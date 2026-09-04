@@ -1,14 +1,16 @@
 use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
+use procgen_tectonics::{PlatePartition, PlatePartitionConfig, partition_plates};
 use std::{
     error::Error,
     time::{Duration, Instant},
 };
 
-#[derive(Resource)]
+#[derive(Clone, Copy, Debug, Resource)]
 pub struct GenerationSettings {
     pub fibonacci: FibonacciConfig,
+    pub plates: PlatePartitionConfig,
 }
 
 impl Default for GenerationSettings {
@@ -18,6 +20,12 @@ impl Default for GenerationSettings {
                 jitter: 0.5,
                 seed: 7,
                 ..FibonacciConfig::new(2_048)
+            },
+            plates: PlatePartitionConfig {
+                major_plate_count: 5,
+                minor_plate_count: 11,
+                major_head_start_rounds: 5,
+                seed: 7,
             },
         }
     }
@@ -46,39 +54,63 @@ impl Plugin for WorldModelPlugin {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
+pub struct StageTiming {
+    pub label: &'static str,
+    pub duration: Duration,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct GenerationTimings {
-    pub sampling: Duration,
-    pub delaunay: Duration,
-    pub voronoi: Duration,
+    stages: Vec<StageTiming>,
 }
 
 impl GenerationTimings {
-    pub fn total(self) -> Duration {
-        self.sampling + self.delaunay + self.voronoi
+    fn record<T, E>(
+        &mut self,
+        label: &'static str,
+        operation: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        let started = Instant::now();
+        let result = operation();
+        self.stages.push(StageTiming {
+            label,
+            duration: started.elapsed(),
+        });
+        result
+    }
+
+    pub fn stages(&self) -> &[StageTiming] {
+        &self.stages
+    }
+
+    pub fn total(&self) -> Duration {
+        self.stages.iter().map(|stage| stage.duration).sum()
     }
 }
 
 #[derive(Resource)]
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
+    pub plates: PlatePartition,
     pub timings: GenerationTimings,
-    pub config: FibonacciConfig,
+    pub config: GenerationSettings,
 }
 
 impl GeneratedWorld {
-    pub fn generate(config: FibonacciConfig) -> Result<Self, Box<dyn Error>> {
-        let (points, sampling) = timed(|| fibonacci_sphere(config))?;
-        let (delaunay, delaunay_time) = timed(|| SphericalDelaunay::build(points))?;
-        let (voronoi, voronoi_time) = timed(|| SphereMesh::from_delaunay(&delaunay, 1.0))?;
+    pub fn generate(config: GenerationSettings) -> Result<Self, Box<dyn Error>> {
+        let mut timings = GenerationTimings::default();
+        let points = timings.record("Sampling", || fibonacci_sphere(config.fibonacci))?;
+        let delaunay = timings.record("Delaunay", || SphericalDelaunay::build(points))?;
+        let voronoi = timings.record("Voronoi", || SphereMesh::from_delaunay(&delaunay, 1.0))?;
+        let plates = timings.record("Plate partition", || {
+            partition_plates(&voronoi, config.plates)
+        })?;
 
         Ok(Self {
             voronoi,
-            timings: GenerationTimings {
-                sampling,
-                delaunay: delaunay_time,
-                voronoi: voronoi_time,
-            },
+            plates,
+            timings,
             config,
         })
     }
@@ -86,15 +118,9 @@ impl GeneratedWorld {
 
 impl FromWorld for GeneratedWorld {
     fn from_world(world: &mut World) -> Self {
-        let config = world.resource::<GenerationSettings>().fibonacci;
+        let config = *world.resource::<GenerationSettings>();
         Self::generate(config).expect("default world generation must succeed")
     }
-}
-
-fn timed<T, E>(operation: impl FnOnce() -> Result<T, E>) -> Result<(T, Duration), E> {
-    let started = Instant::now();
-    let result = operation()?;
-    Ok((result, started.elapsed()))
 }
 
 fn regenerate_world(
@@ -102,7 +128,7 @@ fn regenerate_world(
     mut world: ResMut<GeneratedWorld>,
     mut status: ResMut<GenerationStatus>,
 ) {
-    match GeneratedWorld::generate(settings.fibonacci) {
+    match GeneratedWorld::generate(*settings) {
         Ok(generated) => {
             *world = generated;
             status.last_error = None;
@@ -117,7 +143,11 @@ mod tests {
 
     #[test]
     fn generates_consistent_viewer_counts() {
-        let world = GeneratedWorld::generate(FibonacciConfig::new(128)).unwrap();
+        let world = GeneratedWorld::generate(GenerationSettings {
+            fibonacci: FibonacciConfig::new(128),
+            plates: PlatePartitionConfig::new(4, 4),
+        })
+        .unwrap();
 
         assert_eq!(world.voronoi.cell_count(), 128);
         assert_eq!(world.voronoi.vertex_count(), 252);
@@ -127,19 +157,26 @@ mod tests {
     #[test]
     fn regeneration_message_replaces_the_active_world() {
         let mut app = App::new();
-        let current = GeneratedWorld::generate(FibonacciConfig::new(32)).unwrap();
-        let requested = FibonacciConfig::new(64);
+        let current = GeneratedWorld::generate(GenerationSettings {
+            fibonacci: FibonacciConfig::new(32),
+            plates: PlatePartitionConfig::new(2, 2),
+        })
+        .unwrap();
+        let requested = GenerationSettings {
+            fibonacci: FibonacciConfig::new(64),
+            plates: PlatePartitionConfig::new(3, 3),
+        };
         app.insert_resource(current)
-            .insert_resource(GenerationSettings {
-                fibonacci: requested,
-            })
+            .insert_resource(requested)
             .add_plugins(WorldModelPlugin);
 
         app.world_mut().write_message(RegenerateWorld);
         app.update();
 
         let world = app.world().resource::<GeneratedWorld>();
-        assert_eq!(world.config, requested);
-        assert_eq!(world.voronoi.cell_count(), requested.count);
+        assert_eq!(world.config.fibonacci, requested.fibonacci);
+        assert_eq!(world.config.plates, requested.plates);
+        assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
+        assert_eq!(world.plates.plate_count(), requested.plates.plate_count());
     }
 }
