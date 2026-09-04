@@ -40,6 +40,7 @@ impl SphereMesh {
         let points = delaunay.points();
         let triangles = delaunay.triangles();
         let opposite_half_edges = delaunay.opposite_half_edges();
+        let edge_triangle = SphericalDelaunay::edge_triangle;
         let cell_count = points.len();
         let triangle_count = delaunay.triangle_count();
         let cell_centers: Vec<Vec3> = points.iter().map(|&point| point * radius).collect();
@@ -47,14 +48,11 @@ impl SphereMesh {
             .map(|triangle| delaunay.triangle_circumcenter(triangle))
             .collect();
         let vertex_cells = triangles.to_vec();
-        let vertex_neighbors = (0..triangle_count)
-            .map(|triangle| {
-                let base = triangle * 3;
-                [
-                    SphericalDelaunay::edge_triangle(opposite_half_edges[base]),
-                    SphericalDelaunay::edge_triangle(opposite_half_edges[base + 1]),
-                    SphericalDelaunay::edge_triangle(opposite_half_edges[base + 2]),
-                ]
+        let vertex_neighbors = opposite_half_edges
+            .chunks_exact(3)
+            .map(|edges| {
+                let edges: [usize; 3] = edges.try_into().expect("triangle has three half-edges");
+                edges.map(edge_triangle)
             })
             .collect();
 
@@ -64,10 +62,7 @@ impl SphereMesh {
             let opposite = opposite_half_edges[edge];
             let edge_index = edges.len();
             edges.push(VoronoiEdge {
-                vertices: [
-                    SphericalDelaunay::edge_triangle(edge),
-                    SphericalDelaunay::edge_triangle(opposite),
-                ],
+                vertices: [edge_triangle(edge), edge_triangle(opposite)],
                 cells: [delaunay.edge_origin(edge), delaunay.edge_destination(edge)],
             });
             half_edge_to_edge[edge] = edge_index;
@@ -87,7 +82,7 @@ impl SphereMesh {
             for edge in delaunay.edges_around_point(start_edge) {
                 debug_assert_eq!(delaunay.edge_destination(edge), cell);
                 corners.push(CellCorner {
-                    vertex: SphericalDelaunay::edge_triangle(edge),
+                    vertex: edge_triangle(edge),
                     neighbor: delaunay.edge_origin(edge),
                     edge: half_edge_to_edge[edge],
                 });

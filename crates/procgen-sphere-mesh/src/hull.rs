@@ -73,30 +73,11 @@ impl SphericalDelaunay {
         normal.normalized()
     }
 
-    pub(crate) fn edges_around_point(&self, start: usize) -> EdgesAroundPoint<'_> {
-        EdgesAroundPoint {
-            delaunay: self,
-            start,
-            incoming: Some(start),
-        }
-    }
-}
-
-pub(crate) struct EdgesAroundPoint<'a> {
-    delaunay: &'a SphericalDelaunay,
-    start: usize,
-    incoming: Option<usize>,
-}
-
-impl Iterator for EdgesAroundPoint<'_> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let incoming = self.incoming?;
-        let outgoing = SphericalDelaunay::next_half_edge(incoming);
-        let next = self.delaunay.opposite_half_edges[outgoing];
-        self.incoming = (next != self.start).then_some(next);
-        Some(incoming)
+    pub(crate) fn edges_around_point(&self, start: usize) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(Some(start), move |&incoming| {
+            let next = self.opposite_half_edges[Self::next_half_edge(incoming)];
+            (next != start).then_some(next)
+        })
     }
 }
 
@@ -107,6 +88,8 @@ struct FaceEdge {
 }
 
 impl FaceEdge {
+    const UNWIRED: Self = Self::new(usize::MAX, usize::MAX);
+
     const fn new(face: usize, edge: usize) -> Self {
         Self { face, edge }
     }
@@ -185,38 +168,10 @@ impl QuickHull {
             visit_stamp: 0,
         };
 
-        hull.add_face(
-            [i0, i2, i1],
-            [
-                FaceEdge::new(2, 2),
-                FaceEdge::new(3, 0),
-                FaceEdge::new(1, 0),
-            ],
-        )?;
-        hull.add_face(
-            [i0, i1, i3],
-            [
-                FaceEdge::new(0, 2),
-                FaceEdge::new(3, 2),
-                FaceEdge::new(2, 0),
-            ],
-        )?;
-        hull.add_face(
-            [i0, i3, i2],
-            [
-                FaceEdge::new(1, 2),
-                FaceEdge::new(3, 1),
-                FaceEdge::new(0, 0),
-            ],
-        )?;
-        hull.add_face(
-            [i1, i2, i3],
-            [
-                FaceEdge::new(0, 1),
-                FaceEdge::new(2, 1),
-                FaceEdge::new(1, 1),
-            ],
-        )?;
+        for vertices in [[i0, i2, i1], [i0, i1, i3], [i0, i3, i2], [i1, i2, i3]] {
+            hull.add_face(vertices, [FaceEdge::UNWIRED; 3])?;
+        }
+        hull.wire_initial_tetrahedron();
 
         for point_index in 0..hull.points.len() {
             if ![i0, i1, i2, i3].contains(&point_index) {
@@ -242,45 +197,12 @@ impl QuickHull {
             }
 
             let apex = face.farthest_point;
-            let (visible, horizon) =
-                hull.visible_faces_and_horizon(entry.face, hull.points[apex])?;
-            let mut orphaned = Vec::new();
-            for &face_index in &visible {
-                orphaned.extend(
-                    hull.faces[face_index]
-                        .conflicts
-                        .iter()
-                        .copied()
-                        .filter(|&point| point != apex),
-                );
-            }
-
-            for &face_index in &visible {
-                hull.remove_face(face_index);
-            }
-
-            let new_start = hull.faces.len();
-            let new_face_count = horizon.len();
-            for (index, edge) in horizon.into_iter().enumerate() {
-                let face = new_start + index;
-                let next = new_start + (index + 1) % new_face_count;
-                let previous = new_start + (index + new_face_count - 1) % new_face_count;
-                hull.add_face(
-                    [edge.from, edge.to, apex],
-                    [
-                        edge.outside,
-                        FaceEdge::new(next, 2),
-                        FaceEdge::new(previous, 1),
-                    ],
-                )?;
-                hull.faces[edge.outside.face].neighbors[edge.outside.edge] = FaceEdge::new(face, 0);
-            }
-            let new_end = hull.faces.len();
+            let (new_faces, orphaned) = hull.expand(entry.face, apex)?;
 
             for point_index in orphaned {
-                hull.assign_to_best_face(point_index, new_start..new_end);
+                hull.assign_to_best_face(point_index, new_faces.clone());
             }
-            for face_index in new_start..new_end {
+            for face_index in new_faces {
                 let face = &hull.faces[face_index];
                 if !face.conflicts.is_empty() {
                     heap.push(HeapEntry {
@@ -292,6 +214,42 @@ impl QuickHull {
         }
 
         Ok(hull.compact())
+    }
+
+    fn expand(
+        &mut self,
+        initial_face: usize,
+        apex: usize,
+    ) -> Result<(std::ops::Range<usize>, Vec<usize>), TopologyError> {
+        let (visible, horizon) = self.visible_faces_and_horizon(initial_face, self.points[apex])?;
+        let orphaned = visible
+            .iter()
+            .flat_map(|&face| self.faces[face].conflicts.iter().copied())
+            .filter(|&point| point != apex)
+            .collect();
+
+        for face in visible {
+            self.remove_face(face);
+        }
+
+        let new_start = self.faces.len();
+        let new_face_count = horizon.len();
+        for (index, edge) in horizon.into_iter().enumerate() {
+            let face = new_start + index;
+            let next = new_start + (index + 1) % new_face_count;
+            let previous = new_start + (index + new_face_count - 1) % new_face_count;
+            self.add_face(
+                [edge.from, edge.to, apex],
+                [
+                    edge.outside,
+                    FaceEdge::new(next, 2),
+                    FaceEdge::new(previous, 1),
+                ],
+            )?;
+            self.faces[edge.outside.face].neighbors[edge.outside.edge] = FaceEdge::new(face, 0);
+        }
+
+        Ok((new_start..self.faces.len(), orphaned))
     }
 
     fn add_face(
@@ -327,6 +285,31 @@ impl QuickHull {
             visit_stamp: 0,
         });
         Ok(())
+    }
+
+    fn wire_initial_tetrahedron(&mut self) {
+        debug_assert_eq!(self.faces.len(), 4);
+        for face_index in 0..4 {
+            let vertices = self.faces[face_index].vertices;
+            for edge in 0..3 {
+                let from = vertices[edge];
+                let to = vertices[(edge + 1) % 3];
+                let opposite = self
+                    .faces
+                    .iter()
+                    .enumerate()
+                    .find_map(|(neighbor_face, neighbor)| {
+                        (0..3)
+                            .find(|&neighbor_edge| {
+                                neighbor.vertices[neighbor_edge] == to
+                                    && neighbor.vertices[(neighbor_edge + 1) % 3] == from
+                            })
+                            .map(|neighbor_edge| FaceEdge::new(neighbor_face, neighbor_edge))
+                    })
+                    .expect("tetrahedron edges must have an opposite");
+                self.faces[face_index].neighbors[edge] = opposite;
+            }
+        }
     }
 
     fn remove_face(&mut self, face_index: usize) {

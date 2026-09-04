@@ -1,4 +1,7 @@
 //! Delaunay and Voronoi topology for points on a unit sphere.
+//!
+//! `SphericalDelaunay` protects its construction invariants behind accessors;
+//! `SphereMesh` exposes flat arrays directly for later stages and GPU upload.
 
 mod hull;
 mod initial;
