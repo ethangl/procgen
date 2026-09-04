@@ -2,7 +2,7 @@ use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
-use procgen_tectonics::PlatePartition;
+use procgen_tectonics::{BoundaryClass, PlateKinematics, PlatePartition};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
@@ -11,10 +11,19 @@ pub enum DiagnosticLayer {
     Delaunay,
     Voronoi,
     Plates,
+    Boundaries,
+    Motion,
 }
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 4] = [Self::Points, Self::Delaunay, Self::Voronoi, Self::Plates];
+    pub const ALL: [Self; 6] = [
+        Self::Points,
+        Self::Delaunay,
+        Self::Voronoi,
+        Self::Plates,
+        Self::Boundaries,
+        Self::Motion,
+    ];
     const COUNT: usize = Self::ALL.len();
 
     const fn index(self) -> usize {
@@ -31,6 +40,8 @@ impl DiagnosticLayer {
             Self::Delaunay => 1.1,
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
+            Self::Boundaries => 4.0,
+            Self::Motion => 2.6,
         }
     }
 
@@ -40,6 +51,8 @@ impl DiagnosticLayer {
             Self::Delaunay => "Delaunay",
             Self::Voronoi => "Voronoi",
             Self::Plates => "Tectonic plates",
+            Self::Boundaries => "Boundary classes",
+            Self::Motion => "Plate motion",
         }
     }
 
@@ -49,6 +62,8 @@ impl DiagnosticLayer {
             Self::Delaunay => delaunay_asset(&world.voronoi),
             Self::Voronoi => voronoi_asset(&world.voronoi),
             Self::Plates => plate_asset(&world.voronoi, &world.plates),
+            Self::Boundaries => boundary_asset(world),
+            Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics),
         }
     }
 }
@@ -73,6 +88,8 @@ impl Default for LayerSettings {
         let mut visible = [false; DiagnosticLayer::COUNT];
         visible[DiagnosticLayer::Voronoi.index()] = true;
         visible[DiagnosticLayer::Plates.index()] = true;
+        visible[DiagnosticLayer::Boundaries.index()] = true;
+        visible[DiagnosticLayer::Motion.index()] = true;
         Self { visible }
     }
 }
@@ -230,6 +247,45 @@ fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition) -> GizmoAsset {
             (1.013, Color::srgba(0.95, 0.95, 1.0, 0.98))
         }
     })
+}
+
+fn boundary_asset(world: &GeneratedWorld) -> GizmoAsset {
+    let mut asset = GizmoAsset::new();
+    for (edge_index, edge) in world.voronoi.edges.iter().enumerate() {
+        let color = match world.boundaries.edge_classes[edge_index] {
+            BoundaryClass::Interior => continue,
+            BoundaryClass::Convergent => Color::srgba(1.0, 0.25, 0.18, 1.0),
+            BoundaryClass::Divergent => Color::srgba(0.15, 0.6, 1.0, 1.0),
+            BoundaryClass::Transform => Color::srgba(1.0, 0.78, 0.12, 1.0),
+        };
+        add_surface_edge(
+            &mut asset,
+            to_bevy(world.voronoi.vertices[edge.vertices[0]]),
+            to_bevy(world.voronoi.vertices[edge.vertices[1]]),
+            1.017,
+            color,
+        );
+    }
+    asset
+}
+
+fn motion_asset(
+    mesh: &SphereMesh,
+    plates: &PlatePartition,
+    kinematics: &PlateKinematics,
+) -> GizmoAsset {
+    let mut asset = GizmoAsset::new();
+    let stride = (mesh.cell_count() / 256).max(1);
+    for cell in (0..mesh.cell_count()).step_by(stride) {
+        let plate = plates.cell_plates[cell];
+        let position = mesh.cell_centers[cell];
+        let start = to_bevy(position.normalized()) * 1.035;
+        let velocity = to_bevy(kinematics.velocity_at(plate, position));
+        if velocity.length_squared() > 1.0e-12 {
+            asset.arrow(start, start + velocity * 0.09, id_color(plate));
+        }
+    }
+    asset
 }
 
 fn voronoi_edge_asset(

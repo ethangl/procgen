@@ -2,6 +2,7 @@ use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, Regener
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use procgen_tectonics::BoundaryClass;
 
 pub struct ViewerUiPlugin;
 
@@ -104,6 +105,29 @@ fn generation_controls(
         u64::MIN..=u64::MAX,
         1.0,
     );
+    ui.add_space(4.0);
+    ui.label("Plate kinematics");
+    drag_value(
+        ui,
+        "Motion seed",
+        &mut generation.kinematics.seed,
+        u64::MIN..=u64::MAX,
+        1.0,
+    );
+    ui.horizontal(|ui| {
+        ui.label("Angular speed");
+        ui.add(
+            egui::DragValue::new(&mut generation.kinematics.minimum_angular_speed)
+                .range(0.0..=10.0)
+                .speed(0.01),
+        );
+        ui.label("to");
+        ui.add(
+            egui::DragValue::new(&mut generation.kinematics.maximum_angular_speed)
+                .range(0.0..=10.0)
+                .speed(0.01),
+        );
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
@@ -129,10 +153,31 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Plates", world.plates.plate_count());
         stat(ui, "Sampling seed", world.config.fibonacci.seed);
         stat(ui, "Plate seed", world.config.plates.seed);
+        stat(ui, "Motion seed", world.config.kinematics.seed);
         stat(
             ui,
             "Jitter",
             format!("{:.2}", world.config.fibonacci.jitter),
+        );
+    });
+
+    ui.add_space(6.0);
+    ui.label("Static boundaries");
+    egui::Grid::new("boundaries").num_columns(2).show(ui, |ui| {
+        stat(
+            ui,
+            "Convergent",
+            world.boundaries.count(BoundaryClass::Convergent),
+        );
+        stat(
+            ui,
+            "Divergent",
+            world.boundaries.count(BoundaryClass::Divergent),
+        );
+        stat(
+            ui,
+            "Transform",
+            world.boundaries.count(BoundaryClass::Transform),
         );
     });
 

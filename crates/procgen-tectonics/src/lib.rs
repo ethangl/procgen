@@ -1,7 +1,18 @@
 //! Deterministic tectonic state derived from spherical mesh topology.
 //!
-//! This first slice partitions cells into major and minor plates. Plate motion,
-//! boundary classification, and geological effects remain separate later stages.
+//! Plate partitioning, rigid spherical plate motion, and static boundary
+//! classification live here. Geological effects and time evolution remain
+//! separate later stages.
+
+mod boundaries;
+mod motion;
+
+pub use boundaries::{
+    BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
+};
+pub use motion::{
+    PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
+};
 
 use procgen_core::RandomStream;
 use procgen_sphere_mesh::SphereMesh;
