@@ -1,6 +1,5 @@
-use crate::model::{
-    GeneratedWorld, GenerationSettings, GenerationStatus, LayerSettings, RegenerateWorld,
-};
+use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
+use crate::render::{LayerSettings, TopologyLayer};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -58,9 +57,12 @@ fn viewer_ui(
 
             ui.separator();
             ui.label("Layers");
-            ui.checkbox(&mut layers.show_points, "Cell centers");
-            ui.checkbox(&mut layers.show_delaunay, "Delaunay");
-            ui.checkbox(&mut layers.show_voronoi, "Voronoi");
+            for layer in TopologyLayer::ALL {
+                let mut visible = layers.is_visible(layer);
+                if ui.checkbox(&mut visible, layer.label()).changed() {
+                    layers.set_visible(layer, visible);
+                }
+            }
 
             ui.separator();
             ui.label("Active world");

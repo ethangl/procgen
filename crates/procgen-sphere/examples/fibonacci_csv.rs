@@ -6,9 +6,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|value| value.parse())
         .transpose()?
         .unwrap_or(256);
-    let mut config = FibonacciConfig::new(count);
-    config.jitter = 0.5;
-    config.seed = 7;
+    let config = FibonacciConfig {
+        jitter: 0.5,
+        seed: 7,
+        ..FibonacciConfig::new(count)
+    };
 
     println!("x,y,z");
     for point in fibonacci_sphere(config)? {

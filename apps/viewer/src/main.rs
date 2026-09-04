@@ -6,8 +6,8 @@ mod ui;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use camera::OrbitCameraPlugin;
-use model::{GeneratedWorld, GenerationSettings, LayerSettings, WorldModelPlugin};
-use render::TopologyRenderPlugin;
+use model::{GeneratedWorld, GenerationSettings, WorldModelPlugin};
+use render::{LayerSettings, TopologyRenderPlugin};
 use ui::ViewerUiPlugin;
 
 fn main() {

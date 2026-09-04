@@ -2,9 +2,11 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay, TopologyError, build_sphere_mesh};
 
 fn points(count: usize, jitter: f32) -> Vec<procgen_core::Vec3> {
-    let mut config = FibonacciConfig::new(count);
-    config.seed = 42;
-    config.jitter = jitter;
+    let config = FibonacciConfig {
+        jitter,
+        seed: 42,
+        ..FibonacciConfig::new(count)
+    };
     fibonacci_sphere(config).unwrap()
 }
 

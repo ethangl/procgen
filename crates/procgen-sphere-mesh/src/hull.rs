@@ -27,16 +27,12 @@ impl SphericalDelaunay {
         self.triangles.len()
     }
 
-    fn half_edge_triangle(edge: usize) -> usize {
+    pub fn edge_triangle(&self, edge: usize) -> usize {
         edge / 3
     }
 
     fn next_half_edge(edge: usize) -> usize {
         if edge % 3 == 2 { edge - 2 } else { edge + 1 }
-    }
-
-    pub(crate) fn edge_triangle(&self, edge: usize) -> usize {
-        Self::half_edge_triangle(edge)
     }
 
     pub fn edge_origin(&self, edge: usize) -> usize {
@@ -60,8 +56,6 @@ impl SphericalDelaunay {
         let b = self.points[p1];
         let c = self.points[p2];
         let normal = (b - a).cross(c - a);
-        let centroid = (a + b + c) * (1.0 / 3.0);
-        debug_assert!(normal.dot(centroid) > 0.0);
         normal.normalized()
     }
 
@@ -110,7 +104,7 @@ struct Face {
     conflicts: Vec<usize>,
     farthest_distance: f32,
     farthest_point: usize,
-    visit_stamp: u32,
+    visit_stamp: u64,
 }
 
 impl Face {
@@ -152,7 +146,7 @@ struct QuickHull {
     faces: Vec<Face>,
     directed_edges: HashMap<(usize, usize), usize>,
     interior_point: Vec3,
-    visit_stamp: u32,
+    visit_stamp: u64,
 }
 
 impl QuickHull {
@@ -202,8 +196,8 @@ impl QuickHull {
             }
 
             let apex = face.farthest_point;
-            let (visible, visit_stamp) = hull.visible_faces(entry.face, hull.points[apex]);
-            let horizon = hull.horizon(&visible, visit_stamp)?;
+            let visible = hull.visible_faces(entry.face, hull.points[apex]);
+            let horizon = hull.horizon(&visible)?;
             let mut orphaned = Vec::new();
             for &face_index in &visible {
                 orphaned.extend(
@@ -274,8 +268,7 @@ impl QuickHull {
         for edge in 0..3 {
             let from = vertices[edge];
             let to = vertices[(edge + 1) % 3];
-            self.directed_edges
-                .insert((from, to), face_index * 3 + edge);
+            self.directed_edges.insert((from, to), face_index);
         }
         Ok(())
     }
@@ -316,14 +309,8 @@ impl QuickHull {
         }
     }
 
-    fn visible_faces(&mut self, initial: usize, apex: Vec3) -> (Vec<usize>, u32) {
-        self.visit_stamp = self.visit_stamp.wrapping_add(1);
-        if self.visit_stamp == 0 {
-            for face in &mut self.faces {
-                face.visit_stamp = 0;
-            }
-            self.visit_stamp = 1;
-        }
+    fn visible_faces(&mut self, initial: usize, apex: Vec3) -> Vec<usize> {
+        self.visit_stamp += 1;
         let visit_stamp = self.visit_stamp;
         let mut visible = Vec::new();
         let mut queue = VecDeque::from([initial]);
@@ -335,37 +322,31 @@ impl QuickHull {
             for edge in 0..3 {
                 let from = vertices[edge];
                 let to = vertices[(edge + 1) % 3];
-                if let Some(opposite) = self.directed_edges.get(&(to, from)) {
-                    let neighbor = opposite / 3;
-                    if self.faces[neighbor].visit_stamp != visit_stamp
-                        && self.faces[neighbor].alive
-                        && self.faces[neighbor].distance_to(apex) > VISIBILITY_EPSILON
-                    {
-                        self.faces[neighbor].visit_stamp = visit_stamp;
-                        queue.push_back(neighbor);
-                    }
+                if let Some(&neighbor) = self.directed_edges.get(&(to, from))
+                    && self.faces[neighbor].visit_stamp != visit_stamp
+                    && self.faces[neighbor].alive
+                    && self.faces[neighbor].distance_to(apex) > VISIBILITY_EPSILON
+                {
+                    self.faces[neighbor].visit_stamp = visit_stamp;
+                    queue.push_back(neighbor);
                 }
             }
         }
-        (visible, visit_stamp)
+        visible
     }
 
-    fn horizon(
-        &self,
-        visible_faces: &[usize],
-        visit_stamp: u32,
-    ) -> Result<Vec<(usize, usize)>, TopologyError> {
+    fn horizon(&self, visible_faces: &[usize]) -> Result<Vec<(usize, usize)>, TopologyError> {
         let mut edges = Vec::new();
         for &face_index in visible_faces {
             let face = &self.faces[face_index];
             for edge in 0..3 {
                 let from = face.vertices[edge];
                 let to = face.vertices[(edge + 1) % 3];
-                let opposite = self
+                let opposite_face = self
                     .directed_edges
                     .get(&(to, from))
                     .ok_or(TopologyError::OpenHull)?;
-                if self.faces[opposite / 3].visit_stamp != visit_stamp {
+                if self.faces[*opposite_face].visit_stamp != self.visit_stamp {
                     edges.push((from, to));
                 }
             }

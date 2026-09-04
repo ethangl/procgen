@@ -1,21 +1,78 @@
-use crate::{
-    camera::ViewerCamera,
-    model::{GeneratedWorld, LayerSettings},
-};
+use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 
-const POINT_LAYER: usize = 1;
-const DELAUNAY_LAYER: usize = 2;
-const VORONOI_LAYER: usize = 3;
+#[derive(Clone, Copy, Debug)]
+#[repr(usize)]
+pub enum TopologyLayer {
+    Points,
+    Delaunay,
+    Voronoi,
+}
+
+impl TopologyLayer {
+    pub const ALL: [Self; 3] = [Self::Points, Self::Delaunay, Self::Voronoi];
+    const COUNT: usize = Self::ALL.len();
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    const fn render_layer(self) -> usize {
+        self.index() + 1
+    }
+
+    const fn line_width(self) -> f32 {
+        match self {
+            Self::Points => 1.8,
+            Self::Delaunay => 1.1,
+            Self::Voronoi => 1.5,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Points => "Cell centers",
+            Self::Delaunay => "Delaunay",
+            Self::Voronoi => "Voronoi",
+        }
+    }
+
+    fn build(self, world: &GeneratedWorld) -> GizmoAsset {
+        match self {
+            Self::Points => point_asset(&world.delaunay),
+            Self::Delaunay => delaunay_asset(&world.delaunay),
+            Self::Voronoi => voronoi_asset(&world.voronoi),
+        }
+    }
+}
 
 #[derive(Resource)]
-struct TopologyAssets {
-    points: Handle<GizmoAsset>,
-    delaunay: Handle<GizmoAsset>,
-    voronoi: Handle<GizmoAsset>,
+pub struct LayerSettings {
+    visible: [bool; TopologyLayer::COUNT],
 }
+
+impl LayerSettings {
+    pub fn is_visible(&self, layer: TopologyLayer) -> bool {
+        self.visible[layer.index()]
+    }
+
+    pub fn set_visible(&mut self, layer: TopologyLayer, visible: bool) {
+        self.visible[layer.index()] = visible;
+    }
+}
+
+impl Default for LayerSettings {
+    fn default() -> Self {
+        let mut visible = [false; TopologyLayer::COUNT];
+        visible[TopologyLayer::Voronoi.index()] = true;
+        Self { visible }
+    }
+}
+
+#[derive(Resource)]
+struct TopologyAssets([Handle<GizmoAsset>; TopologyLayer::COUNT]);
 
 pub struct TopologyRenderPlugin;
 
@@ -33,7 +90,6 @@ impl Plugin for TopologyRenderPlugin {
 
 fn setup_scene(
     mut commands: Commands,
-    world: Res<GeneratedWorld>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -48,34 +104,28 @@ fn setup_scene(
         })),
     ));
 
-    let points = gizmo_assets.add(point_asset(&world.delaunay));
-    let delaunay = gizmo_assets.add(delaunay_asset(&world.delaunay));
-    let voronoi = gizmo_assets.add(voronoi_asset(&world.voronoi));
-
-    spawn_layer(&mut commands, points.clone(), POINT_LAYER, 1.8);
-    spawn_layer(&mut commands, delaunay.clone(), DELAUNAY_LAYER, 1.1);
-    spawn_layer(&mut commands, voronoi.clone(), VORONOI_LAYER, 1.5);
+    let topology_assets = TopologyLayer::ALL.map(|layer| {
+        let handle = gizmo_assets.add(GizmoAsset::new());
+        spawn_layer(&mut commands, handle.clone(), layer);
+        handle
+    });
     spawn_axes(&mut commands, &mut gizmo_assets);
 
-    commands.insert_resource(TopologyAssets {
-        points,
-        delaunay,
-        voronoi,
-    });
+    commands.insert_resource(TopologyAssets(topology_assets));
 }
 
-fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: usize, width: f32) {
+fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: TopologyLayer) {
     commands.spawn((
         Gizmo {
             handle,
             line_config: GizmoLineConfig {
-                width,
+                width: layer.line_width(),
                 perspective: false,
                 ..default()
             },
             depth_bias: -0.0005,
         },
-        RenderLayers::layer(layer),
+        RenderLayers::layer(layer.render_layer()),
     ));
 }
 
@@ -103,9 +153,9 @@ fn rebuild_topology_assets(
     assets: Res<TopologyAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    *gizmo_assets.get_mut(&assets.points).unwrap() = point_asset(&world.delaunay);
-    *gizmo_assets.get_mut(&assets.delaunay).unwrap() = delaunay_asset(&world.delaunay);
-    *gizmo_assets.get_mut(&assets.voronoi).unwrap() = voronoi_asset(&world.voronoi);
+    for layer in TopologyLayer::ALL {
+        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build(&world);
+    }
 }
 
 fn sync_visible_layers(
@@ -113,15 +163,12 @@ fn sync_visible_layers(
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
 ) {
     let mut layers = vec![0];
-    if settings.show_points {
-        layers.push(POINT_LAYER);
-    }
-    if settings.show_delaunay {
-        layers.push(DELAUNAY_LAYER);
-    }
-    if settings.show_voronoi {
-        layers.push(VORONOI_LAYER);
-    }
+    layers.extend(
+        TopologyLayer::ALL
+            .into_iter()
+            .filter(|&layer| settings.is_visible(layer))
+            .map(TopologyLayer::render_layer),
+    );
     **camera_layers = RenderLayers::from_layers(&layers);
 }
 

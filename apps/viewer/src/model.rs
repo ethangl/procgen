@@ -10,26 +10,12 @@ pub struct GenerationSettings {
 
 impl Default for GenerationSettings {
     fn default() -> Self {
-        let mut fibonacci = FibonacciConfig::new(2_048);
-        fibonacci.jitter = 0.5;
-        fibonacci.seed = 7;
-        Self { fibonacci }
-    }
-}
-
-#[derive(Resource)]
-pub struct LayerSettings {
-    pub show_points: bool,
-    pub show_delaunay: bool,
-    pub show_voronoi: bool,
-}
-
-impl Default for LayerSettings {
-    fn default() -> Self {
         Self {
-            show_points: false,
-            show_delaunay: false,
-            show_voronoi: true,
+            fibonacci: FibonacciConfig {
+                jitter: 0.5,
+                seed: 7,
+                ..FibonacciConfig::new(2_048)
+            },
         }
     }
 }
@@ -75,18 +61,14 @@ pub struct GeneratedWorld {
 
 impl GeneratedWorld {
     pub fn generate(config: FibonacciConfig) -> Result<Self, String> {
-        let started = Instant::now();
-        let points = fibonacci_sphere(config).map_err(|error| error.to_string())?;
-        let sampling = started.elapsed();
+        let (points, sampling) = timed(|| fibonacci_sphere(config));
+        let points = points.map_err(|error| error.to_string())?;
 
-        let started = Instant::now();
-        let delaunay = SphericalDelaunay::build(points).map_err(|error| error.to_string())?;
-        let delaunay_time = started.elapsed();
+        let (delaunay, delaunay_time) = timed(|| SphericalDelaunay::build(points));
+        let delaunay = delaunay.map_err(|error| error.to_string())?;
 
-        let started = Instant::now();
-        let voronoi =
-            SphereMesh::from_delaunay(&delaunay, 1.0).map_err(|error| error.to_string())?;
-        let voronoi_time = started.elapsed();
+        let (voronoi, voronoi_time) = timed(|| SphereMesh::from_delaunay(&delaunay, 1.0));
+        let voronoi = voronoi.map_err(|error| error.to_string())?;
 
         Ok(Self {
             delaunay,
@@ -99,6 +81,12 @@ impl GeneratedWorld {
             config,
         })
     }
+}
+
+fn timed<T>(operation: impl FnOnce() -> T) -> (T, Duration) {
+    let started = Instant::now();
+    let result = operation();
+    (result, started.elapsed())
 }
 
 fn regenerate_world(

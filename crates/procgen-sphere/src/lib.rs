@@ -97,16 +97,20 @@ mod tests {
             Err(FibonacciError::TooFewPoints)
         );
 
-        let mut config = FibonacciConfig::new(4);
-        config.jitter = 1.01;
+        let config = FibonacciConfig {
+            jitter: 1.01,
+            ..FibonacciConfig::new(4)
+        };
         assert_eq!(fibonacci_sphere(config), Err(FibonacciError::InvalidJitter));
     }
 
     #[test]
     fn points_lie_on_unit_sphere() {
-        let mut config = FibonacciConfig::new(32_768);
-        config.jitter = 1.0;
-        config.seed = 42;
+        let config = FibonacciConfig {
+            jitter: 1.0,
+            seed: 42,
+            ..FibonacciConfig::new(32_768)
+        };
 
         for point in fibonacci_sphere(config).unwrap() {
             assert!((point.length() - 1.0).abs() < 1.0e-5);
@@ -139,9 +143,11 @@ mod tests {
 
     #[test]
     fn output_is_independent_of_thread_count() {
-        let mut config = FibonacciConfig::new(PARALLEL_THRESHOLD);
-        config.jitter = 0.5;
-        config.seed = 7;
+        let config = FibonacciConfig {
+            jitter: 0.5,
+            seed: 7,
+            ..FibonacciConfig::new(PARALLEL_THRESHOLD)
+        };
 
         let one = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
