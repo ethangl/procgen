@@ -3,6 +3,7 @@ use std::fmt;
 
 const ROTATION_AXIS_STREAM: u64 = 1;
 const ANGULAR_SPEED_STREAM: u64 = 2;
+const ROTATION_AXIS_ATTEMPTS: u64 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlateKinematicsConfig {
@@ -69,17 +70,7 @@ pub fn generate_plate_kinematics(
     let angular_velocities = (0..plate_count)
         .map(|plate| {
             let item = plate as u64;
-            let axis = Vec3::new(
-                axes.signed_f32(item, 0),
-                axes.signed_f32(item, 1),
-                axes.signed_f32(item, 2),
-            )
-            .normalized();
-            let axis = if axis == Vec3::ZERO {
-                Vec3::new(0.0, 1.0, 0.0)
-            } else {
-                axis
-            };
+            let axis = random_unit_axis(axes, item);
             let speed = config.minimum_angular_speed
                 + speeds.unit_f32(item, 0)
                     * (config.maximum_angular_speed - config.minimum_angular_speed);
@@ -88,6 +79,23 @@ pub fn generate_plate_kinematics(
         .collect();
 
     Ok(PlateKinematics { angular_velocities })
+}
+
+fn random_unit_axis(stream: RandomStream, item: u64) -> Vec3 {
+    // Rejection sampling inside the unit ball avoids the directional bias from
+    // normalizing points sampled throughout a cube.
+    for attempt in 0..ROTATION_AXIS_ATTEMPTS {
+        let sample = attempt * 3;
+        let candidate = Vec3::new(
+            stream.signed_f32(item, sample),
+            stream.signed_f32(item, sample + 1),
+            stream.signed_f32(item, sample + 2),
+        );
+        if (1.0e-9..=1.0).contains(&candidate.length_squared()) {
+            return candidate.normalized();
+        }
+    }
+    Vec3::new(0.0, 1.0, 0.0)
 }
 
 #[cfg(test)]

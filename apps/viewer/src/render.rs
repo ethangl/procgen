@@ -2,7 +2,7 @@ use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
-use procgen_tectonics::{BoundaryClass, PlateKinematics, PlatePartition};
+use procgen_tectonics::{BoundaryClass, BoundaryClassification, PlateKinematics, PlatePartition};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
@@ -62,7 +62,7 @@ impl DiagnosticLayer {
             Self::Delaunay => delaunay_asset(&world.voronoi),
             Self::Voronoi => voronoi_asset(&world.voronoi),
             Self::Plates => plate_asset(&world.voronoi, &world.plates),
-            Self::Boundaries => boundary_asset(world),
+            Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics),
         }
     }
@@ -234,39 +234,33 @@ fn delaunay_asset(mesh: &SphereMesh) -> GizmoAsset {
 }
 
 fn voronoi_asset(mesh: &SphereMesh) -> GizmoAsset {
-    voronoi_edge_asset(mesh, |edge| (1.006, id_color(edge.cells[0])))
+    voronoi_edge_asset(mesh, |_, edge| Some((1.006, id_color(edge.cells[0]))))
 }
 
 fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition) -> GizmoAsset {
-    voronoi_edge_asset(mesh, |edge| {
+    voronoi_edge_asset(mesh, |_, edge| {
         let left_plate = plates.cell_plates[edge.cells[0]];
         let right_plate = plates.cell_plates[edge.cells[1]];
+        // White outlines keep this layer useful on its own; the boundary-class
+        // layer deliberately overlays them at a slightly larger radius.
         if left_plate == right_plate {
-            (1.009, id_color(left_plate))
+            Some((1.009, id_color(left_plate)))
         } else {
-            (1.013, Color::srgba(0.95, 0.95, 1.0, 0.98))
+            Some((1.013, Color::srgba(0.95, 0.95, 1.0, 0.98)))
         }
     })
 }
 
-fn boundary_asset(world: &GeneratedWorld) -> GizmoAsset {
-    let mut asset = GizmoAsset::new();
-    for (edge_index, edge) in world.voronoi.edges.iter().enumerate() {
-        let color = match world.boundaries.edge_classes[edge_index] {
-            BoundaryClass::Interior => continue,
+fn boundary_asset(mesh: &SphereMesh, boundaries: &BoundaryClassification) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |edge_index, _| {
+        let color = match boundaries.edge_classes[edge_index] {
+            BoundaryClass::Interior => return None,
             BoundaryClass::Convergent => Color::srgba(1.0, 0.25, 0.18, 1.0),
             BoundaryClass::Divergent => Color::srgba(0.15, 0.6, 1.0, 1.0),
             BoundaryClass::Transform => Color::srgba(1.0, 0.78, 0.12, 1.0),
         };
-        add_surface_edge(
-            &mut asset,
-            to_bevy(world.voronoi.vertices[edge.vertices[0]]),
-            to_bevy(world.voronoi.vertices[edge.vertices[1]]),
-            1.017,
-            color,
-        );
-    }
-    asset
+        Some((1.017, color))
+    })
 }
 
 fn motion_asset(
@@ -290,11 +284,13 @@ fn motion_asset(
 
 fn voronoi_edge_asset(
     mesh: &SphereMesh,
-    mut style: impl FnMut(&VoronoiEdge) -> (f32, Color),
+    mut style: impl FnMut(usize, &VoronoiEdge) -> Option<(f32, Color)>,
 ) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
-    for edge in &mesh.edges {
-        let (radius, color) = style(edge);
+    for (edge_index, edge) in mesh.edges.iter().enumerate() {
+        let Some((radius, color)) = style(edge_index, edge) else {
+            continue;
+        };
         add_surface_edge(
             &mut asset,
             to_bevy(mesh.vertices[edge.vertices[0]]),

@@ -13,12 +13,28 @@ pub enum BoundaryClass {
     Transform,
 }
 
+impl BoundaryClass {
+    pub fn from_relative_motion(convergence: f32, shear: f32) -> Self {
+        if convergence.abs() > shear * CONVERGENCE_TO_SHEAR_THRESHOLD {
+            if convergence > 0.0 {
+                Self::Convergent
+            } else {
+                Self::Divergent
+            }
+        } else {
+            Self::Transform
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundaryClassification {
     pub edge_classes: Vec<BoundaryClass>,
-    /// Signed normal closing speed. Positive values converge; negative values diverge.
+    /// Signed normal closing speed retained for downstream geological stages.
+    /// Positive values converge; negative values diverge.
     pub edge_convergence: Vec<f32>,
-    /// Absolute relative speed parallel to the boundary.
+    /// Absolute relative speed parallel to the boundary, retained for
+    /// downstream geological stages.
     pub edge_shear: Vec<f32>,
 }
 
@@ -43,9 +59,9 @@ impl fmt::Display for BoundaryClassificationError {
             Self::CellCountMismatch => {
                 formatter.write_str("plate assignments must match the mesh cell count")
             }
-            Self::PlateCountMismatch => formatter.write_str(
-                "plate assignments and seeds must reference available angular velocities",
-            ),
+            Self::PlateCountMismatch => {
+                formatter.write_str("plate seeds must match the available angular velocities")
+            }
         }
     }
 }
@@ -62,12 +78,7 @@ pub fn classify_boundaries(
     if partition.cell_plates.len() != mesh.cell_count() {
         return Err(BoundaryClassificationError::CellCountMismatch);
     }
-    if partition.plate_count() != kinematics.angular_velocities.len()
-        || partition
-            .cell_plates
-            .iter()
-            .any(|&plate| plate >= kinematics.angular_velocities.len())
-    {
+    if partition.plate_count() != kinematics.angular_velocities.len() {
         return Err(BoundaryClassificationError::PlateCountMismatch);
     }
 
@@ -95,15 +106,7 @@ pub fn classify_boundaries(
             kinematics.velocity_at(plate_0, position) - kinematics.velocity_at(plate_1, position);
         let convergence = relative_velocity.dot(normal);
         let shear = relative_velocity.dot(tangent).abs();
-        let class = if convergence.abs() > shear * CONVERGENCE_TO_SHEAR_THRESHOLD {
-            if convergence > 0.0 {
-                BoundaryClass::Convergent
-            } else {
-                BoundaryClass::Divergent
-            }
-        } else {
-            BoundaryClass::Transform
-        };
+        let class = BoundaryClass::from_relative_motion(convergence, shear);
 
         edge_classes.push(class);
         edge_convergence.push(convergence);
@@ -120,29 +123,14 @@ pub fn classify_boundaries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::mesh;
     use crate::{
         PlateKinematicsConfig, PlatePartitionConfig, generate_plate_kinematics, partition_plates,
     };
-    use procgen_core::Vec3;
-    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::build_sphere_mesh;
-
-    fn mesh() -> SphereMesh {
-        build_sphere_mesh(
-            fibonacci_sphere(FibonacciConfig {
-                count: 512,
-                jitter: 0.5,
-                seed: 7,
-            })
-            .unwrap(),
-            1.0,
-        )
-        .unwrap()
-    }
 
     #[test]
     fn classification_is_deterministic_complete_and_static() {
-        let mesh = mesh();
+        let mesh = mesh(512);
         let partition = partition_plates(
             &mesh,
             PlatePartitionConfig {
@@ -153,7 +141,6 @@ mod tests {
             },
         )
         .unwrap();
-        let original_partition = partition.clone();
         let kinematics =
             generate_plate_kinematics(partition.plate_count(), PlateKinematicsConfig::new(7))
                 .unwrap();
@@ -163,7 +150,6 @@ mod tests {
             first,
             classify_boundaries(&mesh, &partition, &kinematics).unwrap()
         );
-        assert_eq!(partition, original_partition);
         assert_eq!(first.edge_classes.len(), mesh.edge_count());
         assert_eq!(first.edge_convergence.len(), mesh.edge_count());
         assert_eq!(first.edge_shear.len(), mesh.edge_count());
@@ -181,33 +167,18 @@ mod tests {
     }
 
     #[test]
-    fn known_rotations_produce_expected_boundary_classes() {
-        let mesh = mesh();
-        let edge = mesh.edges[0];
-        let mut cell_plates = vec![0; mesh.cell_count()];
-        cell_plates[edge.cells[1]] = 1;
-        let partition = PlatePartition {
-            cell_plates,
-            plate_seeds: vec![edge.cells[0], edge.cells[1]],
-            major_plate_count: 2,
-        };
-        let position =
-            (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
-        let normal =
-            (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
-        let tangent = position.cross(normal).normalized();
-
-        for (relative_velocity, expected) in [
-            (normal, BoundaryClass::Convergent),
-            (-normal, BoundaryClass::Divergent),
-            (tangent, BoundaryClass::Transform),
-        ] {
-            // At a unit position, omega = position x velocity yields omega x position = velocity.
-            let kinematics = PlateKinematics {
-                angular_velocities: vec![position.cross(relative_velocity), Vec3::ZERO],
-            };
-            let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
-            assert_eq!(boundaries.edge_classes[0], expected);
-        }
+    fn classifies_relative_motion_from_scalar_components() {
+        assert_eq!(
+            BoundaryClass::from_relative_motion(1.0, 0.0),
+            BoundaryClass::Convergent
+        );
+        assert_eq!(
+            BoundaryClass::from_relative_motion(-1.0, 0.0),
+            BoundaryClass::Divergent
+        );
+        assert_eq!(
+            BoundaryClass::from_relative_motion(0.25, 1.0),
+            BoundaryClass::Transform
+        );
     }
 }

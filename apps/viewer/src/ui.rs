@@ -4,6 +4,9 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_tectonics::BoundaryClass;
 
+const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
+const ANGULAR_SPEED_STEP: f64 = 0.01;
+
 pub struct ViewerUiPlugin;
 
 impl Plugin for ViewerUiPlugin {
@@ -118,14 +121,14 @@ fn generation_controls(
         ui.label("Angular speed");
         ui.add(
             egui::DragValue::new(&mut generation.kinematics.minimum_angular_speed)
-                .range(0.0..=10.0)
-                .speed(0.01),
+                .range(ANGULAR_SPEED_RANGE)
+                .speed(ANGULAR_SPEED_STEP),
         );
         ui.label("to");
         ui.add(
             egui::DragValue::new(&mut generation.kinematics.maximum_angular_speed)
-                .range(0.0..=10.0)
-                .speed(0.01),
+                .range(ANGULAR_SPEED_RANGE)
+                .speed(ANGULAR_SPEED_STEP),
         );
     });
     if ui.button("Regenerate").clicked() {
