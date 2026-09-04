@@ -67,12 +67,12 @@ impl SphericalDelaunay {
         normal.normalized()
     }
 
-    pub(crate) const fn edge_face(&self, edge: usize) -> usize {
+    pub const fn edge_triangle(&self, edge: usize) -> usize {
         half_edge_face(edge)
     }
 
-    pub(crate) fn triangle_neighbors(&self, triangle: usize) -> [usize; 3] {
-        std::array::from_fn(|corner| self.edge_face(self.opposite(flat_edge(triangle, corner))))
+    pub fn triangle_neighbors(&self, triangle: usize) -> [usize; 3] {
+        std::array::from_fn(|corner| self.edge_triangle(self.opposite(flat_edge(triangle, corner))))
     }
 
     pub(crate) fn edges_around_point(&self, start: usize) -> impl Iterator<Item = usize> + '_ {

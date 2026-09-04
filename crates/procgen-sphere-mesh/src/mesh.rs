@@ -58,7 +58,10 @@ impl SphereMesh {
             let opposite = delaunay.opposite(edge);
             let edge_index = edges.len();
             edges.push(VoronoiEdge {
-                vertices: [delaunay.edge_face(edge), delaunay.edge_face(opposite)],
+                vertices: [
+                    delaunay.edge_triangle(edge),
+                    delaunay.edge_triangle(opposite),
+                ],
                 cells: [delaunay.edge_origin(edge), delaunay.edge_destination(edge)],
             });
             half_edge_to_edge[edge] = edge_index;
@@ -78,7 +81,7 @@ impl SphereMesh {
             for edge in delaunay.edges_around_point(start_edge) {
                 debug_assert_eq!(delaunay.edge_destination(edge), cell);
                 corners.push(CellCorner {
-                    vertex: delaunay.edge_face(edge),
+                    vertex: delaunay.edge_triangle(edge),
                     neighbor: delaunay.edge_origin(edge),
                     edge: half_edge_to_edge[edge],
                 });
