@@ -164,6 +164,7 @@ fn sync_visible_layers(
     settings: Res<LayerSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
 ) {
+    // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
     let mut layers = vec![0];
     layers.extend(
         TopologyLayer::ALL
@@ -176,8 +177,9 @@ fn sync_visible_layers(
 
 fn point_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
-    let size = (0.018 / (delaunay.points.len() as f32).sqrt().max(8.0)).max(0.001);
-    for (index, &point) in delaunay.points.iter().enumerate() {
+    let points = delaunay.points();
+    let size = (0.018 / (points.len() as f32).sqrt().max(8.0)).max(0.001);
+    for (index, &point) in points.iter().enumerate() {
         let point = to_bevy(point).normalize() * 1.012;
         let reference = if point.y.abs() < 0.9 {
             Vec3::Y
@@ -196,11 +198,12 @@ fn point_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
 fn delaunay_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let color = Color::srgba(0.35, 0.5, 0.72, 0.9);
+    let points = delaunay.points();
     for edge in delaunay.unique_edges() {
         add_surface_edge(
             &mut asset,
-            to_bevy(delaunay.points[delaunay.edge_origin(edge)]),
-            to_bevy(delaunay.points[delaunay.edge_destination(edge)]),
+            to_bevy(points[delaunay.edge_origin(edge)]),
+            to_bevy(points[delaunay.edge_destination(edge)]),
             1.0,
             color,
         );

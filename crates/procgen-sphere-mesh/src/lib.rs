@@ -1,10 +1,11 @@
 //! Delaunay and Voronoi topology for points on a unit sphere.
 
 mod hull;
+mod initial;
 mod mesh;
 
 pub use hull::SphericalDelaunay;
-pub use mesh::{SphereMesh, VoronoiEdge};
+pub use mesh::{CellCorner, SphereMesh, VoronoiEdge};
 
 use procgen_core::Vec3;
 use std::fmt;
@@ -16,7 +17,6 @@ pub enum TopologyError {
     PointNotOnUnitSphere { index: usize, length: f32 },
     DegeneratePoints,
     BrokenHorizon,
-    OpenHull,
     InvalidRadius,
 }
 
@@ -33,7 +33,6 @@ impl fmt::Display for TopologyError {
             }
             Self::DegeneratePoints => formatter.write_str("points do not define a 3D hull"),
             Self::BrokenHorizon => formatter.write_str("visible hull faces have a broken horizon"),
-            Self::OpenHull => formatter.write_str("convex hull contains an unpaired half-edge"),
             Self::InvalidRadius => formatter.write_str("sphere radius must be finite and positive"),
         }
     }
