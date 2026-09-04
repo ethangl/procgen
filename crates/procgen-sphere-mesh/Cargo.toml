@@ -1,0 +1,9 @@
+[package]
+name = "procgen-sphere-mesh"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+procgen-sphere = { path = "../procgen-sphere" }
+rayon = "1"
