@@ -81,15 +81,13 @@ impl SphericalDelaunay {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FaceEdge {
     face: usize,
     edge: usize,
 }
 
 impl FaceEdge {
-    const UNWIRED: Self = Self::new(usize::MAX, usize::MAX);
-
     const fn new(face: usize, edge: usize) -> Self {
         Self { face, edge }
     }
@@ -168,10 +166,11 @@ impl QuickHull {
             visit_stamp: 0,
         };
 
-        for vertices in [[i0, i2, i1], [i0, i1, i3], [i0, i3, i2], [i1, i2, i3]] {
-            hull.add_face(vertices, [FaceEdge::UNWIRED; 3])?;
+        let seed_faces = [[i0, i2, i1], [i0, i1, i3], [i0, i3, i2], [i1, i2, i3]];
+        let seed_neighbors = tetrahedron_neighbors(&seed_faces);
+        for (vertices, neighbors) in seed_faces.into_iter().zip(seed_neighbors) {
+            hull.add_face(vertices, neighbors)?;
         }
-        hull.wire_initial_tetrahedron();
 
         for point_index in 0..hull.points.len() {
             if ![i0, i1, i2, i3].contains(&point_index) {
@@ -180,17 +179,9 @@ impl QuickHull {
         }
 
         let mut heap = BinaryHeap::new();
-        for (face_index, face) in hull.faces.iter().enumerate() {
-            if !face.conflicts.is_empty() {
-                heap.push(HeapEntry {
-                    distance: face.farthest_distance,
-                    face: face_index,
-                });
-            }
-        }
+        hull.push_conflicting_faces(&mut heap, 0..hull.faces.len());
 
         while let Some(entry) = heap.pop() {
-            // Each face is queued once, after its conflict set is complete.
             let face = &hull.faces[entry.face];
             if !face.alive {
                 continue;
@@ -202,15 +193,7 @@ impl QuickHull {
             for point_index in orphaned {
                 hull.assign_to_best_face(point_index, new_faces.clone());
             }
-            for face_index in new_faces {
-                let face = &hull.faces[face_index];
-                if !face.conflicts.is_empty() {
-                    heap.push(HeapEntry {
-                        distance: face.farthest_distance,
-                        face: face_index,
-                    });
-                }
-            }
+            hull.push_conflicting_faces(&mut heap, new_faces);
         }
 
         Ok(hull.compact())
@@ -287,27 +270,19 @@ impl QuickHull {
         Ok(())
     }
 
-    fn wire_initial_tetrahedron(&mut self) {
-        debug_assert_eq!(self.faces.len(), 4);
-        for face_index in 0..4 {
-            let vertices = self.faces[face_index].vertices;
-            for edge in 0..3 {
-                let from = vertices[edge];
-                let to = vertices[(edge + 1) % 3];
-                let opposite = self
-                    .faces
-                    .iter()
-                    .enumerate()
-                    .find_map(|(neighbor_face, neighbor)| {
-                        (0..3)
-                            .find(|&neighbor_edge| {
-                                neighbor.vertices[neighbor_edge] == to
-                                    && neighbor.vertices[(neighbor_edge + 1) % 3] == from
-                            })
-                            .map(|neighbor_edge| FaceEdge::new(neighbor_face, neighbor_edge))
-                    })
-                    .expect("tetrahedron edges must have an opposite");
-                self.faces[face_index].neighbors[edge] = opposite;
+    fn push_conflicting_faces(
+        &self,
+        heap: &mut BinaryHeap<HeapEntry>,
+        faces: impl Iterator<Item = usize>,
+    ) {
+        // A face is queued once, after its conflict set is complete.
+        for face_index in faces {
+            let face = &self.faces[face_index];
+            if !face.conflicts.is_empty() {
+                heap.push(HeapEntry {
+                    distance: face.farthest_distance,
+                    face: face_index,
+                });
             }
         }
     }
@@ -408,6 +383,27 @@ impl QuickHull {
     }
 }
 
+fn tetrahedron_neighbors(faces: &[[usize; 3]; 4]) -> [[FaceEdge; 3]; 4] {
+    std::array::from_fn(|face| {
+        std::array::from_fn(|edge| {
+            let from = faces[face][edge];
+            let to = faces[face][(edge + 1) % 3];
+            faces
+                .iter()
+                .enumerate()
+                .find_map(|(neighbor_face, vertices)| {
+                    (0..3)
+                        .find(|&neighbor_edge| {
+                            vertices[neighbor_edge] == to
+                                && vertices[(neighbor_edge + 1) % 3] == from
+                        })
+                        .map(|neighbor_edge| FaceEdge::new(neighbor_face, neighbor_edge))
+                })
+                .expect("tetrahedron edges must have an opposite")
+        })
+    })
+}
+
 fn order_horizon_cycle(edges: Vec<HorizonEdge>) -> Result<Vec<HorizonEdge>, TopologyError> {
     let Some(&first) = edges.first() else {
         return Err(TopologyError::BrokenHorizon);
@@ -429,4 +425,33 @@ fn order_horizon_cycle(edges: Vec<HorizonEdge>) -> Result<Vec<HorizonEdge>, Topo
         return Err(TopologyError::BrokenHorizon);
     }
     Ok(ordered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tetrahedron_neighbors_are_reciprocal() {
+        let faces = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        let neighbors = tetrahedron_neighbors(&faces);
+
+        for face in 0..4 {
+            for edge in 0..3 {
+                let neighbor = neighbors[face][edge];
+                assert_eq!(
+                    neighbors[neighbor.face][neighbor.edge],
+                    FaceEdge::new(face, edge)
+                );
+                assert_eq!(
+                    faces[face][edge],
+                    faces[neighbor.face][(neighbor.edge + 1) % 3]
+                );
+                assert_eq!(
+                    faces[face][(edge + 1) % 3],
+                    faces[neighbor.face][neighbor.edge]
+                );
+            }
+        }
+    }
 }

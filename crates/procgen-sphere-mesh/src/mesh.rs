@@ -48,12 +48,11 @@ impl SphereMesh {
             .map(|triangle| delaunay.triangle_circumcenter(triangle))
             .collect();
         let vertex_cells = triangles.to_vec();
-        let vertex_neighbors = opposite_half_edges
-            .chunks_exact(3)
-            .map(|edges| {
-                let edges: [usize; 3] = edges.try_into().expect("triangle has three half-edges");
-                edges.map(edge_triangle)
-            })
+        let (triangle_edges, remainder) = opposite_half_edges.as_chunks::<3>();
+        debug_assert!(remainder.is_empty());
+        let vertex_neighbors = triangle_edges
+            .iter()
+            .map(|edges| edges.map(edge_triangle))
             .collect();
 
         let mut edges = Vec::with_capacity(opposite_half_edges.len() / 2);
