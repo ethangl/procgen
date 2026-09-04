@@ -10,6 +10,15 @@ fn points(count: usize, jitter: f32) -> Vec<procgen_core::Vec3> {
     fibonacci_sphere(config).unwrap()
 }
 
+fn assert_outward(hull: &SphericalDelaunay) {
+    for (triangle_index, triangle) in hull.triangles().iter().enumerate() {
+        let [a, b, c] = triangle.map(|point| hull.points()[point]);
+        let normal = (b - a).cross(c - a);
+        let centroid = (a + b + c) * (1.0 / 3.0);
+        assert!(normal.dot(centroid) > 0.0, "triangle {triangle_index}");
+    }
+}
+
 #[test]
 fn validates_inputs() {
     assert_eq!(
@@ -31,28 +40,25 @@ fn delaunay_is_a_closed_outward_triangulation() {
     let hull = SphericalDelaunay::build(points(count, 0.5)).unwrap();
 
     assert_eq!(hull.triangle_count(), 2 * count - 4);
-    assert_eq!(hull.opposite_half_edges.len(), hull.triangle_count() * 3);
+    assert_eq!(hull.opposite_half_edges().len(), hull.triangle_count() * 3);
 
     let mut used = vec![false; count];
-    for (triangle_index, triangle) in hull.triangles.iter().enumerate() {
-        let [a, b, c] = triangle.map(|point| hull.points[point]);
-        let normal = (b - a).cross(c - a);
-        let centroid = (a + b + c) * (1.0 / 3.0);
-        assert!(normal.dot(centroid) > 0.0, "triangle {triangle_index}");
+    assert_outward(&hull);
+    for triangle in hull.triangles() {
         for &point in triangle {
             used[point] = true;
         }
     }
     assert!(used.into_iter().all(|is_used| is_used));
 
-    for (edge, &opposite) in hull.opposite_half_edges.iter().enumerate() {
-        assert_eq!(hull.opposite_half_edges[opposite], edge);
+    for (edge, &opposite) in hull.opposite_half_edges().iter().enumerate() {
+        assert_eq!(hull.opposite_half_edges()[opposite], edge);
     }
 
     let unique_edges: Vec<_> = hull.unique_edges().collect();
     assert_eq!(unique_edges.len(), 3 * count - 6);
     for edge in unique_edges {
-        let opposite = hull.opposite_half_edges[edge];
+        let opposite = hull.opposite_half_edges()[edge];
         assert_eq!(hull.edge_origin(edge), hull.edge_destination(opposite));
         assert_eq!(hull.edge_destination(edge), hull.edge_origin(opposite));
     }
@@ -64,12 +70,7 @@ fn input_order_does_not_determine_face_winding() {
     reversed.reverse();
     let hull = SphericalDelaunay::build(reversed).unwrap();
 
-    for triangle in &hull.triangles {
-        let [a, b, c] = triangle.map(|point| hull.points[point]);
-        let normal = (b - a).cross(c - a);
-        let centroid = (a + b + c) * (1.0 / 3.0);
-        assert!(normal.dot(centroid) > 0.0);
-    }
+    assert_outward(&hull);
 }
 
 #[test]
@@ -80,22 +81,22 @@ fn voronoi_has_complete_symmetric_topology() {
     assert_eq!(mesh.cell_count(), count);
     assert_eq!(mesh.vertex_count(), 2 * count - 4);
     assert_eq!(mesh.edge_count(), 3 * count - 6);
+    assert_eq!(mesh.cell_offsets.len(), count + 1);
+    assert_eq!(mesh.corners.len(), 6 * count - 12);
 
     for cell in 0..mesh.cell_count() {
-        assert!(mesh.cell_vertices[cell].len() >= 3);
-        assert_eq!(
-            mesh.cell_vertices[cell].len(),
-            mesh.cell_neighbors[cell].len()
-        );
-        assert_eq!(mesh.cell_vertices[cell].len(), mesh.cell_edges[cell].len());
-        for corner in 0..mesh.cell_vertices[cell].len() {
-            let vertex = mesh.cell_vertices[cell][corner];
-            let neighbor = mesh.cell_neighbors[cell][corner];
-            let edge = mesh.edges[mesh.cell_edges[cell][corner]];
-            assert!(edge.vertices.contains(&vertex));
+        let corners = mesh.cell_corners(cell);
+        assert!(corners.len() >= 3);
+        for corner in corners {
+            let edge = mesh.edges[corner.edge];
+            assert!(edge.vertices.contains(&corner.vertex));
             assert!(edge.cells.contains(&cell));
-            assert!(edge.cells.contains(&neighbor));
-            assert!(mesh.cell_neighbors[neighbor].contains(&cell));
+            assert!(edge.cells.contains(&corner.neighbor));
+            assert!(
+                mesh.cell_corners(corner.neighbor)
+                    .iter()
+                    .any(|neighbor| neighbor.neighbor == cell)
+            );
         }
     }
 }
