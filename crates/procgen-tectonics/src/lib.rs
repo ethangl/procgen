@@ -92,10 +92,25 @@ pub fn partition_plates(
     let mut growth = PlateGrowth::new(mesh);
     growth.seed(first_seed);
     growth.seed_farthest(config.major_plate_count - 1)?;
-    growth.grow(Some(config.major_head_start_rounds));
+    growth.grow(GrowthLimit::Rounds(config.major_head_start_rounds));
     growth.seed_farthest(config.minor_plate_count)?;
-    growth.grow(None);
+    growth.grow(GrowthLimit::Unbounded);
     Ok(growth.finish(config.major_plate_count))
+}
+
+#[derive(Clone, Copy)]
+enum GrowthLimit {
+    Rounds(usize),
+    Unbounded,
+}
+
+impl GrowthLimit {
+    fn includes(self, round: usize) -> bool {
+        match self {
+            Self::Rounds(limit) => round < limit,
+            Self::Unbounded => true,
+        }
+    }
 }
 
 struct PlateGrowth<'mesh> {
@@ -113,7 +128,7 @@ impl<'mesh> PlateGrowth<'mesh> {
             cell_plates: vec![UNASSIGNED_PLATE; mesh.cell_count()],
             plate_seeds: Vec::new(),
             seed_distance: vec![f32::MAX; mesh.cell_count()],
-            frontier: Vec::with_capacity(mesh.cell_count()),
+            frontier: Vec::new(),
         }
     }
 
@@ -148,9 +163,9 @@ impl<'mesh> PlateGrowth<'mesh> {
         Ok(())
     }
 
-    fn grow(&mut self, round_limit: Option<usize>) {
+    fn grow(&mut self, limit: GrowthLimit) {
         let mut rounds = 0;
-        while !self.frontier.is_empty() && round_limit.is_none_or(|limit| rounds < limit) {
+        while !self.frontier.is_empty() && limit.includes(rounds) {
             let current_frontier = std::mem::take(&mut self.frontier);
             for cell in current_frontier {
                 let plate = self.cell_plates[cell];

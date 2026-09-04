@@ -116,17 +116,9 @@ fn viewer_ui(
             ui.label("Timings");
             egui::Grid::new("timings").num_columns(2).show(ui, |ui| {
                 for stage in world.timings.stages() {
-                    stat(
-                        ui,
-                        stage.label,
-                        format!("{:.2} ms", stage.duration.as_secs_f64() * 1_000.0),
-                    );
+                    stat(ui, stage.label, millis(stage.duration));
                 }
-                stat(
-                    ui,
-                    "Total",
-                    format!("{:.2} ms", world.timings.total().as_secs_f64() * 1_000.0),
-                );
+                stat(ui, "Total", millis(world.timings.total()));
             });
 
             ui.separator();
@@ -141,6 +133,10 @@ fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
     ui.label(label);
     ui.monospace(value.to_string());
     ui.end_row();
+}
+
+fn millis(duration: std::time::Duration) -> String {
+    format!("{:.2} ms", duration.as_secs_f64() * 1_000.0)
 }
 
 fn drag_value<T: egui::emath::Numeric>(
