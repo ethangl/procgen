@@ -1,5 +1,5 @@
 use crate::{SphericalDelaunay, TopologyError};
-use procgen_sphere::Vec3;
+use procgen_core::Vec3;
 use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -5,5 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-procgen-sphere = { path = "../procgen-sphere" }
+procgen-core = { path = "../procgen-core" }
 rayon = "1"
+
+[dev-dependencies]
+procgen-sphere = { path = "../procgen-sphere" }

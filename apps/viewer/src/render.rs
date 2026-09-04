@@ -3,7 +3,7 @@ use crate::{
     model::{GeneratedWorld, ViewerSettings},
 };
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
-use procgen_sphere::Vec3 as SphereVec3;
+use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 
 const POINT_LAYER: usize = 1;

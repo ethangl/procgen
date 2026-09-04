@@ -3138,9 +3138,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "procgen-core"
+version = "0.1.0"
+
+[[package]]
 name = "procgen-sphere"
 version = "0.1.0"
 dependencies = [
+ "procgen-core",
  "rayon",
 ]
 
@@ -3148,6 +3153,7 @@ dependencies = [
 name = "procgen-sphere-mesh"
 version = "0.1.0"
 dependencies = [
+ "procgen-core",
  "procgen-sphere",
  "rayon",
 ]
@@ -3158,6 +3164,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "procgen-core",
  "procgen-sphere",
  "procgen-sphere-mesh",
 ]

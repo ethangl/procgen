@@ -1,4 +1,4 @@
-use procgen_sphere::Vec3;
+use procgen_core::Vec3;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 

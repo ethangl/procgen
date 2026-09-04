@@ -3,96 +3,12 @@
 //! Coordinates are right-handed and Y-up: latitude is measured from the XZ
 //! plane, and longitude rotates from +X toward +Z.
 
+use procgen_core::{RandomStream, Vec3};
 use rayon::prelude::*;
 use std::fmt;
-use std::ops::{Add, Mul, Neg, Sub};
 
 const GOLDEN_RATIO: f32 = 1.618_034;
 const PARALLEL_THRESHOLD: usize = 16_384;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Vec3 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
-
-impl Vec3 {
-    pub const ZERO: Self = Self::new(0.0, 0.0, 0.0);
-
-    pub const fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
-    }
-
-    pub fn length_squared(self) -> f32 {
-        self.x * self.x + self.y * self.y + self.z * self.z
-    }
-
-    pub fn length(self) -> f32 {
-        self.length_squared().sqrt()
-    }
-
-    pub fn normalized(self) -> Self {
-        let length = self.length();
-        if length > 1.0e-9 {
-            self * length.recip()
-        } else {
-            Self::ZERO
-        }
-    }
-
-    pub fn dot(self, other: Self) -> f32 {
-        self.x * other.x + self.y * other.y + self.z * other.z
-    }
-
-    pub fn cross(self, other: Self) -> Self {
-        Self::new(
-            self.y * other.z - self.z * other.y,
-            self.z * other.x - self.x * other.z,
-            self.x * other.y - self.y * other.x,
-        )
-    }
-
-    pub fn distance_squared(self, other: Self) -> f32 {
-        (self - other).length_squared()
-    }
-
-    pub fn distance(self, other: Self) -> f32 {
-        self.distance_squared(other).sqrt()
-    }
-}
-
-impl Add for Vec3 {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
-    }
-}
-
-impl Sub for Vec3 {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
-    }
-}
-
-impl Mul<f32> for Vec3 {
-    type Output = Self;
-
-    fn mul(self, rhs: f32) -> Self::Output {
-        Self::new(self.x * rhs, self.y * rhs, self.z * rhs)
-    }
-}
-
-impl Neg for Vec3 {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        Self::new(-self.x, -self.y, -self.z)
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FibonacciConfig {
@@ -159,40 +75,15 @@ fn fibonacci_point(index: usize, config: FibonacciConfig) -> Vec3 {
 
     if config.jitter > 0.0 {
         let spacing = (4.0 * std::f32::consts::PI / count).sqrt();
-        let mut random = SplitMix64::for_index(config.seed, index);
-        theta = (theta + random.signed_unit() * config.jitter * spacing)
+        let random = RandomStream::new(config.seed, 0);
+        theta = (theta + random.signed_f32(index as u64, 0) * config.jitter * spacing)
             .clamp(0.001, std::f32::consts::PI - 0.001);
-        phi += random.signed_unit() * config.jitter * spacing;
+        phi += random.signed_f32(index as u64, 1) * config.jitter * spacing;
         cos_theta = theta.cos();
     }
 
     let sin_theta = theta.sin();
     Vec3::new(sin_theta * phi.cos(), cos_theta, sin_theta * phi.sin()).normalized()
-}
-
-struct SplitMix64 {
-    state: u64,
-}
-
-impl SplitMix64 {
-    fn for_index(seed: u64, index: usize) -> Self {
-        Self {
-            state: seed ^ (index as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut value = self.state;
-        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        value ^ (value >> 31)
-    }
-
-    fn signed_unit(&mut self) -> f32 {
-        let unit = (self.next_u64() >> 40) as f32 / (1_u32 << 24) as f32;
-        unit * 2.0 - 1.0
-    }
 }
 
 #[cfg(test)]

@@ -60,7 +60,9 @@ Port and validate one boundary at a time:
 
 Completed foundations:
 
-- `procgen-sphere`: Y-up vector geometry and deterministic Fibonacci sampling.
+- `procgen-core`: dependency-free vector math and counter-addressable random
+  streams shared by CPU and future GPU implementations.
+- `procgen-sphere`: deterministic Y-up Fibonacci sampling.
 - `procgen-sphere-mesh`: spherical Delaunay/Voronoi topology and cell areas.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology layers, orbit
   controls, deterministic regeneration, statistics, and stage timings.
