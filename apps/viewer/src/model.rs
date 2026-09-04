@@ -1,7 +1,10 @@
 use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
-use std::time::{Duration, Instant};
+use std::{
+    error::Error,
+    time::{Duration, Instant},
+};
 
 #[derive(Resource)]
 pub struct GenerationSettings {
@@ -33,7 +36,9 @@ pub struct WorldModelPlugin;
 impl Plugin for WorldModelPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<RegenerateWorld>()
+            .init_resource::<GenerationSettings>()
             .init_resource::<GenerationStatus>()
+            .init_resource::<GeneratedWorld>()
             .add_systems(Update, regenerate_world);
     }
 }
@@ -60,15 +65,15 @@ pub struct GeneratedWorld {
 }
 
 impl GeneratedWorld {
-    pub fn generate(config: FibonacciConfig) -> Result<Self, String> {
+    pub fn generate(config: FibonacciConfig) -> Result<Self, Box<dyn Error>> {
         let (points, sampling) = timed(|| fibonacci_sphere(config));
-        let points = points.map_err(|error| error.to_string())?;
+        let points = points?;
 
         let (delaunay, delaunay_time) = timed(|| SphericalDelaunay::build(points));
-        let delaunay = delaunay.map_err(|error| error.to_string())?;
+        let delaunay = delaunay?;
 
         let (voronoi, voronoi_time) = timed(|| SphereMesh::from_delaunay(&delaunay, 1.0));
-        let voronoi = voronoi.map_err(|error| error.to_string())?;
+        let voronoi = voronoi?;
 
         Ok(Self {
             delaunay,
@@ -80,6 +85,13 @@ impl GeneratedWorld {
             },
             config,
         })
+    }
+}
+
+impl FromWorld for GeneratedWorld {
+    fn from_world(world: &mut World) -> Self {
+        let config = world.resource::<GenerationSettings>().fibonacci;
+        Self::generate(config).expect("default world generation must succeed")
     }
 }
 
@@ -104,7 +116,7 @@ fn regenerate_world(
             *world = generated;
             status.last_error = None;
         }
-        Err(error) => status.last_error = Some(error),
+        Err(error) => status.last_error = Some(error.to_string()),
     }
 }
 

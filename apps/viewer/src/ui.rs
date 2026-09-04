@@ -58,6 +58,7 @@ fn viewer_ui(
             ui.separator();
             ui.label("Layers");
             for layer in TopologyLayer::ALL {
+                // Only mutably access the resource when egui reports a real change.
                 let mut visible = layers.is_visible(layer);
                 if ui.checkbox(&mut visible, layer.label()).changed() {
                     layers.set_visible(layer, visible);

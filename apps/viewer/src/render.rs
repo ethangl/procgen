@@ -78,13 +78,15 @@ pub struct TopologyRenderPlugin;
 
 impl Plugin for TopologyRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_scene).add_systems(
-            Update,
-            (
-                rebuild_topology_assets.run_if(resource_changed::<GeneratedWorld>),
-                sync_visible_layers.run_if(resource_changed::<LayerSettings>),
-            ),
-        );
+        app.init_resource::<LayerSettings>()
+            .add_systems(Startup, setup_scene)
+            .add_systems(
+                Update,
+                (
+                    rebuild_topology_assets.run_if(resource_changed::<GeneratedWorld>),
+                    sync_visible_layers.run_if(resource_changed::<LayerSettings>),
+                ),
+            );
     }
 }
 
