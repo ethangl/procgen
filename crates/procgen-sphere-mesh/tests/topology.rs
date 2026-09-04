@@ -1,7 +1,8 @@
+use procgen_core::Vec3;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay, TopologyError, build_sphere_mesh};
 
-fn points(count: usize, jitter: f32) -> Vec<procgen_core::Vec3> {
+fn points(count: usize, jitter: f32) -> Vec<Vec3> {
     let config = FibonacciConfig {
         jitter,
         seed: 42,
@@ -22,11 +23,11 @@ fn assert_outward(hull: &SphericalDelaunay) {
 #[test]
 fn validates_inputs() {
     assert_eq!(
-        SphericalDelaunay::build(vec![procgen_core::Vec3::ZERO; 3]).unwrap_err(),
+        SphericalDelaunay::build(vec![Vec3::ZERO; 3]).unwrap_err(),
         TopologyError::TooFewPoints
     );
     assert_eq!(
-        SphericalDelaunay::build(vec![procgen_core::Vec3::ZERO; 4]).unwrap_err(),
+        SphericalDelaunay::build(vec![Vec3::ZERO; 4]).unwrap_err(),
         TopologyError::PointNotOnUnitSphere {
             index: 0,
             length: 0.0

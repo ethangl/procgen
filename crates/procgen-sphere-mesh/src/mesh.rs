@@ -2,6 +2,7 @@ use crate::{SphericalDelaunay, TopologyError};
 use procgen_core::Vec3;
 use rayon::prelude::*;
 
+// Workload-specific tuning belongs with the algorithm, not in `procgen-core`.
 const PARALLEL_THRESHOLD: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

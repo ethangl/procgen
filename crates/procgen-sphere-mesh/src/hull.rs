@@ -3,10 +3,7 @@ use crate::{
     initial::{initial_tetrahedron, validate_points},
 };
 use procgen_core::Vec3;
-use std::{
-    cmp::Ordering,
-    collections::{BinaryHeap, HashMap, VecDeque},
-};
+use std::collections::{HashMap, VecDeque};
 
 const VISIBILITY_EPSILON: f32 = 1.0e-7;
 
@@ -81,29 +78,17 @@ impl SphericalDelaunay {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FaceEdge {
-    face: usize,
-    edge: usize,
-}
-
-impl FaceEdge {
-    const fn new(face: usize, edge: usize) -> Self {
-        Self { face, edge }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct HorizonEdge {
     from: usize,
     to: usize,
-    outside: FaceEdge,
+    outside: usize,
 }
 
 #[derive(Debug)]
 struct Face {
     vertices: [usize; 3],
-    neighbors: [FaceEdge; 3],
+    neighbors: [usize; 3],
     normal: Vec3,
     plane_distance: f32,
     alive: bool,
@@ -116,34 +101,6 @@ struct Face {
 impl Face {
     fn distance_to(&self, point: Vec3) -> f32 {
         self.normal.dot(point) - self.plane_distance
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct HeapEntry {
-    distance: f32,
-    face: usize,
-}
-
-impl PartialEq for HeapEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.face == other.face && self.distance.total_cmp(&other.distance) == Ordering::Equal
-    }
-}
-
-impl Eq for HeapEntry {}
-
-impl PartialOrd for HeapEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for HeapEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.distance
-            .total_cmp(&other.distance)
-            .then_with(|| self.face.cmp(&other.face))
     }
 }
 
@@ -178,22 +135,22 @@ impl QuickHull {
             }
         }
 
-        let mut heap = BinaryHeap::new();
-        hull.push_conflicting_faces(&mut heap, 0..hull.faces.len());
+        let mut pending = VecDeque::new();
+        hull.push_conflicting_faces(&mut pending, 0..hull.faces.len());
 
-        while let Some(entry) = heap.pop() {
-            let face = &hull.faces[entry.face];
+        while let Some(face_index) = pending.pop_front() {
+            let face = &hull.faces[face_index];
             if !face.alive {
                 continue;
             }
 
             let apex = face.farthest_point;
-            let (new_faces, orphaned) = hull.expand(entry.face, apex)?;
+            let (new_faces, orphaned) = hull.expand(face_index, apex)?;
 
             for point_index in orphaned {
                 hull.assign_to_best_face(point_index, new_faces.clone());
             }
-            hull.push_conflicting_faces(&mut heap, new_faces);
+            hull.push_conflicting_faces(&mut pending, new_faces);
         }
 
         Ok(hull.compact())
@@ -223,13 +180,10 @@ impl QuickHull {
             let previous = new_start + (index + new_face_count - 1) % new_face_count;
             self.add_face(
                 [edge.from, edge.to, apex],
-                [
-                    edge.outside,
-                    FaceEdge::new(next, 2),
-                    FaceEdge::new(previous, 1),
-                ],
+                [edge.outside, flat_edge(next, 2), flat_edge(previous, 1)],
             )?;
-            self.faces[edge.outside.face].neighbors[edge.outside.edge] = FaceEdge::new(face, 0);
+            self.faces[SphericalDelaunay::edge_triangle(edge.outside)].neighbors
+                [edge.outside % 3] = flat_edge(face, 0);
         }
 
         Ok((new_start..self.faces.len(), orphaned))
@@ -238,7 +192,7 @@ impl QuickHull {
     fn add_face(
         &mut self,
         vertices: [usize; 3],
-        neighbors: [FaceEdge; 3],
+        neighbors: [usize; 3],
     ) -> Result<(), TopologyError> {
         let [v0, v1, v2] = vertices;
         let a = self.points[v0];
@@ -272,17 +226,14 @@ impl QuickHull {
 
     fn push_conflicting_faces(
         &self,
-        heap: &mut BinaryHeap<HeapEntry>,
+        pending: &mut VecDeque<usize>,
         faces: impl Iterator<Item = usize>,
     ) {
         // A face is queued once, after its conflict set is complete.
         for face_index in faces {
             let face = &self.faces[face_index];
             if !face.conflicts.is_empty() {
-                heap.push(HeapEntry {
-                    distance: face.farthest_distance,
-                    face: face_index,
-                });
+                pending.push_back(face_index);
             }
         }
     }
@@ -337,13 +288,14 @@ impl QuickHull {
             let neighbors = self.faces[face_index].neighbors;
             for edge in 0..3 {
                 let neighbor = neighbors[edge];
-                debug_assert!(self.faces[neighbor.face].alive);
-                if self.faces[neighbor.face].visit_stamp == visit_stamp {
+                let neighbor_face = SphericalDelaunay::edge_triangle(neighbor);
+                debug_assert!(self.faces[neighbor_face].alive);
+                if self.faces[neighbor_face].visit_stamp == visit_stamp {
                     continue;
                 }
-                if self.faces[neighbor.face].distance_to(apex) > VISIBILITY_EPSILON {
-                    self.faces[neighbor.face].visit_stamp = visit_stamp;
-                    queue.push_back(neighbor.face);
+                if self.faces[neighbor_face].distance_to(apex) > VISIBILITY_EPSILON {
+                    self.faces[neighbor_face].visit_stamp = visit_stamp;
+                    queue.push_back(neighbor_face);
                 } else {
                     horizon.push(HorizonEdge {
                         from: vertices[edge],
@@ -353,7 +305,7 @@ impl QuickHull {
                 }
             }
         }
-        Ok((visible, order_horizon_cycle(horizon)?))
+        order_horizon_cycle(horizon).map(|horizon| (visible, horizon))
     }
 
     fn compact(self) -> SphericalDelaunay {
@@ -369,9 +321,9 @@ impl QuickHull {
         let mut opposite_half_edges = Vec::with_capacity(triangles.len() * 3);
         for face in self.faces.iter().filter(|face| face.alive) {
             for neighbor in face.neighbors {
-                let triangle = face_remap[neighbor.face];
+                let triangle = face_remap[SphericalDelaunay::edge_triangle(neighbor)];
                 debug_assert_ne!(triangle, usize::MAX);
-                opposite_half_edges.push(triangle * 3 + neighbor.edge);
+                opposite_half_edges.push(flat_edge(triangle, neighbor % 3));
             }
         }
 
@@ -383,7 +335,11 @@ impl QuickHull {
     }
 }
 
-fn tetrahedron_neighbors(faces: &[[usize; 3]; 4]) -> [[FaceEdge; 3]; 4] {
+const fn flat_edge(face: usize, edge: usize) -> usize {
+    face * 3 + edge
+}
+
+fn tetrahedron_neighbors(faces: &[[usize; 3]; 4]) -> [[usize; 3]; 4] {
     std::array::from_fn(|face| {
         std::array::from_fn(|edge| {
             let from = faces[face][edge];
@@ -397,7 +353,7 @@ fn tetrahedron_neighbors(faces: &[[usize; 3]; 4]) -> [[FaceEdge; 3]; 4] {
                             vertices[neighbor_edge] == to
                                 && vertices[(neighbor_edge + 1) % 3] == from
                         })
-                        .map(|neighbor_edge| FaceEdge::new(neighbor_face, neighbor_edge))
+                        .map(|neighbor_edge| flat_edge(neighbor_face, neighbor_edge))
                 })
                 .expect("tetrahedron edges must have an opposite")
         })
@@ -439,17 +395,19 @@ mod tests {
         for face in 0..4 {
             for edge in 0..3 {
                 let neighbor = neighbors[face][edge];
+                let neighbor_face = SphericalDelaunay::edge_triangle(neighbor);
+                let neighbor_edge = neighbor % 3;
                 assert_eq!(
-                    neighbors[neighbor.face][neighbor.edge],
-                    FaceEdge::new(face, edge)
+                    neighbors[neighbor_face][neighbor_edge],
+                    flat_edge(face, edge)
                 );
                 assert_eq!(
                     faces[face][edge],
-                    faces[neighbor.face][(neighbor.edge + 1) % 3]
+                    faces[neighbor_face][(neighbor_edge + 1) % 3]
                 );
                 assert_eq!(
                     faces[face][(edge + 1) % 3],
-                    faces[neighbor.face][neighbor.edge]
+                    faces[neighbor_face][neighbor_edge]
                 );
             }
         }

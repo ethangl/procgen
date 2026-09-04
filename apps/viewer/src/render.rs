@@ -180,7 +180,7 @@ fn point_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
     let points = delaunay.points();
     let size = (0.018 / (points.len() as f32).sqrt().max(8.0)).max(0.001);
     for (index, &point) in points.iter().enumerate() {
-        let point = to_bevy(point).normalize() * 1.012;
+        let point = to_bevy(point) * 1.012;
         let reference = if point.y.abs() < 0.9 {
             Vec3::Y
         } else {

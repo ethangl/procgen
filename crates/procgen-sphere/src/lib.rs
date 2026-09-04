@@ -8,6 +8,7 @@ use rayon::prelude::*;
 use std::fmt;
 
 const GOLDEN_RATIO: f32 = 1.618_034;
+// Workload-specific tuning belongs with the algorithm, not in `procgen-core`.
 const PARALLEL_THRESHOLD: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

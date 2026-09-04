@@ -77,10 +77,20 @@ fn viewer_ui(
 
             ui.add_space(6.0);
             ui.label("Timings");
-            timing(ui, "Sampling", world.timings.sampling.as_secs_f64());
-            timing(ui, "Delaunay", world.timings.delaunay.as_secs_f64());
-            timing(ui, "Voronoi", world.timings.voronoi.as_secs_f64());
-            timing(ui, "Total", world.timings.total().as_secs_f64());
+            egui::Grid::new("timings").num_columns(2).show(ui, |ui| {
+                for (label, duration) in [
+                    ("Sampling", world.timings.sampling),
+                    ("Delaunay", world.timings.delaunay),
+                    ("Voronoi", world.timings.voronoi),
+                    ("Total", world.timings.total()),
+                ] {
+                    stat(
+                        ui,
+                        label,
+                        format!("{:.2} ms", duration.as_secs_f64() * 1_000.0),
+                    );
+                }
+            });
 
             ui.separator();
             ui.label("Drag the viewport to orbit.");
@@ -94,11 +104,4 @@ fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
     ui.label(label);
     ui.monospace(value.to_string());
     ui.end_row();
-}
-
-fn timing(ui: &mut egui::Ui, label: &str, seconds: f64) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.monospace(format!("{:.2} ms", seconds * 1_000.0));
-    });
 }

@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::schedule::common_conditions::on_message, prelude::*};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use std::{
@@ -39,7 +39,10 @@ impl Plugin for WorldModelPlugin {
             .init_resource::<GenerationSettings>()
             .init_resource::<GenerationStatus>()
             .init_resource::<GeneratedWorld>()
-            .add_systems(Update, regenerate_world);
+            .add_systems(
+                Update,
+                regenerate_world.run_if(on_message::<RegenerateWorld>),
+            );
     }
 }
 
@@ -66,14 +69,9 @@ pub struct GeneratedWorld {
 
 impl GeneratedWorld {
     pub fn generate(config: FibonacciConfig) -> Result<Self, Box<dyn Error>> {
-        let (points, sampling) = timed(|| fibonacci_sphere(config));
-        let points = points?;
-
-        let (delaunay, delaunay_time) = timed(|| SphericalDelaunay::build(points));
-        let delaunay = delaunay?;
-
-        let (voronoi, voronoi_time) = timed(|| SphereMesh::from_delaunay(&delaunay, 1.0));
-        let voronoi = voronoi?;
+        let (points, sampling) = timed(|| fibonacci_sphere(config))?;
+        let (delaunay, delaunay_time) = timed(|| SphericalDelaunay::build(points))?;
+        let (voronoi, voronoi_time) = timed(|| SphereMesh::from_delaunay(&delaunay, 1.0))?;
 
         Ok(Self {
             delaunay,
@@ -95,22 +93,17 @@ impl FromWorld for GeneratedWorld {
     }
 }
 
-fn timed<T>(operation: impl FnOnce() -> T) -> (T, Duration) {
+fn timed<T, E>(operation: impl FnOnce() -> Result<T, E>) -> Result<(T, Duration), E> {
     let started = Instant::now();
-    let result = operation();
-    (result, started.elapsed())
+    let result = operation()?;
+    Ok((result, started.elapsed()))
 }
 
 fn regenerate_world(
-    mut requests: MessageReader<RegenerateWorld>,
     settings: Res<GenerationSettings>,
     mut world: ResMut<GeneratedWorld>,
     mut status: ResMut<GenerationStatus>,
 ) {
-    if requests.read().count() == 0 {
-        return;
-    }
-
     match GeneratedWorld::generate(settings.fibonacci) {
         Ok(generated) => {
             *world = generated;
