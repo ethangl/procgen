@@ -1,4 +1,4 @@
-use crate::{SphericalDelaunay, TopologyError};
+use crate::{SphericalDelaunay, TopologyError, hull::half_edge_face};
 use procgen_core::Vec3;
 use rayon::prelude::*;
 
@@ -41,7 +41,6 @@ impl SphereMesh {
         let points = delaunay.points();
         let triangles = delaunay.triangles();
         let opposite_half_edges = delaunay.opposite_half_edges();
-        let edge_triangle = SphericalDelaunay::edge_triangle;
         let cell_count = points.len();
         let triangle_count = delaunay.triangle_count();
         let cell_centers: Vec<Vec3> = points.iter().map(|&point| point * radius).collect();
@@ -53,7 +52,7 @@ impl SphereMesh {
         debug_assert!(remainder.is_empty());
         let vertex_neighbors = triangle_edges
             .iter()
-            .map(|edges| edges.map(edge_triangle))
+            .map(|edges| edges.map(half_edge_face))
             .collect();
 
         let mut edges = Vec::with_capacity(opposite_half_edges.len() / 2);
@@ -62,7 +61,7 @@ impl SphereMesh {
             let opposite = opposite_half_edges[edge];
             let edge_index = edges.len();
             edges.push(VoronoiEdge {
-                vertices: [edge_triangle(edge), edge_triangle(opposite)],
+                vertices: [half_edge_face(edge), half_edge_face(opposite)],
                 cells: [delaunay.edge_origin(edge), delaunay.edge_destination(edge)],
             });
             half_edge_to_edge[edge] = edge_index;
@@ -82,7 +81,7 @@ impl SphereMesh {
             for edge in delaunay.edges_around_point(start_edge) {
                 debug_assert_eq!(delaunay.edge_destination(edge), cell);
                 corners.push(CellCorner {
-                    vertex: edge_triangle(edge),
+                    vertex: half_edge_face(edge),
                     neighbor: delaunay.edge_origin(edge),
                     edge: half_edge_to_edge[edge],
                 });

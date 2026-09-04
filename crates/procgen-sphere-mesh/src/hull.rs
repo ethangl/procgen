@@ -38,20 +38,17 @@ impl SphericalDelaunay {
         &self.opposite_half_edges
     }
 
-    pub fn edge_triangle(edge: usize) -> usize {
-        edge / 3
-    }
-
-    fn next_half_edge(edge: usize) -> usize {
-        if edge % 3 == 2 { edge - 2 } else { edge + 1 }
+    pub const fn edge_triangle(edge: usize) -> usize {
+        half_edge_face(edge)
     }
 
     pub fn edge_origin(&self, edge: usize) -> usize {
-        self.triangles[Self::edge_triangle(edge)][edge % 3]
+        self.triangles[half_edge_face(edge)][half_edge_corner(edge)]
     }
 
     pub fn edge_destination(&self, edge: usize) -> usize {
-        self.triangles[Self::edge_triangle(edge)][Self::next_half_edge(edge) % 3]
+        let next = next_half_edge(edge);
+        self.triangles[half_edge_face(next)][half_edge_corner(next)]
     }
 
     pub fn unique_edges(&self) -> impl Iterator<Item = usize> + '_ {
@@ -72,7 +69,7 @@ impl SphericalDelaunay {
 
     pub(crate) fn edges_around_point(&self, start: usize) -> impl Iterator<Item = usize> + '_ {
         std::iter::successors(Some(start), move |&incoming| {
-            let next = self.opposite_half_edges[Self::next_half_edge(incoming)];
+            let next = self.opposite_half_edges[next_half_edge(incoming)];
             (next != start).then_some(next)
         })
     }
@@ -93,6 +90,7 @@ struct Face {
     plane_distance: f32,
     alive: bool,
     conflicts: Vec<usize>,
+    // Selecting the farthest conflict as apex materially reduces hull expansion work.
     farthest_distance: f32,
     farthest_point: usize,
     visit_stamp: u64,
@@ -182,8 +180,8 @@ impl QuickHull {
                 [edge.from, edge.to, apex],
                 [edge.outside, flat_edge(next, 2), flat_edge(previous, 1)],
             )?;
-            self.faces[SphericalDelaunay::edge_triangle(edge.outside)].neighbors
-                [edge.outside % 3] = flat_edge(face, 0);
+            self.faces[half_edge_face(edge.outside)].neighbors[half_edge_corner(edge.outside)] =
+                flat_edge(face, 0);
         }
 
         Ok((new_start..self.faces.len(), orphaned))
@@ -288,7 +286,7 @@ impl QuickHull {
             let neighbors = self.faces[face_index].neighbors;
             for edge in 0..3 {
                 let neighbor = neighbors[edge];
-                let neighbor_face = SphericalDelaunay::edge_triangle(neighbor);
+                let neighbor_face = half_edge_face(neighbor);
                 debug_assert!(self.faces[neighbor_face].alive);
                 if self.faces[neighbor_face].visit_stamp == visit_stamp {
                     continue;
@@ -321,9 +319,9 @@ impl QuickHull {
         let mut opposite_half_edges = Vec::with_capacity(triangles.len() * 3);
         for face in self.faces.iter().filter(|face| face.alive) {
             for neighbor in face.neighbors {
-                let triangle = face_remap[SphericalDelaunay::edge_triangle(neighbor)];
+                let triangle = face_remap[half_edge_face(neighbor)];
                 debug_assert_ne!(triangle, usize::MAX);
-                opposite_half_edges.push(flat_edge(triangle, neighbor % 3));
+                opposite_half_edges.push(flat_edge(triangle, half_edge_corner(neighbor)));
             }
         }
 
@@ -335,8 +333,24 @@ impl QuickHull {
     }
 }
 
-const fn flat_edge(face: usize, edge: usize) -> usize {
+pub(crate) const fn flat_edge(face: usize, edge: usize) -> usize {
     face * 3 + edge
+}
+
+pub(crate) const fn half_edge_face(edge: usize) -> usize {
+    edge / 3
+}
+
+pub(crate) const fn half_edge_corner(edge: usize) -> usize {
+    edge % 3
+}
+
+pub(crate) const fn next_half_edge(edge: usize) -> usize {
+    if half_edge_corner(edge) == 2 {
+        edge - 2
+    } else {
+        edge + 1
+    }
 }
 
 fn tetrahedron_neighbors(faces: &[[usize; 3]; 4]) -> [[usize; 3]; 4] {
@@ -395,8 +409,8 @@ mod tests {
         for face in 0..4 {
             for edge in 0..3 {
                 let neighbor = neighbors[face][edge];
-                let neighbor_face = SphericalDelaunay::edge_triangle(neighbor);
-                let neighbor_edge = neighbor % 3;
+                let neighbor_face = half_edge_face(neighbor);
+                let neighbor_edge = half_edge_corner(neighbor);
                 assert_eq!(
                     neighbors[neighbor_face][neighbor_edge],
                     flat_edge(face, edge)
