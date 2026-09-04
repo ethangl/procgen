@@ -1,7 +1,7 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
-use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
+use procgen_sphere_mesh::SphereMesh;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
@@ -41,8 +41,8 @@ impl TopologyLayer {
 
     fn build(self, world: &GeneratedWorld) -> GizmoAsset {
         match self {
-            Self::Points => point_asset(&world.delaunay),
-            Self::Delaunay => delaunay_asset(&world.delaunay),
+            Self::Points => point_asset(&world.voronoi),
+            Self::Delaunay => delaunay_asset(&world.voronoi),
             Self::Voronoi => voronoi_asset(&world.voronoi),
         }
     }
@@ -175,9 +175,9 @@ fn sync_visible_layers(
     **camera_layers = RenderLayers::from_layers(&layers);
 }
 
-fn point_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
+fn point_asset(mesh: &SphereMesh) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
-    let points = delaunay.points();
+    let points = &mesh.cell_centers;
     let size = (0.018 / (points.len() as f32).sqrt().max(8.0)).max(0.001);
     for (index, &point) in points.iter().enumerate() {
         let point = to_bevy(point) * 1.012;
@@ -195,15 +195,14 @@ fn point_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
     asset
 }
 
-fn delaunay_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
+fn delaunay_asset(mesh: &SphereMesh) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let color = Color::srgba(0.35, 0.5, 0.72, 0.9);
-    let points = delaunay.points();
-    for edge in delaunay.unique_edges() {
+    for edge in &mesh.edges {
         add_surface_edge(
             &mut asset,
-            to_bevy(points[delaunay.edge_origin(edge)]),
-            to_bevy(points[delaunay.edge_destination(edge)]),
+            to_bevy(mesh.cell_centers[edge.cells[0]]),
+            to_bevy(mesh.cell_centers[edge.cells[1]]),
             1.0,
             color,
         );

@@ -41,7 +41,7 @@ fn delaunay_is_a_closed_outward_triangulation() {
     let hull = SphericalDelaunay::build(points(count, 0.5)).unwrap();
 
     assert_eq!(hull.triangle_count(), 2 * count - 4);
-    assert_eq!(hull.opposite_half_edges().len(), hull.triangle_count() * 3);
+    assert_eq!(hull.half_edge_count(), hull.triangle_count() * 3);
 
     let mut used = vec![false; count];
     assert_outward(&hull);
@@ -52,14 +52,15 @@ fn delaunay_is_a_closed_outward_triangulation() {
     }
     assert!(used.into_iter().all(|is_used| is_used));
 
-    for (edge, &opposite) in hull.opposite_half_edges().iter().enumerate() {
-        assert_eq!(hull.opposite_half_edges()[opposite], edge);
+    for edge in 0..hull.half_edge_count() {
+        let opposite = hull.opposite(edge);
+        assert_eq!(hull.opposite(opposite), edge);
     }
 
     let unique_edges: Vec<_> = hull.unique_edges().collect();
     assert_eq!(unique_edges.len(), 3 * count - 6);
     for edge in unique_edges {
-        let opposite = hull.opposite_half_edges()[edge];
+        let opposite = hull.opposite(edge);
         assert_eq!(hull.edge_origin(edge), hull.edge_destination(opposite));
         assert_eq!(hull.edge_destination(edge), hull.edge_origin(opposite));
     }

@@ -61,7 +61,6 @@ impl GenerationTimings {
 
 #[derive(Resource)]
 pub struct GeneratedWorld {
-    pub delaunay: SphericalDelaunay,
     pub voronoi: SphereMesh,
     pub timings: GenerationTimings,
     pub config: FibonacciConfig,
@@ -74,7 +73,6 @@ impl GeneratedWorld {
         let (voronoi, voronoi_time) = timed(|| SphereMesh::from_delaunay(&delaunay, 1.0))?;
 
         Ok(Self {
-            delaunay,
             voronoi,
             timings: GenerationTimings {
                 sampling,
@@ -121,7 +119,6 @@ mod tests {
     fn generates_consistent_viewer_counts() {
         let world = GeneratedWorld::generate(FibonacciConfig::new(128)).unwrap();
 
-        assert_eq!(world.delaunay.triangle_count(), 252);
         assert_eq!(world.voronoi.cell_count(), 128);
         assert_eq!(world.voronoi.vertex_count(), 252);
         assert_eq!(world.voronoi.edge_count(), 378);

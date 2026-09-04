@@ -1,4 +1,4 @@
-use crate::{SphericalDelaunay, TopologyError, hull::half_edge_face};
+use crate::{SphericalDelaunay, TopologyError};
 use procgen_core::Vec3;
 use rayon::prelude::*;
 
@@ -40,28 +40,25 @@ impl SphereMesh {
 
         let points = delaunay.points();
         let triangles = delaunay.triangles();
-        let opposite_half_edges = delaunay.opposite_half_edges();
         let cell_count = points.len();
         let triangle_count = delaunay.triangle_count();
+        let half_edge_count = delaunay.half_edge_count();
         let cell_centers: Vec<Vec3> = points.iter().map(|&point| point * radius).collect();
         let unit_vertices: Vec<_> = (0..triangle_count)
             .map(|triangle| delaunay.triangle_circumcenter(triangle))
             .collect();
         let vertex_cells = triangles.to_vec();
-        let (triangle_edges, remainder) = opposite_half_edges.as_chunks::<3>();
-        debug_assert!(remainder.is_empty());
-        let vertex_neighbors = triangle_edges
-            .iter()
-            .map(|edges| edges.map(half_edge_face))
+        let vertex_neighbors = (0..triangle_count)
+            .map(|triangle| delaunay.triangle_neighbors(triangle))
             .collect();
 
-        let mut edges = Vec::with_capacity(opposite_half_edges.len() / 2);
-        let mut half_edge_to_edge = vec![usize::MAX; opposite_half_edges.len()];
+        let mut edges = Vec::with_capacity(half_edge_count / 2);
+        let mut half_edge_to_edge = vec![usize::MAX; half_edge_count];
         for edge in delaunay.unique_edges() {
-            let opposite = opposite_half_edges[edge];
+            let opposite = delaunay.opposite(edge);
             let edge_index = edges.len();
             edges.push(VoronoiEdge {
-                vertices: [half_edge_face(edge), half_edge_face(opposite)],
+                vertices: [delaunay.edge_face(edge), delaunay.edge_face(opposite)],
                 cells: [delaunay.edge_origin(edge), delaunay.edge_destination(edge)],
             });
             half_edge_to_edge[edge] = edge_index;
@@ -69,19 +66,19 @@ impl SphereMesh {
         }
 
         let mut point_to_edge = vec![usize::MAX; cell_count];
-        for edge in 0..opposite_half_edges.len() {
+        for edge in 0..half_edge_count {
             point_to_edge[delaunay.edge_destination(edge)] = edge;
         }
         debug_assert!(point_to_edge.iter().all(|&edge| edge != usize::MAX));
 
         let mut cell_offsets = Vec::with_capacity(cell_count + 1);
-        let mut corners = Vec::with_capacity(opposite_half_edges.len());
+        let mut corners = Vec::with_capacity(half_edge_count);
         cell_offsets.push(0);
         for (cell, &start_edge) in point_to_edge.iter().enumerate() {
             for edge in delaunay.edges_around_point(start_edge) {
                 debug_assert_eq!(delaunay.edge_destination(edge), cell);
                 corners.push(CellCorner {
-                    vertex: half_edge_face(edge),
+                    vertex: delaunay.edge_face(edge),
                     neighbor: delaunay.edge_origin(edge),
                     edge: half_edge_to_edge[edge],
                 });
