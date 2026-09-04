@@ -12,6 +12,9 @@ and rebuild it incrementally; do not attempt a one-shot translation. See
 
 ## Architecture
 
+- Keep `procgen-core` dependency-free and limited to backend-neutral value
+  types and deterministic pure primitives. It must not become a miscellaneous
+  home for algorithms, execution policy, or framework integrations.
 - Build small, cohesive crates under `crates/` and compose them into experiments
   and applications.
 - "Atomic" means independently understandable, testable, and reusable—not one

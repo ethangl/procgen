@@ -1,0 +1,9 @@
+[package]
+name = "procgen-sphere"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+procgen-core = { path = "../procgen-core" }
+rayon = "1"
