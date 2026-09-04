@@ -1,18 +1,19 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
-pub enum TopologyLayer {
+pub enum DiagnosticLayer {
     Points,
     Delaunay,
     Voronoi,
+    Plates,
 }
 
-impl TopologyLayer {
-    pub const ALL: [Self; 3] = [Self::Points, Self::Delaunay, Self::Voronoi];
+impl DiagnosticLayer {
+    pub const ALL: [Self; 4] = [Self::Points, Self::Delaunay, Self::Voronoi, Self::Plates];
     const COUNT: usize = Self::ALL.len();
 
     const fn index(self) -> usize {
@@ -28,6 +29,7 @@ impl TopologyLayer {
             Self::Points => 1.8,
             Self::Delaunay => 1.1,
             Self::Voronoi => 1.5,
+            Self::Plates => 2.4,
         }
     }
 
@@ -36,6 +38,7 @@ impl TopologyLayer {
             Self::Points => "Cell centers",
             Self::Delaunay => "Delaunay",
             Self::Voronoi => "Voronoi",
+            Self::Plates => "Tectonic plates",
         }
     }
 
@@ -44,46 +47,48 @@ impl TopologyLayer {
             Self::Points => point_asset(&world.voronoi),
             Self::Delaunay => delaunay_asset(&world.voronoi),
             Self::Voronoi => voronoi_asset(&world.voronoi),
+            Self::Plates => plate_asset(world),
         }
     }
 }
 
 #[derive(Resource)]
 pub struct LayerSettings {
-    visible: [bool; TopologyLayer::COUNT],
+    visible: [bool; DiagnosticLayer::COUNT],
 }
 
 impl LayerSettings {
-    pub fn is_visible(&self, layer: TopologyLayer) -> bool {
+    pub fn is_visible(&self, layer: DiagnosticLayer) -> bool {
         self.visible[layer.index()]
     }
 
-    pub fn set_visible(&mut self, layer: TopologyLayer, visible: bool) {
+    pub fn set_visible(&mut self, layer: DiagnosticLayer, visible: bool) {
         self.visible[layer.index()] = visible;
     }
 }
 
 impl Default for LayerSettings {
     fn default() -> Self {
-        let mut visible = [false; TopologyLayer::COUNT];
-        visible[TopologyLayer::Voronoi.index()] = true;
+        let mut visible = [false; DiagnosticLayer::COUNT];
+        visible[DiagnosticLayer::Voronoi.index()] = true;
+        visible[DiagnosticLayer::Plates.index()] = true;
         Self { visible }
     }
 }
 
 #[derive(Resource)]
-struct TopologyAssets([Handle<GizmoAsset>; TopologyLayer::COUNT]);
+struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
 
-pub struct TopologyRenderPlugin;
+pub struct DiagnosticRenderPlugin;
 
-impl Plugin for TopologyRenderPlugin {
+impl Plugin for DiagnosticRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LayerSettings>()
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
                 (
-                    rebuild_topology_assets.run_if(resource_changed::<GeneratedWorld>),
+                    rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
                     sync_visible_layers.run_if(resource_changed::<LayerSettings>),
                 ),
             );
@@ -106,17 +111,17 @@ fn setup_scene(
         })),
     ));
 
-    let topology_assets = TopologyLayer::ALL.map(|layer| {
+    let diagnostic_assets = DiagnosticLayer::ALL.map(|layer| {
         let handle = gizmo_assets.add(GizmoAsset::new());
         spawn_layer(&mut commands, handle.clone(), layer);
         handle
     });
     spawn_axes(&mut commands, &mut gizmo_assets);
 
-    commands.insert_resource(TopologyAssets(topology_assets));
+    commands.insert_resource(DiagnosticAssets(diagnostic_assets));
 }
 
-fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: TopologyLayer) {
+fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: DiagnosticLayer) {
     commands.spawn((
         Gizmo {
             handle,
@@ -150,12 +155,12 @@ fn spawn_axes(commands: &mut Commands, assets: &mut Assets<GizmoAsset>) {
     });
 }
 
-fn rebuild_topology_assets(
+fn rebuild_diagnostic_assets(
     world: Res<GeneratedWorld>,
-    assets: Res<TopologyAssets>,
+    assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    for layer in TopologyLayer::ALL {
+    for layer in DiagnosticLayer::ALL {
         *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build(&world);
     }
 }
@@ -167,10 +172,10 @@ fn sync_visible_layers(
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
     let mut layers = vec![0];
     layers.extend(
-        TopologyLayer::ALL
+        DiagnosticLayer::ALL
             .into_iter()
             .filter(|&layer| settings.is_visible(layer))
-            .map(TopologyLayer::render_layer),
+            .map(DiagnosticLayer::render_layer),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
 }
@@ -211,14 +216,34 @@ fn delaunay_asset(mesh: &SphereMesh) -> GizmoAsset {
 }
 
 fn voronoi_asset(mesh: &SphereMesh) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |edge| (1.006, id_color(edge.cells[0])))
+}
+
+fn plate_asset(world: &GeneratedWorld) -> GizmoAsset {
+    voronoi_edge_asset(&world.voronoi, |edge| {
+        let left_plate = world.plates.cell_plates[edge.cells[0]];
+        let right_plate = world.plates.cell_plates[edge.cells[1]];
+        if left_plate == right_plate {
+            (1.009, id_color(left_plate))
+        } else {
+            (1.013, Color::srgba(0.95, 0.95, 1.0, 0.98))
+        }
+    })
+}
+
+fn voronoi_edge_asset(
+    mesh: &SphereMesh,
+    mut style: impl FnMut(&VoronoiEdge) -> (f32, Color),
+) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     for edge in &mesh.edges {
+        let (radius, color) = style(edge);
         add_surface_edge(
             &mut asset,
             to_bevy(mesh.vertices[edge.vertices[0]]),
             to_bevy(mesh.vertices[edge.vertices[1]]),
-            1.006,
-            id_color(edge.cells[0]),
+            radius,
+            color,
         );
     }
     asset

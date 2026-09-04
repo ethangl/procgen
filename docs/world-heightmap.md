@@ -65,8 +65,12 @@ Completed foundations:
 - `procgen-sphere`: deterministic Y-up Fibonacci sampling.
 - `procgen-sphere-mesh`: spherical Delaunay/Voronoi topology, GPU-friendly CSR
   cell-corner rings, and cell areas.
-- `procgen-viewer`: diagnostic GPU viewer with retained topology layers, orbit
-  controls, deterministic regeneration, statistics, and stage timings.
+- `procgen-tectonics`: deterministic major/minor plate partitioning with
+  major-plate head-start growth. Motion, boundaries, and elevation remain later
+  slices.
+- `procgen-viewer`: diagnostic GPU viewer with retained topology and tectonic
+  plate layers, orbit controls, deterministic regeneration, statistics, and
+  stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

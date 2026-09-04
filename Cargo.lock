@@ -3159,6 +3159,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "procgen-tectonics"
+version = "0.1.0"
+dependencies = [
+ "procgen-core",
+ "procgen-sphere",
+ "procgen-sphere-mesh",
+]
+
+[[package]]
 name = "procgen-viewer"
 version = "0.1.0"
 dependencies = [
@@ -3167,6 +3176,7 @@ dependencies = [
  "procgen-core",
  "procgen-sphere",
  "procgen-sphere-mesh",
+ "procgen-tectonics",
 ]
 
 [[package]]

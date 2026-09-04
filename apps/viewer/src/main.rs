@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use camera::OrbitCameraPlugin;
 use model::WorldModelPlugin;
-use render::TopologyRenderPlugin;
+use render::DiagnosticRenderPlugin;
 use ui::ViewerUiPlugin;
 
 fn main() {
@@ -25,7 +25,7 @@ fn main() {
             EguiPlugin::default(),
             WorldModelPlugin,
             OrbitCameraPlugin,
-            TopologyRenderPlugin,
+            DiagnosticRenderPlugin,
             ViewerUiPlugin,
         ))
         .run();

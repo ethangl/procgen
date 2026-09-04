@@ -1,5 +1,5 @@
 use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
-use crate::render::{LayerSettings, TopologyLayer};
+use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -28,14 +28,13 @@ fn viewer_ui(
             ui.add_space(6.0);
 
             ui.label("Generation");
-            ui.horizontal(|ui| {
-                ui.label("Cells");
-                ui.add(
-                    egui::DragValue::new(&mut generation.fibonacci.count)
-                        .range(4..=65_536)
-                        .speed(16),
-                );
-            });
+            drag_value(
+                ui,
+                "Cells",
+                &mut generation.fibonacci.count,
+                4..=65_536,
+                16.0,
+            );
             ui.horizontal(|ui| {
                 ui.label("Jitter");
                 ui.add(egui::Slider::new(
@@ -43,10 +42,43 @@ fn viewer_ui(
                     0.0..=1.0,
                 ));
             });
-            ui.horizontal(|ui| {
-                ui.label("Seed");
-                ui.add(egui::DragValue::new(&mut generation.fibonacci.seed));
-            });
+            drag_value(
+                ui,
+                "Seed",
+                &mut generation.fibonacci.seed,
+                u64::MIN..=u64::MAX,
+                1.0,
+            );
+            ui.add_space(4.0);
+            ui.label("Tectonic plates");
+            drag_value(
+                ui,
+                "Major",
+                &mut generation.plates.major_plate_count,
+                1..=128,
+                1.0,
+            );
+            drag_value(
+                ui,
+                "Minor",
+                &mut generation.plates.minor_plate_count,
+                0..=256,
+                1.0,
+            );
+            drag_value(
+                ui,
+                "Major head start",
+                &mut generation.plates.major_head_start_rounds,
+                0..=64,
+                1.0,
+            );
+            drag_value(
+                ui,
+                "Seed",
+                &mut generation.plates.seed,
+                u64::MIN..=u64::MAX,
+                1.0,
+            );
             if ui.button("Regenerate").clicked() {
                 regenerate.write_default();
             }
@@ -57,7 +89,7 @@ fn viewer_ui(
 
             ui.separator();
             ui.label("Layers");
-            for layer in TopologyLayer::ALL {
+            for layer in DiagnosticLayer::ALL {
                 // Only mutably access the resource when egui reports a real change.
                 let mut visible = layers.is_visible(layer);
                 if ui.checkbox(&mut visible, layer.label()).changed() {
@@ -71,25 +103,30 @@ fn viewer_ui(
                 stat(ui, "Cells", world.voronoi.cell_count());
                 stat(ui, "Vertices", world.voronoi.vertex_count());
                 stat(ui, "Edges", world.voronoi.edge_count());
-                stat(ui, "Seed", world.config.seed);
-                stat(ui, "Jitter", format!("{:.2}", world.config.jitter));
+                stat(ui, "Plates", world.plates.plate_count());
+                stat(ui, "Seed", world.config.fibonacci.seed);
+                stat(
+                    ui,
+                    "Jitter",
+                    format!("{:.2}", world.config.fibonacci.jitter),
+                );
             });
 
             ui.add_space(6.0);
             ui.label("Timings");
             egui::Grid::new("timings").num_columns(2).show(ui, |ui| {
-                for (label, duration) in [
-                    ("Sampling", world.timings.sampling),
-                    ("Delaunay", world.timings.delaunay),
-                    ("Voronoi", world.timings.voronoi),
-                    ("Total", world.timings.total()),
-                ] {
+                for stage in world.timings.stages() {
                     stat(
                         ui,
-                        label,
-                        format!("{:.2} ms", duration.as_secs_f64() * 1_000.0),
+                        stage.label,
+                        format!("{:.2} ms", stage.duration.as_secs_f64() * 1_000.0),
                     );
                 }
+                stat(
+                    ui,
+                    "Total",
+                    format!("{:.2} ms", world.timings.total().as_secs_f64() * 1_000.0),
+                );
             });
 
             ui.separator();
@@ -104,4 +141,17 @@ fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
     ui.label(label);
     ui.monospace(value.to_string());
     ui.end_row();
+}
+
+fn drag_value<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    speed: f64,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(egui::DragValue::new(value).range(range).speed(speed));
+    });
 }
