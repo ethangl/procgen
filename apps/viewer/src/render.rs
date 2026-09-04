@@ -1,6 +1,6 @@
 use crate::{
     camera::ViewerCamera,
-    model::{GeneratedWorld, ViewerSettings},
+    model::{GeneratedWorld, LayerSettings},
 };
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
@@ -24,8 +24,8 @@ impl Plugin for TopologyRenderPlugin {
         app.add_systems(Startup, setup_scene).add_systems(
             Update,
             (
-                regenerate_world,
-                sync_visible_layers.after(regenerate_world),
+                rebuild_topology_assets.run_if(resource_changed::<GeneratedWorld>),
+                sync_visible_layers.run_if(resource_changed::<LayerSettings>),
             ),
         );
     }
@@ -98,31 +98,18 @@ fn spawn_axes(commands: &mut Commands, assets: &mut Assets<GizmoAsset>) {
     });
 }
 
-fn regenerate_world(
-    mut settings: ResMut<ViewerSettings>,
-    mut world: ResMut<GeneratedWorld>,
+fn rebuild_topology_assets(
+    world: Res<GeneratedWorld>,
     assets: Res<TopologyAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    if !settings.regenerate_requested {
-        return;
-    }
-    settings.regenerate_requested = false;
-
-    match GeneratedWorld::generate(&settings) {
-        Ok(generated) => {
-            *gizmo_assets.get_mut(&assets.points).unwrap() = point_asset(&generated.delaunay);
-            *gizmo_assets.get_mut(&assets.delaunay).unwrap() = delaunay_asset(&generated.delaunay);
-            *gizmo_assets.get_mut(&assets.voronoi).unwrap() = voronoi_asset(&generated.voronoi);
-            *world = generated;
-            settings.last_error = None;
-        }
-        Err(error) => settings.last_error = Some(error),
-    }
+    *gizmo_assets.get_mut(&assets.points).unwrap() = point_asset(&world.delaunay);
+    *gizmo_assets.get_mut(&assets.delaunay).unwrap() = delaunay_asset(&world.delaunay);
+    *gizmo_assets.get_mut(&assets.voronoi).unwrap() = voronoi_asset(&world.voronoi);
 }
 
 fn sync_visible_layers(
-    settings: Res<ViewerSettings>,
+    settings: Res<LayerSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
 ) {
     let mut layers = vec![0];
@@ -160,17 +147,11 @@ fn point_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
 fn delaunay_asset(delaunay: &SphericalDelaunay) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let color = Color::srgba(0.35, 0.5, 0.72, 0.9);
-    for edge in 0..delaunay.opposite_half_edges.len() {
-        if delaunay.opposite_half_edges[edge] < edge {
-            continue;
-        }
-        let triangle = edge / 3;
-        let local = edge % 3;
-        let vertices = delaunay.triangles[triangle];
+    for edge in delaunay.unique_edges() {
         add_surface_edge(
             &mut asset,
-            to_bevy(delaunay.points[vertices[local]]),
-            to_bevy(delaunay.points[vertices[(local + 1) % 3]]),
+            to_bevy(delaunay.points[delaunay.edge_origin(edge)]),
+            to_bevy(delaunay.points[delaunay.edge_destination(edge)]),
             1.0,
             color,
         );

@@ -6,17 +6,19 @@ mod ui;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use camera::OrbitCameraPlugin;
-use model::{GeneratedWorld, ViewerSettings};
+use model::{GeneratedWorld, GenerationSettings, LayerSettings, WorldModelPlugin};
 use render::TopologyRenderPlugin;
 use ui::ViewerUiPlugin;
 
 fn main() {
-    let settings = ViewerSettings::default();
-    let world = GeneratedWorld::generate(&settings).expect("default world generation must succeed");
+    let settings = GenerationSettings::default();
+    let world = GeneratedWorld::generate(settings.fibonacci)
+        .expect("default world generation must succeed");
 
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.012, 0.016, 0.025)))
         .insert_resource(settings)
+        .insert_resource(LayerSettings::default())
         .insert_resource(world)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -28,6 +30,7 @@ fn main() {
         }))
         .add_plugins((
             EguiPlugin::default(),
+            WorldModelPlugin,
             OrbitCameraPlugin,
             TopologyRenderPlugin,
             ViewerUiPlugin,

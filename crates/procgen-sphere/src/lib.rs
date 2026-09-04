@@ -57,20 +57,20 @@ pub fn fibonacci_sphere(config: FibonacciConfig) -> Result<Vec<Vec3>, FibonacciE
         return Err(FibonacciError::InvalidJitter);
     }
 
-    let point = |index| fibonacci_point(index, config);
-    let points = if config.count >= PARALLEL_THRESHOLD {
-        (0..config.count).into_par_iter().map(point).collect()
-    } else {
-        (0..config.count).map(point).collect()
-    };
+    let points = (0..config.count)
+        .into_par_iter()
+        .with_min_len(PARALLEL_THRESHOLD)
+        .map(|index| fibonacci_point(index, config))
+        .collect();
 
     Ok(points)
 }
 
 fn fibonacci_point(index: usize, config: FibonacciConfig) -> Vec3 {
     let count = config.count as f32;
-    let mut cos_theta = 1.0 - 2.0 * (index as f32 + 0.5) / count;
-    let mut theta = cos_theta.clamp(-1.0, 1.0).acos();
+    let mut theta = (1.0 - 2.0 * (index as f32 + 0.5) / count)
+        .clamp(-1.0, 1.0)
+        .acos();
     let mut phi = std::f32::consts::TAU * index as f32 / GOLDEN_RATIO;
 
     if config.jitter > 0.0 {
@@ -79,11 +79,11 @@ fn fibonacci_point(index: usize, config: FibonacciConfig) -> Vec3 {
         theta = (theta + random.signed_f32(index as u64, 0) * config.jitter * spacing)
             .clamp(0.001, std::f32::consts::PI - 0.001);
         phi += random.signed_f32(index as u64, 1) * config.jitter * spacing;
-        cos_theta = theta.cos();
     }
 
-    let sin_theta = theta.sin();
-    Vec3::new(sin_theta * phi.cos(), cos_theta, sin_theta * phi.sin()).normalized()
+    let (sin_theta, cos_theta) = theta.sin_cos();
+    let (sin_phi, cos_phi) = phi.sin_cos();
+    Vec3::new(sin_theta * cos_phi, cos_theta, sin_theta * sin_phi)
 }
 
 #[cfg(test)]

@@ -48,10 +48,6 @@ impl Vec3 {
     pub fn distance_squared(self, other: Self) -> f32 {
         (self - other).length_squared()
     }
-
-    pub fn distance(self, other: Self) -> f32 {
-        self.distance_squared(other).sqrt()
-    }
 }
 
 impl Add for Vec3 {

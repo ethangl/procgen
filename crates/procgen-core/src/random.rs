@@ -23,10 +23,6 @@ impl RandomStream {
         mix64(state.wrapping_add(sample.wrapping_add(1).wrapping_mul(SAMPLE_STEP)))
     }
 
-    pub const fn sample_u32(self, item: u64, sample: u64) -> u32 {
-        (self.sample_u64(item, sample) >> 32) as u32
-    }
-
     /// Returns a reproducible value in `[0, 1)` using 24 significant bits.
     pub fn unit_f32(self, item: u64, sample: u64) -> f32 {
         (self.sample_u64(item, sample) >> 40) as f32 / (1_u32 << 24) as f32

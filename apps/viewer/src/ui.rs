@@ -1,4 +1,6 @@
-use crate::model::{GeneratedWorld, ViewerSettings};
+use crate::model::{
+    GeneratedWorld, GenerationSettings, GenerationStatus, LayerSettings, RegenerateWorld,
+};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -13,8 +15,11 @@ impl Plugin for ViewerUiPlugin {
 
 fn viewer_ui(
     mut contexts: EguiContexts,
-    mut settings: ResMut<ViewerSettings>,
+    mut generation: ResMut<GenerationSettings>,
+    mut layers: ResMut<LayerSettings>,
+    status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
+    mut regenerate: MessageWriter<RegenerateWorld>,
 ) -> Result {
     egui::SidePanel::left("controls")
         .default_width(250.0)
@@ -27,32 +32,35 @@ fn viewer_ui(
             ui.horizontal(|ui| {
                 ui.label("Cells");
                 ui.add(
-                    egui::DragValue::new(&mut settings.count)
+                    egui::DragValue::new(&mut generation.fibonacci.count)
                         .range(4..=65_536)
                         .speed(16),
                 );
             });
             ui.horizontal(|ui| {
                 ui.label("Jitter");
-                ui.add(egui::Slider::new(&mut settings.jitter, 0.0..=1.0));
+                ui.add(egui::Slider::new(
+                    &mut generation.fibonacci.jitter,
+                    0.0..=1.0,
+                ));
             });
             ui.horizontal(|ui| {
                 ui.label("Seed");
-                ui.add(egui::DragValue::new(&mut settings.seed));
+                ui.add(egui::DragValue::new(&mut generation.fibonacci.seed));
             });
             if ui.button("Regenerate").clicked() {
-                settings.regenerate_requested = true;
+                regenerate.write_default();
             }
 
-            if let Some(error) = &settings.last_error {
+            if let Some(error) = &status.last_error {
                 ui.colored_label(egui::Color32::from_rgb(255, 110, 110), error);
             }
 
             ui.separator();
             ui.label("Layers");
-            ui.checkbox(&mut settings.show_points, "Cell centers");
-            ui.checkbox(&mut settings.show_delaunay, "Delaunay");
-            ui.checkbox(&mut settings.show_voronoi, "Voronoi");
+            ui.checkbox(&mut layers.show_points, "Cell centers");
+            ui.checkbox(&mut layers.show_delaunay, "Delaunay");
+            ui.checkbox(&mut layers.show_voronoi, "Voronoi");
 
             ui.separator();
             ui.label("Active world");
@@ -60,10 +68,8 @@ fn viewer_ui(
                 stat(ui, "Cells", world.voronoi.cell_count());
                 stat(ui, "Vertices", world.voronoi.vertex_count());
                 stat(ui, "Edges", world.voronoi.edge_count());
-                stat(ui, "Seed", world.seed);
-                ui.label("Jitter");
-                ui.label(format!("{:.2}", world.jitter));
-                ui.end_row();
+                stat(ui, "Seed", world.config.seed);
+                stat(ui, "Jitter", format!("{:.2}", world.config.jitter));
             });
 
             ui.add_space(6.0);

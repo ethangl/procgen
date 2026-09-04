@@ -1,6 +1,9 @@
+use crate::TopologyError;
 use procgen_core::Vec3;
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, HashMap, VecDeque},
+};
 
 const VISIBILITY_EPSILON: f32 = 1.0e-7;
 const UNIT_SPHERE_TOLERANCE: f32 = 1.0e-4;
@@ -24,20 +27,31 @@ impl SphericalDelaunay {
         self.triangles.len()
     }
 
-    pub fn half_edge_triangle(edge: usize) -> usize {
+    fn half_edge_triangle(edge: usize) -> usize {
         edge / 3
     }
 
-    pub fn next_half_edge(edge: usize) -> usize {
+    fn next_half_edge(edge: usize) -> usize {
         if edge % 3 == 2 { edge - 2 } else { edge + 1 }
     }
 
-    pub fn previous_half_edge(edge: usize) -> usize {
-        if edge.is_multiple_of(3) {
-            edge + 2
-        } else {
-            edge - 1
-        }
+    pub(crate) fn edge_triangle(&self, edge: usize) -> usize {
+        Self::half_edge_triangle(edge)
+    }
+
+    pub fn edge_origin(&self, edge: usize) -> usize {
+        self.triangles[self.edge_triangle(edge)][edge % 3]
+    }
+
+    pub fn edge_destination(&self, edge: usize) -> usize {
+        self.triangles[self.edge_triangle(edge)][Self::next_half_edge(edge) % 3]
+    }
+
+    pub fn unique_edges(&self) -> impl Iterator<Item = usize> + '_ {
+        self.opposite_half_edges
+            .iter()
+            .enumerate()
+            .filter_map(|(edge, &opposite)| (edge < opposite).then_some(edge))
     }
 
     pub fn triangle_circumcenter(&self, triangle: usize) -> Vec3 {
@@ -45,11 +59,9 @@ impl SphericalDelaunay {
         let a = self.points[p0];
         let b = self.points[p1];
         let c = self.points[p2];
-        let mut normal = (b - a).cross(c - a);
+        let normal = (b - a).cross(c - a);
         let centroid = (a + b + c) * (1.0 / 3.0);
-        if normal.dot(centroid) < 0.0 {
-            normal = -normal;
-        }
+        debug_assert!(normal.dot(centroid) > 0.0);
         normal.normalized()
     }
 
@@ -70,38 +82,6 @@ impl SphericalDelaunay {
         edges
     }
 }
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum TopologyError {
-    TooFewPoints,
-    NonFinitePoint { index: usize },
-    PointNotOnUnitSphere { index: usize, length: f32 },
-    DegeneratePoints,
-    BrokenHorizon,
-    OpenHull,
-    InvalidRadius,
-}
-
-impl fmt::Display for TopologyError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooFewPoints => formatter.write_str("a hull requires at least four points"),
-            Self::NonFinitePoint { index } => write!(formatter, "point {index} is not finite"),
-            Self::PointNotOnUnitSphere { index, length } => {
-                write!(
-                    formatter,
-                    "point {index} has length {length}, expected unit length"
-                )
-            }
-            Self::DegeneratePoints => formatter.write_str("points do not define a 3D hull"),
-            Self::BrokenHorizon => formatter.write_str("visible hull faces have a broken horizon"),
-            Self::OpenHull => formatter.write_str("convex hull contains an unpaired half-edge"),
-            Self::InvalidRadius => formatter.write_str("sphere radius must be finite and positive"),
-        }
-    }
-}
-
-impl std::error::Error for TopologyError {}
 
 fn validate_points(points: &[Vec3]) -> Result<(), TopologyError> {
     if points.len() < 4 {
@@ -130,6 +110,7 @@ struct Face {
     conflicts: Vec<usize>,
     farthest_distance: f32,
     farthest_point: usize,
+    visit_stamp: u32,
 }
 
 impl Face {
@@ -144,55 +125,25 @@ struct HeapEntry {
     face: usize,
 }
 
-#[derive(Default)]
-struct FaceHeap {
-    entries: Vec<HeapEntry>,
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.face == other.face && self.distance.total_cmp(&other.distance) == Ordering::Equal
+    }
 }
 
-impl FaceHeap {
-    fn push(&mut self, entry: HeapEntry) {
-        self.entries.push(entry);
-        let mut index = self.entries.len() - 1;
-        while index > 0 {
-            let parent = (index - 1) / 2;
-            if self.entries[index].distance <= self.entries[parent].distance {
-                break;
-            }
-            self.entries.swap(index, parent);
-            index = parent;
-        }
+impl Eq for HeapEntry {}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
+}
 
-    fn pop(&mut self) -> Option<HeapEntry> {
-        let top = *self.entries.first()?;
-        let last = self.entries.pop().unwrap();
-        if self.entries.is_empty() {
-            return Some(top);
-        }
-        self.entries[0] = last;
-
-        let mut index = 0;
-        loop {
-            let left = index * 2 + 1;
-            let right = left + 1;
-            let mut largest = index;
-            if left < self.entries.len()
-                && self.entries[left].distance > self.entries[largest].distance
-            {
-                largest = left;
-            }
-            if right < self.entries.len()
-                && self.entries[right].distance > self.entries[largest].distance
-            {
-                largest = right;
-            }
-            if largest == index {
-                break;
-            }
-            self.entries.swap(index, largest);
-            index = largest;
-        }
-        Some(top)
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.face.cmp(&other.face))
     }
 }
 
@@ -201,6 +152,7 @@ struct QuickHull {
     faces: Vec<Face>,
     directed_edges: HashMap<(usize, usize), usize>,
     interior_point: Vec3,
+    visit_stamp: u32,
 }
 
 impl QuickHull {
@@ -213,12 +165,13 @@ impl QuickHull {
             faces: Vec::with_capacity(expected_faces),
             directed_edges: HashMap::with_capacity(expected_faces * 3),
             interior_point,
+            visit_stamp: 0,
         };
 
-        hull.add_face([i0, i1, i2])?;
-        hull.add_face([i0, i2, i3])?;
-        hull.add_face([i0, i3, i1])?;
-        hull.add_face([i1, i3, i2])?;
+        hull.add_face([i0, i2, i1])?;
+        hull.add_face([i0, i1, i3])?;
+        hull.add_face([i0, i3, i2])?;
+        hull.add_face([i1, i2, i3])?;
 
         let mut in_hull = vec![false; hull.points.len()];
         for index in [i0, i1, i2, i3] {
@@ -231,7 +184,7 @@ impl QuickHull {
             }
         }
 
-        let mut heap = FaceHeap::default();
+        let mut heap = BinaryHeap::new();
         for (face_index, face) in hull.faces.iter().enumerate() {
             if !face.conflicts.is_empty() {
                 heap.push(HeapEntry {
@@ -249,8 +202,8 @@ impl QuickHull {
             }
 
             let apex = face.farthest_point;
-            let visible = hull.visible_faces(entry.face, hull.points[apex]);
-            let horizon = hull.horizon(&visible)?;
+            let (visible, visit_stamp) = hull.visible_faces(entry.face, hull.points[apex]);
+            let horizon = hull.horizon(&visible, visit_stamp)?;
             let mut orphaned = Vec::new();
             for &face_index in &visible {
                 orphaned.extend(
@@ -290,22 +243,22 @@ impl QuickHull {
         hull.compact()
     }
 
-    fn add_face(&mut self, mut vertices: [usize; 3]) -> Result<(), TopologyError> {
+    fn add_face(&mut self, vertices: [usize; 3]) -> Result<(), TopologyError> {
         let [v0, v1, v2] = vertices;
         let a = self.points[v0];
         let b = self.points[v1];
         let c = self.points[v2];
-        let mut normal = (b - a).cross(c - a);
+        let normal = (b - a).cross(c - a);
         if normal.length_squared() < 1.0e-16 {
             return Err(TopologyError::DegeneratePoints);
         }
 
         let centroid = (a + b + c) * (1.0 / 3.0);
-        if normal.dot(centroid - self.interior_point) < 0.0 {
-            vertices.swap(1, 2);
-            normal = -normal;
-        }
-        normal = normal.normalized();
+        debug_assert!(
+            normal.dot(centroid - self.interior_point) > 0.0,
+            "QuickHull produced an inward-facing triangle"
+        );
+        let normal = normal.normalized();
 
         let face_index = self.faces.len();
         self.faces.push(Face {
@@ -316,6 +269,7 @@ impl QuickHull {
             conflicts: Vec::new(),
             farthest_distance: f32::NEG_INFINITY,
             farthest_point: usize::MAX,
+            visit_stamp: 0,
         });
         for edge in 0..3 {
             let from = vertices[edge];
@@ -362,39 +316,45 @@ impl QuickHull {
         }
     }
 
-    fn visible_faces(&self, initial: usize, apex: Vec3) -> Vec<usize> {
+    fn visible_faces(&mut self, initial: usize, apex: Vec3) -> (Vec<usize>, u32) {
+        self.visit_stamp = self.visit_stamp.wrapping_add(1);
+        if self.visit_stamp == 0 {
+            for face in &mut self.faces {
+                face.visit_stamp = 0;
+            }
+            self.visit_stamp = 1;
+        }
+        let visit_stamp = self.visit_stamp;
         let mut visible = Vec::new();
-        let mut marked = vec![false; self.faces.len()];
         let mut queue = VecDeque::from([initial]);
-        marked[initial] = true;
+        self.faces[initial].visit_stamp = visit_stamp;
 
         while let Some(face_index) = queue.pop_front() {
             visible.push(face_index);
-            let face = &self.faces[face_index];
+            let vertices = self.faces[face_index].vertices;
             for edge in 0..3 {
-                let from = face.vertices[edge];
-                let to = face.vertices[(edge + 1) % 3];
+                let from = vertices[edge];
+                let to = vertices[(edge + 1) % 3];
                 if let Some(opposite) = self.directed_edges.get(&(to, from)) {
                     let neighbor = opposite / 3;
-                    if !marked[neighbor]
+                    if self.faces[neighbor].visit_stamp != visit_stamp
                         && self.faces[neighbor].alive
                         && self.faces[neighbor].distance_to(apex) > VISIBILITY_EPSILON
                     {
-                        marked[neighbor] = true;
+                        self.faces[neighbor].visit_stamp = visit_stamp;
                         queue.push_back(neighbor);
                     }
                 }
             }
         }
-        visible
+        (visible, visit_stamp)
     }
 
-    fn horizon(&self, visible_faces: &[usize]) -> Result<Vec<(usize, usize)>, TopologyError> {
-        let mut visible = vec![false; self.faces.len()];
-        for &face in visible_faces {
-            visible[face] = true;
-        }
-
+    fn horizon(
+        &self,
+        visible_faces: &[usize],
+        visit_stamp: u32,
+    ) -> Result<Vec<(usize, usize)>, TopologyError> {
         let mut edges = Vec::new();
         for &face_index in visible_faces {
             let face = &self.faces[face_index];
@@ -405,12 +365,13 @@ impl QuickHull {
                     .directed_edges
                     .get(&(to, from))
                     .ok_or(TopologyError::OpenHull)?;
-                if !visible[opposite / 3] {
-                    edges.push((to, from));
+                if self.faces[opposite / 3].visit_stamp != visit_stamp {
+                    edges.push((from, to));
                 }
             }
         }
-        order_horizon(edges)
+        validate_horizon_cycle(&edges)?;
+        Ok(edges)
     }
 
     fn compact(self) -> Result<SphericalDelaunay, TopologyError> {
@@ -450,13 +411,9 @@ impl QuickHull {
 }
 
 fn initial_tetrahedron(points: &[Vec3]) -> Result<[usize; 4], TopologyError> {
-    let i0 = (1..points.len()).fold(0, |best, index| {
-        if points[index].x > points[best].x {
-            index
-        } else {
-            best
-        }
-    });
+    let i0 = (0..points.len())
+        .max_by(|&a, &b| points[a].x.total_cmp(&points[b].x))
+        .ok_or(TopologyError::DegeneratePoints)?;
     let i1 = (0..points.len())
         .filter(|&index| index != i0)
         .max_by(|&a, &b| {
@@ -478,37 +435,39 @@ fn initial_tetrahedron(points: &[Vec3]) -> Result<[usize; 4], TopologyError> {
         .ok_or(TopologyError::DegeneratePoints)?;
 
     let normal = baseline.cross(points[i2] - points[i0]);
-    let (i3, volume) = (0..points.len())
+    let (i3, signed_volume) = (0..points.len())
         .filter(|&index| index != i0 && index != i1 && index != i2)
-        .map(|index| (index, normal.dot(points[index] - points[i0]).abs()))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|index| (index, normal.dot(points[index] - points[i0])))
+        .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
         .ok_or(TopologyError::DegeneratePoints)?;
 
-    if volume < 1.0e-10 {
+    if signed_volume.abs() < 1.0e-10 {
         return Err(TopologyError::DegeneratePoints);
     }
-    Ok([i0, i1, i2, i3])
+    if signed_volume > 0.0 {
+        Ok([i0, i1, i2, i3])
+    } else {
+        Ok([i0, i2, i1, i3])
+    }
 }
 
-fn order_horizon(edges: Vec<(usize, usize)>) -> Result<Vec<(usize, usize)>, TopologyError> {
+fn validate_horizon_cycle(edges: &[(usize, usize)]) -> Result<(), TopologyError> {
     let Some(&first) = edges.first() else {
         return Err(TopologyError::BrokenHorizon);
     };
     let mut by_start = HashMap::with_capacity(edges.len());
-    for edge in edges {
-        if by_start.insert(edge.0, edge).is_some() {
+    for &edge in edges {
+        if by_start.insert(edge.0, edge.1).is_some() {
             return Err(TopologyError::BrokenHorizon);
         }
     }
 
-    let mut ordered = Vec::with_capacity(by_start.len());
     let mut current = first.0;
-    while let Some(edge) = by_start.remove(&current) {
-        ordered.push(edge);
-        current = edge.1;
+    while let Some(next) = by_start.remove(&current) {
+        current = next;
     }
     if !by_start.is_empty() || current != first.0 {
         return Err(TopologyError::BrokenHorizon);
     }
-    Ok(ordered)
+    Ok(())
 }

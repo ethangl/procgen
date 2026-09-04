@@ -4,29 +4,51 @@ use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use std::time::{Duration, Instant};
 
 #[derive(Resource)]
-pub struct ViewerSettings {
-    pub count: usize,
-    pub jitter: f32,
-    pub seed: u64,
+pub struct GenerationSettings {
+    pub fibonacci: FibonacciConfig,
+}
+
+impl Default for GenerationSettings {
+    fn default() -> Self {
+        let mut fibonacci = FibonacciConfig::new(2_048);
+        fibonacci.jitter = 0.5;
+        fibonacci.seed = 7;
+        Self { fibonacci }
+    }
+}
+
+#[derive(Resource)]
+pub struct LayerSettings {
     pub show_points: bool,
     pub show_delaunay: bool,
     pub show_voronoi: bool,
-    pub regenerate_requested: bool,
-    pub last_error: Option<String>,
 }
 
-impl Default for ViewerSettings {
+impl Default for LayerSettings {
     fn default() -> Self {
         Self {
-            count: 2_048,
-            jitter: 0.5,
-            seed: 7,
             show_points: false,
             show_delaunay: false,
             show_voronoi: true,
-            regenerate_requested: false,
-            last_error: None,
         }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct GenerationStatus {
+    pub last_error: Option<String>,
+}
+
+#[derive(Message, Default)]
+pub struct RegenerateWorld;
+
+pub struct WorldModelPlugin;
+
+impl Plugin for WorldModelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<RegenerateWorld>()
+            .init_resource::<GenerationStatus>()
+            .add_systems(Update, regenerate_world);
     }
 }
 
@@ -48,16 +70,11 @@ pub struct GeneratedWorld {
     pub delaunay: SphericalDelaunay,
     pub voronoi: SphereMesh,
     pub timings: GenerationTimings,
-    pub seed: u64,
-    pub jitter: f32,
+    pub config: FibonacciConfig,
 }
 
 impl GeneratedWorld {
-    pub fn generate(settings: &ViewerSettings) -> Result<Self, String> {
-        let mut config = FibonacciConfig::new(settings.count);
-        config.jitter = settings.jitter;
-        config.seed = settings.seed;
-
+    pub fn generate(config: FibonacciConfig) -> Result<Self, String> {
         let started = Instant::now();
         let points = fibonacci_sphere(config).map_err(|error| error.to_string())?;
         let sampling = started.elapsed();
@@ -79,9 +96,27 @@ impl GeneratedWorld {
                 delaunay: delaunay_time,
                 voronoi: voronoi_time,
             },
-            seed: settings.seed,
-            jitter: settings.jitter,
+            config,
         })
+    }
+}
+
+fn regenerate_world(
+    mut requests: MessageReader<RegenerateWorld>,
+    settings: Res<GenerationSettings>,
+    mut world: ResMut<GeneratedWorld>,
+    mut status: ResMut<GenerationStatus>,
+) {
+    if requests.read().count() == 0 {
+        return;
+    }
+
+    match GeneratedWorld::generate(settings.fibonacci) {
+        Ok(generated) => {
+            *world = generated;
+            status.last_error = None;
+        }
+        Err(error) => status.last_error = Some(error),
     }
 }
 
@@ -91,15 +126,30 @@ mod tests {
 
     #[test]
     fn generates_consistent_viewer_counts() {
-        let settings = ViewerSettings {
-            count: 128,
-            ..default()
-        };
-        let world = GeneratedWorld::generate(&settings).unwrap();
+        let world = GeneratedWorld::generate(FibonacciConfig::new(128)).unwrap();
 
         assert_eq!(world.delaunay.triangle_count(), 252);
         assert_eq!(world.voronoi.cell_count(), 128);
         assert_eq!(world.voronoi.vertex_count(), 252);
         assert_eq!(world.voronoi.edge_count(), 378);
+    }
+
+    #[test]
+    fn regeneration_message_replaces_the_active_world() {
+        let mut app = App::new();
+        let current = GeneratedWorld::generate(FibonacciConfig::new(32)).unwrap();
+        let requested = FibonacciConfig::new(64);
+        app.insert_resource(current)
+            .insert_resource(GenerationSettings {
+                fibonacci: requested,
+            })
+            .add_plugins(WorldModelPlugin);
+
+        app.world_mut().write_message(RegenerateWorld);
+        app.update();
+
+        let world = app.world().resource::<GeneratedWorld>();
+        assert_eq!(world.config, requested);
+        assert_eq!(world.voronoi.cell_count(), requested.count);
     }
 }

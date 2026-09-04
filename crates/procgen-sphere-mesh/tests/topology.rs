@@ -46,6 +46,28 @@ fn delaunay_is_a_closed_outward_triangulation() {
     for (edge, &opposite) in hull.opposite_half_edges.iter().enumerate() {
         assert_eq!(hull.opposite_half_edges[opposite], edge);
     }
+
+    let unique_edges: Vec<_> = hull.unique_edges().collect();
+    assert_eq!(unique_edges.len(), 3 * count - 6);
+    for edge in unique_edges {
+        let opposite = hull.opposite_half_edges[edge];
+        assert_eq!(hull.edge_origin(edge), hull.edge_destination(opposite));
+        assert_eq!(hull.edge_destination(edge), hull.edge_origin(opposite));
+    }
+}
+
+#[test]
+fn input_order_does_not_determine_face_winding() {
+    let mut reversed = points(128, 0.5);
+    reversed.reverse();
+    let hull = SphericalDelaunay::build(reversed).unwrap();
+
+    for triangle in &hull.triangles {
+        let [a, b, c] = triangle.map(|point| hull.points[point]);
+        let normal = (b - a).cross(c - a);
+        let centroid = (a + b + c) * (1.0 / 3.0);
+        assert!(normal.dot(centroid) > 0.0);
+    }
 }
 
 #[test]
@@ -64,7 +86,13 @@ fn voronoi_has_complete_symmetric_topology() {
             mesh.cell_neighbors[cell].len()
         );
         assert_eq!(mesh.cell_vertices[cell].len(), mesh.cell_edges[cell].len());
-        for &neighbor in &mesh.cell_neighbors[cell] {
+        for corner in 0..mesh.cell_vertices[cell].len() {
+            let vertex = mesh.cell_vertices[cell][corner];
+            let neighbor = mesh.cell_neighbors[cell][corner];
+            let edge = mesh.edges[mesh.cell_edges[cell][corner]];
+            assert!(edge.vertices.contains(&vertex));
+            assert!(edge.cells.contains(&cell));
+            assert!(edge.cells.contains(&neighbor));
             assert!(mesh.cell_neighbors[neighbor].contains(&cell));
         }
     }

@@ -48,7 +48,7 @@ fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
         Camera3d::default(),
         Tonemapping::None,
         camera_transform(&orbit),
-        RenderLayers::from_layers(&[0, 3]),
+        RenderLayers::layer(0),
         ViewerCamera,
     ));
 }
