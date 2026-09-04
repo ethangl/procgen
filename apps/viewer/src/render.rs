@@ -2,6 +2,7 @@ use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
+use procgen_tectonics::PlatePartition;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
@@ -47,7 +48,7 @@ impl DiagnosticLayer {
             Self::Points => point_asset(&world.voronoi),
             Self::Delaunay => delaunay_asset(&world.voronoi),
             Self::Voronoi => voronoi_asset(&world.voronoi),
-            Self::Plates => plate_asset(world),
+            Self::Plates => plate_asset(&world.voronoi, &world.plates),
         }
     }
 }
@@ -219,10 +220,10 @@ fn voronoi_asset(mesh: &SphereMesh) -> GizmoAsset {
     voronoi_edge_asset(mesh, |edge| (1.006, id_color(edge.cells[0])))
 }
 
-fn plate_asset(world: &GeneratedWorld) -> GizmoAsset {
-    voronoi_edge_asset(&world.voronoi, |edge| {
-        let left_plate = world.plates.cell_plates[edge.cells[0]];
-        let right_plate = world.plates.cell_plates[edge.cells[1]];
+fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |edge| {
+        let left_plate = plates.cell_plates[edge.cells[0]];
+        let right_plate = plates.cell_plates[edge.cells[1]];
         if left_plate == right_plate {
             (1.009, id_color(left_plate))
         } else {

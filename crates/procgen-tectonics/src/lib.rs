@@ -45,10 +45,6 @@ impl PlatePartition {
     pub fn plate_count(&self) -> usize {
         self.plate_seeds.len()
     }
-
-    pub fn is_major(&self, plate: usize) -> bool {
-        plate < self.major_plate_count
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,9 +61,9 @@ impl fmt::Display for PlatePartitionError {
             Self::TooManyPlates => {
                 formatter.write_str("plate count cannot exceed the mesh cell count")
             }
-            Self::InsufficientUnclaimedCells => formatter.write_str(
-                "major plate growth left too few unclaimed cells for the requested minor plates",
-            ),
+            Self::InsufficientUnclaimedCells => {
+                formatter.write_str("too few unassigned cells remain to seed the requested plates")
+            }
         }
     }
 }
@@ -92,25 +88,14 @@ pub fn partition_plates(
     let mut growth = PlateGrowth::new(mesh);
     growth.seed(first_seed);
     growth.seed_farthest(config.major_plate_count - 1)?;
-    growth.grow(GrowthLimit::Rounds(config.major_head_start_rounds));
+    growth.grow(config.major_head_start_rounds);
     growth.seed_farthest(config.minor_plate_count)?;
-    growth.grow(GrowthLimit::Unbounded);
-    Ok(growth.finish(config.major_plate_count))
-}
-
-#[derive(Clone, Copy)]
-enum GrowthLimit {
-    Rounds(usize),
-    Unbounded,
-}
-
-impl GrowthLimit {
-    fn includes(self, round: usize) -> bool {
-        match self {
-            Self::Rounds(limit) => round < limit,
-            Self::Unbounded => true,
-        }
-    }
+    growth.grow(usize::MAX);
+    Ok(PlatePartition {
+        cell_plates: growth.cell_plates,
+        plate_seeds: growth.plate_seeds,
+        major_plate_count: config.major_plate_count,
+    })
 }
 
 struct PlateGrowth<'mesh> {
@@ -163,9 +148,9 @@ impl<'mesh> PlateGrowth<'mesh> {
         Ok(())
     }
 
-    fn grow(&mut self, limit: GrowthLimit) {
+    fn grow(&mut self, max_rounds: usize) {
         let mut rounds = 0;
-        while !self.frontier.is_empty() && limit.includes(rounds) {
+        while !self.frontier.is_empty() && rounds < max_rounds {
             let current_frontier = std::mem::take(&mut self.frontier);
             for cell in current_frontier {
                 let plate = self.cell_plates[cell];
@@ -177,14 +162,6 @@ impl<'mesh> PlateGrowth<'mesh> {
                 }
             }
             rounds += 1;
-        }
-    }
-
-    fn finish(self, major_plate_count: usize) -> PlatePartition {
-        PlatePartition {
-            cell_plates: self.cell_plates,
-            plate_seeds: self.plate_seeds,
-            major_plate_count,
         }
     }
 }
