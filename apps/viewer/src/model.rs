@@ -170,13 +170,7 @@ impl GeneratedWorld {
             derive_seafloor_age(&voronoi, &plates, &crust, &boundaries, config.seafloor_age)
         })?;
         let base_elevation = timings.record("Base elevation", || {
-            derive_base_elevation(
-                &voronoi,
-                &plates,
-                &crust,
-                &seafloor_age,
-                config.base_elevation,
-            )
+            derive_base_elevation(&seafloor_age, config.base_elevation)
         })?;
         let deformation = timings.record("Boundary deformation", || {
             derive_boundary_deformation(&voronoi, &plates, &crust, &boundaries, config.deformation)

@@ -75,9 +75,9 @@ Completed foundations:
   classes remain fixed while cell crust follows current ownership. A separate
   post-evolution stage derives signed per-cell deformation from current-owner
   crust and final boundary classes and strengths, with deterministic overlap
-  resolution and bounded within-plate propagation. Oceanic divergent
-  deformation is omitted because the bathymetric base already represents the
-  ridge profile; continental divergent deformation remains intact. A separate
+  resolution and bounded within-plate propagation. Divergent deformation uses
+  separate continental-rift and oceanic-ridge effects; ridge offset defaults to
+  zero because the bathymetric base already represents that profile. A separate
   seafloor-age stage derives oceanic-cell hop distance from final divergent
   boundaries; propagation stays within final plate ownership and ridge-less
   oceanic plates receive a deterministic configured fallback age. Base

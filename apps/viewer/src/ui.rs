@@ -218,7 +218,8 @@ fn deformation_controls(
     kinematics: PlateKinematicsConfig,
 ) {
     boundary_effect_controls(ui, "Convergent", &mut config.convergent);
-    boundary_effect_controls(ui, "Divergent", &mut config.divergent);
+    boundary_effect_controls(ui, "Rift", &mut config.rift);
+    boundary_effect_controls(ui, "Ridge", &mut config.ridge);
     boundary_effect_controls(ui, "Transform", &mut config.transform);
     boundary_effect_controls(ui, "Collision", &mut config.collision);
     boundary_effect_controls(ui, "Trench", &mut config.trench);
@@ -412,11 +413,6 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         );
         stat(
             ui,
-            "Continental range",
-            format_field_range(&world.base_elevation.diagnostics.continental),
-        );
-        stat(
-            ui,
             "Oceanic cells",
             world.base_elevation.diagnostics.oceanic_cell_count,
         );
@@ -424,11 +420,6 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Continental cells",
             world.base_elevation.diagnostics.continental_cell_count,
-        );
-        stat(
-            ui,
-            "At deep floor",
-            world.base_elevation.diagnostics.deep_ocean_cell_count,
         );
     });
     stat_grid(ui, "Coarse elevation", "elevation", |ui| {

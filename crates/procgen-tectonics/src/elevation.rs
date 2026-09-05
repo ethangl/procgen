@@ -137,14 +137,7 @@ mod tests {
             SeafloorAgeConfig::default(),
         )
         .unwrap();
-        let base = derive_base_elevation(
-            &mesh,
-            &partition,
-            &crust,
-            &age,
-            BaseElevationConfig::default(),
-        )
-        .unwrap();
+        let base = derive_base_elevation(&age, BaseElevationConfig::default()).unwrap();
         let deformation = derive_boundary_deformation(
             &mesh,
             &partition,
