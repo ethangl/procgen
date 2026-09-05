@@ -20,15 +20,6 @@ mod partition;
 mod seafloor_age;
 mod stage;
 
-mod random_streams {
-    // Keep stream ids globally unique so equal user-facing seeds do not
-    // correlate random draws between tectonic stages.
-    pub const FIRST_MAJOR_SEED: u64 = 0;
-    pub const ROTATION_AXIS: u64 = 1;
-    pub const ANGULAR_SPEED: u64 = 2;
-    pub const CRUST_PLATE_ORDER: u64 = 3;
-}
-
 #[cfg(test)]
 mod test_support;
 

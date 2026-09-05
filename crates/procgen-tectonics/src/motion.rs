@@ -1,5 +1,8 @@
-use crate::random_streams::{ANGULAR_SPEED, ROTATION_AXIS};
-use procgen_core::{RandomStream, Vec3};
+use crate::{PlatePartition, StageInputError};
+use procgen_core::{
+    RandomStream, Vec3,
+    random_streams::{PLATE_ANGULAR_SPEED, PLATE_ROTATION_AXIS},
+};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,6 +36,13 @@ pub struct PlateKinematics {
 }
 
 impl PlateKinematics {
+    pub fn validate(&self, partition: &PlatePartition) -> Result<(), StageInputError> {
+        if self.angular_velocities.len() != partition.plate_count {
+            return Err(StageInputError::Plates);
+        }
+        Ok(())
+    }
+
     /// Derives the instantaneous Cartesian velocity at a point fixed to a
     /// rigidly rotating plate. The result is tangent to the sphere at `position`.
     pub fn velocity_at(&self, plate: usize, position: Vec3) -> Vec3 {
@@ -68,12 +78,12 @@ pub fn generate_plate_kinematics(
         return Err(PlateKinematicsError::InvalidAngularSpeedRange);
     }
 
-    let axes = RandomStream::new(config.seed, ROTATION_AXIS);
-    let speeds = RandomStream::new(config.seed, ANGULAR_SPEED);
+    let axes = RandomStream::new(config.seed, PLATE_ROTATION_AXIS);
+    let speeds = RandomStream::new(config.seed, PLATE_ANGULAR_SPEED);
     let angular_velocities = (0..plate_count)
         .map(|plate| {
             let item = plate as u64;
-            let axis = random_unit_axis(axes, item);
+            let axis = axes.unit_vector(item);
             let speed = config.minimum_angular_speed
                 + speeds.unit_f32(item, 0)
                     * (config.maximum_angular_speed - config.minimum_angular_speed);
@@ -82,13 +92,6 @@ pub fn generate_plate_kinematics(
         .collect();
 
     Ok(PlateKinematics { angular_velocities })
-}
-
-fn random_unit_axis(stream: RandomStream, item: u64) -> Vec3 {
-    let z = stream.signed_f32(item, 0);
-    let theta = stream.unit_f32(item, 1) * std::f32::consts::TAU;
-    let ring = (1.0 - z * z).max(0.0).sqrt();
-    Vec3::new(ring * theta.cos(), ring * theta.sin(), z)
 }
 
 #[cfg(test)]

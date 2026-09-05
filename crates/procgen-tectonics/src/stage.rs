@@ -6,6 +6,7 @@ use std::fmt;
 pub enum StageInputError {
     Cells,
     Plates,
+    PlateOwnership,
     Boundaries,
 }
 
@@ -13,9 +14,8 @@ impl fmt::Display for StageInputError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cells => formatter.write_str("plate assignments must match the mesh cell count"),
-            Self::Plates => {
-                formatter.write_str("plate classes must match the partition plate count")
-            }
+            Self::Plates => formatter.write_str("plate data must match the partition plate count"),
+            Self::PlateOwnership => formatter.write_str("every cell must reference a valid plate"),
             Self::Boundaries => {
                 formatter.write_str("boundary arrays must match the mesh edge count")
             }
@@ -30,9 +30,7 @@ pub(crate) fn validate_ownership_and_crust(
     partition: &PlatePartition,
     crust: &CrustClassification,
 ) -> Result<(), StageInputError> {
-    if partition.cell_plates.len() != mesh.cell_count() {
-        return Err(StageInputError::Cells);
-    }
+    partition.validate(mesh)?;
     if crust.plate_classes.len() != partition.plate_count {
         return Err(StageInputError::Plates);
     }

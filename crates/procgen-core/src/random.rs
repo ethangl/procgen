@@ -1,3 +1,5 @@
+use crate::Vec3;
+
 const ITEM_MIX: u64 = 0xD1B5_4A32_D192_ED03;
 const STREAM_MIX: u64 = 0x8CB9_2BA7_2F3D_8DD7;
 const SAMPLE_STEP: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -31,6 +33,14 @@ impl RandomStream {
     /// Returns a reproducible value in `[-1, 1)`.
     pub fn signed_f32(self, item: u64, sample: u64) -> f32 {
         self.unit_f32(item, sample) * 2.0 - 1.0
+    }
+
+    /// Samples a uniformly distributed unit vector with stable axis ordering.
+    pub fn unit_vector(self, item: u64) -> Vec3 {
+        let z = self.signed_f32(item, 0);
+        let theta = self.unit_f32(item, 1) * std::f32::consts::TAU;
+        let ring = (1.0 - z * z).max(0.0).sqrt();
+        Vec3::new(ring * theta.cos(), ring * theta.sin(), z)
     }
 }
 
@@ -74,6 +84,18 @@ mod tests {
             let signed = stream.signed_f32(item, 1);
             assert!((0.0..1.0).contains(&unit));
             assert!((-1.0..1.0).contains(&signed));
+        }
+    }
+
+    #[test]
+    fn unit_vectors_are_deterministic_and_normalized() {
+        let stream = RandomStream::new(19, 2);
+        assert_eq!(
+            stream.unit_vector(7),
+            RandomStream::new(19, 2).unit_vector(7)
+        );
+        for item in 0..1_000 {
+            assert!((stream.unit_vector(item).length() - 1.0).abs() < 1.0e-6);
         }
     }
 }

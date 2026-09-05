@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use procgen_geology::{HotspotField, HotspotFieldConfig, generate_hotspot_field};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
@@ -28,6 +29,7 @@ pub struct GenerationSettings {
     pub base_elevation: BaseElevationConfig,
     pub deformation: BoundaryDeformationConfig,
     pub elevation: CoarseElevationConfig,
+    pub hotspots: HotspotFieldConfig,
 }
 
 impl Default for GenerationSettings {
@@ -57,6 +59,7 @@ impl Default for GenerationSettings {
             base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
+            hotspots: HotspotFieldConfig::new(7),
         }
     }
 }
@@ -131,6 +134,7 @@ pub struct GeneratedWorld {
     pub base_elevation: BaseElevation,
     pub deformation: BoundaryDeformation,
     pub elevation: CoarseElevation,
+    pub hotspots: HotspotField,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -178,6 +182,9 @@ impl GeneratedWorld {
         let elevation = timings.record("Coarse elevation", || {
             compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)
         })?;
+        let hotspots = timings.record("Mantle hotspots", || {
+            generate_hotspot_field(&voronoi, &plates, &kinematics, config.hotspots)
+        })?;
 
         Ok(Self {
             voronoi,
@@ -190,6 +197,7 @@ impl GeneratedWorld {
             base_elevation,
             deformation,
             elevation,
+            hotspots,
             timings,
             config,
         })
@@ -234,6 +242,7 @@ mod tests {
             base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
+            hotspots: HotspotFieldConfig::new(7),
         })
         .unwrap();
 
@@ -263,6 +272,14 @@ mod tests {
         );
         assert!(world.elevation.diagnostics.minimum >= 0.0);
         assert!(world.elevation.diagnostics.maximum <= 1.0);
+        assert_eq!(
+            world.hotspots.cell_intensities.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.hotspots.hotspots.len(),
+            world.config.hotspots.hotspot_count
+        );
     }
 
     #[test]
@@ -278,6 +295,7 @@ mod tests {
             base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
+            hotspots: HotspotFieldConfig::new(7),
         })
         .unwrap();
         let requested = GenerationSettings {
@@ -307,6 +325,11 @@ mod tests {
                 smoothing_passes: 4,
                 ..Default::default()
             },
+            hotspots: HotspotFieldConfig {
+                hotspot_count: 9,
+                maximum_trail_cells: 6,
+                seed: 5,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -325,6 +348,7 @@ mod tests {
         assert_eq!(world.config.base_elevation, requested.base_elevation);
         assert_eq!(world.config.deformation, requested.deformation);
         assert_eq!(world.config.elevation, requested.elevation);
+        assert_eq!(world.config.hotspots, requested.hotspots);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }
