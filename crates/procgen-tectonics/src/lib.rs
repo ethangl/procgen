@@ -32,10 +32,3 @@ pub use motion::{
     PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
 };
 pub use partition::{PlatePartition, PlatePartitionConfig, PlatePartitionError, partition_plates};
-
-fn count_of<T: PartialEq>(values: impl IntoIterator<Item = T>, target: T) -> usize {
-    values
-        .into_iter()
-        .filter(|candidate| *candidate == target)
-        .count()
-}

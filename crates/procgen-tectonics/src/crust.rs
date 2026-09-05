@@ -17,6 +17,15 @@ pub struct CrustClassificationConfig {
     pub seed: u64,
 }
 
+impl CrustClassificationConfig {
+    pub const fn new(seed: u64) -> Self {
+        Self {
+            target_ocean_fraction: 0.7,
+            seed,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrustClassification {
     pub plate_classes: Vec<CrustClass>,
@@ -27,38 +36,11 @@ impl CrustClassification {
         self.plate_classes[partition.cell_plates[cell]]
     }
 
-    pub fn cell_classes(&self, partition: &PlatePartition) -> Vec<CrustClass> {
-        partition
-            .cell_plates
-            .iter()
-            .map(|&plate| self.plate_classes[plate])
-            .collect()
-    }
-
-    pub fn ocean_fraction(&self, mesh: &SphereMesh, partition: &PlatePartition) -> f64 {
-        let ocean_area: f64 = mesh
-            .cell_areas
-            .iter()
-            .enumerate()
-            .filter(|(cell, _)| self.cell_class(partition, *cell) == CrustClass::Oceanic)
-            .map(|(_, &area)| f64::from(area))
-            .sum();
-        let total_area: f64 = mesh.cell_areas.iter().map(|&area| f64::from(area)).sum();
-        ocean_area / total_area
-    }
-
     pub fn plate_count(&self, class: CrustClass) -> usize {
-        crate::count_of(self.plate_classes.iter().copied(), class)
-    }
-
-    pub fn cell_count(&self, partition: &PlatePartition, class: CrustClass) -> usize {
-        crate::count_of(
-            partition
-                .cell_plates
-                .iter()
-                .map(|&plate| self.plate_classes[plate]),
-            class,
-        )
+        self.plate_classes
+            .iter()
+            .filter(|&&candidate| candidate == class)
+            .count()
     }
 }
 
@@ -111,7 +93,7 @@ pub fn classify_crust(
     let target_area = total_area * f64::from(config.target_ocean_fraction);
     let random = RandomStream::new(config.seed, CRUST_PLATE_ORDER);
     let mut plate_order: Vec<_> = (0..plate_count).collect();
-    plate_order.sort_by_cached_key(|&plate| (random.sample_u64(plate as u64, 0), plate));
+    plate_order.sort_unstable_by_key(|&plate| (random.sample_u64(plate as u64, 0), plate));
 
     let mut ocean_area = 0.0_f64;
     let mut plate_classes = vec![CrustClass::Continental; plate_count];
@@ -150,10 +132,7 @@ mod tests {
     #[test]
     fn classification_is_deterministic_and_seeded() {
         let (mesh, partition) = fixture();
-        let config = CrustClassificationConfig {
-            target_ocean_fraction: 0.7,
-            seed: 17,
-        };
+        let config = CrustClassificationConfig::new(17);
         let first = classify_crust(&mesh, &partition, config).unwrap();
 
         assert_eq!(first, classify_crust(&mesh, &partition, config).unwrap());
@@ -172,18 +151,9 @@ mod tests {
     #[test]
     fn cell_crust_follows_plate_ownership_and_area_drives_fraction() {
         let (mesh, partition) = fixture();
-        let crust = classify_crust(
-            &mesh,
-            &partition,
-            CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 17,
-            },
-        )
-        .unwrap();
+        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
 
         assert_eq!(crust.plate_classes.len(), partition.plate_count());
-        assert_eq!(crust.cell_classes(&partition).len(), mesh.cell_count());
         for (cell, &plate) in partition.cell_plates.iter().enumerate() {
             assert_eq!(
                 crust.cell_class(&partition, cell),
@@ -199,25 +169,13 @@ mod tests {
             .map(|(_, &area)| f64::from(area))
             .sum();
         let total_area: f64 = mesh.cell_areas.iter().map(|&area| f64::from(area)).sum();
-        assert_eq!(
-            crust.ocean_fraction(&mesh, &partition),
-            measured_ocean_area / total_area
-        );
-        assert!((crust.ocean_fraction(&mesh, &partition) - 0.7).abs() < 0.1);
+        assert!((measured_ocean_area / total_area - 0.7).abs() < 0.1);
     }
 
     #[test]
     fn derived_cell_crust_tracks_current_plate_ownership() {
         let (mesh, mut partition) = fixture();
-        let crust = classify_crust(
-            &mesh,
-            &partition,
-            CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 17,
-            },
-        )
-        .unwrap();
+        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
         let cell = 0;
         let original_class = crust.cell_class(&partition, cell);
         let replacement_plate = crust
@@ -265,8 +223,6 @@ mod tests {
                 .iter()
                 .all(|&class| class == CrustClass::Oceanic)
         );
-        assert_eq!(continental.ocean_fraction(&mesh, &partition), 0.0);
-        assert_eq!(oceanic.ocean_fraction(&mesh, &partition), 1.0);
     }
 
     #[test]

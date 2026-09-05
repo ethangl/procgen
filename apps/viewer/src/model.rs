@@ -2,9 +2,9 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateKinematics,
-    PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, classify_boundaries,
-    classify_crust, generate_plate_kinematics, partition_plates,
+    BoundaryClassification, CrustClass, CrustClassification, CrustClassificationConfig,
+    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig,
+    classify_boundaries, classify_crust, generate_plate_kinematics, partition_plates,
 };
 use std::{
     error::Error,
@@ -33,10 +33,7 @@ impl Default for GenerationSettings {
                 major_head_start_rounds: 5,
                 seed: 7,
             },
-            crust: CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 8,
-            },
+            crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(7),
         }
     }
@@ -100,11 +97,19 @@ impl GenerationTimings {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CrustSummary {
+    pub ocean_fraction: f64,
+    pub oceanic_cells: usize,
+    pub continental_cells: usize,
+}
+
 #[derive(Resource)]
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
     pub plates: PlatePartition,
     pub crust: CrustClassification,
+    pub crust_summary: CrustSummary,
     pub kinematics: PlateKinematics,
     pub boundaries: BoundaryClassification,
     pub timings: GenerationTimings,
@@ -121,6 +126,7 @@ impl GeneratedWorld {
             partition_plates(&voronoi, config.plates)
         })?;
         let crust = timings.record("Crust", || classify_crust(&voronoi, &plates, config.crust))?;
+        let crust_summary = summarize_crust(&voronoi, &plates, &crust);
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(plates.plate_count(), config.kinematics)
         })?;
@@ -132,11 +138,36 @@ impl GeneratedWorld {
             voronoi,
             plates,
             crust,
+            crust_summary,
             kinematics,
             boundaries,
             timings,
             config,
         })
+    }
+}
+
+fn summarize_crust(
+    mesh: &SphereMesh,
+    plates: &PlatePartition,
+    crust: &CrustClassification,
+) -> CrustSummary {
+    let mut total_area = 0.0;
+    let mut ocean_area = 0.0;
+    let mut oceanic_cells = 0;
+    for (cell, &area) in mesh.cell_areas.iter().enumerate() {
+        let area = f64::from(area);
+        total_area += area;
+        if crust.cell_class(plates, cell) == CrustClass::Oceanic {
+            ocean_area += area;
+            oceanic_cells += 1;
+        }
+    }
+
+    CrustSummary {
+        ocean_fraction: ocean_area / total_area,
+        oceanic_cells,
+        continental_cells: mesh.cell_count() - oceanic_cells,
     }
 }
 
@@ -170,10 +201,7 @@ mod tests {
         let world = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(128),
             plates: PlatePartitionConfig::new(4, 4),
-            crust: CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 10,
-            },
+            crust: CrustClassificationConfig::new(10),
             kinematics: PlateKinematicsConfig::new(9),
         })
         .unwrap();
@@ -181,6 +209,10 @@ mod tests {
         assert_eq!(world.voronoi.cell_count(), 128);
         assert_eq!(world.voronoi.vertex_count(), 252);
         assert_eq!(world.voronoi.edge_count(), 378);
+        assert_eq!(
+            world.crust_summary.oceanic_cells + world.crust_summary.continental_cells,
+            world.voronoi.cell_count()
+        );
     }
 
     #[test]
@@ -189,10 +221,7 @@ mod tests {
         let current = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(32),
             plates: PlatePartitionConfig::new(2, 2),
-            crust: CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 4,
-            },
+            crust: CrustClassificationConfig::new(4),
             kinematics: PlateKinematicsConfig::new(3),
         })
         .unwrap();

@@ -19,6 +19,8 @@ pub enum DiagnosticLayer {
     Motion,
 }
 
+const PLATE_BORDER_RADIUS: f32 = 1.013;
+
 impl DiagnosticLayer {
     pub const ALL: [Self; 7] = [
         Self::Points,
@@ -39,17 +41,29 @@ impl DiagnosticLayer {
         self.index() + 1
     }
 
-    // Radius order defines the intended default composition: plate interiors,
-    // crust interiors, emphasized plate borders, then boundary classes.
-    const fn geometry(self) -> LayerGeometry {
+    const fn line_width(self) -> f32 {
         match self {
-            Self::Points => LayerGeometry::new(1.8, 1.012),
-            Self::Delaunay => LayerGeometry::new(1.1, 1.000),
-            Self::Voronoi => LayerGeometry::new(1.5, 1.006),
-            Self::Plates => LayerGeometry::with_accent(2.4, 1.009, 1.013),
-            Self::Crust => LayerGeometry::new(3.0, 1.011),
-            Self::Boundaries => LayerGeometry::new(4.0, 1.017),
-            Self::Motion => LayerGeometry::new(2.6, 1.035),
+            Self::Points => 1.8,
+            Self::Delaunay => 1.1,
+            Self::Voronoi => 1.5,
+            Self::Plates => 2.4,
+            Self::Crust => 3.0,
+            Self::Boundaries => 4.0,
+            Self::Motion => 2.6,
+        }
+    }
+
+    // Radius order defines the intended default composition: plate interiors,
+    // crust interiors, PLATE_BORDER_RADIUS, then boundary classes.
+    const fn radius(self) -> f32 {
+        match self {
+            Self::Points => 1.012,
+            Self::Delaunay => 1.000,
+            Self::Voronoi => 1.006,
+            Self::Plates => 1.009,
+            Self::Crust => 1.011,
+            Self::Boundaries => 1.017,
+            Self::Motion => 1.035,
         }
     }
 
@@ -66,35 +80,15 @@ impl DiagnosticLayer {
     }
 
     fn build(self, world: &GeneratedWorld) -> GizmoAsset {
+        let radius = self.radius();
         match self {
-            Self::Points => point_asset(&world.voronoi),
-            Self::Delaunay => delaunay_asset(&world.voronoi),
-            Self::Voronoi => voronoi_asset(&world.voronoi),
-            Self::Plates => plate_asset(&world.voronoi, &world.plates),
-            Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust),
-            Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries),
-            Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct LayerGeometry {
-    line_width: f32,
-    radius: f32,
-    accent_radius: f32,
-}
-
-impl LayerGeometry {
-    const fn new(line_width: f32, radius: f32) -> Self {
-        Self::with_accent(line_width, radius, radius)
-    }
-
-    const fn with_accent(line_width: f32, radius: f32, accent_radius: f32) -> Self {
-        Self {
-            line_width,
-            radius,
-            accent_radius,
+            Self::Points => point_asset(&world.voronoi, radius),
+            Self::Delaunay => delaunay_asset(&world.voronoi, radius),
+            Self::Voronoi => voronoi_asset(&world.voronoi, radius),
+            Self::Plates => plate_asset(&world.voronoi, &world.plates, radius),
+            Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
+            Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
+            Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
 }
@@ -176,7 +170,7 @@ fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: Diagn
         Gizmo {
             handle,
             line_config: GizmoLineConfig {
-                width: layer.geometry().line_width,
+                width: layer.line_width(),
                 perspective: false,
                 ..default()
             },
@@ -230,12 +224,12 @@ fn sync_visible_layers(
     **camera_layers = RenderLayers::from_layers(&layers);
 }
 
-fn point_asset(mesh: &SphereMesh) -> GizmoAsset {
+fn point_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let points = &mesh.cell_centers;
     let size = (0.018 / (points.len() as f32).sqrt().max(8.0)).max(0.001);
     for (index, &point) in points.iter().enumerate() {
-        let point = to_bevy(point) * DiagnosticLayer::Points.geometry().radius;
+        let point = to_bevy(point) * radius;
         let reference = if point.y.abs() < 0.9 {
             Vec3::Y
         } else {
@@ -250,7 +244,7 @@ fn point_asset(mesh: &SphereMesh) -> GizmoAsset {
     asset
 }
 
-fn delaunay_asset(mesh: &SphereMesh) -> GizmoAsset {
+fn delaunay_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let color = Color::srgba(0.35, 0.5, 0.72, 0.9);
     for edge in &mesh.edges {
@@ -258,33 +252,27 @@ fn delaunay_asset(mesh: &SphereMesh) -> GizmoAsset {
             &mut asset,
             to_bevy(mesh.cell_centers[edge.cells[0]]),
             to_bevy(mesh.cell_centers[edge.cells[1]]),
-            DiagnosticLayer::Delaunay.geometry().radius,
+            radius,
             color,
         );
     }
     asset
 }
 
-fn voronoi_asset(mesh: &SphereMesh) -> GizmoAsset {
-    voronoi_edge_asset(mesh, |_, edge| {
-        Some((
-            DiagnosticLayer::Voronoi.geometry().radius,
-            id_color(edge.cells[0]),
-        ))
-    })
+fn voronoi_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |_, edge| Some((radius, id_color(edge.cells[0]))))
 }
 
-fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition) -> GizmoAsset {
-    let geometry = DiagnosticLayer::Plates.geometry();
+fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition, radius: f32) -> GizmoAsset {
     voronoi_edge_asset(mesh, |_, edge| {
         let left_plate = plates.cell_plates[edge.cells[0]];
         let right_plate = plates.cell_plates[edge.cells[1]];
         // White outlines keep this layer useful on its own; the boundary-class
         // layer deliberately overlays them at a slightly larger radius.
         if left_plate == right_plate {
-            Some((geometry.radius, id_color(left_plate)))
+            Some((radius, id_color(left_plate)))
         } else {
-            Some((geometry.accent_radius, Color::srgba(0.95, 0.95, 1.0, 0.98)))
+            Some((PLATE_BORDER_RADIUS, Color::srgba(0.95, 0.95, 1.0, 0.98)))
         }
     })
 }
@@ -293,8 +281,8 @@ fn crust_asset(
     mesh: &SphereMesh,
     plates: &PlatePartition,
     crust: &CrustClassification,
+    radius: f32,
 ) -> GizmoAsset {
-    let radius = DiagnosticLayer::Crust.geometry().radius;
     voronoi_edge_asset(mesh, |_, edge| {
         let left = crust.cell_class(plates, edge.cells[0]);
         let right = crust.cell_class(plates, edge.cells[1]);
@@ -310,8 +298,11 @@ fn crust_asset(
     })
 }
 
-fn boundary_asset(mesh: &SphereMesh, boundaries: &BoundaryClassification) -> GizmoAsset {
-    let radius = DiagnosticLayer::Boundaries.geometry().radius;
+fn boundary_asset(
+    mesh: &SphereMesh,
+    boundaries: &BoundaryClassification,
+    radius: f32,
+) -> GizmoAsset {
     voronoi_edge_asset(mesh, |edge_index, _| {
         let color = match boundaries.edge_classes[edge_index] {
             BoundaryClass::Interior => return None,
@@ -327,9 +318,9 @@ fn motion_asset(
     mesh: &SphereMesh,
     plates: &PlatePartition,
     kinematics: &PlateKinematics,
+    radius: f32,
 ) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
-    let radius = DiagnosticLayer::Motion.geometry().radius;
     let stride = (mesh.cell_count() / 256).max(1);
     for cell in (0..mesh.cell_count()).step_by(stride) {
         let plate = plates.cell_plates[cell];
