@@ -1,9 +1,6 @@
+use crate::random_streams::{ANGULAR_SPEED, ROTATION_AXIS};
 use procgen_core::{RandomStream, Vec3};
 use std::fmt;
-
-const ROTATION_AXIS_STREAM: u64 = 1;
-const ANGULAR_SPEED_STREAM: u64 = 2;
-const ROTATION_AXIS_ATTEMPTS: u64 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlateKinematicsConfig {
@@ -13,12 +10,18 @@ pub struct PlateKinematicsConfig {
 }
 
 impl PlateKinematicsConfig {
-    pub const fn new(seed: u64) -> Self {
+    pub const fn new() -> Self {
         Self {
-            seed,
+            seed: 0,
             minimum_angular_speed: 0.5,
             maximum_angular_speed: 1.0,
         }
+    }
+}
+
+impl Default for PlateKinematicsConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -65,8 +68,8 @@ pub fn generate_plate_kinematics(
         return Err(PlateKinematicsError::InvalidAngularSpeedRange);
     }
 
-    let axes = RandomStream::new(config.seed, ROTATION_AXIS_STREAM);
-    let speeds = RandomStream::new(config.seed, ANGULAR_SPEED_STREAM);
+    let axes = RandomStream::new(config.seed, ROTATION_AXIS);
+    let speeds = RandomStream::new(config.seed, ANGULAR_SPEED);
     let angular_velocities = (0..plate_count)
         .map(|plate| {
             let item = plate as u64;
@@ -82,20 +85,10 @@ pub fn generate_plate_kinematics(
 }
 
 fn random_unit_axis(stream: RandomStream, item: u64) -> Vec3 {
-    // Rejection sampling inside the unit ball avoids the directional bias from
-    // normalizing points sampled throughout a cube.
-    for attempt in 0..ROTATION_AXIS_ATTEMPTS {
-        let sample = attempt * 3;
-        let candidate = Vec3::new(
-            stream.signed_f32(item, sample),
-            stream.signed_f32(item, sample + 1),
-            stream.signed_f32(item, sample + 2),
-        );
-        if (1.0e-9..=1.0).contains(&candidate.length_squared()) {
-            return candidate.normalized();
-        }
-    }
-    Vec3::new(0.0, 1.0, 0.0)
+    let z = stream.signed_f32(item, 0);
+    let theta = stream.unit_f32(item, 1) * std::f32::consts::TAU;
+    let ring = (1.0 - z * z).max(0.0).sqrt();
+    Vec3::new(ring * theta.cos(), ring * theta.sin(), z)
 }
 
 #[cfg(test)]
@@ -104,12 +97,22 @@ mod tests {
 
     #[test]
     fn angular_velocities_are_deterministic_and_bounded() {
-        let config = PlateKinematicsConfig::new(17);
+        let config = PlateKinematicsConfig {
+            seed: 17,
+            ..PlateKinematicsConfig::new()
+        };
         let first = generate_plate_kinematics(12, config).unwrap();
         assert_eq!(first, generate_plate_kinematics(12, config).unwrap());
         assert_ne!(
             first,
-            generate_plate_kinematics(12, PlateKinematicsConfig::new(18)).unwrap()
+            generate_plate_kinematics(
+                12,
+                PlateKinematicsConfig {
+                    seed: 18,
+                    ..PlateKinematicsConfig::new()
+                },
+            )
+            .unwrap()
         );
         assert!(first.angular_velocities.iter().all(|velocity| {
             (config.minimum_angular_speed..=config.maximum_angular_speed)

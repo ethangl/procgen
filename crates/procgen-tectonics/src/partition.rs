@@ -1,8 +1,8 @@
+use crate::random_streams::FIRST_MAJOR_SEED;
 use procgen_core::RandomStream;
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
-const FIRST_MAJOR_SEED_STREAM: u64 = 0;
 const UNASSIGNED_PLATE: usize = usize::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ pub fn partition_plates(
         return Err(PlatePartitionError::TooManyPlates);
     }
 
-    let first_seed = (RandomStream::new(config.seed, FIRST_MAJOR_SEED_STREAM).sample_u64(0, 0)
+    let first_seed = (RandomStream::new(config.seed, FIRST_MAJOR_SEED).sample_u64(0, 0)
         % mesh.cell_count() as u64) as usize;
     let mut growth = PlateGrowth::new(mesh);
     growth.seed(first_seed);

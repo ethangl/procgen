@@ -6,6 +6,8 @@ const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
+/// Dense per-edge classification. `Interior` is the sentinel for non-boundary
+/// edges so the array remains directly indexable by mesh edge id.
 pub enum BoundaryClass {
     Interior,
     Convergent,
@@ -89,24 +91,25 @@ pub fn classify_boundaries(
     for edge in &mesh.edges {
         let plate_0 = partition.cell_plates[edge.cells[0]];
         let plate_1 = partition.cell_plates[edge.cells[1]];
-        if plate_0 == plate_1 {
-            edge_classes.push(BoundaryClass::Interior);
-            edge_convergence.push(0.0);
-            edge_shear.push(0.0);
-            continue;
-        }
-
-        let unit_position =
-            (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
-        let position = unit_position * mesh.radius;
-        let normal =
-            (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
-        let tangent = unit_position.cross(normal).normalized();
-        let relative_velocity =
-            kinematics.velocity_at(plate_0, position) - kinematics.velocity_at(plate_1, position);
-        let convergence = relative_velocity.dot(normal);
-        let shear = relative_velocity.dot(tangent).abs();
-        let class = BoundaryClass::from_relative_motion(convergence, shear);
+        let (class, convergence, shear) = if plate_0 == plate_1 {
+            (BoundaryClass::Interior, 0.0, 0.0)
+        } else {
+            let unit_position =
+                (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
+            let position = unit_position * mesh.radius;
+            let normal =
+                (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
+            let tangent = unit_position.cross(normal).normalized();
+            let relative_velocity = kinematics.velocity_at(plate_0, position)
+                - kinematics.velocity_at(plate_1, position);
+            let convergence = relative_velocity.dot(normal);
+            let shear = relative_velocity.dot(tangent).abs();
+            (
+                BoundaryClass::from_relative_motion(convergence, shear),
+                convergence,
+                shear,
+            )
+        };
 
         edge_classes.push(class);
         edge_convergence.push(convergence);
@@ -142,9 +145,14 @@ mod tests {
             },
         )
         .unwrap();
-        let kinematics =
-            generate_plate_kinematics(partition.plate_count(), PlateKinematicsConfig::new(7))
-                .unwrap();
+        let kinematics = generate_plate_kinematics(
+            partition.plate_count(),
+            PlateKinematicsConfig {
+                seed: 7,
+                ..PlateKinematicsConfig::new()
+            },
+        )
+        .unwrap();
 
         let first = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
         assert_eq!(

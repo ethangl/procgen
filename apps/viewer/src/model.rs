@@ -31,7 +31,10 @@ impl Default for GenerationSettings {
                 major_head_start_rounds: 5,
                 seed: 7,
             },
-            kinematics: PlateKinematicsConfig::new(7),
+            kinematics: PlateKinematicsConfig {
+                seed: 7,
+                ..PlateKinematicsConfig::new()
+            },
         }
     }
 }
@@ -161,7 +164,10 @@ mod tests {
         let world = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(128),
             plates: PlatePartitionConfig::new(4, 4),
-            kinematics: PlateKinematicsConfig::new(9),
+            kinematics: PlateKinematicsConfig {
+                seed: 9,
+                ..PlateKinematicsConfig::new()
+            },
         })
         .unwrap();
 
@@ -176,13 +182,19 @@ mod tests {
         let current = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(32),
             plates: PlatePartitionConfig::new(2, 2),
-            kinematics: PlateKinematicsConfig::new(3),
+            kinematics: PlateKinematicsConfig {
+                seed: 3,
+                ..PlateKinematicsConfig::new()
+            },
         })
         .unwrap();
         let requested = GenerationSettings {
             fibonacci: FibonacciConfig::new(64),
             plates: PlatePartitionConfig::new(3, 3),
-            kinematics: PlateKinematicsConfig::new(4),
+            kinematics: PlateKinematicsConfig {
+                seed: 4,
+                ..PlateKinematicsConfig::new()
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
