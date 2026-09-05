@@ -98,8 +98,8 @@ Completed foundations:
   and ramps with graph distance from final plate boundaries. It reads but never
   mutates elevation and does not infer plate-continuity history. Sedimentary
   basins are compact, stable connected-component IDs for low-lying continental
-  land, filtered by size and ocean-facing perimeter. Per-basin floor elevation
-  is metadata only; the stage does not flatten or otherwise modify elevation.
+  land, filtered by size and ocean-facing perimeter. The stage records component
+  summaries but does not flatten or otherwise modify elevation.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation

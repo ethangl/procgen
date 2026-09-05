@@ -220,9 +220,7 @@ fn basin_asset(mesh: &SphereMesh, cell_basins: &[Option<usize>], radius: f32) ->
         let basins = edge.cells.map(|cell| cell_basins[cell]);
         let color = match basins {
             [None, None] => Color::srgba(0.045, 0.065, 0.075, 0.7),
-            [Some(left), Some(right)] if left == right => id_color(left),
-            [Some(id), None] | [None, Some(id)] => id_color(id),
-            [Some(_), Some(_)] => Color::srgba(0.95, 0.98, 1.0, 1.0),
+            [Some(id), _] | [None, Some(id)] => id_color(id),
         };
         Some((radius, color))
     })

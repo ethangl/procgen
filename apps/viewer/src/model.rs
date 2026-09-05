@@ -384,7 +384,6 @@ mod tests {
                 maximum_elevation: 0.62,
                 minimum_cell_count: 4,
                 maximum_ocean_perimeter_fraction: 0.4,
-                floor_offset: 0.03,
             },
         };
         app.insert_resource(current)

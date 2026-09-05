@@ -11,7 +11,7 @@ use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
     CoarseElevationConfig, ContinentalRiftProfile, CrustClass, CrustClassificationConfig,
-    FieldSummary, PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
+    FieldSummary, PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig, SEA_LEVEL,
     SeafloorAgeConfig,
 };
 
@@ -372,7 +372,7 @@ fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig) {
         ui,
         "Maximum elevation",
         &mut config.maximum_elevation,
-        procgen_tectonics::SEA_LEVEL..=1.0,
+        SEA_LEVEL..=1.0,
     );
     drag_value(
         ui,
@@ -387,7 +387,6 @@ fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig) {
         &mut config.maximum_ocean_perimeter_fraction,
         0.0..=1.0,
     );
-    slider(ui, "Floor offset", &mut config.floor_offset, 0.0..=0.25);
 }
 
 fn boundary_effect_controls(ui: &mut egui::Ui, label: &str, effect: &mut BoundaryEffect) {

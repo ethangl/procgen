@@ -1,10 +1,10 @@
 use crate::field::MaxWinsField;
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
     StageInputError,
 };
-use std::{collections::VecDeque, fmt};
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolcanicArcFieldConfig {
@@ -270,41 +270,29 @@ fn group_boundaries(
     plates: &PlatePartition,
     boundary: &BoundaryData,
 ) -> Vec<BoundaryGroup> {
-    let mut visited = vec![false; mesh.cell_count()];
-    let mut groups = Vec::new();
-    for start in 0..mesh.cell_count() {
-        if visited[start] || boundary.claims[start].is_none() {
-            continue;
-        }
-        let overriding_plate = plates.cell_plates[start];
-        let mut queue = VecDeque::from([start]);
-        let mut boundary_cells = Vec::new();
-        let mut boundary_edges = Vec::new();
-        visited[start] = true;
-        while let Some(cell) = queue.pop_front() {
-            boundary_cells.push(cell);
-            boundary_edges.extend_from_slice(&boundary.edges_by_cell[cell]);
-            for corner in mesh.cell_corners(cell) {
-                let neighbor = corner.neighbor;
-                if !visited[neighbor]
-                    && boundary.claims[neighbor].is_some()
-                    && plates.cell_plates[neighbor] == overriding_plate
-                {
-                    visited[neighbor] = true;
-                    queue.push_back(neighbor);
-                }
-            }
-        }
+    connected_components(
+        mesh,
+        |cell| boundary.claims[cell].is_some(),
+        |cell, neighbor| plates.cell_plates[cell] == plates.cell_plates[neighbor],
+    )
+    .into_iter()
+    .map(|mut boundary_cells| {
+        let overriding_plate = plates.cell_plates[boundary_cells[0]];
+        let mut boundary_edges: Vec<_> = boundary_cells
+            .iter()
+            .flat_map(|&cell| &boundary.edges_by_cell[cell])
+            .copied()
+            .collect();
         boundary_cells.sort_unstable();
         boundary_edges.sort_unstable();
         boundary_edges.dedup();
-        groups.push(BoundaryGroup {
+        BoundaryGroup {
             overriding_plate,
             boundary_edges,
             boundary_cells,
-        });
-    }
-    groups
+        }
+    })
+    .collect()
 }
 
 fn derive_segment(

@@ -1,8 +1,8 @@
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
     CoarseElevation, CrustClass, CrustClassification, PlatePartition, SEA_LEVEL, StageInputError,
 };
-use std::{collections::VecDeque, fmt};
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SedimentaryBasinFieldConfig {
@@ -11,9 +11,6 @@ pub struct SedimentaryBasinFieldConfig {
     pub minimum_cell_count: usize,
     /// Maximum fraction of external component-neighbor incidences that may face ocean.
     pub maximum_ocean_perimeter_fraction: f32,
-    /// Added to a retained component's minimum elevation to describe the floor
-    /// consumed by a future, separate basin elevation-modifier stage.
-    pub floor_offset: f32,
 }
 
 impl Default for SedimentaryBasinFieldConfig {
@@ -22,7 +19,6 @@ impl Default for SedimentaryBasinFieldConfig {
             maximum_elevation: 0.61,
             minimum_cell_count: 3,
             maximum_ocean_perimeter_fraction: 0.5,
-            floor_offset: 0.02,
         }
     }
 }
@@ -34,9 +30,6 @@ pub struct SedimentaryBasin {
     pub cell_count: usize,
     pub ocean_perimeter_fraction: f32,
     pub minimum_elevation: f32,
-    /// Metadata for a future, separate basin elevation modifier; this stage does
-    /// not flatten or otherwise mutate elevation.
-    pub floor_elevation: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -64,7 +57,6 @@ pub enum SedimentaryBasinFieldError {
     InvalidMaximumElevation,
     EmptyMinimumBasin,
     InvalidOceanPerimeterFraction,
-    InvalidFloorOffset,
 }
 
 impl fmt::Display for SedimentaryBasinFieldError {
@@ -78,9 +70,6 @@ impl fmt::Display for SedimentaryBasinFieldError {
             }
             Self::InvalidOceanPerimeterFraction => formatter
                 .write_str("maximum ocean perimeter fraction must be finite and between 0 and 1"),
-            Self::InvalidFloorOffset => {
-                formatter.write_str("basin floor offset must be finite and nonnegative")
-            }
         }
     }
 }
@@ -103,9 +92,8 @@ impl From<StageInputError> for SedimentaryBasinFieldError {
 /// Identifies connected, low-lying continental-land components and retains
 /// sufficiently large, sufficiently enclosed components as sedimentary basins.
 ///
-/// IDs follow ascending root-cell order and compactly index `basins`. Basin
-/// floors are deterministic metadata derived from present-day coarse elevation;
-/// the elevation field is never modified.
+/// IDs follow ascending root-cell order and compactly index `basins`. The
+/// elevation field is read without being modified.
 pub fn derive_sedimentary_basin_field(
     mesh: &SphereMesh,
     plates: &PlatePartition,
@@ -123,35 +111,24 @@ pub fn derive_sedimentary_basin_field(
         })
         .collect();
     let candidate_cell_count = candidates.iter().filter(|&&candidate| candidate).count();
-    let mut visited = vec![false; mesh.cell_count()];
+    let components = connected_components(mesh, |cell| candidates[cell], |_, _| true);
+    let component_count = components.len();
     let mut cell_basins = vec![None; mesh.cell_count()];
     let mut basins = Vec::new();
-    let mut component_count = 0;
     let mut rejected_small_component_count = 0;
     let mut rejected_ocean_exposed_component_count = 0;
 
-    for root_cell in 0..mesh.cell_count() {
-        if !candidates[root_cell] || visited[root_cell] {
-            continue;
-        }
-        component_count += 1;
-        let component = collect_component(mesh, &candidates, elevation, &mut visited, root_cell);
-        match reject_reason(&component, config) {
+    for component in components {
+        let basin = summarize_component(mesh, &candidates, elevation, &component);
+        match reject_reason(&basin, config) {
             Some(Rejection::TooSmall) => rejected_small_component_count += 1,
             Some(Rejection::OceanExposed) => rejected_ocean_exposed_component_count += 1,
             None => {
                 let id = basins.len();
-                for &cell in &component.cells {
+                for cell in component {
                     cell_basins[cell] = Some(id);
                 }
-                basins.push(SedimentaryBasin {
-                    root_cell,
-                    cell_count: component.cells.len(),
-                    ocean_perimeter_fraction: component.ocean_perimeter_fraction,
-                    minimum_elevation: component.minimum_elevation,
-                    floor_elevation: (component.minimum_elevation + config.floor_offset)
-                        .clamp(0.0, 1.0),
-                });
+                basins.push(basin);
             }
         }
     }
@@ -174,53 +151,39 @@ pub fn derive_sedimentary_basin_field(
     })
 }
 
-struct Component {
-    cells: Vec<usize>,
-    ocean_perimeter_fraction: f32,
-    minimum_elevation: f32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Rejection {
     TooSmall,
     OceanExposed,
 }
 
-fn reject_reason(component: &Component, config: SedimentaryBasinFieldConfig) -> Option<Rejection> {
-    if component.cells.len() < config.minimum_cell_count {
+fn reject_reason(
+    basin: &SedimentaryBasin,
+    config: SedimentaryBasinFieldConfig,
+) -> Option<Rejection> {
+    if basin.cell_count < config.minimum_cell_count {
         Some(Rejection::TooSmall)
-    } else if component.ocean_perimeter_fraction > config.maximum_ocean_perimeter_fraction {
+    } else if basin.ocean_perimeter_fraction > config.maximum_ocean_perimeter_fraction {
         Some(Rejection::OceanExposed)
     } else {
         None
     }
 }
 
-fn collect_component(
+fn summarize_component(
     mesh: &SphereMesh,
     candidates: &[bool],
     elevation: &CoarseElevation,
-    visited: &mut [bool],
-    root_cell: usize,
-) -> Component {
-    let mut cells = Vec::new();
-    let mut queue = VecDeque::from([root_cell]);
+    cells: &[usize],
+) -> SedimentaryBasin {
     let mut perimeter_count = 0;
     let mut ocean_perimeter_count = 0;
     let mut minimum_elevation = f32::INFINITY;
-    visited[root_cell] = true;
-
-    while let Some(cell) = queue.pop_front() {
-        cells.push(cell);
+    for &cell in cells {
         minimum_elevation = minimum_elevation.min(elevation.cell_elevations[cell]);
         for corner in mesh.cell_corners(cell) {
             let neighbor = corner.neighbor;
-            if candidates[neighbor] {
-                if !visited[neighbor] {
-                    visited[neighbor] = true;
-                    queue.push_back(neighbor);
-                }
-            } else {
+            if !candidates[neighbor] {
                 perimeter_count += 1;
                 ocean_perimeter_count += usize::from(!elevation.is_land(neighbor));
             }
@@ -232,8 +195,9 @@ fn collect_component(
     } else {
         ocean_perimeter_count as f32 / perimeter_count as f32
     };
-    Component {
-        cells,
+    SedimentaryBasin {
+        root_cell: cells[0],
+        cell_count: cells.len(),
         ocean_perimeter_fraction,
         minimum_elevation,
     }
@@ -260,9 +224,6 @@ fn validate_inputs(
     {
         return Err(SedimentaryBasinFieldError::InvalidOceanPerimeterFraction);
     }
-    if !config.floor_offset.is_finite() || config.floor_offset < 0.0 {
-        return Err(SedimentaryBasinFieldError::InvalidFloorOffset);
-    }
     plates.validate(mesh)?;
     crust.validate(plates)?;
     elevation.validate(mesh)?;
@@ -274,7 +235,7 @@ mod tests {
     use super::*;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::build_sphere_mesh;
+    use procgen_sphere_mesh::{build_sphere_mesh, multi_source_distances};
     use procgen_tectonics::{PlatePartitionConfig, partition_plates};
 
     fn fixture(cell_count: usize) -> (SphereMesh, PlatePartition, CrustClassification) {
@@ -303,23 +264,13 @@ mod tests {
     }
 
     fn connected_cells(mesh: &SphereMesh, count: usize) -> Vec<usize> {
-        let mut cells = Vec::new();
-        let mut seen = vec![false; mesh.cell_count()];
-        let mut queue = VecDeque::from([0]);
-        seen[0] = true;
-        while let Some(cell) = queue.pop_front() {
-            cells.push(cell);
-            if cells.len() == count {
-                break;
-            }
-            for corner in mesh.cell_corners(cell) {
-                if !seen[corner.neighbor] {
-                    seen[corner.neighbor] = true;
-                    queue.push_back(corner.neighbor);
-                }
-            }
-        }
-        cells
+        connected_components(mesh, |_| true, |_, _| true)
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_iter()
+            .take(count)
+            .collect()
     }
 
     #[test]
@@ -342,21 +293,14 @@ mod tests {
         assert_eq!(elevation, original_elevation);
         assert_eq!(first.basins.len(), 1);
         assert_eq!(first.basins[0].root_cell, 0);
-        assert!((first.basins[0].floor_elevation - 0.54).abs() < f32::EPSILON);
         assert_eq!(first.diagnostics.basin_cell_count, 12);
-        let mut reached = vec![false; mesh.cell_count()];
-        let mut queue = VecDeque::from([first.basins[0].root_cell]);
-        reached[first.basins[0].root_cell] = true;
-        let mut reached_count = 0;
-        while let Some(cell) = queue.pop_front() {
-            reached_count += 1;
-            for corner in mesh.cell_corners(cell) {
-                if first.cell_basins[corner.neighbor] == Some(0) && !reached[corner.neighbor] {
-                    reached[corner.neighbor] = true;
-                    queue.push_back(corner.neighbor);
-                }
-            }
-        }
+        let reached_count =
+            multi_source_distances(&mesh, &[first.basins[0].root_cell], |_, neighbor| {
+                first.cell_basins[neighbor] == Some(0)
+            })
+            .iter()
+            .flatten()
+            .count();
         assert_eq!(reached_count, first.basins[0].cell_count);
         let ids = first
             .cell_basins
@@ -516,13 +460,6 @@ mod tests {
                 },
                 SedimentaryBasinFieldError::InvalidOceanPerimeterFraction,
             ),
-            (
-                SedimentaryBasinFieldConfig {
-                    floor_offset: -0.01,
-                    ..Default::default()
-                },
-                SedimentaryBasinFieldError::InvalidFloorOffset,
-            ),
         ];
         for (config, expected) in invalid_cases {
             assert_eq!(
@@ -534,8 +471,9 @@ mod tests {
 
     #[test]
     fn rejection_policy_prioritizes_size_before_ocean_exposure() {
-        let component = Component {
-            cells: vec![0],
+        let basin = SedimentaryBasin {
+            root_cell: 0,
+            cell_count: 1,
             ocean_perimeter_fraction: 1.0,
             minimum_elevation: 0.55,
         };
@@ -544,10 +482,10 @@ mod tests {
             maximum_ocean_perimeter_fraction: 0.5,
             ..Default::default()
         };
-        assert_eq!(reject_reason(&component, config), Some(Rejection::TooSmall));
+        assert_eq!(reject_reason(&basin, config), Some(Rejection::TooSmall));
         assert_eq!(
             reject_reason(
-                &component,
+                &basin,
                 SedimentaryBasinFieldConfig {
                     minimum_cell_count: 1,
                     ..config
@@ -557,7 +495,7 @@ mod tests {
         );
         assert_eq!(
             reject_reason(
-                &component,
+                &basin,
                 SedimentaryBasinFieldConfig {
                     minimum_cell_count: 1,
                     maximum_ocean_perimeter_fraction: 1.0,
