@@ -77,8 +77,8 @@ pub struct GeologicalElevation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeologicalElevationError {
-    Input(GeologyInputError),
-    Elevation(StageInputError),
+    Input(StageInputError),
+    Geology(GeologyInputError),
     InvalidConfig,
 }
 
@@ -86,7 +86,7 @@ impl fmt::Display for GeologicalElevationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(error) => error.fmt(formatter),
-            Self::Elevation(error) => error.fmt(formatter),
+            Self::Geology(error) => error.fmt(formatter),
             Self::InvalidConfig => formatter
                 .write_str("geological elevation values must be finite and between zero and one"),
         }
@@ -97,7 +97,7 @@ impl std::error::Error for GeologicalElevationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Input(error) => Some(error),
-            Self::Elevation(error) => Some(error),
+            Self::Geology(error) => Some(error),
             Self::InvalidConfig => None,
         }
     }
@@ -105,13 +105,13 @@ impl std::error::Error for GeologicalElevationError {
 
 impl From<GeologyInputError> for GeologicalElevationError {
     fn from(error: GeologyInputError) -> Self {
-        Self::Input(error)
+        Self::Geology(error)
     }
 }
 
 impl From<StageInputError> for GeologicalElevationError {
     fn from(error: StageInputError) -> Self {
-        Self::Elevation(error)
+        Self::Input(error)
     }
 }
 
@@ -425,23 +425,23 @@ mod tests {
         fixture.tectonic_elevation.cell_elevations.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Elevation(
-                StageInputError::Elevation
-            ))
+            Err(GeologicalElevationError::Input(StageInputError::Elevation))
         );
         fixture.tectonic_elevation.cell_elevations.push(0.5);
 
         fixture.hotspots.cell_intensities.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Input(GeologyInputError::Hotspots))
+            Err(GeologicalElevationError::Geology(
+                GeologyInputError::Hotspots
+            ))
         );
         fixture.hotspots.cell_intensities.push(0.0);
 
         fixture.volcanic_arcs.cell_strengths.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Input(
+            Err(GeologicalElevationError::Geology(
                 GeologyInputError::VolcanicArcs
             ))
         );
@@ -450,14 +450,16 @@ mod tests {
         fixture.cratons.cell_strengths.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Input(GeologyInputError::Cratons))
+            Err(GeologicalElevationError::Geology(
+                GeologyInputError::Cratons
+            ))
         );
         fixture.cratons.cell_strengths.push(0.0);
 
         fixture.basins.cell_basins[0] = Some(0);
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Input(GeologyInputError::Basins))
+            Err(GeologicalElevationError::Geology(GeologyInputError::Basins))
         );
         fixture.basins.cell_basins[0] = None;
 
