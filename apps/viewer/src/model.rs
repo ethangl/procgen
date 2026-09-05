@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 use procgen_geology::{
-    CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig, HotspotField,
-    HotspotFieldConfig, OceanicPeakField, OceanicPeakFieldConfig, SedimentaryBasinField,
-    SedimentaryBasinFieldConfig, VolcanicArcField, VolcanicArcFieldConfig,
-    compose_geological_elevation, derive_craton_field, derive_oceanic_peak_field,
-    derive_sedimentary_basin_field, derive_volcanic_arc_field, generate_hotspot_field,
+    CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
+    GeologicalElevationInputs, HotspotField, HotspotFieldConfig, OceanicPeakField,
+    OceanicPeakFieldConfig, SedimentaryBasinField, SedimentaryBasinFieldConfig, VolcanicArcField,
+    VolcanicArcFieldConfig, compose_geological_elevation, derive_craton_field,
+    derive_oceanic_peak_field, derive_sedimentary_basin_field, derive_volcanic_arc_field,
+    generate_hotspot_field,
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
@@ -200,7 +201,7 @@ impl GeneratedWorld {
         let deformation = timings.record("Boundary deformation", || {
             derive_boundary_deformation(&voronoi, &plates, &crust, &boundaries, config.deformation)
         })?;
-        let elevation = timings.record("Coarse elevation", || {
+        let elevation = timings.record("Tectonic elevation", || {
             compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)
         })?;
         let hotspots = timings.record("Mantle hotspots", || {
@@ -220,12 +221,15 @@ impl GeneratedWorld {
         })?;
         let geological_elevation = timings.record("Geological elevation", || {
             compose_geological_elevation(
-                &elevation,
-                &hotspots,
-                &volcanic_arcs,
-                &cratons,
-                &basins,
-                config.base_elevation.continental_base,
+                &voronoi,
+                GeologicalElevationInputs {
+                    tectonic_elevation: &elevation,
+                    hotspots: &hotspots,
+                    volcanic_arcs: &volcanic_arcs,
+                    cratons: &cratons,
+                    basins: &basins,
+                    continental_base: config.base_elevation.continental_base,
+                },
                 config.geological_elevation,
             )
         })?;

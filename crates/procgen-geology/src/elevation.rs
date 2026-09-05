@@ -1,5 +1,8 @@
-use crate::{CratonField, HotspotField, SedimentaryBasinField, VolcanicArcField};
-use procgen_tectonics::{CoarseElevation, FieldSummary};
+use crate::{
+    CratonField, GeologyInputError, HotspotField, SedimentaryBasinField, VolcanicArcField,
+};
+use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::{CoarseElevation, FieldSummary, StageInputError};
 use std::fmt;
 
 /// Configuration for the ordered coarse geological-elevation composition.
@@ -24,6 +27,17 @@ impl Default for GeologicalElevationConfig {
             basin_flattening: 0.65,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GeologicalElevationInputs<'a> {
+    pub tectonic_elevation: &'a CoarseElevation,
+    pub hotspots: &'a HotspotField,
+    pub volcanic_arcs: &'a VolcanicArcField,
+    pub cratons: &'a CratonField,
+    pub basins: &'a SedimentaryBasinField,
+    /// Validated normalized continental base used by tectonic base elevation.
+    pub continental_base: f32,
 }
 
 /// Aggregate change produced by one composition effect.
@@ -63,68 +77,73 @@ pub struct GeologicalElevation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeologicalElevationError {
+    Input(GeologyInputError),
+    Elevation(StageInputError),
     InvalidConfig,
-    FieldCountMismatch,
-    InvalidBasinId,
 }
 
 impl fmt::Display for GeologicalElevationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Input(error) => error.fmt(formatter),
+            Self::Elevation(error) => error.fmt(formatter),
             Self::InvalidConfig => formatter
                 .write_str("geological elevation values must be finite and between zero and one"),
-            Self::FieldCountMismatch => formatter.write_str(
-                "tectonic elevation and geological fields must have the same cell count",
-            ),
-            Self::InvalidBasinId => {
-                formatter.write_str("basin cell ownership must index an existing basin")
-            }
         }
     }
 }
 
-impl std::error::Error for GeologicalElevationError {}
+impl std::error::Error for GeologicalElevationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Input(error) => Some(error),
+            Self::Elevation(error) => Some(error),
+            Self::InvalidConfig => None,
+        }
+    }
+}
 
-/// Composes a new normalized coarse elevation field in this stable order:
+impl From<GeologyInputError> for GeologicalElevationError {
+    fn from(error: GeologyInputError) -> Self {
+        Self::Input(error)
+    }
+}
+
+impl From<StageInputError> for GeologicalElevationError {
+    fn from(error: StageInputError) -> Self {
+        Self::Elevation(error)
+    }
+}
+
+/// Composes a new normalized geological elevation field in this stable order:
 /// hotspot uplift, volcanic-arc uplift, craton flattening, then basin flattening.
 ///
 /// Basin floors are the deterministic component minima captured by the basin
 /// field from the input tectonic elevation. No input field is modified, and
 /// sparse oceanic peaks are deliberately not consumed by this stage.
 pub fn compose_geological_elevation(
-    tectonic_elevation: &CoarseElevation,
-    hotspots: &HotspotField,
-    volcanic_arcs: &VolcanicArcField,
-    cratons: &CratonField,
-    basins: &SedimentaryBasinField,
-    continental_base: f32,
+    mesh: &SphereMesh,
+    inputs: GeologicalElevationInputs<'_>,
     config: GeologicalElevationConfig,
 ) -> Result<GeologicalElevation, GeologicalElevationError> {
-    validate_inputs(
-        tectonic_elevation,
-        hotspots,
-        volcanic_arcs,
-        cratons,
-        basins,
-        continental_base,
-        config,
-    )?;
+    validate_inputs(mesh, inputs, config)?;
 
-    let mut cell_elevations = tectonic_elevation.cell_elevations.clone();
+    let mut cell_elevations = inputs.tectonic_elevation.cell_elevations.clone();
     let mut diagnostics = GeologicalElevationDiagnostics::default();
 
     apply(
         &mut cell_elevations,
         &mut diagnostics.hotspots,
         |cell, elevation| {
-            (elevation + hotspots.cell_intensities[cell] * config.hotspot_uplift).clamp(0.0, 1.0)
+            (elevation + inputs.hotspots.cell_intensities[cell] * config.hotspot_uplift)
+                .clamp(0.0, 1.0)
         },
     );
     apply(
         &mut cell_elevations,
         &mut diagnostics.volcanic_arcs,
         |cell, elevation| {
-            (elevation + volcanic_arcs.cell_strengths[cell] * config.volcanic_arc_uplift)
+            (elevation + inputs.volcanic_arcs.cell_strengths[cell] * config.volcanic_arc_uplift)
                 .clamp(0.0, 1.0)
         },
     );
@@ -134,8 +153,8 @@ pub fn compose_geological_elevation(
         |cell, elevation| {
             lerp(
                 elevation,
-                continental_base,
-                cratons.cell_strengths[cell] * config.craton_flattening,
+                inputs.continental_base,
+                inputs.cratons.cell_strengths[cell] * config.craton_flattening,
             )
         },
     );
@@ -143,10 +162,10 @@ pub fn compose_geological_elevation(
         &mut cell_elevations,
         &mut diagnostics.basins,
         |cell, elevation| {
-            basins.cell_basins[cell].map_or(elevation, |basin| {
+            inputs.basins.cell_basins[cell].map_or(elevation, |basin| {
                 lerp(
                     elevation,
-                    basins.basins[basin].minimum_elevation,
+                    inputs.basins.basins[basin].minimum_elevation,
                     config.basin_flattening,
                 )
             })
@@ -177,12 +196,8 @@ fn lerp(value: f32, target: f32, amount: f32) -> f32 {
 }
 
 fn validate_inputs(
-    tectonic_elevation: &CoarseElevation,
-    hotspots: &HotspotField,
-    volcanic_arcs: &VolcanicArcField,
-    cratons: &CratonField,
-    basins: &SedimentaryBasinField,
-    continental_base: f32,
+    mesh: &SphereMesh,
+    inputs: GeologicalElevationInputs<'_>,
     config: GeologicalElevationConfig,
 ) -> Result<(), GeologicalElevationError> {
     let unit_interval = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
@@ -190,27 +205,16 @@ fn validate_inputs(
         || !unit_interval(config.volcanic_arc_uplift)
         || !unit_interval(config.craton_flattening)
         || !unit_interval(config.basin_flattening)
-        || !unit_interval(continental_base)
+        || !unit_interval(inputs.continental_base)
     {
         return Err(GeologicalElevationError::InvalidConfig);
     }
 
-    let cell_count = tectonic_elevation.cell_elevations.len();
-    if hotspots.cell_intensities.len() != cell_count
-        || volcanic_arcs.cell_strengths.len() != cell_count
-        || cratons.cell_strengths.len() != cell_count
-        || basins.cell_basins.len() != cell_count
-    {
-        return Err(GeologicalElevationError::FieldCountMismatch);
-    }
-    if basins
-        .cell_basins
-        .iter()
-        .flatten()
-        .any(|&basin| basin >= basins.basins.len())
-    {
-        return Err(GeologicalElevationError::InvalidBasinId);
-    }
+    inputs.tectonic_elevation.validate(mesh)?;
+    inputs.hotspots.validate(mesh)?;
+    inputs.volcanic_arcs.validate(mesh)?;
+    inputs.cratons.validate(mesh)?;
+    inputs.basins.validate(mesh)?;
     Ok(())
 }
 
@@ -222,97 +226,116 @@ mod tests {
         VolcanicArcDiagnostics,
     };
     use procgen_core::fingerprint;
+    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
+    use procgen_sphere_mesh::build_sphere_mesh;
 
-    fn fields(
-        elevations: Vec<f32>,
-        hotspot_strengths: Vec<f32>,
-        arc_strengths: Vec<f32>,
-        craton_strengths: Vec<f32>,
-        cell_basins: Vec<Option<usize>>,
-        basins: Vec<SedimentaryBasin>,
-    ) -> (
-        CoarseElevation,
-        HotspotField,
-        VolcanicArcField,
-        CratonField,
-        SedimentaryBasinField,
-    ) {
-        (
-            CoarseElevation {
-                cell_elevations: elevations,
-                diagnostics: Default::default(),
-            },
-            HotspotField {
-                hotspots: Vec::new(),
-                cell_hotspots: hotspot_strengths
-                    .iter()
-                    .map(|&strength| (strength > 0.0).then_some(0))
-                    .collect(),
-                cell_intensities: hotspot_strengths,
-                diagnostics: HotspotDiagnostics::default(),
-            },
-            VolcanicArcField {
-                segments: Vec::new(),
-                cell_segments: arc_strengths
-                    .iter()
-                    .map(|&strength| (strength > 0.0).then_some(0))
-                    .collect(),
-                cell_strengths: arc_strengths,
-                diagnostics: VolcanicArcDiagnostics::default(),
-            },
-            CratonField {
-                cell_strengths: craton_strengths,
-                diagnostics: CratonDiagnostics::default(),
-            },
-            SedimentaryBasinField {
-                cell_basins,
-                basins,
-                diagnostics: SedimentaryBasinDiagnostics::default(),
-            },
+    #[derive(Clone)]
+    struct Fixture {
+        tectonic_elevation: CoarseElevation,
+        hotspots: HotspotField,
+        volcanic_arcs: VolcanicArcField,
+        cratons: CratonField,
+        basins: SedimentaryBasinField,
+    }
+
+    impl Fixture {
+        fn new(elevations: Vec<f32>) -> Self {
+            let cell_count = elevations.len();
+            Self {
+                tectonic_elevation: CoarseElevation {
+                    cell_elevations: elevations,
+                    diagnostics: Default::default(),
+                },
+                hotspots: HotspotField {
+                    hotspots: Vec::new(),
+                    cell_intensities: vec![0.0; cell_count],
+                    cell_hotspots: vec![None; cell_count],
+                    diagnostics: HotspotDiagnostics::default(),
+                },
+                volcanic_arcs: VolcanicArcField {
+                    segments: Vec::new(),
+                    cell_strengths: vec![0.0; cell_count],
+                    cell_segments: vec![None; cell_count],
+                    diagnostics: VolcanicArcDiagnostics::default(),
+                },
+                cratons: CratonField {
+                    cell_strengths: vec![0.0; cell_count],
+                    diagnostics: CratonDiagnostics::default(),
+                },
+                basins: SedimentaryBasinField {
+                    cell_basins: vec![None; cell_count],
+                    basins: Vec::new(),
+                    diagnostics: SedimentaryBasinDiagnostics::default(),
+                },
+            }
+        }
+
+        fn compose(
+            &self,
+            mesh: &SphereMesh,
+            continental_base: f32,
+            config: GeologicalElevationConfig,
+        ) -> Result<GeologicalElevation, GeologicalElevationError> {
+            compose_geological_elevation(
+                mesh,
+                GeologicalElevationInputs {
+                    tectonic_elevation: &self.tectonic_elevation,
+                    hotspots: &self.hotspots,
+                    volcanic_arcs: &self.volcanic_arcs,
+                    cratons: &self.cratons,
+                    basins: &self.basins,
+                    continental_base,
+                },
+                config,
+            )
+        }
+    }
+
+    fn mesh(cell_count: usize) -> SphereMesh {
+        build_sphere_mesh(
+            fibonacci_sphere(FibonacciConfig::new(cell_count)).unwrap(),
+            1.0,
         )
+        .unwrap()
     }
 
     #[test]
     fn composition_is_deterministic_and_preserves_every_input() {
-        let inputs = fields(
-            vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-            vec![1.0, 0.5, 0.0, 0.2, 0.0, 0.0, 0.8, 1.0],
-            vec![0.0, 0.4, 1.0, 0.2, 0.0, 0.7, 0.8, 1.0],
-            vec![0.0, 0.0, 0.0, 0.5, 1.0, 0.6, 0.8, 1.0],
-            vec![
-                None,
-                None,
-                None,
-                Some(0),
-                Some(0),
-                Some(0),
-                Some(0),
-                Some(0),
-            ],
-            vec![SedimentaryBasin {
-                root_cell: 3,
-                cell_count: 5,
-                ocean_perimeter_fraction: 0.0,
-                minimum_elevation: 0.6,
-            }],
-        );
-        let original = inputs.clone();
+        let mesh = mesh(8);
+        let mut fixture = Fixture::new(vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]);
+        fixture.hotspots.cell_intensities = vec![1.0, 0.5, 0.0, 0.2, 0.0, 0.0, 0.8, 1.0];
+        fixture.volcanic_arcs.cell_strengths = vec![0.0, 0.4, 1.0, 0.2, 0.0, 0.7, 0.8, 1.0];
+        fixture.cratons.cell_strengths = vec![0.0, 0.0, 0.0, 0.5, 1.0, 0.6, 0.8, 1.0];
+        fixture.basins.cell_basins = vec![
+            None,
+            None,
+            None,
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+        ];
+        fixture.basins.basins = vec![SedimentaryBasin {
+            root_cell: 3,
+            cell_count: 5,
+            ocean_perimeter_fraction: 0.0,
+            minimum_elevation: 0.6,
+        }];
+        let original = fixture.clone();
         let compose = || {
-            compose_geological_elevation(
-                &inputs.0,
-                &inputs.1,
-                &inputs.2,
-                &inputs.3,
-                &inputs.4,
-                0.6,
-                GeologicalElevationConfig::default(),
-            )
-            .unwrap()
+            fixture
+                .compose(&mesh, 0.6, GeologicalElevationConfig::default())
+                .unwrap()
         };
 
         let first = compose();
         assert_eq!(first, compose());
-        assert_eq!(inputs, original);
+        assert_eq!(fixture.tectonic_elevation, original.tectonic_elevation);
+        assert_eq!(fixture.hotspots, original.hotspots);
+        assert_eq!(fixture.volcanic_arcs, original.volcanic_arcs);
+        assert_eq!(fixture.cratons, original.cratons);
+        assert_eq!(fixture.basins, original.basins);
         assert!(
             first
                 .cell_elevations
@@ -332,19 +355,18 @@ mod tests {
 
     #[test]
     fn overlapping_effects_follow_the_documented_stable_order() {
-        let inputs = fields(
-            vec![0.6, 0.4, 0.8, 0.2],
-            vec![0.4, 0.0, 0.0, 0.0],
-            vec![0.5, 0.0, 0.0, 0.0],
-            vec![0.5, 0.0, 0.0, 0.0],
-            vec![Some(0), Some(0), None, None],
-            vec![SedimentaryBasin {
-                root_cell: 0,
-                cell_count: 2,
-                ocean_perimeter_fraction: 0.0,
-                minimum_elevation: 0.4,
-            }],
-        );
+        let mesh = mesh(4);
+        let mut fixture = Fixture::new(vec![0.6, 0.4, 0.8, 0.2]);
+        fixture.hotspots.cell_intensities = vec![0.4, 0.0, 0.0, 0.0];
+        fixture.volcanic_arcs.cell_strengths = vec![0.5, 0.0, 0.0, 0.0];
+        fixture.cratons.cell_strengths = vec![0.5, 0.0, 0.0, 0.0];
+        fixture.basins.cell_basins = vec![Some(0), Some(0), None, None];
+        fixture.basins.basins = vec![SedimentaryBasin {
+            root_cell: 0,
+            cell_count: 2,
+            ocean_perimeter_fraction: 0.0,
+            minimum_elevation: 0.4,
+        }];
         let config = GeologicalElevationConfig {
             hotspot_uplift: 0.5,
             volcanic_arc_uplift: 0.2,
@@ -352,10 +374,7 @@ mod tests {
             basin_flattening: 0.5,
         };
 
-        let result = compose_geological_elevation(
-            &inputs.0, &inputs.1, &inputs.2, &inputs.3, &inputs.4, 0.5, config,
-        )
-        .unwrap();
+        let result = fixture.compose(&mesh, 0.5, config).unwrap();
         // 0.6 + 0.2 hotspot + 0.1 arc = 0.9; quarter-way toward 0.5 because
         // craton strength and flattening are both 0.5 = 0.8; halfway toward
         // the original component floor 0.4 = 0.6.
@@ -368,26 +387,18 @@ mod tests {
 
     #[test]
     fn zero_strengths_are_identity_and_uplift_reports_clamped_actual_delta() {
-        let inputs = fields(
-            vec![1.0, 0.0, 0.5, 0.75],
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![0.0; 4],
-            vec![None; 4],
-            Vec::new(),
-        );
-        let result = compose_geological_elevation(
-            &inputs.0,
-            &inputs.1,
-            &inputs.2,
-            &inputs.3,
-            &inputs.4,
-            0.6,
-            GeologicalElevationConfig::default(),
-        )
-        .unwrap();
+        let mesh = mesh(4);
+        let mut fixture = Fixture::new(vec![1.0, 0.0, 0.5, 0.75]);
+        fixture.hotspots.cell_intensities = vec![1.0, 0.0, 0.0, 0.0];
+        fixture.volcanic_arcs.cell_strengths = vec![1.0, 0.0, 0.0, 0.0];
+        let result = fixture
+            .compose(&mesh, 0.6, GeologicalElevationConfig::default())
+            .unwrap();
 
-        assert_eq!(result.cell_elevations, inputs.0.cell_elevations);
+        assert_eq!(
+            result.cell_elevations,
+            fixture.tectonic_elevation.cell_elevations
+        );
         assert_eq!(
             result.diagnostics.hotspots,
             ElevationEffectDiagnostics::default()
@@ -408,50 +419,54 @@ mod tests {
 
     #[test]
     fn rejects_invalid_configuration_shapes_and_basin_ownership() {
-        let mut inputs = fields(
-            vec![0.5; 4],
-            vec![0.0; 4],
-            vec![0.0; 4],
-            vec![0.0; 4],
-            vec![None; 4],
-            Vec::new(),
-        );
-        inputs.1.cell_intensities.pop();
+        let mesh = mesh(4);
+        let mut fixture = Fixture::new(vec![0.5; 4]);
+
+        fixture.tectonic_elevation.cell_elevations.pop();
         assert_eq!(
-            compose_geological_elevation(
-                &inputs.0,
-                &inputs.1,
-                &inputs.2,
-                &inputs.3,
-                &inputs.4,
-                0.6,
-                GeologicalElevationConfig::default(),
-            ),
-            Err(GeologicalElevationError::FieldCountMismatch)
+            fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
+            Err(GeologicalElevationError::Elevation(
+                StageInputError::Elevation
+            ))
         );
-        inputs.1.cell_intensities.push(0.0);
-        inputs.4.cell_basins[0] = Some(0);
+        fixture.tectonic_elevation.cell_elevations.push(0.5);
+
+        fixture.hotspots.cell_intensities.pop();
         assert_eq!(
-            compose_geological_elevation(
-                &inputs.0,
-                &inputs.1,
-                &inputs.2,
-                &inputs.3,
-                &inputs.4,
-                0.6,
-                GeologicalElevationConfig::default(),
-            ),
-            Err(GeologicalElevationError::InvalidBasinId)
+            fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
+            Err(GeologicalElevationError::Input(GeologyInputError::Hotspots))
         );
+        fixture.hotspots.cell_intensities.push(0.0);
+
+        fixture.volcanic_arcs.cell_strengths.pop();
+        assert_eq!(
+            fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
+            Err(GeologicalElevationError::Input(
+                GeologyInputError::VolcanicArcs
+            ))
+        );
+        fixture.volcanic_arcs.cell_strengths.push(0.0);
+
+        fixture.cratons.cell_strengths.pop();
+        assert_eq!(
+            fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
+            Err(GeologicalElevationError::Input(GeologyInputError::Cratons))
+        );
+        fixture.cratons.cell_strengths.push(0.0);
+
+        fixture.basins.cell_basins[0] = Some(0);
+        assert_eq!(
+            fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
+            Err(GeologicalElevationError::Input(GeologyInputError::Basins))
+        );
+        fixture.basins.cell_basins[0] = None;
 
         let invalid = GeologicalElevationConfig {
             hotspot_uplift: f32::NAN,
             ..Default::default()
         };
         assert_eq!(
-            compose_geological_elevation(
-                &inputs.0, &inputs.1, &inputs.2, &inputs.3, &inputs.4, 0.6, invalid,
-            ),
+            fixture.compose(&mesh, 0.6, invalid),
             Err(GeologicalElevationError::InvalidConfig)
         );
     }

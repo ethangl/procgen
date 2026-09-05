@@ -57,7 +57,7 @@ pub(super) fn generation_controls(
     section(ui, "Boundary deformation", |ui| {
         deformation_controls(ui, &mut generation.deformation, generation.kinematics)
     });
-    section(ui, "Coarse elevation", |ui| {
+    section(ui, "Tectonic elevation", |ui| {
         elevation_controls(ui, &mut generation.elevation)
     });
     section(ui, "Mantle hotspots", |ui| {

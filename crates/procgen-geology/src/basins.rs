@@ -1,3 +1,4 @@
+use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
     CoarseElevation, CrustClass, CrustClassification, PlatePartition, SEA_LEVEL, StageInputError,
@@ -51,6 +52,21 @@ pub struct SedimentaryBasinField {
     pub diagnostics: SedimentaryBasinDiagnostics,
 }
 
+impl SedimentaryBasinField {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
+        if self.cell_basins.len() != mesh.cell_count()
+            || self
+                .cell_basins
+                .iter()
+                .flatten()
+                .any(|&basin| basin >= self.basins.len())
+        {
+            return Err(GeologyInputError::Basins);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SedimentaryBasinFieldError {
     Input(StageInputError),
@@ -93,7 +109,7 @@ impl From<StageInputError> for SedimentaryBasinFieldError {
 /// sufficiently large, sufficiently enclosed components as sedimentary basins.
 ///
 /// IDs follow ascending root-cell order and compactly index `basins`. The
-/// elevation field is read without being modified.
+/// tectonic elevation field is read without being modified.
 pub fn derive_sedimentary_basin_field(
     mesh: &SphereMesh,
     plates: &PlatePartition,

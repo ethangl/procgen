@@ -84,7 +84,7 @@ Completed foundations:
   oceanic plates receive a deterministic configured fallback age. Base
   elevation then keeps continental cells at their configured base and maps
   oceanic age through a configurable square-root ridge-to-deep cooling curve.
-  Coarse elevation composes that base with boundary deformation once before
+  Tectonic elevation composes that base with boundary deformation once before
   simultaneous smoothing and clamping. None of these stages accumulates state
   during evolution.
 - `procgen-geology`: deterministic present-day geological fields derived from
@@ -96,12 +96,13 @@ Completed foundations:
   strength-ranked peak candidates with stable segment, peak, and overlap
   ordering. Craton strength applies only to above-sea-level continental cells
   and ramps with graph distance from final plate boundaries. It reads but never
-  mutates elevation and does not infer plate-continuity history. Sedimentary
-  basins are compact, stable connected-component IDs for low-lying continental
-  land, filtered by size and ocean-facing perimeter. The stage records component
-  summaries but does not flatten or otherwise modify elevation. Oceanic peak
-  density uses deterministic max-wins overlap between hotspot intensity and
-  young nonzero seafloor age. An independent seeded pass emits stable sparse
+  mutates tectonic elevation and does not infer plate-continuity history.
+  Sedimentary basins are compact, stable connected-component IDs for low-lying
+  continental land, filtered by size and ocean-facing perimeter. The stage
+  records component summaries but does not flatten or otherwise modify tectonic
+  elevation. Oceanic peak density uses deterministic max-wins overlap between
+  hotspot intensity and young nonzero seafloor age. An independent seeded pass
+  emits stable sparse
   seamount and abyssal-hill candidates with positions bounded inside their
   source cells and strength-scaled diagnostic heights; it does not stamp cones,
   mutate elevation, or produce a dense terrain field. A separate geological
@@ -112,11 +113,12 @@ Completed foundations:
   does not consume the sparse oceanic peaks or mutate any input field.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
-  regeneration, evolution, deformation, bathymetry, and coarse-elevation
-  controls, signed deformation, seafloor-age, base-elevation, and composed
-  elevation layers, hotspot and volcanic-arc field visualization, craton
-  distance/ramp controls and strength visualization, sedimentary-basin controls
-  and stable-ID visualization, seamount/abyssal density and sparse-peak controls
+  regeneration, evolution, deformation, bathymetry, and tectonic-elevation
+  controls, signed deformation, seafloor-age, base-elevation,
+  tectonic-elevation, and geological-elevation layers, hotspot and volcanic-arc
+  field visualization, craton distance/ramp controls and strength
+  visualization, sedimentary-basin controls and stable-ID visualization,
+  seamount/abyssal density and sparse-peak controls
   and visualization, geological-elevation effect controls and final layer,
   per-effect aggregate diagnostics, and stage timings.
 

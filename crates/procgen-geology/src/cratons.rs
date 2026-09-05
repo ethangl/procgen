@@ -1,3 +1,4 @@
+use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
 use procgen_tectonics::{
     CoarseElevation, CrustClass, CrustClassification, FieldSummary, PlatePartition, StageInputError,
@@ -33,14 +34,24 @@ pub struct CratonDiagnostics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CratonField {
-    /// Normalized present-day craton eligibility. This field never mutates elevation.
+    /// Normalized present-day craton eligibility. This field never mutates
+    /// tectonic elevation.
     pub cell_strengths: Vec<f32>,
     pub diagnostics: CratonDiagnostics,
 }
 
+impl CratonField {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
+        if self.cell_strengths.len() != mesh.cell_count() {
+            return Err(GeologyInputError::Cratons);
+        }
+        Ok(())
+    }
+}
+
 /// Derives a present-day craton-strength field from final plate-boundary
 /// distance. Only continental cells strictly above normalized sea level are
-/// eligible. The operation reads coarse elevation without modifying it and
+/// eligible. The operation reads tectonic elevation without modifying it and
 /// does not infer plate age or continuity history.
 pub fn derive_craton_field(
     mesh: &SphereMesh,

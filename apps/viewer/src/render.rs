@@ -172,7 +172,7 @@ impl DiagnosticLayer {
             Self::SeafloorAge => "Seafloor age",
             Self::BaseElevation => "Base elevation",
             Self::Deformation => "Boundary deformation",
-            Self::Elevation => "Coarse elevation",
+            Self::Elevation => "Tectonic elevation",
             Self::GeologicalElevation => "Geological elevation",
             Self::Hotspots => "Mantle hotspots",
             Self::OceanicPeaks => "Seamount / abyssal peaks",

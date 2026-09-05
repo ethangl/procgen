@@ -1,6 +1,7 @@
 use super::{field_summary_stats, format_field_range, millis, stat, stat_grid};
 use crate::model::GeneratedWorld;
 use bevy_egui::egui;
+use procgen_geology::ElevationEffectDiagnostics;
 use procgen_tectonics::{BoundaryClass, CrustClass};
 
 pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
@@ -186,7 +187,7 @@ fn base_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
 }
 
 fn elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    stat_grid(ui, "Coarse elevation", "elevation", |ui| {
+    stat_grid(ui, "Tectonic elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
     });
 }
@@ -403,11 +404,7 @@ fn geological_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn effect_stats(
-    ui: &mut egui::Ui,
-    label: &str,
-    effect: procgen_geology::ElevationEffectDiagnostics,
-) {
+fn effect_stats(ui: &mut egui::Ui, label: &str, effect: ElevationEffectDiagnostics) {
     stat(ui, &format!("{label} affected"), effect.affected_cell_count);
     stat(
         ui,
