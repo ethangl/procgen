@@ -171,7 +171,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_bits() as u64),
         );
-        assert_eq!(fingerprint, 18_396_277_247_688_344_762);
+        assert_eq!(fingerprint, 1_871_567_419_565_747_826);
     }
 
     #[test]

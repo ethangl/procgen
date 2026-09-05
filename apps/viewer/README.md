@@ -12,8 +12,9 @@ partition, static crust classification, angular velocities, and one simultaneous
 migration transition for each configured evolution step, then derives an
 independent seafloor hop-age field, ridge-to-deep oceanic base elevation, and
 signed boundary deformation from the final state before composing coarse
-elevation. Divergent deformation exposes separate rift and ridge effects; ridge
-offset defaults to zero so the profile is not counted twice. The viewer toggles
+elevation. Continental divergent deformation exposes a configurable negative
+graben center, weaker negative flanks, and bounded decay; oceanic ridges remain
+owned by bathymetry so their profile is not counted twice. The viewer toggles
 topology, plate, crust, seafloor-age, base-elevation, deformation,
 composed-elevation, motion, and final-boundary diagnostics and reports their
 aggregate statistics plus stage timings. Plate interiors use
