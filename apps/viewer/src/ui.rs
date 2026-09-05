@@ -56,7 +56,7 @@ fn viewer_ui(
 
 fn layer_controls(ui: &mut egui::Ui, layers: &mut LayerSettings) {
     ui.label("Layers");
-    for layer in DiagnosticLayer::ALL.iter().copied() {
+    for &layer in DiagnosticLayer::ALL {
         // Only mutably access the resource when egui reports a real change.
         let mut visible = layers.is_visible(layer);
         if ui.checkbox(&mut visible, layer.label()).changed() {

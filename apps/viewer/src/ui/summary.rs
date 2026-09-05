@@ -424,8 +424,8 @@ fn isostatic_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Basin floors preserved",
             diagnostics.preserved_basin_cell_count,
         );
-        effect_stats(ui, "Rise", diagnostics.rise);
-        effect_stats(ui, "Sink", diagnostics.sink);
+        effect_stats(ui, "Rise", diagnostics.adjustment.rise);
+        effect_stats(ui, "Sink", diagnostics.adjustment.sink);
     });
 }
 
