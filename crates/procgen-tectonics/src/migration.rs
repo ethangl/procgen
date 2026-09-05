@@ -26,15 +26,18 @@ pub struct CellMigration {
     pub convergence: f32,
 }
 
-/// Transition record produced alongside the updated partition by one step.
+/// Transition record for one migration step.
+///
+/// Apply it to the originating partition with [`Self::apply`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlateMigration {
     /// Winning ownership change per cell. `None` means ownership was retained.
     pub cell_changes: Vec<Option<CellMigration>>,
-    /// Qualifying convergent-edge proposals before conflict resolution.
-    pub proposal_count: usize,
-    /// Cells targeted by more than one proposal.
-    pub contested_cell_count: usize,
+    /// Qualifying convergent-edge proposal count per target cell.
+    ///
+    /// This dense diagnostic supports aggregate statistics and future
+    /// per-cell visualization of contested migration.
+    pub cell_proposal_counts: Vec<usize>,
 }
 
 impl PlateMigration {
@@ -49,6 +52,17 @@ impl PlateMigration {
 
     pub fn migrated_cell_count(&self) -> usize {
         self.cell_changes.iter().flatten().count()
+    }
+
+    pub fn proposal_count(&self) -> usize {
+        self.cell_proposal_counts.iter().sum()
+    }
+
+    pub fn contested_cell_count(&self) -> usize {
+        self.cell_proposal_counts
+            .iter()
+            .filter(|&&count| count > 1)
+            .count()
     }
 
     pub fn maximum_convergence(&self) -> f32 {
@@ -121,7 +135,6 @@ pub fn migrate_plates_once(
 
     let mut winners = vec![None; mesh.cell_count()];
     let mut proposal_counts = vec![0_usize; mesh.cell_count()];
-    let mut proposal_count = 0;
 
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let convergence = boundaries.convergence(edge_index);
@@ -153,7 +166,6 @@ pub fn migrate_plates_once(
             convergence,
         };
 
-        proposal_count += 1;
         proposal_counts[retreating_cell] += 1;
         if winners[retreating_cell].is_none_or(|winner| proposal_precedes(proposal, winner)) {
             winners[retreating_cell] = Some(proposal);
@@ -162,8 +174,7 @@ pub fn migrate_plates_once(
 
     Ok(PlateMigration {
         cell_changes: winners,
-        proposal_count,
-        contested_cell_count: proposal_counts.iter().filter(|&&count| count > 1).count(),
+        cell_proposal_counts: proposal_counts,
     })
 }
 
@@ -222,7 +233,7 @@ mod tests {
             .unwrap()
         );
         assert!(first.migrated_cell_count() > 0);
-        assert!(first.contested_cell_count > 0);
+        assert!(first.contested_cell_count() > 0);
         let mut migrated_partition = partition.clone();
         first.apply(&mut migrated_partition);
         let fingerprint = migrated_partition

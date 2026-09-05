@@ -3,9 +3,9 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateKinematics,
-    PlateKinematicsConfig, PlateMigration, PlateMigrationConfig, PlateMigrationError,
-    PlatePartition, PlatePartitionConfig, classify_boundaries, classify_crust,
-    generate_plate_kinematics, migrate_plates_once, partition_plates,
+    PlateKinematicsConfig, PlateMigration, PlateMigrationConfig, PlatePartition,
+    PlatePartitionConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
+    migrate_plates_once, partition_plates,
 };
 use std::{
     error::Error,
@@ -133,16 +133,15 @@ impl GeneratedWorld {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;
         let migration = timings.record("Plate migration", || {
-            let migration = migrate_plates_once(
+            migrate_plates_once(
                 &voronoi,
                 &plates,
                 &crust,
                 &migration_boundaries,
                 config.migration,
-            )?;
-            migration.apply(&mut plates);
-            Ok::<_, PlateMigrationError>(migration)
+            )
         })?;
+        migration.apply(&mut plates);
         let boundaries = timings.record("Boundaries", || {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;

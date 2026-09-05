@@ -72,6 +72,8 @@ pub fn partition_plates(
     })
 }
 
+// Keep seed provenance available to partition-local invariant tests without
+// putting generation provenance into the mutable ownership type.
 fn grow_plates(
     mesh: &SphereMesh,
     config: PlatePartitionConfig,
