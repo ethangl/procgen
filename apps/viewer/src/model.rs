@@ -2,8 +2,9 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BoundaryClassification, PlateKinematics, PlateKinematicsConfig, PlatePartition,
-    PlatePartitionConfig, classify_boundaries, generate_plate_kinematics, partition_plates,
+    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateKinematics,
+    PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, classify_boundaries,
+    classify_crust, generate_plate_kinematics, partition_plates,
 };
 use std::{
     error::Error,
@@ -14,6 +15,7 @@ use std::{
 pub struct GenerationSettings {
     pub fibonacci: FibonacciConfig,
     pub plates: PlatePartitionConfig,
+    pub crust: CrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
 }
 
@@ -31,6 +33,7 @@ impl Default for GenerationSettings {
                 major_head_start_rounds: 5,
                 seed: 7,
             },
+            crust: CrustClassificationConfig::new(0.7, 8),
             kinematics: PlateKinematicsConfig::new(7),
         }
     }
@@ -98,6 +101,7 @@ impl GenerationTimings {
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
     pub plates: PlatePartition,
+    pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
     pub boundaries: BoundaryClassification,
     pub timings: GenerationTimings,
@@ -113,6 +117,7 @@ impl GeneratedWorld {
         let plates = timings.record("Plate partition", || {
             partition_plates(&voronoi, config.plates)
         })?;
+        let crust = timings.record("Crust", || classify_crust(&voronoi, &plates, config.crust))?;
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(plates.plate_count(), config.kinematics)
         })?;
@@ -123,6 +128,7 @@ impl GeneratedWorld {
         Ok(Self {
             voronoi,
             plates,
+            crust,
             kinematics,
             boundaries,
             timings,
@@ -161,6 +167,7 @@ mod tests {
         let world = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(128),
             plates: PlatePartitionConfig::new(4, 4),
+            crust: CrustClassificationConfig::new(0.7, 10),
             kinematics: PlateKinematicsConfig::new(9),
         })
         .unwrap();
@@ -176,12 +183,14 @@ mod tests {
         let current = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(32),
             plates: PlatePartitionConfig::new(2, 2),
+            crust: CrustClassificationConfig::new(0.7, 4),
             kinematics: PlateKinematicsConfig::new(3),
         })
         .unwrap();
         let requested = GenerationSettings {
             fibonacci: FibonacciConfig::new(64),
             plates: PlatePartitionConfig::new(3, 3),
+            crust: CrustClassificationConfig::new(0.6, 5),
             kinematics: PlateKinematicsConfig::new(4),
         };
         app.insert_resource(current)
@@ -194,6 +203,7 @@ mod tests {
         let world = app.world().resource::<GeneratedWorld>();
         assert_eq!(world.config.fibonacci, requested.fibonacci);
         assert_eq!(world.config.plates, requested.plates);
+        assert_eq!(world.config.crust, requested.crust);
         assert_eq!(world.config.kinematics, requested.kinematics);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count(), requested.plates.plate_count());

@@ -2,7 +2,7 @@ use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, Regener
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_tectonics::BoundaryClass;
+use procgen_tectonics::{BoundaryClass, CrustClass};
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
@@ -109,6 +109,22 @@ fn generation_controls(
         1.0,
     );
     ui.add_space(4.0);
+    ui.label("Static crust");
+    ui.horizontal(|ui| {
+        ui.label("Target ocean");
+        ui.add(egui::Slider::new(
+            &mut generation.crust.target_ocean_fraction,
+            0.0..=1.0,
+        ));
+    });
+    drag_value(
+        ui,
+        "Crust seed",
+        &mut generation.crust.seed,
+        u64::MIN..=u64::MAX,
+        1.0,
+    );
+    ui.add_space(4.0);
     ui.label("Plate kinematics");
     drag_value(
         ui,
@@ -156,11 +172,47 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Plates", world.plates.plate_count());
         stat(ui, "Sampling seed", world.config.fibonacci.seed);
         stat(ui, "Plate seed", world.config.plates.seed);
+        stat(ui, "Crust seed", world.config.crust.seed);
         stat(ui, "Motion seed", world.config.kinematics.seed);
         stat(
             ui,
             "Jitter",
             format!("{:.2}", world.config.fibonacci.jitter),
+        );
+    });
+
+    ui.add_space(6.0);
+    ui.label("Static crust");
+    egui::Grid::new("crust").num_columns(2).show(ui, |ui| {
+        stat(
+            ui,
+            "Target ocean area",
+            format!("{:.2}%", world.config.crust.target_ocean_fraction * 100.0),
+        );
+        stat(
+            ui,
+            "Achieved ocean area",
+            format!("{:.2}%", world.crust.achieved_ocean_fraction() * 100.0),
+        );
+        stat(
+            ui,
+            "Oceanic plates",
+            world.crust.plate_count(CrustClass::Oceanic),
+        );
+        stat(
+            ui,
+            "Continental plates",
+            world.crust.plate_count(CrustClass::Continental),
+        );
+        stat(
+            ui,
+            "Oceanic cells",
+            world.crust.cell_count(CrustClass::Oceanic),
+        );
+        stat(
+            ui,
+            "Continental cells",
+            world.crust.cell_count(CrustClass::Continental),
         );
     });
 

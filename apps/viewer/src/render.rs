@@ -2,7 +2,10 @@ use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
-use procgen_tectonics::{BoundaryClass, BoundaryClassification, PlateKinematics, PlatePartition};
+use procgen_tectonics::{
+    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
+    PlatePartition,
+};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
@@ -11,16 +14,18 @@ pub enum DiagnosticLayer {
     Delaunay,
     Voronoi,
     Plates,
+    Crust,
     Boundaries,
     Motion,
 }
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
+        Self::Crust,
         Self::Boundaries,
         Self::Motion,
     ];
@@ -40,6 +45,7 @@ impl DiagnosticLayer {
             Self::Delaunay => 1.1,
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
+            Self::Crust => 3.0,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -51,6 +57,7 @@ impl DiagnosticLayer {
             Self::Delaunay => "Delaunay",
             Self::Voronoi => "Voronoi",
             Self::Plates => "Tectonic plates",
+            Self::Crust => "Crust classes",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
         }
@@ -62,6 +69,7 @@ impl DiagnosticLayer {
             Self::Delaunay => delaunay_asset(&world.voronoi),
             Self::Voronoi => voronoi_asset(&world.voronoi),
             Self::Plates => plate_asset(&world.voronoi, &world.plates),
+            Self::Crust => crust_asset(&world.voronoi, &world.crust),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics),
         }
@@ -88,6 +96,7 @@ impl Default for LayerSettings {
         let mut visible = [false; DiagnosticLayer::COUNT];
         visible[DiagnosticLayer::Voronoi.index()] = true;
         visible[DiagnosticLayer::Plates.index()] = true;
+        visible[DiagnosticLayer::Crust.index()] = true;
         visible[DiagnosticLayer::Boundaries.index()] = true;
         visible[DiagnosticLayer::Motion.index()] = true;
         Self { visible }
@@ -248,6 +257,22 @@ fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition) -> GizmoAsset {
         } else {
             Some((1.013, Color::srgba(0.95, 0.95, 1.0, 0.98)))
         }
+    })
+}
+
+fn crust_asset(mesh: &SphereMesh, crust: &CrustClassification) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |_, edge| {
+        let left = crust.cell_classes[edge.cells[0]];
+        let right = crust.cell_classes[edge.cells[1]];
+        let color = if left != right {
+            Color::srgba(0.96, 0.96, 1.0, 1.0)
+        } else {
+            match left {
+                CrustClass::Oceanic => Color::srgba(0.12, 0.48, 0.95, 0.98),
+                CrustClass::Continental => Color::srgba(0.92, 0.62, 0.2, 0.98),
+            }
+        };
+        Some((1.011, color))
     })
 }
 
