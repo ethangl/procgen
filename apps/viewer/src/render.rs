@@ -15,6 +15,7 @@ pub enum DiagnosticLayer {
     Voronoi,
     Plates,
     Crust,
+    Elevation,
     Boundaries,
     Motion,
 }
@@ -22,12 +23,13 @@ pub enum DiagnosticLayer {
 const PLATE_BORDER_OFFSET: f32 = 0.004;
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
+        Self::Elevation,
         Self::Boundaries,
         Self::Motion,
     ];
@@ -48,13 +50,14 @@ impl DiagnosticLayer {
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
             Self::Crust => 3.0,
+            Self::Elevation => 3.4,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
     }
 
     // Radius order defines the intended composition: Delaunay, Voronoi, plate
-    // interiors, crust, points, plate borders, boundaries, then motion.
+    // interiors, crust/elevation, points, plate borders, boundaries, then motion.
     const fn radius(self) -> f32 {
         match self {
             Self::Points => 1.012,
@@ -62,6 +65,7 @@ impl DiagnosticLayer {
             Self::Voronoi => 1.006,
             Self::Plates => 1.009,
             Self::Crust => 1.011,
+            Self::Elevation => 1.013,
             Self::Boundaries => 1.017,
             Self::Motion => 1.035,
         }
@@ -74,6 +78,7 @@ impl DiagnosticLayer {
             Self::Voronoi => "Voronoi",
             Self::Plates => "Tectonic plates",
             Self::Crust => "Crust classes",
+            Self::Elevation => "Coarse elevation",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
         }
@@ -87,6 +92,7 @@ impl DiagnosticLayer {
             Self::Voronoi => voronoi_asset(&world.voronoi, radius),
             Self::Plates => plate_asset(&world.voronoi, &world.plates, radius),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
+            Self::Elevation => elevation_asset(&world.voronoi, &world.elevation, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
@@ -314,6 +320,47 @@ fn boundary_asset(
         };
         Some((radius, color))
     })
+}
+
+fn elevation_asset(
+    mesh: &SphereMesh,
+    elevation: &procgen_tectonics::CoarseElevation,
+    radius: f32,
+) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |_, edge| {
+        let value = (elevation.cell_elevations[edge.cells[0]]
+            + elevation.cell_elevations[edge.cells[1]])
+            * 0.5;
+        Some((radius, elevation_color(value)))
+    })
+}
+
+fn elevation_color(value: f32) -> Color {
+    let (low_value, low, high_value, high) = if value < 0.5 {
+        (
+            0.0,
+            Vec3::new(0.02, 0.08, 0.3),
+            0.5,
+            Vec3::new(0.08, 0.65, 0.85),
+        )
+    } else if value < 0.75 {
+        (
+            0.5,
+            Vec3::new(0.16, 0.55, 0.18),
+            0.75,
+            Vec3::new(0.55, 0.38, 0.16),
+        )
+    } else {
+        (
+            0.75,
+            Vec3::new(0.55, 0.38, 0.16),
+            1.0,
+            Vec3::new(0.96, 0.96, 0.94),
+        )
+    };
+    let t = ((value - low_value) / (high_value - low_value)).clamp(0.0, 1.0);
+    let color = low.lerp(high, t);
+    Color::srgba(color.x, color.y, color.z, 0.98)
 }
 
 fn motion_asset(

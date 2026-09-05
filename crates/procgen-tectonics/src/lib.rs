@@ -1,12 +1,13 @@
 //! Deterministic tectonic state derived from spherical mesh topology.
 //!
 //! Plate partitioning, rigid spherical plate motion, static boundary
-//! classification, static crust classification, one-step plate migration, and
-//! deterministic multi-step ownership evolution live here. Geological effects
-//! remain separate later stages.
+//! classification, static crust classification, one-step plate migration,
+//! deterministic multi-step ownership evolution, and post-evolution coarse
+//! elevation live here. Geological effects remain separate later stages.
 
 mod boundaries;
 mod crust;
+mod elevation;
 mod evolution;
 mod migration;
 mod motion;
@@ -30,6 +31,10 @@ pub use boundaries::{
 pub use crust::{
     CrustClass, CrustClassification, CrustClassificationConfig, CrustClassificationError,
     classify_crust,
+};
+pub use elevation::{
+    CoarseElevation, CoarseElevationConfig, CoarseElevationDiagnostics, CoarseElevationError,
+    derive_coarse_elevation,
 };
 pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,

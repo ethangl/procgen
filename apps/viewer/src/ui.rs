@@ -9,6 +9,8 @@ use procgen_tectonics::{BoundaryClass, CrustClass};
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+const ELEVATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 
 pub struct ViewerUiPlugin;
 
@@ -31,24 +33,26 @@ fn viewer_ui(
         .default_width(250.0)
         .resizable(false)
         .show(contexts.ctx_mut()?, |ui| {
-            ui.heading("Sphere topology");
-            ui.add_space(6.0);
-            generation_controls(ui, &mut generation, &mut regenerate);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading("Sphere topology");
+                ui.add_space(6.0);
+                generation_controls(ui, &mut generation, &mut regenerate);
 
-            if let Some(error) = &status.last_error {
-                ui.colored_label(egui::Color32::from_rgb(255, 110, 110), error);
-            }
+                if let Some(error) = &status.last_error {
+                    ui.colored_label(egui::Color32::from_rgb(255, 110, 110), error);
+                }
 
-            ui.separator();
-            layer_controls(ui, &mut layers);
+                ui.separator();
+                layer_controls(ui, &mut layers);
 
-            ui.separator();
-            world_summary(ui, &world);
+                ui.separator();
+                world_summary(ui, &world);
 
-            ui.separator();
-            ui.label("Drag the viewport to orbit.");
-            ui.label("Scroll to zoom.");
-            ui.label("Axes: X red, Y green, Z blue.");
+                ui.separator();
+                ui.label("Drag the viewport to orbit.");
+                ui.label("Scroll to zoom.");
+                ui.label("Axes: X red, Y green, Z blue.");
+            });
         });
     Ok(())
 }
@@ -158,6 +162,84 @@ fn generation_controls(
         &mut generation.evolution.migration.minimum_convergence,
         0.0..=generation.kinematics.maximum_convergence(WORLD_RADIUS),
     );
+    ui.add_space(4.0);
+    ui.label("Coarse elevation");
+    slider(
+        ui,
+        "Oceanic base",
+        &mut generation.elevation.oceanic_base,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Continental base",
+        &mut generation.elevation.continental_base,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Convergent lift",
+        &mut generation.elevation.convergent_lift,
+        -1.0..=1.0,
+    );
+    slider(
+        ui,
+        "Divergent drop",
+        &mut generation.elevation.divergent_drop,
+        -1.0..=1.0,
+    );
+    slider(
+        ui,
+        "Transform lift",
+        &mut generation.elevation.transform_lift,
+        -1.0..=1.0,
+    );
+    drag_value(
+        ui,
+        "Boundary depth",
+        &mut generation.elevation.propagation_depth,
+        ELEVATION_DEPTH_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Continental convergence",
+        &mut generation.elevation.continental_convergent_lift,
+        -1.0..=1.0,
+    );
+    drag_value(
+        ui,
+        "Mountain depth",
+        &mut generation.elevation.continental_convergent_depth,
+        ELEVATION_DEPTH_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Oceanic trench",
+        &mut generation.elevation.oceanic_trench_drop,
+        -1.0..=1.0,
+    );
+    drag_value(
+        ui,
+        "Trench depth",
+        &mut generation.elevation.oceanic_trench_depth,
+        ELEVATION_DEPTH_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Smoothing passes",
+        &mut generation.elevation.smoothing_passes,
+        SMOOTHING_PASS_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Smoothing weight",
+        &mut generation.elevation.smoothing_weight,
+        0.0..=1.0,
+    );
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
@@ -217,6 +299,34 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Continental plates",
             world.crust.plate_count(CrustClass::Continental),
+        );
+    });
+
+    ui.add_space(6.0);
+    ui.label("Coarse elevation");
+    egui::Grid::new("elevation").num_columns(2).show(ui, |ui| {
+        stat(
+            ui,
+            "Range",
+            format!(
+                "{:.3} - {:.3}",
+                world.elevation.diagnostics.minimum, world.elevation.diagnostics.maximum
+            ),
+        );
+        stat(
+            ui,
+            "Mean",
+            format!("{:.3}", world.elevation.diagnostics.mean),
+        );
+        stat(
+            ui,
+            "Boundary sources",
+            world.elevation.diagnostics.boundary_source_cell_count,
+        );
+        stat(
+            ui,
+            "Boundary affected",
+            world.elevation.diagnostics.boundary_affected_cell_count,
         );
     });
 
