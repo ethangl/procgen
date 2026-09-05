@@ -11,6 +11,8 @@ mod hotspots;
 mod oceanic_peaks;
 mod volcanic_arcs;
 
+pub use field::GeologyInputError;
+
 pub use basins::{
     SedimentaryBasin, SedimentaryBasinDiagnostics, SedimentaryBasinField,
     SedimentaryBasinFieldConfig, SedimentaryBasinFieldError, derive_sedimentary_basin_field,
@@ -18,7 +20,7 @@ pub use basins::{
 pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
-    HotspotFieldInputError, HotspotTrailCell, generate_hotspot_field,
+    HotspotTrailCell, generate_hotspot_field,
 };
 pub use oceanic_peaks::{
     OceanicPeak, OceanicPeakDiagnostics, OceanicPeakField, OceanicPeakFieldConfig,

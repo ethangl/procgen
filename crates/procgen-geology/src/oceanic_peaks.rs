@@ -1,4 +1,7 @@
-use crate::{HotspotField, HotspotFieldInputError, field::MaxWinsField};
+use crate::{
+    HotspotField,
+    field::{GeologyInputError, MaxWinsField},
+};
 use procgen_core::{
     RandomStream, Vec3,
     random_streams::{OCEANIC_PEAK_POSITION, OCEANIC_PEAK_PRESENCE},
@@ -79,10 +82,21 @@ pub struct OceanicPeakField {
     pub diagnostics: OceanicPeakDiagnostics,
 }
 
+impl OceanicPeakField {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
+        if self.cell_densities.len() != mesh.cell_count()
+            || self.cell_kinds.len() != mesh.cell_count()
+        {
+            return Err(GeologyInputError::OceanicPeaks);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OceanicPeakFieldError {
     Input(StageInputError),
-    Hotspots(HotspotFieldInputError),
+    Geology(GeologyInputError),
     EmptyYoungAgeRange,
     InvalidDensityScale,
     InvalidPositionOffset,
@@ -93,7 +107,7 @@ impl fmt::Display for OceanicPeakFieldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(error) => error.fmt(formatter),
-            Self::Hotspots(error) => error.fmt(formatter),
+            Self::Geology(error) => error.fmt(formatter),
             Self::EmptyYoungAgeRange => {
                 formatter.write_str("maximum young seafloor age must be at least one")
             }
@@ -113,7 +127,7 @@ impl std::error::Error for OceanicPeakFieldError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Input(error) => Some(error),
-            Self::Hotspots(error) => Some(error),
+            Self::Geology(error) => Some(error),
             _ => None,
         }
     }
@@ -125,9 +139,9 @@ impl From<StageInputError> for OceanicPeakFieldError {
     }
 }
 
-impl From<HotspotFieldInputError> for OceanicPeakFieldError {
-    fn from(error: HotspotFieldInputError) -> Self {
-        Self::Hotspots(error)
+impl From<GeologyInputError> for OceanicPeakFieldError {
+    fn from(error: GeologyInputError) -> Self {
+        Self::Geology(error)
     }
 }
 
@@ -469,7 +483,7 @@ mod tests {
         hotspots.cell_intensities.pop();
         assert_eq!(
             derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(7)),
-            Err(OceanicPeakFieldError::Hotspots(HotspotFieldInputError))
+            Err(OceanicPeakFieldError::Geology(GeologyInputError::Hotspots))
         );
 
         let (hotspots, mut ages) = inputs(&mesh);

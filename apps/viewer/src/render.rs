@@ -86,8 +86,8 @@ const OCEANIC_PEAK_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.65, Vec3::new(0.18, 0.78, 0.72)),
     (1.0, Vec3::new(0.95, 0.9, 0.42)),
 ];
-const OCEANIC_PEAK_MARKER_COLORS: [Vec3; 2] =
-    [Vec3::new(1.0, 0.42, 0.08), Vec3::new(0.55, 0.92, 1.0)];
+const SEAMOUNT_PEAK_COLOR: Vec3 = Vec3::new(1.0, 0.42, 0.08);
+const ABYSSAL_HILL_PEAK_COLOR: Vec3 = Vec3::new(0.55, 0.92, 1.0);
 const CELL_MARKER_SCALE: f32 = 0.32;
 const MINIMUM_CELL_MARKER_SIZE: f32 = 0.003;
 const MAXIMUM_CELL_MARKER_SIZE: f32 = 0.012;
@@ -242,8 +242,8 @@ fn oceanic_peak_asset(mesh: &SphereMesh, field: &OceanicPeakField, radius: f32) 
     let base_size = cell_marker_size(mesh);
     for peak in &field.peaks {
         let color = match peak.kind {
-            OceanicPeakKind::Seamount => OCEANIC_PEAK_MARKER_COLORS[0],
-            OceanicPeakKind::AbyssalHill => OCEANIC_PEAK_MARKER_COLORS[1],
+            OceanicPeakKind::Seamount => SEAMOUNT_PEAK_COLOR,
+            OceanicPeakKind::AbyssalHill => ABYSSAL_HILL_PEAK_COLOR,
         };
         let position = to_bevy(peak.position.normalized()) * radius;
         add_cross_marker(
