@@ -1,4 +1,4 @@
-use crate::{FieldSummary, SeafloorAge, field::summarize_field};
+use crate::{FieldSummary, SeafloorAge};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,13 +86,10 @@ pub fn derive_base_elevation(
         .zip(&cell_elevations)
         .filter_map(|(age, &elevation)| age.map(|_| elevation))
         .collect();
-    let mut oceanic_cell_count = 0;
-    let oceanic = summarize_field(&oceanic_elevations, |_| {
-        oceanic_cell_count += 1;
-    });
+    let oceanic_cell_count = oceanic_elevations.len();
     let diagnostics = BaseElevationDiagnostics {
         summary: FieldSummary::from_values(&cell_elevations),
-        oceanic,
+        oceanic: FieldSummary::from_values(&oceanic_elevations),
         oceanic_cell_count,
         continental_cell_count: cell_elevations.len() - oceanic_cell_count,
     };

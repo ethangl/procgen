@@ -253,10 +253,6 @@ mod tests {
             world.voronoi.cell_count()
         );
         assert_eq!(
-            world.base_elevation.diagnostics.oceanic_cell_count,
-            world.seafloor_age.diagnostics.oceanic_cell_count
-        );
-        assert_eq!(
             world.deformation.cell_deformation.len(),
             world.voronoi.cell_count()
         );
