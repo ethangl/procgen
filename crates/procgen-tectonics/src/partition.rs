@@ -32,13 +32,16 @@ impl PlatePartitionConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatePartition {
     pub cell_plates: Vec<usize>,
+    /// Original seed cell per plate. Seeds are generation provenance and are
+    /// not guaranteed to remain owned by their plate after migration.
     pub plate_seeds: Vec<usize>,
     pub major_plate_count: usize,
+    pub minor_plate_count: usize,
 }
 
 impl PlatePartition {
     pub fn plate_count(&self) -> usize {
-        self.plate_seeds.len()
+        self.major_plate_count + self.minor_plate_count
     }
 }
 
@@ -90,6 +93,7 @@ pub fn partition_plates(
         cell_plates: growth.cell_plates,
         plate_seeds: growth.plate_seeds,
         major_plate_count: config.major_plate_count,
+        minor_plate_count: config.minor_plate_count,
     })
 }
 

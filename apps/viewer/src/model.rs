@@ -104,6 +104,7 @@ impl GenerationTimings {
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
     pub crust: CrustClassification,
+    pub ocean_fraction: f32,
     pub kinematics: PlateKinematics,
     pub migration: PlateMigration,
     pub boundaries: BoundaryClassification,
@@ -132,7 +133,6 @@ impl GeneratedWorld {
                 &voronoi,
                 &plates,
                 &crust,
-                &kinematics,
                 &migration_boundaries,
                 config.migration,
             )
@@ -140,10 +140,12 @@ impl GeneratedWorld {
         let boundaries = timings.record("Boundaries", || {
             classify_boundaries(&voronoi, &migration.partition, &kinematics)
         })?;
+        let ocean_fraction = crust.ocean_fraction(&voronoi, &migration.partition);
 
         Ok(Self {
             voronoi,
             crust,
+            ocean_fraction,
             kinematics,
             migration,
             boundaries,
@@ -200,6 +202,10 @@ mod tests {
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
         assert!(world.crust.plate_count(CrustClass::Continental) > 0);
         assert!(world.migration.migrated_cell_count() > 0);
+        assert_eq!(
+            world.ocean_fraction,
+            world.crust.ocean_fraction(&world.voronoi, world.plates())
+        );
     }
 
     #[test]

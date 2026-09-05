@@ -32,6 +32,10 @@ impl BoundaryClass {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundaryClassification {
     pub edge_classes: Vec<BoundaryClass>,
+    /// Signed normal speed of each side toward the other side. Entry zero is
+    /// the speed of edge cell zero toward cell one; entry one is the speed of
+    /// edge cell one toward cell zero. Their sum is `edge_convergence`.
+    pub edge_normal_speeds: Vec<[f32; 2]>,
     /// Signed normal closing speed retained for downstream geological stages.
     /// Positive values converge; negative values diverge.
     pub edge_convergence: Vec<f32>,
@@ -46,6 +50,13 @@ impl BoundaryClassification {
             .iter()
             .filter(|&&candidate| candidate == class)
             .count()
+    }
+
+    pub(crate) fn matches_edge_count(&self, edge_count: usize) -> bool {
+        self.edge_classes.len() == edge_count
+            && self.edge_normal_speeds.len() == edge_count
+            && self.edge_convergence.len() == edge_count
+            && self.edge_shear.len() == edge_count
     }
 }
 
@@ -85,14 +96,15 @@ pub fn classify_boundaries(
     }
 
     let mut edge_classes = Vec::with_capacity(mesh.edge_count());
+    let mut edge_normal_speeds = Vec::with_capacity(mesh.edge_count());
     let mut edge_convergence = Vec::with_capacity(mesh.edge_count());
     let mut edge_shear = Vec::with_capacity(mesh.edge_count());
 
     for edge in &mesh.edges {
         let plate_0 = partition.cell_plates[edge.cells[0]];
         let plate_1 = partition.cell_plates[edge.cells[1]];
-        let (class, convergence, shear) = if plate_0 == plate_1 {
-            (BoundaryClass::Interior, 0.0, 0.0)
+        let (class, normal_speeds, convergence, shear) = if plate_0 == plate_1 {
+            (BoundaryClass::Interior, [0.0; 2], 0.0, 0.0)
         } else {
             let unit_position =
                 (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
@@ -100,24 +112,29 @@ pub fn classify_boundaries(
             let normal =
                 (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
             let tangent = unit_position.cross(normal).normalized();
-            let relative_velocity = kinematics.velocity_at(plate_0, position)
-                - kinematics.velocity_at(plate_1, position);
-            let convergence = relative_velocity.dot(normal);
+            let velocity_0 = kinematics.velocity_at(plate_0, position);
+            let velocity_1 = kinematics.velocity_at(plate_1, position);
+            let normal_speeds = [velocity_0.dot(normal), -velocity_1.dot(normal)];
+            let convergence = normal_speeds.iter().sum();
+            let relative_velocity = velocity_0 - velocity_1;
             let shear = relative_velocity.dot(tangent).abs();
             (
                 BoundaryClass::from_relative_motion(convergence, shear),
+                normal_speeds,
                 convergence,
                 shear,
             )
         };
 
         edge_classes.push(class);
+        edge_normal_speeds.push(normal_speeds);
         edge_convergence.push(convergence);
         edge_shear.push(shear);
     }
 
     Ok(BoundaryClassification {
         edge_classes,
+        edge_normal_speeds,
         edge_convergence,
         edge_shear,
     })
@@ -155,6 +172,7 @@ mod tests {
             classify_boundaries(&mesh, &partition, &kinematics).unwrap()
         );
         assert_eq!(first.edge_classes.len(), mesh.edge_count());
+        assert_eq!(first.edge_normal_speeds.len(), mesh.edge_count());
         assert_eq!(first.edge_convergence.len(), mesh.edge_count());
         assert_eq!(first.edge_shear.len(), mesh.edge_count());
         assert_eq!(
@@ -196,6 +214,7 @@ mod tests {
             cell_plates,
             plate_seeds: vec![edge.cells[0], edge.cells[1]],
             major_plate_count: 2,
+            minor_plate_count: 0,
         };
         let unit_position =
             (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
@@ -208,6 +227,10 @@ mod tests {
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
 
         assert_eq!(boundaries.edge_classes[0], BoundaryClass::Convergent);
+        assert_eq!(
+            boundaries.edge_normal_speeds[0].iter().sum::<f32>(),
+            boundaries.edge_convergence[0]
+        );
         assert!(boundaries.edge_convergence[0] > 0.0);
     }
 }

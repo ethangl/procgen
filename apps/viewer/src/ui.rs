@@ -118,14 +118,6 @@ fn generation_controls(
         1.0,
     );
     ui.add_space(4.0);
-    ui.label("Plate migration");
-    slider(
-        ui,
-        "Minimum convergence",
-        &mut generation.migration.minimum_convergence,
-        0.0..=20.0,
-    );
-    ui.add_space(4.0);
     ui.label("Plate kinematics");
     drag_value(
         ui,
@@ -148,6 +140,14 @@ fn generation_controls(
                 .speed(ANGULAR_SPEED_STEP),
         );
     });
+    ui.add_space(4.0);
+    ui.label("Plate migration");
+    slider(
+        ui,
+        "Minimum convergence",
+        &mut generation.migration.minimum_convergence,
+        0.0..=20.0,
+    );
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
@@ -193,10 +193,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Achieved ocean area",
-            format!(
-                "{:.2}%",
-                world.crust.ocean_fraction(&world.voronoi, world.plates()) * 100.0
-            ),
+            format!("{:.2}%", world.ocean_fraction * 100.0),
         );
         stat(
             ui,
@@ -218,8 +215,12 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Minimum convergence",
             format!("{:.2}", world.config.migration.minimum_convergence),
         );
-        stat(ui, "Proposals", world.migration.proposal_count);
-        stat(ui, "Contested cells", world.migration.contested_cell_count);
+        stat(ui, "Proposals", world.migration.proposal_count());
+        stat(
+            ui,
+            "Contested cells",
+            world.migration.contested_cell_count(),
+        );
         stat(ui, "Migrated cells", world.migration.migrated_cell_count());
         stat(
             ui,
