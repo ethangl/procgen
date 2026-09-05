@@ -87,16 +87,10 @@ pub struct BoundaryDeformationDiagnostics {
     pub source_cell_count: usize,
     pub uplifted_cell_count: usize,
     pub subsided_cell_count: usize,
-    /// Continental divergent boundary cells with nonzero strength.
-    pub rift_source_cell_count: usize,
 }
 
 impl BoundaryDeformationDiagnostics {
-    fn summarize(
-        deformation: &[f32],
-        source_cell_count: usize,
-        rift_source_cell_count: usize,
-    ) -> Self {
+    fn summarize(deformation: &[f32], source_cell_count: usize) -> Self {
         let mut uplifted_cell_count = 0;
         let mut subsided_cell_count = 0;
         let summary = summarize_field(deformation, |value| {
@@ -108,7 +102,6 @@ impl BoundaryDeformationDiagnostics {
             source_cell_count,
             uplifted_cell_count,
             subsided_cell_count,
-            rift_source_cell_count,
         }
     }
 
@@ -180,15 +173,11 @@ pub fn derive_boundary_deformation(
     validate_ownership_and_crust(mesh, partition, crust)?;
     validate_boundaries(mesh, boundaries)?;
 
-    let (sources, rift_source_cell_count) =
-        collect_boundary_sources(mesh, partition, crust, boundaries, &config);
+    let sources = collect_boundary_sources(mesh, partition, crust, boundaries, &config);
     let source_cell_count = sources.iter().flatten().count();
     let cell_deformation = propagate_boundary_effects(mesh, partition, &sources);
-    let diagnostics = BoundaryDeformationDiagnostics::summarize(
-        &cell_deformation,
-        source_cell_count,
-        rift_source_cell_count,
-    );
+    let diagnostics =
+        BoundaryDeformationDiagnostics::summarize(&cell_deformation, source_cell_count);
 
     Ok(BoundaryDeformation {
         cell_deformation,
@@ -202,10 +191,8 @@ fn collect_boundary_sources(
     crust: &CrustClassification,
     boundaries: &BoundaryClassification,
     config: &BoundaryDeformationConfig,
-) -> (Vec<Option<PropagationProfile>>, usize) {
+) -> Vec<Option<PropagationProfile>> {
     let mut sources = vec![None; mesh.cell_count()];
-    let mut rift_source_cells = vec![false; mesh.cell_count()];
-    let mut rift_source_cell_count = 0;
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let class = boundaries.edge_classes[edge_index];
         let Some(strength) = boundaries.strength(edge_index) else {
@@ -221,18 +208,10 @@ fn collect_boundary_sources(
             };
             let source_cell = edge.cells[side];
             let source = source.scaled(scale);
-            if source.center_offset != 0.0
-                && class == BoundaryClass::Divergent
-                && classes[side] == CrustClass::Continental
-                && !rift_source_cells[source_cell]
-            {
-                rift_source_cells[source_cell] = true;
-                rift_source_cell_count += 1;
-            }
             retain_stronger_source(&mut sources[source_cell], source);
         }
     }
-    (sources, rift_source_cell_count)
+    sources
 }
 
 fn boundary_source(
@@ -250,9 +229,7 @@ fn boundary_source(
         }
         (BoundaryClass::Convergent, _, _) => Some(config.convergent.into()),
         (BoundaryClass::Divergent, CrustClass::Oceanic, _) => None,
-        (BoundaryClass::Divergent, CrustClass::Continental, _) => {
-            Some(PropagationProfile::from_rift(config.rift))
-        }
+        (BoundaryClass::Divergent, CrustClass::Continental, _) => Some(config.rift.into()),
         (BoundaryClass::Transform, _, _) => Some(config.transform.into()),
         (BoundaryClass::Interior, _, _) => unreachable!("interior edges are skipped"),
     }
@@ -285,14 +262,6 @@ struct PropagationProfile {
 }
 
 impl PropagationProfile {
-    fn from_rift(profile: ContinentalRiftProfile) -> Self {
-        Self {
-            center_offset: profile.center_offset,
-            flank_offset: profile.flank_offset,
-            decay_depth: profile.decay_depth,
-        }
-    }
-
     fn depth(self) -> usize {
         self.decay_depth.saturating_sub(1)
     }
@@ -312,6 +281,16 @@ impl PropagationProfile {
             center_offset: self.center_offset * scale,
             flank_offset: self.flank_offset * scale,
             ..self
+        }
+    }
+}
+
+impl From<ContinentalRiftProfile> for PropagationProfile {
+    fn from(profile: ContinentalRiftProfile) -> Self {
+        Self {
+            center_offset: profile.center_offset,
+            flank_offset: profile.flank_offset,
+            decay_depth: profile.decay_depth,
         }
     }
 }
@@ -528,7 +507,6 @@ mod tests {
             assert_eq!(deformation.cell_deformation[cell], expected);
         }
 
-        assert_eq!(deformation.diagnostics.rift_source_cell_count, 1);
         let rift_flanks = deformation
             .cell_deformation
             .iter()
@@ -555,7 +533,7 @@ mod tests {
 
     #[test]
     fn continental_rift_has_a_deep_center_weak_flank_and_bounded_decay_to_zero() {
-        let source = PropagationProfile::from_rift(ContinentalRiftProfile {
+        let source = PropagationProfile::from(ContinentalRiftProfile {
             center_offset: -0.8,
             flank_offset: -0.2,
             decay_depth: 4,

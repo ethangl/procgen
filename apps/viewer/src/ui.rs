@@ -252,12 +252,6 @@ fn continental_rift_controls(ui: &mut egui::Ui, profile: &mut ContinentalRiftPro
         ContinentalRiftProfile::MIN_DECAY_DEPTH..=*DEFORMATION_DEPTH_RANGE.end(),
         1.0,
     );
-    if !profile.is_valid() {
-        ui.colored_label(
-            egui::Color32::from_rgb(255, 110, 110),
-            "Rift requires center < flank < 0.",
-        );
-    }
 }
 
 fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
@@ -430,11 +424,6 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Subsided",
             world.deformation.diagnostics.subsided_cell_count,
-        );
-        stat(
-            ui,
-            "Rift sources",
-            world.deformation.diagnostics.rift_source_cell_count,
         );
     });
     stat_grid(ui, "Base elevation", "base_elevation", |ui| {
