@@ -3,8 +3,9 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateKinematics,
-    PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, classify_boundaries,
-    classify_crust, generate_plate_kinematics, partition_plates,
+    PlateKinematicsConfig, PlateMigration, PlateMigrationConfig, PlatePartition,
+    PlatePartitionConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
+    migrate_plates_once, partition_plates,
 };
 use std::{
     error::Error,
@@ -17,6 +18,7 @@ pub struct GenerationSettings {
     pub plates: PlatePartitionConfig,
     pub crust: CrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
+    pub migration: PlateMigrationConfig,
 }
 
 impl Default for GenerationSettings {
@@ -35,6 +37,7 @@ impl Default for GenerationSettings {
             },
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(7),
+            migration: PlateMigrationConfig::default(),
         }
     }
 }
@@ -100,9 +103,9 @@ impl GenerationTimings {
 #[derive(Resource)]
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
-    pub plates: PlatePartition,
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
+    pub migration: PlateMigration,
     pub boundaries: BoundaryClassification,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
@@ -121,19 +124,36 @@ impl GeneratedWorld {
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(plates.plate_count(), config.kinematics)
         })?;
-        let boundaries = timings.record("Boundaries", || {
+        let migration_boundaries = timings.record("Pre-migration boundaries", || {
             classify_boundaries(&voronoi, &plates, &kinematics)
+        })?;
+        let migration = timings.record("Plate migration", || {
+            migrate_plates_once(
+                &voronoi,
+                &plates,
+                &crust,
+                &kinematics,
+                &migration_boundaries,
+                config.migration,
+            )
+        })?;
+        let boundaries = timings.record("Boundaries", || {
+            classify_boundaries(&voronoi, &migration.partition, &kinematics)
         })?;
 
         Ok(Self {
             voronoi,
-            plates,
             crust,
             kinematics,
+            migration,
             boundaries,
             timings,
             config,
         })
+    }
+
+    pub fn plates(&self) -> &PlatePartition {
+        &self.migration.partition
     }
 }
 
@@ -170,6 +190,7 @@ mod tests {
             plates: PlatePartitionConfig::new(4, 4),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(9),
+            migration: PlateMigrationConfig::default(),
         })
         .unwrap();
 
@@ -178,6 +199,7 @@ mod tests {
         assert_eq!(world.voronoi.edge_count(), 378);
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
         assert!(world.crust.plate_count(CrustClass::Continental) > 0);
+        assert!(world.migration.migrated_cell_count() > 0);
     }
 
     #[test]
@@ -188,6 +210,7 @@ mod tests {
             plates: PlatePartitionConfig::new(2, 2),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(3),
+            migration: PlateMigrationConfig::default(),
         })
         .unwrap();
         let requested = GenerationSettings {
@@ -198,6 +221,9 @@ mod tests {
                 seed: 7,
             },
             kinematics: PlateKinematicsConfig::new(4),
+            migration: PlateMigrationConfig {
+                minimum_convergence: 0.4,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -211,7 +237,8 @@ mod tests {
         assert_eq!(world.config.plates, requested.plates);
         assert_eq!(world.config.crust, requested.crust);
         assert_eq!(world.config.kinematics, requested.kinematics);
+        assert_eq!(world.config.migration, requested.migration);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
-        assert_eq!(world.plates.plate_count(), requested.plates.plate_count());
+        assert_eq!(world.plates().plate_count(), requested.plates.plate_count());
     }
 }

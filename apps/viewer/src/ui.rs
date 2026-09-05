@@ -118,6 +118,14 @@ fn generation_controls(
         1.0,
     );
     ui.add_space(4.0);
+    ui.label("Plate migration");
+    slider(
+        ui,
+        "Minimum convergence",
+        &mut generation.migration.minimum_convergence,
+        0.0..=20.0,
+    );
+    ui.add_space(4.0);
     ui.label("Plate kinematics");
     drag_value(
         ui,
@@ -162,7 +170,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Cells", world.voronoi.cell_count());
         stat(ui, "Vertices", world.voronoi.vertex_count());
         stat(ui, "Edges", world.voronoi.edge_count());
-        stat(ui, "Plates", world.plates.plate_count());
+        stat(ui, "Plates", world.plates().plate_count());
         stat(ui, "Sampling seed", world.config.fibonacci.seed);
         stat(ui, "Plate seed", world.config.plates.seed);
         stat(ui, "Crust seed", world.config.crust.seed);
@@ -185,7 +193,10 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Achieved ocean area",
-            format!("{:.2}%", world.crust.ocean_fraction * 100.0),
+            format!(
+                "{:.2}%",
+                world.crust.ocean_fraction(&world.voronoi, world.plates()) * 100.0
+            ),
         );
         stat(
             ui,
@@ -196,6 +207,24 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Continental plates",
             world.crust.plate_count(CrustClass::Continental),
+        );
+    });
+
+    ui.add_space(6.0);
+    ui.label("Single-step migration");
+    egui::Grid::new("migration").num_columns(2).show(ui, |ui| {
+        stat(
+            ui,
+            "Minimum convergence",
+            format!("{:.2}", world.config.migration.minimum_convergence),
+        );
+        stat(ui, "Proposals", world.migration.proposal_count);
+        stat(ui, "Contested cells", world.migration.contested_cell_count);
+        stat(ui, "Migrated cells", world.migration.migrated_cell_count());
+        stat(
+            ui,
+            "Strongest migration",
+            format!("{:.3}", world.migration.maximum_convergence()),
         );
     });
 
