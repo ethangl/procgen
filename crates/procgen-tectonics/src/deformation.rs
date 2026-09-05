@@ -25,6 +25,18 @@ pub struct ContinentalRiftProfile {
     pub decay_depth: usize,
 }
 
+impl ContinentalRiftProfile {
+    pub const MIN_DECAY_DEPTH: usize = 2;
+
+    pub fn is_valid(&self) -> bool {
+        self.center_offset.is_finite()
+            && self.flank_offset.is_finite()
+            && self.center_offset < self.flank_offset
+            && self.flank_offset < 0.0
+            && self.decay_depth >= Self::MIN_DECAY_DEPTH
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundaryDeformationConfig {
     pub convergent: BoundaryEffect,
@@ -75,18 +87,13 @@ pub struct BoundaryDeformationDiagnostics {
     pub source_cell_count: usize,
     pub uplifted_cell_count: usize,
     pub subsided_cell_count: usize,
-    /// Continental divergent boundary cells that retained a rift source.
+    /// Continental divergent boundary cells with nonzero strength.
     pub rift_source_cell_count: usize,
-    /// Cells whose final winning effect is a rift center.
-    pub rift_center_cell_count: usize,
-    /// Cells whose final winning effect is a nonzero rift flank.
-    pub rift_flank_cell_count: usize,
 }
 
 impl BoundaryDeformationDiagnostics {
     fn summarize(
         deformation: &[f32],
-        winners: &[Option<WinningSource>],
         source_cell_count: usize,
         rift_source_cell_count: usize,
     ) -> Self {
@@ -96,22 +103,12 @@ impl BoundaryDeformationDiagnostics {
             uplifted_cell_count += usize::from(value > 0.0);
             subsided_cell_count += usize::from(value < 0.0);
         });
-        let mut rift_center_cell_count = 0;
-        let mut rift_flank_cell_count = 0;
-        for winner in winners.iter().flatten() {
-            if winner.kind == SourceKind::ContinentalRift {
-                rift_center_cell_count += usize::from(winner.depth == 0);
-                rift_flank_cell_count += usize::from(winner.depth > 0);
-            }
-        }
         Self {
             summary,
             source_cell_count,
             uplifted_cell_count,
             subsided_cell_count,
             rift_source_cell_count,
-            rift_center_cell_count,
-            rift_flank_cell_count,
         }
     }
 
@@ -130,6 +127,7 @@ pub struct BoundaryDeformation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundaryDeformationError {
     InvalidConfig,
+    InvalidRiftProfile,
     Input(StageInputError),
 }
 
@@ -137,7 +135,12 @@ impl fmt::Display for BoundaryDeformationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig => formatter.write_str(
-                "deformation offsets must be finite, rift offsets must satisfy center < flank < 0 with decay depth of at least two, and saturation speed must be finite and positive",
+                "deformation offsets must be finite and saturation speed must be finite and positive",
+            ),
+            Self::InvalidRiftProfile => write!(
+                formatter,
+                "rift profile must satisfy center < flank < 0 and decay depth >= {}",
+                ContinentalRiftProfile::MIN_DECAY_DEPTH
             ),
             Self::Input(error) => error.fmt(formatter),
         }
@@ -147,7 +150,7 @@ impl fmt::Display for BoundaryDeformationError {
 impl std::error::Error for BoundaryDeformationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InvalidConfig => None,
+            Self::InvalidConfig | Self::InvalidRiftProfile => None,
             Self::Input(error) => Some(error),
         }
     }
@@ -177,23 +180,18 @@ pub fn derive_boundary_deformation(
     validate_ownership_and_crust(mesh, partition, crust)?;
     validate_boundaries(mesh, boundaries)?;
 
-    let sources = collect_boundary_sources(mesh, partition, crust, boundaries, &config);
+    let (sources, rift_source_cell_count) =
+        collect_boundary_sources(mesh, partition, crust, boundaries, &config);
     let source_cell_count = sources.iter().flatten().count();
-    let rift_source_cell_count = sources
-        .iter()
-        .flatten()
-        .filter(|source| source.kind() == SourceKind::ContinentalRift)
-        .count();
-    let propagation = propagate_boundary_effects(mesh, partition, &sources);
+    let cell_deformation = propagate_boundary_effects(mesh, partition, &sources);
     let diagnostics = BoundaryDeformationDiagnostics::summarize(
-        &propagation.effects,
-        &propagation.winners,
+        &cell_deformation,
         source_cell_count,
         rift_source_cell_count,
     );
 
     Ok(BoundaryDeformation {
-        cell_deformation: propagation.effects,
+        cell_deformation,
         diagnostics,
     })
 }
@@ -204,8 +202,10 @@ fn collect_boundary_sources(
     crust: &CrustClassification,
     boundaries: &BoundaryClassification,
     config: &BoundaryDeformationConfig,
-) -> Vec<Option<DeformationSource>> {
+) -> (Vec<Option<PropagationProfile>>, usize) {
     let mut sources = vec![None; mesh.cell_count()];
+    let mut rift_source_cells = vec![false; mesh.cell_count()];
+    let mut rift_source_cell_count = 0;
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let class = boundaries.edge_classes[edge_index];
         let Some(strength) = boundaries.strength(edge_index) else {
@@ -219,10 +219,20 @@ fn collect_boundary_sources(
             else {
                 continue;
             };
-            retain_stronger_source(&mut sources[edge.cells[side]], source.scaled(scale));
+            let source_cell = edge.cells[side];
+            let source = source.scaled(scale);
+            if source.center_offset != 0.0
+                && class == BoundaryClass::Divergent
+                && classes[side] == CrustClass::Continental
+                && !rift_source_cells[source_cell]
+            {
+                rift_source_cells[source_cell] = true;
+                rift_source_cell_count += 1;
+            }
+            retain_stronger_source(&mut sources[source_cell], source);
         }
     }
-    sources
+    (sources, rift_source_cell_count)
 }
 
 fn boundary_source(
@@ -230,25 +240,28 @@ fn boundary_source(
     class: BoundaryClass,
     own: CrustClass,
     other: CrustClass,
-) -> Option<DeformationSource> {
+) -> Option<PropagationProfile> {
     match (class, own, other) {
         (BoundaryClass::Convergent, CrustClass::Continental, CrustClass::Oceanic) => {
-            Some(DeformationSource::Linear(config.collision))
+            Some(config.collision.into())
         }
         (BoundaryClass::Convergent, CrustClass::Oceanic, CrustClass::Continental) => {
-            Some(DeformationSource::Linear(config.trench))
+            Some(config.trench.into())
         }
-        (BoundaryClass::Convergent, _, _) => Some(DeformationSource::Linear(config.convergent)),
+        (BoundaryClass::Convergent, _, _) => Some(config.convergent.into()),
         (BoundaryClass::Divergent, CrustClass::Oceanic, _) => None,
         (BoundaryClass::Divergent, CrustClass::Continental, _) => {
-            Some(DeformationSource::ContinentalRift(config.rift))
+            Some(PropagationProfile::from_rift(config.rift))
         }
-        (BoundaryClass::Transform, _, _) => Some(DeformationSource::Linear(config.transform)),
+        (BoundaryClass::Transform, _, _) => Some(config.transform.into()),
         (BoundaryClass::Interior, _, _) => unreachable!("interior edges are skipped"),
     }
 }
 
 fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDeformationError> {
+    if !config.rift.is_valid() {
+        return Err(BoundaryDeformationError::InvalidRiftProfile);
+    }
     let effects = [
         config.convergent,
         config.transform,
@@ -256,11 +269,6 @@ fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDefo
         config.trench,
     ];
     if effects.iter().any(|effect| !effect.offset.is_finite())
-        || !config.rift.center_offset.is_finite()
-        || !config.rift.flank_offset.is_finite()
-        || config.rift.center_offset >= config.rift.flank_offset
-        || config.rift.flank_offset >= 0.0
-        || config.rift.decay_depth < 2
         || !config.saturation_speed.is_finite()
         || config.saturation_speed <= 0.0
     {
@@ -269,61 +277,57 @@ fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDefo
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SourceKind {
-    Linear,
-    ContinentalRift,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum DeformationSource {
-    Linear(BoundaryEffect),
-    ContinentalRift(ContinentalRiftProfile),
+struct PropagationProfile {
+    center_offset: f32,
+    flank_offset: f32,
+    decay_depth: usize,
 }
 
-impl DeformationSource {
-    fn depth(self) -> usize {
-        match self {
-            Self::Linear(effect) => effect.depth,
-            Self::ContinentalRift(profile) => profile.decay_depth,
+impl PropagationProfile {
+    fn from_rift(profile: ContinentalRiftProfile) -> Self {
+        Self {
+            center_offset: profile.center_offset,
+            flank_offset: profile.flank_offset,
+            decay_depth: profile.decay_depth,
         }
     }
 
-    fn kind(self) -> SourceKind {
-        match self {
-            Self::Linear(_) => SourceKind::Linear,
-            Self::ContinentalRift(_) => SourceKind::ContinentalRift,
-        }
+    fn depth(self) -> usize {
+        self.decay_depth.saturating_sub(1)
     }
 
     fn offset_at(self, depth: usize) -> f32 {
-        match self {
-            Self::Linear(effect) => {
-                effect.offset * (1.0 - depth as f32 / (effect.depth as f32 + 1.0))
-            }
-            Self::ContinentalRift(profile) if depth == 0 => profile.center_offset,
-            Self::ContinentalRift(profile) => {
-                profile.flank_offset * (1.0 - (depth - 1) as f32 / (profile.decay_depth - 1) as f32)
-            }
+        if depth == 0 {
+            return self.center_offset;
         }
+        if self.decay_depth == 1 {
+            return 0.0;
+        }
+        self.flank_offset * (1.0 - (depth - 1) as f32 / (self.decay_depth - 1) as f32)
     }
 
     fn scaled(self, scale: f32) -> Self {
-        match self {
-            Self::Linear(effect) => Self::Linear(BoundaryEffect {
-                offset: effect.offset * scale,
-                ..effect
-            }),
-            Self::ContinentalRift(profile) => Self::ContinentalRift(ContinentalRiftProfile {
-                center_offset: profile.center_offset * scale,
-                flank_offset: profile.flank_offset * scale,
-                ..profile
-            }),
+        Self {
+            center_offset: self.center_offset * scale,
+            flank_offset: self.flank_offset * scale,
+            ..self
         }
     }
 }
 
-fn retain_stronger_source(slot: &mut Option<DeformationSource>, candidate: DeformationSource) {
+impl From<BoundaryEffect> for PropagationProfile {
+    fn from(effect: BoundaryEffect) -> Self {
+        let decay_depth = effect.depth.saturating_add(1);
+        Self {
+            center_offset: effect.offset,
+            flank_offset: effect.offset * effect.depth as f32 / decay_depth as f32,
+            decay_depth,
+        }
+    }
+}
+
+fn retain_stronger_source(slot: &mut Option<PropagationProfile>, candidate: PropagationProfile) {
     let candidate_offset = candidate.offset_at(0);
     if candidate_offset != 0.0
         && slot.is_none_or(|current| candidate_offset.abs() > current.offset_at(0).abs())
@@ -332,24 +336,12 @@ fn retain_stronger_source(slot: &mut Option<DeformationSource>, candidate: Defor
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct WinningSource {
-    kind: SourceKind,
-    depth: usize,
-}
-
-struct Propagation {
-    effects: Vec<f32>,
-    winners: Vec<Option<WinningSource>>,
-}
-
 fn propagate_boundary_effects(
     mesh: &SphereMesh,
     partition: &PlatePartition,
-    sources: &[Option<DeformationSource>],
-) -> Propagation {
+    sources: &[Option<PropagationProfile>],
+) -> Vec<f32> {
     let mut effects = vec![0.0_f32; mesh.cell_count()];
-    let mut winners = vec![None; mesh.cell_count()];
     let mut seen_at = vec![usize::MAX; mesh.cell_count()];
     let mut queue = VecDeque::new();
 
@@ -365,10 +357,6 @@ fn propagate_boundary_effects(
             let effect = source.offset_at(depth);
             if effect.abs() > effects[cell].abs() {
                 effects[cell] = effect;
-                winners[cell] = Some(WinningSource {
-                    kind: source.kind(),
-                    depth,
-                });
             }
             if depth == source.depth() {
                 continue;
@@ -386,7 +374,7 @@ fn propagate_boundary_effects(
             }
         }
     }
-    Propagation { effects, winners }
+    effects
 }
 
 #[cfg(test)]
@@ -422,7 +410,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_bits() as u64),
         );
-        assert_eq!(fingerprint, 11_120_630_315_172_307_476);
+        assert_eq!(fingerprint, 6_081_290_538_896_439_957);
     }
 
     #[test]
@@ -491,12 +479,13 @@ mod tests {
                 config.rift.center_offset / 4.0
             );
         }
+        let expected_flank = config.rift.flank_offset * 0.5 / config.saturation_speed;
         assert!(
             divergent
                 .cell_deformation
                 .iter()
                 .enumerate()
-                .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == -0.025)
+                .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == expected_flank)
         );
 
         boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
@@ -540,8 +529,15 @@ mod tests {
         }
 
         assert_eq!(deformation.diagnostics.rift_source_cell_count, 1);
-        assert!(deformation.diagnostics.rift_center_cell_count >= 1);
-        assert!(deformation.diagnostics.rift_flank_cell_count >= 1);
+        let rift_flanks = deformation
+            .cell_deformation
+            .iter()
+            .enumerate()
+            .filter(|(cell, value)| {
+                partition.cell_plates[*cell] == 0 && **value == config.rift.flank_offset
+            })
+            .count();
+        assert_eq!(rift_flanks, 4);
         assert!(
             deformation
                 .cell_deformation
@@ -559,7 +555,7 @@ mod tests {
 
     #[test]
     fn continental_rift_has_a_deep_center_weak_flank_and_bounded_decay_to_zero() {
-        let source = DeformationSource::ContinentalRift(ContinentalRiftProfile {
+        let source = PropagationProfile::from_rift(ContinentalRiftProfile {
             center_offset: -0.8,
             flank_offset: -0.2,
             decay_depth: 4,
@@ -574,6 +570,27 @@ mod tests {
             (0..=source.depth()).all(|depth| source.offset_at(depth) <= 0.0),
             "a continental rift must never create positive shoulders"
         );
+    }
+
+    #[test]
+    fn linear_effect_conversion_preserves_its_profile_and_zero_depth_edge_case() {
+        let effect = BoundaryEffect {
+            offset: 0.6,
+            depth: 3,
+        };
+        let profile = PropagationProfile::from(effect);
+        for depth in 0..=effect.depth {
+            let expected = effect.offset * (1.0 - depth as f32 / (effect.depth + 1) as f32);
+            assert!((profile.offset_at(depth) - expected).abs() < f32::EPSILON);
+        }
+
+        let point = PropagationProfile::from(BoundaryEffect {
+            offset: -0.2,
+            depth: 0,
+        });
+        assert_eq!(point.depth(), 0);
+        assert_eq!(point.offset_at(0), -0.2);
+        assert_eq!(point.offset_at(1), 0.0);
     }
 
     #[test]
@@ -618,21 +635,21 @@ mod tests {
     #[test]
     fn maximum_magnitude_wins_and_equal_ties_keep_the_first_source() {
         let mut source = None;
-        let first = DeformationSource::Linear(BoundaryEffect {
+        let first = PropagationProfile::from(BoundaryEffect {
             offset: -0.4,
             depth: 1,
         });
         retain_stronger_source(&mut source, first);
         retain_stronger_source(
             &mut source,
-            DeformationSource::Linear(BoundaryEffect {
+            PropagationProfile::from(BoundaryEffect {
                 offset: 0.4,
                 depth: 7,
             }),
         );
         assert_eq!(source, Some(first));
 
-        let stronger = DeformationSource::Linear(BoundaryEffect {
+        let stronger = PropagationProfile::from(BoundaryEffect {
             offset: 0.5,
             depth: 2,
         });
@@ -659,16 +676,16 @@ mod tests {
             plate_count: 1,
         };
         let mut sources = vec![None; mesh.cell_count()];
-        sources[source_cells[0]] = Some(DeformationSource::Linear(BoundaryEffect {
+        sources[source_cells[0]] = Some(PropagationProfile::from(BoundaryEffect {
             offset: -0.4,
             depth: 1,
         }));
-        sources[source_cells[1]] = Some(DeformationSource::Linear(BoundaryEffect {
+        sources[source_cells[1]] = Some(PropagationProfile::from(BoundaryEffect {
             offset: 0.4,
             depth: 1,
         }));
         let propagated = propagate_boundary_effects(&mesh, &partition, &sources);
-        assert_eq!(propagated.effects[overlap], -0.2);
+        assert_eq!(propagated[overlap], -0.2);
     }
 
     #[test]
@@ -717,7 +734,7 @@ mod tests {
                         ..Default::default()
                     }
                 ),
-                Err(BoundaryDeformationError::InvalidConfig)
+                Err(BoundaryDeformationError::InvalidRiftProfile)
             );
         }
 
