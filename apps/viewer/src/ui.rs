@@ -144,14 +144,11 @@ fn generation_controls(
     });
     ui.add_space(4.0);
     ui.label("Plate migration");
-    // Each side can approach at omega * radius, so opposing speeds add.
-    let maximum_convergence =
-        (generation.kinematics.maximum_angular_speed * WORLD_RADIUS * 2.0).max(0.1);
     slider(
         ui,
         "Minimum convergence",
         &mut generation.migration.minimum_convergence,
-        0.0..=maximum_convergence,
+        0.0..=generation.kinematics.maximum_convergence(WORLD_RADIUS),
     );
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();

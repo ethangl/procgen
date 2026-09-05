@@ -17,6 +17,12 @@ impl PlateKinematicsConfig {
             maximum_angular_speed: 1.0,
         }
     }
+
+    /// Upper bound on relative normal closing speed for the configured motion
+    /// at the given sphere radius.
+    pub fn maximum_convergence(&self, radius: f32) -> f32 {
+        self.maximum_angular_speed * radius * 2.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,6 +122,16 @@ mod tests {
         assert_eq!(unit_velocity, Vec3::new(0.0, 0.0, -2.0));
         assert_eq!(double_velocity, unit_velocity * 2.0);
         assert_eq!(unit_velocity.dot(unit_position), 0.0);
+    }
+
+    #[test]
+    fn maximum_convergence_accounts_for_both_sides() {
+        let config = PlateKinematicsConfig {
+            maximum_angular_speed: 2.0,
+            ..PlateKinematicsConfig::new(17)
+        };
+
+        assert_eq!(config.maximum_convergence(3.0), 12.0);
     }
 
     #[test]

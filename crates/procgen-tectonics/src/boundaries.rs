@@ -4,6 +4,10 @@ use std::fmt;
 
 const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
 
+fn convergence(speeds: [f32; 2]) -> f32 {
+    speeds[0] + speeds[1]
+}
+
 /// Dense per-edge classification. `Interior` is the sentinel for non-boundary
 /// edges so the array remains directly indexable by mesh edge id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,8 +59,7 @@ impl BoundaryClassification {
     /// Signed normal closing speed. Positive values converge; negative values
     /// diverge.
     pub fn convergence(&self, edge: usize) -> f32 {
-        let speeds = self.edge_normal_speeds[edge];
-        speeds[0] + speeds[1]
+        convergence(self.edge_normal_speeds[edge])
     }
 
     pub(crate) fn matches_edge_count(&self, edge_count: usize) -> bool {
@@ -120,7 +123,7 @@ pub fn classify_boundaries(
             let velocity_0 = kinematics.velocity_at(plate_0, position);
             let velocity_1 = kinematics.velocity_at(plate_1, position);
             let normal_speeds = [velocity_0.dot(normal), -velocity_1.dot(normal)];
-            let convergence = normal_speeds.iter().sum();
+            let convergence = convergence(normal_speeds);
             let relative_velocity = velocity_0 - velocity_1;
             let shear = relative_velocity.dot(tangent).abs();
             (

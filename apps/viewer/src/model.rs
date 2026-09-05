@@ -145,6 +145,7 @@ impl GeneratedWorld {
         let boundaries = timings.record("Boundaries", || {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;
+
         Ok(Self {
             voronoi,
             plates,
@@ -183,6 +184,7 @@ fn regenerate_world(
 mod tests {
     use super::*;
     use procgen_tectonics::CrustClass;
+
     #[test]
     fn generates_consistent_viewer_counts() {
         let world = GeneratedWorld::generate(GenerationSettings {

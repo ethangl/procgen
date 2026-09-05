@@ -42,7 +42,25 @@ pub struct PlateMigration {
 
 impl PlateMigration {
     /// Applies this transition to the partition it was computed from.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the partition has a different cell count or a migrating cell
+    /// is no longer owned by its recorded source plate.
     pub fn apply(&self, partition: &mut PlatePartition) {
+        assert_eq!(
+            partition.cell_plates.len(),
+            self.cell_changes.len(),
+            "migration cell count must match the partition"
+        );
+        for (cell, change) in self.cell_changes.iter().enumerate() {
+            if let Some(change) = change {
+                assert_eq!(
+                    partition.cell_plates[cell], change.from_plate,
+                    "migration source plate must match current ownership for cell {cell}"
+                );
+            }
+        }
         for (cell, change) in self.cell_changes.iter().enumerate() {
             if let Some(change) = change {
                 partition.cell_plates[cell] = change.to_plate;
@@ -245,13 +263,9 @@ mod tests {
         assert_eq!(fingerprint, 13_160_498_416_595_985_480);
     }
 
-    #[test]
-    fn continental_plate_overrides_oceanic_cell() {
+    fn two_plate_convergent_fixture() -> (SphereMesh, usize, PlatePartition, BoundaryClassification)
+    {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
-        };
         let mut boundaries = BoundaryClassification {
             edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
             edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
@@ -259,6 +273,16 @@ mod tests {
         };
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 0.0];
+        (mesh, edge_index, partition, boundaries)
+    }
+
+    #[test]
+    fn continental_plate_overrides_oceanic_cell() {
+        let (mesh, edge_index, partition, boundaries) = two_plate_convergent_fixture();
+        let edge = mesh.edges[edge_index];
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
+        };
 
         let migration = migrate_plates_once(
             &mesh,
@@ -288,7 +312,14 @@ mod tests {
         );
         assert!(crust.ocean_fraction(&mesh, &partition) > 0.0);
         assert_eq!(crust.ocean_fraction(&mesh, &migrated_partition), 0.0);
+    }
 
+    #[test]
+    fn minimum_convergence_suppresses_weaker_boundaries() {
+        let (mesh, _, partition, boundaries) = two_plate_convergent_fixture();
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
+        };
         let suppressed = migrate_plates_once(
             &mesh,
             &partition,
@@ -303,7 +334,12 @@ mod tests {
         let mut suppressed_partition = partition.clone();
         suppressed.apply(&mut suppressed_partition);
         assert_eq!(suppressed_partition, partition);
+    }
 
+    #[test]
+    fn equal_crust_advances_the_faster_side() {
+        let (mesh, edge_index, partition, boundaries) = two_plate_convergent_fixture();
+        let edge = mesh.edges[edge_index];
         let same_crust = CrustClassification {
             plate_classes: vec![CrustClass::Continental; 2],
         };
@@ -318,6 +354,27 @@ mod tests {
         let mut same_crust_partition = partition.clone();
         same_crust_migration.apply(&mut same_crust_partition);
         assert_eq!(same_crust_partition.cell_plates[edge.cells[1]], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "migration source plate must match current ownership")]
+    fn apply_rejects_changed_source_ownership() {
+        let (mesh, edge_index, mut partition, boundaries) = two_plate_convergent_fixture();
+        let edge = mesh.edges[edge_index];
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
+        };
+        let migration = migrate_plates_once(
+            &mesh,
+            &partition,
+            &crust,
+            &boundaries,
+            PlateMigrationConfig::default(),
+        )
+        .unwrap();
+        partition.cell_plates[edge.cells[1]] = 0;
+
+        migration.apply(&mut partition);
     }
 
     #[test]
