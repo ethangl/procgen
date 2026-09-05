@@ -1,6 +1,9 @@
-use crate::{BaseElevation, BoundaryDeformation, FieldSummary};
+use crate::{BaseElevation, BoundaryDeformation, FieldSummary, StageInputError};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
+
+/// Normalized elevation at the ocean/land boundary.
+pub const SEA_LEVEL: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CoarseElevationConfig {
@@ -21,6 +24,19 @@ impl Default for CoarseElevationConfig {
 pub struct CoarseElevation {
     pub cell_elevations: Vec<f32>,
     pub diagnostics: FieldSummary,
+}
+
+impl CoarseElevation {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_elevations.len() != mesh.cell_count() {
+            return Err(StageInputError::Elevation);
+        }
+        Ok(())
+    }
+
+    pub fn is_land(&self, cell: usize) -> bool {
+        self.cell_elevations[cell] > SEA_LEVEL
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +163,22 @@ mod tests {
         )
         .unwrap();
         (mesh, base, deformation)
+    }
+
+    #[test]
+    fn coarse_elevation_owns_land_classification_and_shape_validation() {
+        let (mesh, _, _) = two_plate_boundary_partition();
+        let mut elevation = CoarseElevation {
+            cell_elevations: vec![SEA_LEVEL; mesh.cell_count()],
+            diagnostics: Default::default(),
+        };
+        assert_eq!(elevation.validate(&mesh), Ok(()));
+        assert!(!elevation.is_land(0));
+
+        elevation.cell_elevations[0] = SEA_LEVEL + 0.01;
+        assert!(elevation.is_land(0));
+        elevation.cell_elevations.pop();
+        assert_eq!(elevation.validate(&mesh), Err(StageInputError::Elevation));
     }
 
     #[test]

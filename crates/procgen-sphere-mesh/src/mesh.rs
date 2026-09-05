@@ -1,6 +1,7 @@
 use crate::{SphericalDelaunay, TopologyError};
 use procgen_core::Vec3;
 use rayon::prelude::*;
+use std::collections::VecDeque;
 
 // Workload-specific tuning belongs with the algorithm, not in `procgen-core`.
 const PARALLEL_THRESHOLD: usize = 16_384;
@@ -137,6 +138,39 @@ impl SphereMesh {
     }
 }
 
+/// Computes minimum cell-hop distance from multiple sources while allowing a
+/// caller to constrain each graph traversal step.
+pub fn multi_source_distances(
+    mesh: &SphereMesh,
+    sources: &[usize],
+    mut passable: impl FnMut(usize, usize) -> bool,
+) -> Vec<Option<usize>> {
+    let mut distances = vec![None; mesh.cell_count()];
+    let mut queue = VecDeque::new();
+    for &source in sources {
+        assert!(
+            source < mesh.cell_count(),
+            "distance source must be a mesh cell"
+        );
+        if distances[source].is_none() {
+            distances[source] = Some(0);
+            queue.push_back(source);
+        }
+    }
+
+    while let Some(cell) = queue.pop_front() {
+        let next_distance = distances[cell].expect("queued cells have a distance") + 1;
+        for corner in mesh.cell_corners(cell) {
+            let neighbor = corner.neighbor;
+            if distances[neighbor].is_none() && passable(cell, neighbor) {
+                distances[neighbor] = Some(next_distance);
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    distances
+}
+
 fn spherical_polygon_area(center: Vec3, polygon: &[CellCorner], vertices: &[Vec3]) -> f32 {
     let mut area = 0.0;
     for index in 0..polygon.len() {
@@ -147,4 +181,41 @@ fn spherical_polygon_area(center: Vec3, polygon: &[CellCorner], vertices: &[Vec3
         area += 2.0 * numerator.atan2(denominator);
     }
     area
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tetrahedron() -> SphereMesh {
+        let points = [
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-1.0, -1.0, 1.0),
+            Vec3::new(-1.0, 1.0, -1.0),
+            Vec3::new(1.0, -1.0, -1.0),
+        ]
+        .map(Vec3::normalized)
+        .to_vec();
+        SphereMesh::from_delaunay(&SphericalDelaunay::build(points).unwrap(), 1.0).unwrap()
+    }
+
+    #[test]
+    fn multi_source_distance_edges_are_explicit() {
+        let mesh = tetrahedron();
+
+        assert_eq!(
+            multi_source_distances(&mesh, &[], |_, _| true),
+            vec![None; 4]
+        );
+        assert_eq!(
+            multi_source_distances(&mesh, &[0], |_, _| false),
+            vec![Some(0), None, None, None]
+        );
+        let single_source = multi_source_distances(&mesh, &[0], |_, _| true);
+        assert_eq!(single_source, vec![Some(0), Some(1), Some(1), Some(1)]);
+        assert_eq!(
+            multi_source_distances(&mesh, &[0, 0], |_, _| true),
+            single_source
+        );
+    }
 }

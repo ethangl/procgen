@@ -2,8 +2,7 @@ use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
     PlatePartition, stage::StageInputError,
 };
-use procgen_sphere_mesh::SphereMesh;
-use std::collections::VecDeque;
+use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeafloorAgeConfig {
@@ -52,9 +51,8 @@ pub fn derive_seafloor_age(
     crust.validate(partition)?;
     boundaries.validate(mesh)?;
 
-    let mut cell_ages = vec![None; mesh.cell_count()];
     let mut ridge_plates = vec![false; partition.plate_count];
-    let mut queue = VecDeque::new();
+    let mut ridge_cells = Vec::new();
 
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         if boundaries.edge_classes[edge_index] != BoundaryClass::Divergent {
@@ -66,25 +64,13 @@ pub fn derive_seafloor_age(
                 continue;
             }
             ridge_plates[plate] = true;
-            if cell_ages[cell].is_none() {
-                cell_ages[cell] = Some(0);
-                queue.push_back((cell, 0));
-            }
+            ridge_cells.push(cell);
         }
     }
-    let ridge_cell_count = queue.len();
-
-    while let Some((cell, age)) = queue.pop_front() {
-        let plate = partition.cell_plates[cell];
-        let next_age = age + 1;
-        for corner in mesh.cell_corners(cell) {
-            let neighbor = corner.neighbor;
-            if cell_ages[neighbor].is_none() && partition.cell_plates[neighbor] == plate {
-                cell_ages[neighbor] = Some(next_age);
-                queue.push_back((neighbor, next_age));
-            }
-        }
-    }
+    let mut cell_ages = multi_source_distances(mesh, &ridge_cells, |cell, neighbor| {
+        partition.cell_plates[cell] == partition.cell_plates[neighbor]
+    });
+    let ridge_cell_count = cell_ages.iter().filter(|&&age| age == Some(0)).count();
 
     let mut fallback_cell_count = 0;
     for (cell, age) in cell_ages.iter_mut().enumerate() {

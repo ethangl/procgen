@@ -6,6 +6,7 @@ pub enum StageInputError {
     Plates,
     PlateOwnership,
     Boundaries,
+    Elevation,
 }
 
 impl fmt::Display for StageInputError {
@@ -16,6 +17,9 @@ impl fmt::Display for StageInputError {
             Self::PlateOwnership => formatter.write_str("every cell must reference a valid plate"),
             Self::Boundaries => {
                 formatter.write_str("boundary arrays must match the mesh edge count")
+            }
+            Self::Elevation => {
+                formatter.write_str("elevation values must match the mesh cell count")
             }
         }
     }
