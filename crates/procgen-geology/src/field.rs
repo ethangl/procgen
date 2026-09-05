@@ -38,7 +38,7 @@ impl fmt::Display for GeologyStageError {
             Self::Input(error) => error.fmt(formatter),
             Self::Geology(error) => error.fmt(formatter),
             Self::InvalidConfig => formatter
-                .write_str("geological elevation values must be finite and between zero and one"),
+                .write_str("stage configuration values must be finite and between zero and one"),
         }
     }
 }
@@ -75,7 +75,7 @@ pub struct ElevationEffectDiagnostics {
 }
 
 impl ElevationEffectDiagnostics {
-    pub(crate) fn record(&mut self, before: f32, after: f32) {
+    fn record_change(&mut self, before: f32, after: f32) {
         let delta = after - before;
         if delta != 0.0 {
             self.affected_cell_count += 1;
@@ -85,15 +85,41 @@ impl ElevationEffectDiagnostics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SignedEffectDiagnostics {
+    pub rise: ElevationEffectDiagnostics,
+    pub sink: ElevationEffectDiagnostics,
+}
+
+pub(crate) trait ElevationEffectRecorder {
+    fn record(&mut self, before: f32, after: f32);
+}
+
+impl ElevationEffectRecorder for ElevationEffectDiagnostics {
+    fn record(&mut self, before: f32, after: f32) {
+        self.record_change(before, after);
+    }
+}
+
+impl ElevationEffectRecorder for SignedEffectDiagnostics {
+    fn record(&mut self, before: f32, after: f32) {
+        if after > before {
+            self.rise.record_change(before, after);
+        } else {
+            self.sink.record_change(before, after);
+        }
+    }
+}
+
 pub(crate) fn apply_elevation_effect(
     elevations: &mut [f32],
+    diagnostics: &mut impl ElevationEffectRecorder,
     mut effect: impl FnMut(usize, f32) -> f32,
-    mut record: impl FnMut(f32, f32),
 ) {
     for (cell, elevation) in elevations.iter_mut().enumerate() {
         let before = *elevation;
         *elevation = effect(cell, before);
-        record(before, *elevation);
+        diagnostics.record(before, *elevation);
     }
 }
 
@@ -153,6 +179,21 @@ impl<T: Copy + Ord> MaxWinsField<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_effect_diagnostics_dispatches_rise_sink_and_ignores_zero() {
+        let mut diagnostics = SignedEffectDiagnostics::default();
+        diagnostics.record(0.25, 0.5);
+        diagnostics.record(0.75, 0.25);
+        diagnostics.record(0.5, 0.5);
+
+        assert_eq!(diagnostics.rise.affected_cell_count, 1);
+        assert_eq!(diagnostics.rise.total_delta, 0.25);
+        assert_eq!(diagnostics.rise.maximum_absolute_delta, 0.25);
+        assert_eq!(diagnostics.sink.affected_cell_count, 1);
+        assert_eq!(diagnostics.sink.total_delta, -0.5);
+        assert_eq!(diagnostics.sink.maximum_absolute_delta, 0.5);
+    }
 
     #[test]
     fn zero_value_gets_a_winner_and_equal_ties_use_the_lower_index() {

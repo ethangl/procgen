@@ -132,6 +132,8 @@ impl DiagnosticLayer {
         Self::Boundaries,
         Self::Motion,
     ];
+    const COUNT: usize = Self::ALL.len();
+
     const fn index(self) -> usize {
         self as usize
     }
@@ -345,7 +347,7 @@ fn draw_radius(surface: DrawSurface) -> f32 {
 
 #[derive(Resource)]
 pub struct LayerSettings {
-    visible: Vec<bool>,
+    visible: [bool; DiagnosticLayer::COUNT],
 }
 
 impl LayerSettings {
@@ -360,14 +362,14 @@ impl LayerSettings {
 
 impl Default for LayerSettings {
     fn default() -> Self {
-        let mut visible = vec![false; DiagnosticLayer::ALL.len()];
+        let mut visible = [false; DiagnosticLayer::COUNT];
         visible[DiagnosticLayer::IsostaticElevation.index()] = true;
         Self { visible }
     }
 }
 
 #[derive(Resource)]
-struct DiagnosticAssets(Vec<Handle<GizmoAsset>>);
+struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
 
 pub struct DiagnosticRenderPlugin;
 
@@ -401,15 +403,12 @@ fn setup_scene(
         })),
     ));
 
-    let diagnostic_assets = DiagnosticLayer::ALL
-        .iter()
-        .copied()
-        .map(|layer| {
-            let handle = gizmo_assets.add(GizmoAsset::new());
-            spawn_layer(&mut commands, handle.clone(), layer);
-            handle
-        })
-        .collect();
+    let diagnostic_assets = std::array::from_fn(|index| {
+        let layer = DiagnosticLayer::ALL[index];
+        let handle = gizmo_assets.add(GizmoAsset::new());
+        spawn_layer(&mut commands, handle.clone(), layer);
+        handle
+    });
     spawn_axes(&mut commands, &mut gizmo_assets);
 
     commands.insert_resource(DiagnosticAssets(diagnostic_assets));
@@ -454,7 +453,7 @@ fn rebuild_diagnostic_assets(
     assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    for layer in DiagnosticLayer::ALL.iter().copied() {
+    for &layer in DiagnosticLayer::ALL {
         *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build(&world);
     }
 }
@@ -468,9 +467,8 @@ fn sync_visible_layers(
     layers.extend(
         DiagnosticLayer::ALL
             .iter()
-            .copied()
-            .filter(|&layer| settings.is_visible(layer))
-            .map(DiagnosticLayer::render_layer),
+            .filter(|&&layer| settings.is_visible(layer))
+            .map(|&layer| layer.render_layer()),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
 }
@@ -681,7 +679,7 @@ mod tests {
 
     #[test]
     fn draw_order_covers_each_surface_once_with_unique_radii() {
-        for layer in DiagnosticLayer::ALL.iter().copied() {
+        for &layer in DiagnosticLayer::ALL {
             assert_eq!(
                 DRAW_ORDER
                     .iter()

@@ -1,7 +1,7 @@
 use crate::{
     CratonField, GeologicalElevation, SedimentaryBasinField,
     field::{
-        ElevationEffectDiagnostics, GeologyStageError, apply_elevation_effect, lerp, unit_interval,
+        GeologyStageError, SignedEffectDiagnostics, apply_elevation_effect, lerp, unit_interval,
     },
 };
 use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
@@ -56,8 +56,7 @@ pub struct IsostaticAdjustmentDiagnostics {
     pub elevation: FieldSummary,
     pub oceanic_cell_count: usize,
     pub preserved_basin_cell_count: usize,
-    pub rise: ElevationEffectDiagnostics,
-    pub sink: ElevationEffectDiagnostics,
+    pub adjustment: SignedEffectDiagnostics,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,16 +84,12 @@ pub fn derive_isostatic_adjustment(
     let divergent_distances = edge_cell_distances(mesh, |edge, _| {
         inputs.boundaries.edge_classes[edge] == BoundaryClass::Divergent
     });
-    let oceanic: Vec<_> = (0..mesh.cell_count())
-        .map(|cell| inputs.crust.cell_class(inputs.plates, cell) == CrustClass::Oceanic)
-        .collect();
-    let oceanic_cell_count = oceanic.iter().filter(|&&value| value).count();
-    let preserved_basin_cell_count = inputs
-        .basins
-        .cell_basins
-        .iter()
-        .enumerate()
-        .filter(|(cell, basin)| !oceanic[*cell] && basin.is_some())
+    let oceanic = |cell: usize| inputs.crust.cell_class(inputs.plates, cell) == CrustClass::Oceanic;
+    let basin = |cell: usize| inputs.basins.cell_basins[cell].is_some();
+    let preserved = |cell: usize| oceanic(cell) || basin(cell);
+    let oceanic_cell_count = (0..mesh.cell_count()).filter(|&cell| oceanic(cell)).count();
+    let preserved_basin_cell_count = (0..mesh.cell_count())
+        .filter(|&cell| !oceanic(cell) && basin(cell))
         .count();
     let mut diagnostics = IsostaticAdjustmentDiagnostics {
         oceanic_cell_count,
@@ -105,7 +100,7 @@ pub fn derive_isostatic_adjustment(
     let cell_support: Vec<_> = (0..mesh.cell_count())
         .map(|cell| {
             let elevation = inputs.geological_elevation.cell_elevations[cell];
-            if oceanic[cell] || inputs.basins.cell_basins[cell].is_some() {
+            if preserved(cell) {
                 elevation
             } else {
                 (config.continental_support
@@ -121,15 +116,9 @@ pub fn derive_isostatic_adjustment(
     let mut cell_elevations = inputs.geological_elevation.cell_elevations.clone();
     apply_elevation_effect(
         &mut cell_elevations,
+        &mut diagnostics.adjustment,
         |cell, elevation| {
             lerp(elevation, cell_support[cell], config.adjustment_strength).clamp(0.0, 1.0)
-        },
-        |before, after| {
-            if after > before {
-                diagnostics.rise.record(before, after);
-            } else if after < before {
-                diagnostics.sink.record(before, after);
-            }
         },
     );
 
@@ -178,7 +167,8 @@ fn validate_inputs(
 mod tests {
     use super::*;
     use crate::{
-        GeologicalElevationDiagnostics, GeologyInputError, SedimentaryBasin,
+        ElevationEffectDiagnostics, GeologicalElevationDiagnostics, GeologyInputError,
+        SedimentaryBasin,
         test_support::{empty_basins, empty_cratons, mesh},
     };
     use procgen_core::fingerprint;
@@ -299,8 +289,8 @@ mod tests {
         assert!(risen.cell_elevations[boundary_cell] > 0.5);
         assert!(sunk.cell_support[boundary_cell] < 0.65);
         assert!(sunk.cell_elevations[boundary_cell] < 0.8);
-        assert!(risen.diagnostics.rise.affected_cell_count > 0);
-        assert!(sunk.diagnostics.sink.affected_cell_count > 0);
+        assert!(risen.diagnostics.adjustment.rise.affected_cell_count > 0);
+        assert!(sunk.diagnostics.adjustment.sink.affected_cell_count > 0);
 
         let mut cratonic = Fixture::new(8);
         cratonic.cratons.cell_strengths[0] = 1.0;
@@ -374,11 +364,11 @@ mod tests {
 
         assert_eq!(result.cell_elevations, fixture.elevation.cell_elevations);
         assert_eq!(
-            result.diagnostics.rise,
+            result.diagnostics.adjustment.rise,
             ElevationEffectDiagnostics::default()
         );
         assert_eq!(
-            result.diagnostics.sink,
+            result.diagnostics.adjustment.sink,
             ElevationEffectDiagnostics::default()
         );
         assert_ne!(result.cell_support, fixture.elevation.cell_elevations);

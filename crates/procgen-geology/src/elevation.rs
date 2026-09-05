@@ -84,22 +84,23 @@ pub fn compose_geological_elevation(
 
     apply_elevation_effect(
         &mut cell_elevations,
+        &mut diagnostics.hotspots,
         |cell, elevation| {
             (elevation + inputs.hotspots.cell_intensities[cell] * config.hotspot_uplift)
                 .clamp(0.0, 1.0)
         },
-        |before, after| diagnostics.hotspots.record(before, after),
     );
     apply_elevation_effect(
         &mut cell_elevations,
+        &mut diagnostics.volcanic_arcs,
         |cell, elevation| {
             (elevation + inputs.volcanic_arcs.cell_strengths[cell] * config.volcanic_arc_uplift)
                 .clamp(0.0, 1.0)
         },
-        |before, after| diagnostics.volcanic_arcs.record(before, after),
     );
     apply_elevation_effect(
         &mut cell_elevations,
+        &mut diagnostics.cratons,
         |cell, elevation| {
             lerp(
                 elevation,
@@ -107,10 +108,10 @@ pub fn compose_geological_elevation(
                 inputs.cratons.cell_strengths[cell] * config.craton_flattening,
             )
         },
-        |before, after| diagnostics.cratons.record(before, after),
     );
     apply_elevation_effect(
         &mut cell_elevations,
+        &mut diagnostics.basins,
         |cell, elevation| {
             inputs.basins.cell_basins[cell].map_or(elevation, |basin| {
                 lerp(
@@ -120,7 +121,6 @@ pub fn compose_geological_elevation(
                 )
             })
         },
-        |before, after| diagnostics.basins.record(before, after),
     );
 
     diagnostics.elevation = FieldSummary::from_values(&cell_elevations);

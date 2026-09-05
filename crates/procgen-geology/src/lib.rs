@@ -17,7 +17,9 @@ mod volcanic_arcs;
 #[cfg(test)]
 mod test_support;
 
-pub use field::{ElevationEffectDiagnostics, GeologyInputError, GeologyStageError};
+pub use field::{
+    ElevationEffectDiagnostics, GeologyInputError, GeologyStageError, SignedEffectDiagnostics,
+};
 
 pub use basins::{
     SedimentaryBasin, SedimentaryBasinDiagnostics, SedimentaryBasinField,
