@@ -706,10 +706,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Basin size range",
-            format!(
-                "{} - {}",
-                world.basins.diagnostics.smallest_basin_cell_count,
-                world.basins.diagnostics.largest_basin_cell_count
+            world.basins.diagnostics.basin_cell_count_range.map_or_else(
+                || "None".to_owned(),
+                |(minimum, maximum)| format!("{minimum} - {maximum}"),
             ),
         );
     });

@@ -47,8 +47,7 @@ pub struct SedimentaryBasinDiagnostics {
     pub basin_cell_count: usize,
     pub rejected_small_component_count: usize,
     pub rejected_ocean_exposed_component_count: usize,
-    pub smallest_basin_cell_count: usize,
-    pub largest_basin_cell_count: usize,
+    pub basin_cell_count_range: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -128,7 +127,8 @@ pub fn derive_sedimentary_basin_field(
     let mut cell_basins = vec![None; mesh.cell_count()];
     let mut basins = Vec::new();
     let mut component_count = 0;
-    let mut rejections = RejectionCounts::default();
+    let mut rejected_small_component_count = 0;
+    let mut rejected_ocean_exposed_component_count = 0;
 
     for root_cell in 0..mesh.cell_count() {
         if !candidates[root_cell] || visited[root_cell] {
@@ -136,35 +136,29 @@ pub fn derive_sedimentary_basin_field(
         }
         component_count += 1;
         let component = collect_component(mesh, &candidates, elevation, &mut visited, root_cell);
-        if let Some(rejection) = reject_reason(&component, config) {
-            rejections.record(rejection);
-            continue;
+        match reject_reason(&component, config) {
+            Some(Rejection::TooSmall) => rejected_small_component_count += 1,
+            Some(Rejection::OceanExposed) => rejected_ocean_exposed_component_count += 1,
+            None => {
+                let id = basins.len();
+                for &cell in &component.cells {
+                    cell_basins[cell] = Some(id);
+                }
+                basins.push(SedimentaryBasin {
+                    root_cell,
+                    cell_count: component.cells.len(),
+                    ocean_perimeter_fraction: component.ocean_perimeter_fraction,
+                    minimum_elevation: component.minimum_elevation,
+                    floor_elevation: (component.minimum_elevation + config.floor_offset)
+                        .clamp(0.0, 1.0),
+                });
+            }
         }
-
-        let id = basins.len();
-        for &cell in &component.cells {
-            cell_basins[cell] = Some(id);
-        }
-        basins.push(SedimentaryBasin {
-            root_cell,
-            cell_count: component.cells.len(),
-            ocean_perimeter_fraction: component.ocean_perimeter_fraction,
-            minimum_elevation: component.minimum_elevation,
-            floor_elevation: (component.minimum_elevation + config.floor_offset).clamp(0.0, 1.0),
-        });
     }
 
     let basin_cell_count = basins.iter().map(|basin| basin.cell_count).sum();
-    let smallest_basin_cell_count = basins
-        .iter()
-        .map(|basin| basin.cell_count)
-        .min()
-        .unwrap_or(0);
-    let largest_basin_cell_count = basins
-        .iter()
-        .map(|basin| basin.cell_count)
-        .max()
-        .unwrap_or(0);
+    let minimum_basin_cell_count = basins.iter().map(|basin| basin.cell_count).min();
+    let maximum_basin_cell_count = basins.iter().map(|basin| basin.cell_count).max();
     Ok(SedimentaryBasinField {
         cell_basins,
         diagnostics: SedimentaryBasinDiagnostics {
@@ -172,10 +166,9 @@ pub fn derive_sedimentary_basin_field(
             component_count,
             basin_count: basins.len(),
             basin_cell_count,
-            rejected_small_component_count: rejections.small,
-            rejected_ocean_exposed_component_count: rejections.ocean_exposed,
-            smallest_basin_cell_count,
-            largest_basin_cell_count,
+            rejected_small_component_count,
+            rejected_ocean_exposed_component_count,
+            basin_cell_count_range: minimum_basin_cell_count.zip(maximum_basin_cell_count),
         },
         basins,
     })
@@ -191,21 +184,6 @@ struct Component {
 enum Rejection {
     TooSmall,
     OceanExposed,
-}
-
-#[derive(Default)]
-struct RejectionCounts {
-    small: usize,
-    ocean_exposed: usize,
-}
-
-impl RejectionCounts {
-    fn record(&mut self, rejection: Rejection) {
-        match rejection {
-            Rejection::TooSmall => self.small += 1,
-            Rejection::OceanExposed => self.ocean_exposed += 1,
-        }
-    }
 }
 
 fn reject_reason(component: &Component, config: SedimentaryBasinFieldConfig) -> Option<Rejection> {
@@ -468,8 +446,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![first, second]
         );
-        assert_eq!(field.diagnostics.smallest_basin_cell_count, 1);
-        assert_eq!(field.diagnostics.largest_basin_cell_count, 1);
+        assert_eq!(field.diagnostics.basin_cell_count_range, Some((1, 1)));
     }
 
     #[test]
