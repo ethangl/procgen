@@ -1,10 +1,14 @@
-use crate::{CratonField, GeologicalElevation, GeologyInputError, SedimentaryBasinField};
-use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
+use crate::{
+    CratonField, GeologicalElevation, SedimentaryBasinField,
+    field::{
+        ElevationEffectDiagnostics, GeologyStageError, apply_elevation_effect, lerp, unit_interval,
+    },
+};
+use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
-    PlatePartition, StageInputError,
+    PlatePartition,
 };
-use std::fmt;
 
 /// Configuration for deterministic present-day isostatic support and adjustment.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,63 +56,17 @@ pub struct IsostaticAdjustmentDiagnostics {
     pub elevation: FieldSummary,
     pub oceanic_cell_count: usize,
     pub preserved_basin_cell_count: usize,
-    pub adjusted_cell_count: usize,
-    pub rise_cell_count: usize,
-    pub sink_cell_count: usize,
-    /// Sum of positive actual deltas after clamping.
-    pub total_rise: f64,
-    /// Sum of absolute negative actual deltas after clamping.
-    pub total_sink: f64,
-    pub maximum_rise: f32,
-    pub maximum_sink: f32,
+    pub rise: ElevationEffectDiagnostics,
+    pub sink: ElevationEffectDiagnostics,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct IsostaticAdjustment {
+    /// Continental equilibrium support. Preserved oceanic and basin cells use
+    /// their geological elevation so the uniform adjustment remains a no-op.
     pub cell_support: Vec<f32>,
     pub cell_elevations: Vec<f32>,
     pub diagnostics: IsostaticAdjustmentDiagnostics,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IsostaticAdjustmentError {
-    Input(StageInputError),
-    Geology(GeologyInputError),
-    InvalidConfig,
-}
-
-impl fmt::Display for IsostaticAdjustmentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(error) => error.fmt(formatter),
-            Self::Geology(error) => error.fmt(formatter),
-            Self::InvalidConfig => formatter.write_str(
-                "isostatic adjustment strengths and support values must be finite and between zero and one",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for IsostaticAdjustmentError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::Geology(error) => Some(error),
-            Self::InvalidConfig => None,
-        }
-    }
-}
-
-impl From<StageInputError> for IsostaticAdjustmentError {
-    fn from(error: StageInputError) -> Self {
-        Self::Input(error)
-    }
-}
-
-impl From<GeologyInputError> for IsostaticAdjustmentError {
-    fn from(error: GeologyInputError) -> Self {
-        Self::Geology(error)
-    }
 }
 
 /// Derives per-cell support from present-day fields and returns a separately
@@ -118,47 +76,62 @@ pub fn derive_isostatic_adjustment(
     mesh: &SphereMesh,
     inputs: IsostaticAdjustmentInputs<'_>,
     config: IsostaticAdjustmentConfig,
-) -> Result<IsostaticAdjustment, IsostaticAdjustmentError> {
+) -> Result<IsostaticAdjustment, GeologyStageError> {
     validate_inputs(mesh, inputs, config)?;
 
-    let convergent_distances =
-        boundary_distances(mesh, inputs.boundaries, BoundaryClass::Convergent);
-    let divergent_distances = boundary_distances(mesh, inputs.boundaries, BoundaryClass::Divergent);
-    let mut cell_support = Vec::with_capacity(mesh.cell_count());
-    let mut cell_elevations = Vec::with_capacity(mesh.cell_count());
-    let mut diagnostics = IsostaticAdjustmentDiagnostics::default();
+    let convergent_distances = edge_cell_distances(mesh, |edge, _| {
+        inputs.boundaries.edge_classes[edge] == BoundaryClass::Convergent
+    });
+    let divergent_distances = edge_cell_distances(mesh, |edge, _| {
+        inputs.boundaries.edge_classes[edge] == BoundaryClass::Divergent
+    });
+    let oceanic: Vec<_> = (0..mesh.cell_count())
+        .map(|cell| inputs.crust.cell_class(inputs.plates, cell) == CrustClass::Oceanic)
+        .collect();
+    let oceanic_cell_count = oceanic.iter().filter(|&&value| value).count();
+    let preserved_basin_cell_count = inputs
+        .basins
+        .cell_basins
+        .iter()
+        .enumerate()
+        .filter(|(cell, basin)| !oceanic[*cell] && basin.is_some())
+        .count();
+    let mut diagnostics = IsostaticAdjustmentDiagnostics {
+        oceanic_cell_count,
+        preserved_basin_cell_count,
+        ..Default::default()
+    };
 
-    for cell in 0..mesh.cell_count() {
-        let elevation = inputs.geological_elevation.cell_elevations[cell];
-        let oceanic = inputs.crust.cell_class(inputs.plates, cell) == CrustClass::Oceanic;
-        let basin = inputs.basins.cell_basins[cell].is_some();
-
-        if oceanic {
-            diagnostics.oceanic_cell_count += 1;
-            cell_support.push(elevation);
-            cell_elevations.push(elevation);
-            continue;
-        }
-        if basin {
-            diagnostics.preserved_basin_cell_count += 1;
-            cell_support.push(elevation);
-            cell_elevations.push(elevation);
-            continue;
-        }
-
-        let support = (config.continental_support
-            + proximity(convergent_distances[cell], config.maximum_boundary_distance)
-                * config.convergent_support_bonus
-            + inputs.cratons.cell_strengths[cell] * config.craton_support_bonus
-            - proximity(divergent_distances[cell], config.maximum_boundary_distance)
-                * config.divergent_support_penalty)
-            .clamp(0.0, 1.0);
-        let adjusted =
-            (elevation + config.adjustment_strength * (support - elevation)).clamp(0.0, 1.0);
-        record_delta(&mut diagnostics, adjusted - elevation);
-        cell_support.push(support);
-        cell_elevations.push(adjusted);
-    }
+    let cell_support: Vec<_> = (0..mesh.cell_count())
+        .map(|cell| {
+            let elevation = inputs.geological_elevation.cell_elevations[cell];
+            if oceanic[cell] || inputs.basins.cell_basins[cell].is_some() {
+                elevation
+            } else {
+                (config.continental_support
+                    + proximity(convergent_distances[cell], config.maximum_boundary_distance)
+                        * config.convergent_support_bonus
+                    + inputs.cratons.cell_strengths[cell] * config.craton_support_bonus
+                    - proximity(divergent_distances[cell], config.maximum_boundary_distance)
+                        * config.divergent_support_penalty)
+                    .clamp(0.0, 1.0)
+            }
+        })
+        .collect();
+    let mut cell_elevations = inputs.geological_elevation.cell_elevations.clone();
+    apply_elevation_effect(
+        &mut cell_elevations,
+        |cell, elevation| {
+            lerp(elevation, cell_support[cell], config.adjustment_strength).clamp(0.0, 1.0)
+        },
+        |before, after| {
+            if after > before {
+                diagnostics.rise.record(before, after);
+            } else if after < before {
+                diagnostics.sink.record(before, after);
+            }
+        },
+    );
 
     diagnostics.support = FieldSummary::from_values(&cell_support);
     diagnostics.elevation = FieldSummary::from_values(&cell_elevations);
@@ -167,20 +140,6 @@ pub fn derive_isostatic_adjustment(
         cell_elevations,
         diagnostics,
     })
-}
-
-fn boundary_distances(
-    mesh: &SphereMesh,
-    boundaries: &BoundaryClassification,
-    class: BoundaryClass,
-) -> Vec<Option<usize>> {
-    let mut sources = Vec::new();
-    for (edge_index, edge) in mesh.edges.iter().enumerate() {
-        if boundaries.edge_classes[edge_index] == class {
-            sources.extend(edge.cells);
-        }
-    }
-    multi_source_distances(mesh, &sources, |_, _| true)
 }
 
 fn proximity(distance: Option<usize>, maximum_distance: usize) -> f32 {
@@ -193,34 +152,18 @@ fn proximity(distance: Option<usize>, maximum_distance: usize) -> f32 {
     })
 }
 
-fn record_delta(diagnostics: &mut IsostaticAdjustmentDiagnostics, delta: f32) {
-    if delta > 0.0 {
-        diagnostics.adjusted_cell_count += 1;
-        diagnostics.rise_cell_count += 1;
-        diagnostics.total_rise += f64::from(delta);
-        diagnostics.maximum_rise = diagnostics.maximum_rise.max(delta);
-    } else if delta < 0.0 {
-        let sink = -delta;
-        diagnostics.adjusted_cell_count += 1;
-        diagnostics.sink_cell_count += 1;
-        diagnostics.total_sink += f64::from(sink);
-        diagnostics.maximum_sink = diagnostics.maximum_sink.max(sink);
-    }
-}
-
 fn validate_inputs(
     mesh: &SphereMesh,
     inputs: IsostaticAdjustmentInputs<'_>,
     config: IsostaticAdjustmentConfig,
-) -> Result<(), IsostaticAdjustmentError> {
-    let unit_interval = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
+) -> Result<(), GeologyStageError> {
     if !unit_interval(config.adjustment_strength)
         || !unit_interval(config.continental_support)
         || !unit_interval(config.convergent_support_bonus)
         || !unit_interval(config.divergent_support_penalty)
         || !unit_interval(config.craton_support_bonus)
     {
-        return Err(IsostaticAdjustmentError::InvalidConfig);
+        return Err(GeologyStageError::InvalidConfig);
     }
     inputs.plates.validate(mesh)?;
     inputs.crust.validate(inputs.plates)?;
@@ -235,12 +178,11 @@ fn validate_inputs(
 mod tests {
     use super::*;
     use crate::{
-        CratonDiagnostics, GeologicalElevationDiagnostics, SedimentaryBasin,
-        SedimentaryBasinDiagnostics,
+        GeologicalElevationDiagnostics, GeologyInputError, SedimentaryBasin,
+        test_support::{empty_basins, empty_cratons, mesh},
     };
     use procgen_core::fingerprint;
-    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::build_sphere_mesh;
+    use procgen_tectonics::StageInputError;
 
     #[derive(Clone)]
     struct Fixture {
@@ -255,11 +197,7 @@ mod tests {
 
     impl Fixture {
         fn new(cell_count: usize) -> Self {
-            let mesh = build_sphere_mesh(
-                fibonacci_sphere(FibonacciConfig::new(cell_count)).unwrap(),
-                1.0,
-            )
-            .unwrap();
+            let mesh = mesh(cell_count);
             let plates = PlatePartition {
                 cell_plates: vec![0; cell_count],
                 plate_count: 1,
@@ -273,15 +211,8 @@ mod tests {
                 crust: CrustClassification {
                     plate_classes: vec![CrustClass::Continental],
                 },
-                cratons: CratonField {
-                    cell_strengths: vec![0.0; cell_count],
-                    diagnostics: CratonDiagnostics::default(),
-                },
-                basins: SedimentaryBasinField {
-                    cell_basins: vec![None; cell_count],
-                    basins: Vec::new(),
-                    diagnostics: SedimentaryBasinDiagnostics::default(),
-                },
+                cratons: empty_cratons(cell_count),
+                basins: empty_basins(cell_count),
                 elevation: GeologicalElevation {
                     cell_elevations: vec![0.65; cell_count],
                     diagnostics: GeologicalElevationDiagnostics::default(),
@@ -294,7 +225,7 @@ mod tests {
         fn derive(
             &self,
             config: IsostaticAdjustmentConfig,
-        ) -> Result<IsostaticAdjustment, IsostaticAdjustmentError> {
+        ) -> Result<IsostaticAdjustment, GeologyStageError> {
             derive_isostatic_adjustment(
                 &self.mesh,
                 IsostaticAdjustmentInputs {
@@ -368,8 +299,8 @@ mod tests {
         assert!(risen.cell_elevations[boundary_cell] > 0.5);
         assert!(sunk.cell_support[boundary_cell] < 0.65);
         assert!(sunk.cell_elevations[boundary_cell] < 0.8);
-        assert!(risen.diagnostics.rise_cell_count > 0);
-        assert!(sunk.diagnostics.sink_cell_count > 0);
+        assert!(risen.diagnostics.rise.affected_cell_count > 0);
+        assert!(sunk.diagnostics.sink.affected_cell_count > 0);
 
         let mut cratonic = Fixture::new(8);
         cratonic.cratons.cell_strengths[0] = 1.0;
@@ -442,7 +373,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.cell_elevations, fixture.elevation.cell_elevations);
-        assert_eq!(result.diagnostics.adjusted_cell_count, 0);
+        assert_eq!(
+            result.diagnostics.rise,
+            ElevationEffectDiagnostics::default()
+        );
+        assert_eq!(
+            result.diagnostics.sink,
+            ElevationEffectDiagnostics::default()
+        );
         assert_ne!(result.cell_support, fixture.elevation.cell_elevations);
     }
 
@@ -464,7 +402,14 @@ mod tests {
         fixture.boundaries.edge_classes.pop();
         assert_eq!(
             fixture.derive(IsostaticAdjustmentConfig::default()),
-            Err(IsostaticAdjustmentError::Input(StageInputError::Boundaries))
+            Err(GeologyStageError::Input(StageInputError::Boundaries))
+        );
+
+        let mut fixture = Fixture::new(4);
+        fixture.elevation.cell_elevations.pop();
+        assert_eq!(
+            fixture.derive(IsostaticAdjustmentConfig::default()),
+            Err(GeologyStageError::Geology(GeologyInputError::Elevation))
         );
 
         let fixture = Fixture::new(4);
@@ -473,7 +418,7 @@ mod tests {
                 adjustment_strength: f32::NAN,
                 ..Default::default()
             }),
-            Err(IsostaticAdjustmentError::InvalidConfig)
+            Err(GeologyStageError::InvalidConfig)
         );
     }
 }

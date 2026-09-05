@@ -8,7 +8,10 @@ mod initial;
 mod mesh;
 
 pub use hull::SphericalDelaunay;
-pub use mesh::{CellCorner, SphereMesh, VoronoiEdge, connected_components, multi_source_distances};
+pub use mesh::{
+    CellCorner, SphereMesh, VoronoiEdge, connected_components, edge_cell_distances,
+    multi_source_distances,
+};
 
 use procgen_core::Vec3;
 use std::fmt;

@@ -424,21 +424,8 @@ fn isostatic_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Basin floors preserved",
             diagnostics.preserved_basin_cell_count,
         );
-        stat(ui, "Adjusted", diagnostics.adjusted_cell_count);
-        stat(ui, "Rising", diagnostics.rise_cell_count);
-        stat(ui, "Sinking", diagnostics.sink_cell_count);
-        stat(ui, "Total rise", format!("{:.3}", diagnostics.total_rise));
-        stat(ui, "Total sink", format!("{:.3}", diagnostics.total_sink));
-        stat(
-            ui,
-            "Maximum rise",
-            format!("{:.3}", diagnostics.maximum_rise),
-        );
-        stat(
-            ui,
-            "Maximum sink",
-            format!("{:.3}", diagnostics.maximum_sink),
-        );
+        effect_stats(ui, "Rise", diagnostics.rise);
+        effect_stats(ui, "Sink", diagnostics.sink);
     });
 }
 

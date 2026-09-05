@@ -231,6 +231,21 @@ pub fn multi_source_distances(
     distances
 }
 
+/// Computes minimum cell-hop distance from both cells of every mesh edge that
+/// matches `eligible`. Traversal is unconstrained after selecting source cells.
+pub fn edge_cell_distances(
+    mesh: &SphereMesh,
+    mut eligible: impl FnMut(usize, &VoronoiEdge) -> bool,
+) -> Vec<Option<usize>> {
+    let mut sources = Vec::new();
+    for (edge_index, edge) in mesh.edges.iter().enumerate() {
+        if eligible(edge_index, edge) {
+            sources.extend(edge.cells);
+        }
+    }
+    multi_source_distances(mesh, &sources, |_, _| true)
+}
+
 fn spherical_polygon_area(center: Vec3, polygon: &[CellCorner], vertices: &[Vec3]) -> f32 {
     let mut area = 0.0;
     for index in 0..polygon.len() {
@@ -276,6 +291,29 @@ mod tests {
         assert_eq!(
             multi_source_distances(&mesh, &[0, 0], |_, _| true),
             single_source
+        );
+    }
+
+    #[test]
+    fn edge_cell_distance_sources_both_cells_of_matching_edges() {
+        let mesh = tetrahedron();
+        let matching_edge = 0;
+        let source_cells = mesh.edges[matching_edge].cells;
+        let distances = edge_cell_distances(&mesh, |edge, _| edge == matching_edge);
+
+        for cell in source_cells {
+            assert_eq!(distances[cell], Some(0));
+        }
+        assert!(
+            distances
+                .iter()
+                .enumerate()
+                .filter(|(cell, _)| !source_cells.contains(cell))
+                .all(|(_, distance)| *distance == Some(1))
+        );
+        assert_eq!(
+            edge_cell_distances(&mesh, |_, _| false),
+            vec![None; mesh.cell_count()]
         );
     }
 

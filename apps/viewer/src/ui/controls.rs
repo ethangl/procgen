@@ -25,7 +25,7 @@ const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
-const CRATON_DISTANCE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
+const BOUNDARY_DISTANCE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
 const BASIN_CELL_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=256;
 
 pub(super) fn generation_controls(
@@ -358,14 +358,14 @@ fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
         ui,
         "Minimum boundary distance",
         &mut config.minimum_boundary_distance,
-        CRATON_DISTANCE_RANGE,
+        BOUNDARY_DISTANCE_RANGE,
         1.0,
     );
     drag_value(
         ui,
         "Ramp width",
         &mut config.ramp_width,
-        CRATON_DISTANCE_RANGE,
+        BOUNDARY_DISTANCE_RANGE,
         1.0,
     );
 }
@@ -449,7 +449,7 @@ fn isostatic_controls(ui: &mut egui::Ui, config: &mut IsostaticAdjustmentConfig)
         ui,
         "Boundary distance",
         &mut config.maximum_boundary_distance,
-        CRATON_DISTANCE_RANGE,
+        BOUNDARY_DISTANCE_RANGE,
         1.0,
     );
 }

@@ -38,7 +38,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 20] = [
+const DRAW_ORDER: &[DrawSurface] = &[
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -111,7 +111,7 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: &[Self] = &[
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -132,8 +132,6 @@ impl DiagnosticLayer {
         Self::Boundaries,
         Self::Motion,
     ];
-    const COUNT: usize = Self::ALL.len();
-
     const fn index(self) -> usize {
         self as usize
     }
@@ -148,19 +146,19 @@ impl DiagnosticLayer {
             Self::Delaunay => 1.1,
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
-            Self::Crust => 3.0,
-            Self::SeafloorAge => 3.1,
-            Self::BaseElevation => 3.2,
-            Self::Deformation => 3.3,
-            Self::Elevation => 3.5,
-            Self::GeologicalElevation => 3.6,
-            Self::IsostaticSupport => 3.7,
-            Self::IsostaticElevation => 3.8,
-            Self::Hotspots => 3.9,
-            Self::OceanicPeaks => 4.0,
-            Self::VolcanicArcs => 4.1,
-            Self::Cratons => 4.2,
-            Self::Basins => 4.3,
+            Self::Crust
+            | Self::SeafloorAge
+            | Self::BaseElevation
+            | Self::Deformation
+            | Self::Elevation
+            | Self::GeologicalElevation
+            | Self::IsostaticSupport
+            | Self::IsostaticElevation => 3.5,
+            Self::Hotspots
+            | Self::OceanicPeaks
+            | Self::VolcanicArcs
+            | Self::Cratons
+            | Self::Basins => 3.8,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -347,7 +345,7 @@ fn draw_radius(surface: DrawSurface) -> f32 {
 
 #[derive(Resource)]
 pub struct LayerSettings {
-    visible: [bool; DiagnosticLayer::COUNT],
+    visible: Vec<bool>,
 }
 
 impl LayerSettings {
@@ -362,14 +360,14 @@ impl LayerSettings {
 
 impl Default for LayerSettings {
     fn default() -> Self {
-        let mut visible = [false; DiagnosticLayer::COUNT];
+        let mut visible = vec![false; DiagnosticLayer::ALL.len()];
         visible[DiagnosticLayer::IsostaticElevation.index()] = true;
         Self { visible }
     }
 }
 
 #[derive(Resource)]
-struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
+struct DiagnosticAssets(Vec<Handle<GizmoAsset>>);
 
 pub struct DiagnosticRenderPlugin;
 
@@ -403,11 +401,15 @@ fn setup_scene(
         })),
     ));
 
-    let diagnostic_assets = DiagnosticLayer::ALL.map(|layer| {
-        let handle = gizmo_assets.add(GizmoAsset::new());
-        spawn_layer(&mut commands, handle.clone(), layer);
-        handle
-    });
+    let diagnostic_assets = DiagnosticLayer::ALL
+        .iter()
+        .copied()
+        .map(|layer| {
+            let handle = gizmo_assets.add(GizmoAsset::new());
+            spawn_layer(&mut commands, handle.clone(), layer);
+            handle
+        })
+        .collect();
     spawn_axes(&mut commands, &mut gizmo_assets);
 
     commands.insert_resource(DiagnosticAssets(diagnostic_assets));
@@ -452,7 +454,7 @@ fn rebuild_diagnostic_assets(
     assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    for layer in DiagnosticLayer::ALL {
+    for layer in DiagnosticLayer::ALL.iter().copied() {
         *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build(&world);
     }
 }
@@ -465,7 +467,8 @@ fn sync_visible_layers(
     let mut layers = vec![0];
     layers.extend(
         DiagnosticLayer::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|&layer| settings.is_visible(layer))
             .map(DiagnosticLayer::render_layer),
     );
@@ -678,7 +681,7 @@ mod tests {
 
     #[test]
     fn draw_order_covers_each_surface_once_with_unique_radii() {
-        for layer in DiagnosticLayer::ALL {
+        for layer in DiagnosticLayer::ALL.iter().copied() {
             assert_eq!(
                 DRAW_ORDER
                     .iter()
