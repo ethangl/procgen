@@ -2,7 +2,7 @@ use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, Regener
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_tectonics::{BoundaryClass, CrustClass};
+use procgen_tectonics::BoundaryClass;
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
@@ -194,15 +194,11 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Achieved ocean area",
             format!("{:.2}%", world.crust_summary.ocean_fraction * 100.0),
         );
-        stat(
-            ui,
-            "Oceanic plates",
-            world.crust.plate_count(CrustClass::Oceanic),
-        );
+        stat(ui, "Oceanic plates", world.crust_summary.oceanic_plates);
         stat(
             ui,
             "Continental plates",
-            world.crust.plate_count(CrustClass::Continental),
+            world.crust_summary.continental_plates,
         );
         stat(ui, "Oceanic cells", world.crust_summary.oceanic_cells);
         stat(

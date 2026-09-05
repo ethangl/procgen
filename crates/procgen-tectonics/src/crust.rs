@@ -32,6 +32,7 @@ pub struct CrustClassification {
 }
 
 impl CrustClassification {
+    /// Derives a cell's crust class from its current plate ownership.
     pub fn cell_class(&self, partition: &PlatePartition, cell: usize) -> CrustClass {
         self.plate_classes[partition.cell_plates[cell]]
     }
@@ -65,10 +66,10 @@ impl fmt::Display for CrustClassificationError {
 
 impl std::error::Error for CrustClassificationError {}
 
-/// Assigns one immutable crust class to each plate and derives dense per-cell
-/// crust from current ownership. Plate candidates are visited in a seeded,
-/// deterministic order and selected only when their complete surface area
-/// moves the achieved ocean fraction closer to the requested target.
+/// Assigns one immutable crust class to each plate. Plate candidates are
+/// visited in a seeded, deterministic order and selected only when their
+/// complete surface area moves the achieved ocean fraction closer to the
+/// requested target.
 pub fn classify_crust(
     mesh: &SphereMesh,
     partition: &PlatePartition,

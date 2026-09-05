@@ -3,8 +3,9 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BoundaryClassification, CrustClass, CrustClassification, CrustClassificationConfig,
-    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig,
-    classify_boundaries, classify_crust, generate_plate_kinematics, partition_plates,
+    CrustClassificationError, PlateKinematics, PlateKinematicsConfig, PlatePartition,
+    PlatePartitionConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
+    partition_plates,
 };
 use std::{
     error::Error,
@@ -100,6 +101,8 @@ impl GenerationTimings {
 #[derive(Clone, Copy, Debug)]
 pub struct CrustSummary {
     pub ocean_fraction: f64,
+    pub oceanic_plates: usize,
+    pub continental_plates: usize,
     pub oceanic_cells: usize,
     pub continental_cells: usize,
 }
@@ -125,8 +128,12 @@ impl GeneratedWorld {
         let plates = timings.record("Plate partition", || {
             partition_plates(&voronoi, config.plates)
         })?;
-        let crust = timings.record("Crust", || classify_crust(&voronoi, &plates, config.crust))?;
-        let crust_summary = summarize_crust(&voronoi, &plates, &crust);
+        let (crust, crust_summary) =
+            timings.record("Crust", || -> Result<_, CrustClassificationError> {
+                let crust = classify_crust(&voronoi, &plates, config.crust)?;
+                let summary = summarize_crust(&voronoi, &plates, &crust);
+                Ok((crust, summary))
+            })?;
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(plates.plate_count(), config.kinematics)
         })?;
@@ -166,6 +173,8 @@ fn summarize_crust(
 
     CrustSummary {
         ocean_fraction: ocean_area / total_area,
+        oceanic_plates: crust.plate_count(CrustClass::Oceanic),
+        continental_plates: crust.plate_count(CrustClass::Continental),
         oceanic_cells,
         continental_cells: mesh.cell_count() - oceanic_cells,
     }
@@ -209,10 +218,8 @@ mod tests {
         assert_eq!(world.voronoi.cell_count(), 128);
         assert_eq!(world.voronoi.vertex_count(), 252);
         assert_eq!(world.voronoi.edge_count(), 378);
-        assert_eq!(
-            world.crust_summary.oceanic_cells + world.crust_summary.continental_cells,
-            world.voronoi.cell_count()
-        );
+        assert!(world.crust_summary.oceanic_cells > 0);
+        assert!(world.crust_summary.continental_cells > 0);
     }
 
     #[test]

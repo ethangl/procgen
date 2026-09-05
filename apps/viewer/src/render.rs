@@ -53,8 +53,8 @@ impl DiagnosticLayer {
         }
     }
 
-    // Radius order defines the intended default composition: plate interiors,
-    // crust interiors, PLATE_BORDER_RADIUS, then boundary classes.
+    // Radius order defines the intended composition: Delaunay, Voronoi, plate
+    // interiors, crust, points, PLATE_BORDER_RADIUS, boundaries, then motion.
     const fn radius(self) -> f32 {
         match self {
             Self::Points => 1.012,
