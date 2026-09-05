@@ -32,13 +32,8 @@ impl PlatePartitionConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatePartition {
     pub cell_plates: Vec<usize>,
+    /// Number of stable plate identities addressable by `cell_plates`.
     pub plate_count: usize,
-}
-
-impl PlatePartition {
-    pub fn plate_count(&self) -> usize {
-        self.plate_count
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

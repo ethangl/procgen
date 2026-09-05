@@ -94,7 +94,7 @@ pub fn classify_boundaries(
     if partition.cell_plates.len() != mesh.cell_count() {
         return Err(BoundaryClassificationError::CellCountMismatch);
     }
-    if partition.plate_count() != kinematics.angular_velocities.len() {
+    if partition.plate_count != kinematics.angular_velocities.len() {
         return Err(BoundaryClassificationError::PlateCountMismatch);
     }
 
@@ -150,7 +150,7 @@ mod tests {
     fn classification_is_deterministic_complete_and_static() {
         let (mesh, partition) = reference_partition();
         let kinematics =
-            generate_plate_kinematics(partition.plate_count(), PlateKinematicsConfig::new(7))
+            generate_plate_kinematics(partition.plate_count, PlateKinematicsConfig::new(7))
                 .unwrap();
 
         let first = classify_boundaries(&mesh, &partition, &kinematics).unwrap();

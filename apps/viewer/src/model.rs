@@ -2,10 +2,10 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateKinematics,
-    PlateKinematicsConfig, PlateMigration, PlateMigrationConfig, PlatePartition,
-    PlatePartitionConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
-    migrate_plates_once, partition_plates,
+    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification,
+    CrustClassificationConfig, PlateKinematics, PlateKinematicsConfig, PlateMigration,
+    PlateMigrationConfig, PlatePartition, PlatePartitionConfig, classify_boundaries,
+    classify_crust, generate_plate_kinematics, migrate_plates_once, partition_plates,
 };
 use std::{
     error::Error,
@@ -103,12 +103,29 @@ impl GenerationTimings {
 #[derive(Resource)]
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
+    pub plates: PlatePartition,
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
     pub migration: PlateMigration,
     pub boundaries: BoundaryClassification,
+    pub statistics: WorldStatistics,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
+}
+
+/// Viewer-only snapshot of derived values displayed every frame.
+#[derive(Clone, Copy, Debug)]
+pub struct WorldStatistics {
+    pub ocean_fraction: f32,
+    pub oceanic_plate_count: usize,
+    pub continental_plate_count: usize,
+    pub migration_proposal_count: usize,
+    pub contested_cell_count: usize,
+    pub migrated_cell_count: usize,
+    pub maximum_migration_convergence: f32,
+    pub convergent_boundary_count: usize,
+    pub divergent_boundary_count: usize,
+    pub transform_boundary_count: usize,
 }
 
 impl GeneratedWorld {
@@ -122,12 +139,12 @@ impl GeneratedWorld {
         })?;
         let crust = timings.record("Crust", || classify_crust(&voronoi, &plates, config.crust))?;
         let kinematics = timings.record("Plate kinematics", || {
-            generate_plate_kinematics(plates.plate_count(), config.kinematics)
+            generate_plate_kinematics(plates.plate_count, config.kinematics)
         })?;
         let migration_boundaries = timings.record("Pre-migration boundaries", || {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;
-        let migration = timings.record("Plate migration", || {
+        let (plates, migration) = timings.record("Plate migration", || {
             migrate_plates_once(
                 &voronoi,
                 &plates,
@@ -137,21 +154,31 @@ impl GeneratedWorld {
             )
         })?;
         let boundaries = timings.record("Boundaries", || {
-            classify_boundaries(&voronoi, &migration.partition, &kinematics)
+            classify_boundaries(&voronoi, &plates, &kinematics)
         })?;
+        let statistics = WorldStatistics {
+            ocean_fraction: crust.ocean_fraction(&voronoi, &plates),
+            oceanic_plate_count: crust.plate_count(CrustClass::Oceanic),
+            continental_plate_count: crust.plate_count(CrustClass::Continental),
+            migration_proposal_count: migration.proposal_count,
+            contested_cell_count: migration.contested_cell_count,
+            migrated_cell_count: migration.migrated_cell_count(),
+            maximum_migration_convergence: migration.maximum_convergence(),
+            convergent_boundary_count: boundaries.count(BoundaryClass::Convergent),
+            divergent_boundary_count: boundaries.count(BoundaryClass::Divergent),
+            transform_boundary_count: boundaries.count(BoundaryClass::Transform),
+        };
         Ok(Self {
             voronoi,
+            plates,
             crust,
             kinematics,
             migration,
             boundaries,
+            statistics,
             timings,
             config,
         })
-    }
-
-    pub fn plates(&self) -> &PlatePartition {
-        &self.migration.partition
     }
 }
 
@@ -179,8 +206,6 @@ fn regenerate_world(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use procgen_tectonics::CrustClass;
-
     #[test]
     fn generates_consistent_viewer_counts() {
         let world = GeneratedWorld::generate(GenerationSettings {
@@ -195,9 +220,9 @@ mod tests {
         assert_eq!(world.voronoi.cell_count(), 128);
         assert_eq!(world.voronoi.vertex_count(), 252);
         assert_eq!(world.voronoi.edge_count(), 378);
-        assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
-        assert!(world.crust.plate_count(CrustClass::Continental) > 0);
-        assert!(world.migration.migrated_cell_count() > 0);
+        assert!(world.statistics.oceanic_plate_count > 0);
+        assert!(world.statistics.continental_plate_count > 0);
+        assert!(world.statistics.migrated_cell_count > 0);
     }
 
     #[test]
@@ -237,6 +262,6 @@ mod tests {
         assert_eq!(world.config.kinematics, requested.kinematics);
         assert_eq!(world.config.migration, requested.migration);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
-        assert_eq!(world.plates().plate_count(), requested.plates.plate_count());
+        assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }
 }

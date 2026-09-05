@@ -90,11 +90,11 @@ impl DiagnosticLayer {
             Self::Points => point_asset(&world.voronoi, radius),
             Self::Delaunay => delaunay_asset(&world.voronoi, radius),
             Self::Voronoi => voronoi_asset(&world.voronoi, radius),
-            Self::Plates => plate_asset(&world.voronoi, world.plates(), radius),
-            Self::Crust => crust_asset(&world.voronoi, world.plates(), &world.crust, radius),
+            Self::Plates => plate_asset(&world.voronoi, &world.plates, radius),
+            Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Migration => migration_asset(&world.voronoi, &world.migration, radius),
-            Self::Motion => motion_asset(&world.voronoi, world.plates(), &world.kinematics, radius),
+            Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
 }

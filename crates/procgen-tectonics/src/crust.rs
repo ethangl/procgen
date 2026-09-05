@@ -46,14 +46,14 @@ impl CrustClassification {
 
     /// Derives the current area-weighted ocean fraction from cell ownership.
     pub fn ocean_fraction(&self, mesh: &SphereMesh, partition: &PlatePartition) -> f32 {
-        let ocean_area: f64 = partition
-            .cell_plates
+        let areas = plate_areas(mesh, partition);
+        let ocean_area: f64 = areas
             .iter()
-            .zip(&mesh.cell_areas)
-            .filter(|(plate, _)| self.plate_classes[**plate] == CrustClass::Oceanic)
-            .map(|(_, &area)| f64::from(area))
+            .zip(&self.plate_classes)
+            .filter(|(_, class)| **class == CrustClass::Oceanic)
+            .map(|(&area, _)| area)
             .sum();
-        let total_area: f64 = mesh.cell_areas.iter().map(|&area| f64::from(area)).sum();
+        let total_area: f64 = areas.iter().sum();
         (ocean_area / total_area) as f32
     }
 }
@@ -97,11 +97,8 @@ pub fn classify_crust(
         return Err(CrustClassificationError::CellCountMismatch);
     }
 
-    let plate_count = partition.plate_count();
-    let mut plate_areas = vec![0.0_f64; plate_count];
-    for (&plate, &area) in partition.cell_plates.iter().zip(&mesh.cell_areas) {
-        plate_areas[plate] += f64::from(area);
-    }
+    let plate_count = partition.plate_count;
+    let plate_areas = plate_areas(mesh, partition);
 
     let total_area: f64 = plate_areas.iter().sum();
     let target_area = total_area * f64::from(config.target_ocean_fraction);
@@ -120,6 +117,14 @@ pub fn classify_crust(
     }
 
     Ok(CrustClassification { plate_classes })
+}
+
+fn plate_areas(mesh: &SphereMesh, partition: &PlatePartition) -> Vec<f64> {
+    let mut areas = vec![0.0; partition.plate_count];
+    for (&plate, &area) in partition.cell_plates.iter().zip(&mesh.cell_areas) {
+        areas[plate] += f64::from(area);
+    }
+    areas
 }
 
 #[cfg(test)]
@@ -151,7 +156,7 @@ mod tests {
         let (mesh, partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
 
-        assert_eq!(crust.plate_classes.len(), partition.plate_count());
+        assert_eq!(crust.plate_classes.len(), partition.plate_count);
         for (cell, &plate) in partition.cell_plates.iter().enumerate() {
             assert_eq!(
                 crust.cell_class(&partition, cell),
