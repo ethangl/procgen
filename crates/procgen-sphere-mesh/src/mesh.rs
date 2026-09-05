@@ -138,6 +138,38 @@ impl SphereMesh {
     }
 }
 
+/// Collects connected components of eligible cells in ascending root-cell
+/// order. The first cell in each component is its lowest-indexed member.
+/// `passable` may impose an additional directed edge constraint.
+pub fn connected_components(
+    mesh: &SphereMesh,
+    mut eligible: impl FnMut(usize) -> bool,
+    mut passable: impl FnMut(usize, usize) -> bool,
+) -> Vec<Vec<usize>> {
+    let mut visited = vec![false; mesh.cell_count()];
+    let mut components = Vec::new();
+    for root in 0..mesh.cell_count() {
+        if visited[root] || !eligible(root) {
+            continue;
+        }
+        let mut component = Vec::new();
+        let mut queue = VecDeque::from([root]);
+        visited[root] = true;
+        while let Some(cell) = queue.pop_front() {
+            component.push(cell);
+            for corner in mesh.cell_corners(cell) {
+                let neighbor = corner.neighbor;
+                if !visited[neighbor] && eligible(neighbor) && passable(cell, neighbor) {
+                    visited[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        components.push(component);
+    }
+    components
+}
+
 /// Computes minimum cell-hop distance from multiple sources while allowing a
 /// caller to constrain each graph traversal step.
 pub fn multi_source_distances(
@@ -217,5 +249,27 @@ mod tests {
             multi_source_distances(&mesh, &[0, 0], |_, _| true),
             single_source
         );
+    }
+
+    #[test]
+    fn connected_components_are_filtered_and_root_ordered() {
+        let mesh = tetrahedron();
+        let components = connected_components(
+            &mesh,
+            |_| true,
+            |cell, neighbor| (cell < 2) == (neighbor < 2),
+        );
+        assert_eq!(components, vec![vec![0, 1], vec![2, 3]]);
+        assert!(
+            components
+                .iter()
+                .all(|component| { component.first() == component.iter().min() })
+        );
+
+        assert_eq!(
+            connected_components(&mesh, |cell| cell % 2 == 0, |_, _| true),
+            vec![vec![0, 2]]
+        );
+        assert!(connected_components(&mesh, |_| false, |_, _| true).is_empty());
     }
 }

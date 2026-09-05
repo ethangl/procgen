@@ -4,11 +4,16 @@
 //! tectonic generation. Geological fields never mutate elevation and remain
 //! independent of rendering.
 
+mod basins;
 mod cratons;
 mod field;
 mod hotspots;
 mod volcanic_arcs;
 
+pub use basins::{
+    SedimentaryBasin, SedimentaryBasinDiagnostics, SedimentaryBasinField,
+    SedimentaryBasinFieldConfig, SedimentaryBasinFieldError, derive_sedimentary_basin_field,
+};
 pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
