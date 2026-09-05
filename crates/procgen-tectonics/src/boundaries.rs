@@ -34,11 +34,8 @@ pub struct BoundaryClassification {
     pub edge_classes: Vec<BoundaryClass>,
     /// Signed normal speed of each side toward the other side. Entry zero is
     /// the speed of edge cell zero toward cell one; entry one is the speed of
-    /// edge cell one toward cell zero. Their sum is `edge_convergence`.
+    /// edge cell one toward cell zero. Their sum is the edge convergence.
     pub edge_normal_speeds: Vec<[f32; 2]>,
-    /// Signed normal closing speed retained for downstream geological stages.
-    /// Positive values converge; negative values diverge.
-    pub edge_convergence: Vec<f32>,
     /// Absolute relative speed parallel to the boundary, retained for
     /// downstream geological stages.
     pub edge_shear: Vec<f32>,
@@ -52,10 +49,15 @@ impl BoundaryClassification {
             .count()
     }
 
+    /// Signed normal closing speed. Positive values converge; negative values
+    /// diverge.
+    pub fn convergence(&self, edge: usize) -> f32 {
+        self.edge_normal_speeds[edge].iter().sum()
+    }
+
     pub(crate) fn matches_edge_count(&self, edge_count: usize) -> bool {
         self.edge_classes.len() == edge_count
             && self.edge_normal_speeds.len() == edge_count
-            && self.edge_convergence.len() == edge_count
             && self.edge_shear.len() == edge_count
     }
 }
@@ -73,7 +75,7 @@ impl fmt::Display for BoundaryClassificationError {
                 formatter.write_str("plate assignments must match the mesh cell count")
             }
             Self::PlateCountMismatch => {
-                formatter.write_str("plate seeds must match the available angular velocities")
+                formatter.write_str("plate count must match the available angular velocities")
             }
         }
     }
@@ -97,14 +99,13 @@ pub fn classify_boundaries(
 
     let mut edge_classes = Vec::with_capacity(mesh.edge_count());
     let mut edge_normal_speeds = Vec::with_capacity(mesh.edge_count());
-    let mut edge_convergence = Vec::with_capacity(mesh.edge_count());
     let mut edge_shear = Vec::with_capacity(mesh.edge_count());
 
     for edge in &mesh.edges {
         let plate_0 = partition.cell_plates[edge.cells[0]];
         let plate_1 = partition.cell_plates[edge.cells[1]];
-        let (class, normal_speeds, convergence, shear) = if plate_0 == plate_1 {
-            (BoundaryClass::Interior, [0.0; 2], 0.0, 0.0)
+        let (class, normal_speeds, shear) = if plate_0 == plate_1 {
+            (BoundaryClass::Interior, [0.0; 2], 0.0)
         } else {
             let unit_position =
                 (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
@@ -121,21 +122,18 @@ pub fn classify_boundaries(
             (
                 BoundaryClass::from_relative_motion(convergence, shear),
                 normal_speeds,
-                convergence,
                 shear,
             )
         };
 
         edge_classes.push(class);
         edge_normal_speeds.push(normal_speeds);
-        edge_convergence.push(convergence);
         edge_shear.push(shear);
     }
 
     Ok(BoundaryClassification {
         edge_classes,
         edge_normal_speeds,
-        edge_convergence,
         edge_shear,
     })
 }
@@ -173,7 +171,6 @@ mod tests {
         );
         assert_eq!(first.edge_classes.len(), mesh.edge_count());
         assert_eq!(first.edge_normal_speeds.len(), mesh.edge_count());
-        assert_eq!(first.edge_convergence.len(), mesh.edge_count());
         assert_eq!(first.edge_shear.len(), mesh.edge_count());
         assert_eq!(
             first.count(BoundaryClass::Interior),
@@ -227,10 +224,6 @@ mod tests {
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
 
         assert_eq!(boundaries.edge_classes[0], BoundaryClass::Convergent);
-        assert_eq!(
-            boundaries.edge_normal_speeds[0].iter().sum::<f32>(),
-            boundaries.edge_convergence[0]
-        );
-        assert!(boundaries.edge_convergence[0] > 0.0);
+        assert!(boundaries.convergence(0) > 0.0);
     }
 }

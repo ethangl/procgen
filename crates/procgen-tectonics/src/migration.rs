@@ -122,7 +122,7 @@ pub fn migrate_plates_once(
     let mut proposal_counts = vec![0_usize; mesh.cell_count()];
 
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
-        let convergence = boundaries.edge_convergence[edge_index];
+        let convergence = boundaries.convergence(edge_index);
         if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent
             || convergence < config.minimum_convergence
         {
@@ -286,12 +286,10 @@ mod tests {
         let mut boundaries = BoundaryClassification {
             edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
             edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
-            edge_convergence: vec![0.0; mesh.edge_count()],
             edge_shear: vec![0.0; mesh.edge_count()],
         };
         boundaries.edge_classes[0] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[0] = [1.0, 0.0];
-        boundaries.edge_convergence[0] = 1.0;
 
         let migration = migrate_plates_once(
             &mesh,
