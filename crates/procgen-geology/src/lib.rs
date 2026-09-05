@@ -10,10 +10,16 @@ mod cratons;
 mod elevation;
 mod field;
 mod hotspots;
+mod isostasy;
 mod oceanic_peaks;
 mod volcanic_arcs;
 
-pub use field::GeologyInputError;
+#[cfg(test)]
+mod test_support;
+
+pub use field::{
+    ElevationEffectDiagnostics, GeologyInputError, GeologyStageError, SignedEffectDiagnostics,
+};
 
 pub use basins::{
     SedimentaryBasin, SedimentaryBasinDiagnostics, SedimentaryBasinField,
@@ -21,13 +27,16 @@ pub use basins::{
 };
 pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
 pub use elevation::{
-    ElevationEffectDiagnostics, GeologicalElevation, GeologicalElevationConfig,
-    GeologicalElevationDiagnostics, GeologicalElevationError, GeologicalElevationInputs,
-    compose_geological_elevation,
+    GeologicalElevation, GeologicalElevationConfig, GeologicalElevationDiagnostics,
+    GeologicalElevationInputs, compose_geological_elevation,
 };
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
     HotspotTrailCell, generate_hotspot_field,
+};
+pub use isostasy::{
+    IsostaticAdjustment, IsostaticAdjustmentConfig, IsostaticAdjustmentDiagnostics,
+    IsostaticAdjustmentInputs, derive_isostatic_adjustment,
 };
 pub use oceanic_peaks::{
     OceanicPeak, OceanicPeakDiagnostics, OceanicPeakField, OceanicPeakFieldConfig,

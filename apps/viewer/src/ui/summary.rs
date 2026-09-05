@@ -19,6 +19,7 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     craton_summary(ui, world);
     basin_summary(ui, world);
     geological_elevation_summary(ui, world);
+    isostatic_summary(ui, world);
     timing_summary(ui, world);
 }
 
@@ -401,6 +402,30 @@ fn geological_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         effect_stats(ui, "Volcanic arcs", diagnostics.volcanic_arcs);
         effect_stats(ui, "Cratons", diagnostics.cratons);
         effect_stats(ui, "Basins", diagnostics.basins);
+    });
+}
+
+fn isostatic_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.isostasy.diagnostics;
+    stat_grid(ui, "Isostatic adjustment", "isostasy", |ui| {
+        stat(
+            ui,
+            "Support range",
+            format_field_range(&diagnostics.support),
+        );
+        stat(
+            ui,
+            "Elevation range",
+            format_field_range(&diagnostics.elevation),
+        );
+        stat(ui, "Oceanic unchanged", diagnostics.oceanic_cell_count);
+        stat(
+            ui,
+            "Basin floors preserved",
+            diagnostics.preserved_basin_cell_count,
+        );
+        effect_stats(ui, "Rise", diagnostics.adjustment.rise);
+        effect_stats(ui, "Sink", diagnostics.adjustment.sink);
     });
 }
 

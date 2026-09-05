@@ -1,9 +1,11 @@
 use crate::{
     CratonField, GeologyInputError, HotspotField, SedimentaryBasinField, VolcanicArcField,
+    field::{
+        ElevationEffectDiagnostics, GeologyStageError, apply_elevation_effect, lerp, unit_interval,
+    },
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{CoarseElevation, FieldSummary, StageInputError};
-use std::fmt;
+use procgen_tectonics::{CoarseElevation, FieldSummary};
 
 /// Configuration for the ordered coarse geological-elevation composition.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,26 +42,6 @@ pub struct GeologicalElevationInputs<'a> {
     pub continental_base: f32,
 }
 
-/// Aggregate change produced by one composition effect.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ElevationEffectDiagnostics {
-    pub affected_cell_count: usize,
-    /// Signed sum of the effect's actual per-cell changes after clamping.
-    pub total_delta: f64,
-    pub maximum_absolute_delta: f32,
-}
-
-impl ElevationEffectDiagnostics {
-    fn record(&mut self, before: f32, after: f32) {
-        let delta = after - before;
-        if delta != 0.0 {
-            self.affected_cell_count += 1;
-            self.total_delta += f64::from(delta);
-            self.maximum_absolute_delta = self.maximum_absolute_delta.max(delta.abs());
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GeologicalElevationDiagnostics {
     pub elevation: FieldSummary,
@@ -75,43 +57,12 @@ pub struct GeologicalElevation {
     pub diagnostics: GeologicalElevationDiagnostics,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GeologicalElevationError {
-    Input(StageInputError),
-    Geology(GeologyInputError),
-    InvalidConfig,
-}
-
-impl fmt::Display for GeologicalElevationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(error) => error.fmt(formatter),
-            Self::Geology(error) => error.fmt(formatter),
-            Self::InvalidConfig => formatter
-                .write_str("geological elevation values must be finite and between zero and one"),
+impl GeologicalElevation {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
+        if self.cell_elevations.len() != mesh.cell_count() {
+            return Err(GeologyInputError::Elevation);
         }
-    }
-}
-
-impl std::error::Error for GeologicalElevationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::Geology(error) => Some(error),
-            Self::InvalidConfig => None,
-        }
-    }
-}
-
-impl From<GeologyInputError> for GeologicalElevationError {
-    fn from(error: GeologyInputError) -> Self {
-        Self::Geology(error)
-    }
-}
-
-impl From<StageInputError> for GeologicalElevationError {
-    fn from(error: StageInputError) -> Self {
-        Self::Input(error)
+        Ok(())
     }
 }
 
@@ -125,13 +76,13 @@ pub fn compose_geological_elevation(
     mesh: &SphereMesh,
     inputs: GeologicalElevationInputs<'_>,
     config: GeologicalElevationConfig,
-) -> Result<GeologicalElevation, GeologicalElevationError> {
+) -> Result<GeologicalElevation, GeologyStageError> {
     validate_inputs(mesh, inputs, config)?;
 
     let mut cell_elevations = inputs.tectonic_elevation.cell_elevations.clone();
     let mut diagnostics = GeologicalElevationDiagnostics::default();
 
-    apply(
+    apply_elevation_effect(
         &mut cell_elevations,
         &mut diagnostics.hotspots,
         |cell, elevation| {
@@ -139,7 +90,7 @@ pub fn compose_geological_elevation(
                 .clamp(0.0, 1.0)
         },
     );
-    apply(
+    apply_elevation_effect(
         &mut cell_elevations,
         &mut diagnostics.volcanic_arcs,
         |cell, elevation| {
@@ -147,7 +98,7 @@ pub fn compose_geological_elevation(
                 .clamp(0.0, 1.0)
         },
     );
-    apply(
+    apply_elevation_effect(
         &mut cell_elevations,
         &mut diagnostics.cratons,
         |cell, elevation| {
@@ -158,7 +109,7 @@ pub fn compose_geological_elevation(
             )
         },
     );
-    apply(
+    apply_elevation_effect(
         &mut cell_elevations,
         &mut diagnostics.basins,
         |cell, elevation| {
@@ -179,35 +130,18 @@ pub fn compose_geological_elevation(
     })
 }
 
-fn apply(
-    elevations: &mut [f32],
-    diagnostics: &mut ElevationEffectDiagnostics,
-    mut effect: impl FnMut(usize, f32) -> f32,
-) {
-    for (cell, elevation) in elevations.iter_mut().enumerate() {
-        let before = *elevation;
-        *elevation = effect(cell, before);
-        diagnostics.record(before, *elevation);
-    }
-}
-
-fn lerp(value: f32, target: f32, amount: f32) -> f32 {
-    value + (target - value) * amount
-}
-
 fn validate_inputs(
     mesh: &SphereMesh,
     inputs: GeologicalElevationInputs<'_>,
     config: GeologicalElevationConfig,
-) -> Result<(), GeologicalElevationError> {
-    let unit_interval = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
+) -> Result<(), GeologyStageError> {
     if !unit_interval(config.hotspot_uplift)
         || !unit_interval(config.volcanic_arc_uplift)
         || !unit_interval(config.craton_flattening)
         || !unit_interval(config.basin_flattening)
         || !unit_interval(inputs.continental_base)
     {
-        return Err(GeologicalElevationError::InvalidConfig);
+        return Err(GeologyStageError::InvalidConfig);
     }
 
     inputs.tectonic_elevation.validate(mesh)?;
@@ -222,12 +156,11 @@ fn validate_inputs(
 mod tests {
     use super::*;
     use crate::{
-        CratonDiagnostics, HotspotDiagnostics, SedimentaryBasin, SedimentaryBasinDiagnostics,
-        VolcanicArcDiagnostics,
+        SedimentaryBasin,
+        test_support::{empty_basins, empty_cratons, empty_hotspots, empty_volcanic_arcs, mesh},
     };
     use procgen_core::fingerprint;
-    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::build_sphere_mesh;
+    use procgen_tectonics::StageInputError;
 
     #[derive(Clone)]
     struct Fixture {
@@ -246,27 +179,10 @@ mod tests {
                     cell_elevations: elevations,
                     diagnostics: Default::default(),
                 },
-                hotspots: HotspotField {
-                    hotspots: Vec::new(),
-                    cell_intensities: vec![0.0; cell_count],
-                    cell_hotspots: vec![None; cell_count],
-                    diagnostics: HotspotDiagnostics::default(),
-                },
-                volcanic_arcs: VolcanicArcField {
-                    segments: Vec::new(),
-                    cell_strengths: vec![0.0; cell_count],
-                    cell_segments: vec![None; cell_count],
-                    diagnostics: VolcanicArcDiagnostics::default(),
-                },
-                cratons: CratonField {
-                    cell_strengths: vec![0.0; cell_count],
-                    diagnostics: CratonDiagnostics::default(),
-                },
-                basins: SedimentaryBasinField {
-                    cell_basins: vec![None; cell_count],
-                    basins: Vec::new(),
-                    diagnostics: SedimentaryBasinDiagnostics::default(),
-                },
+                hotspots: empty_hotspots(cell_count),
+                volcanic_arcs: empty_volcanic_arcs(cell_count),
+                cratons: empty_cratons(cell_count),
+                basins: empty_basins(cell_count),
             }
         }
 
@@ -275,7 +191,7 @@ mod tests {
             mesh: &SphereMesh,
             continental_base: f32,
             config: GeologicalElevationConfig,
-        ) -> Result<GeologicalElevation, GeologicalElevationError> {
+        ) -> Result<GeologicalElevation, GeologyStageError> {
             compose_geological_elevation(
                 mesh,
                 GeologicalElevationInputs {
@@ -289,14 +205,6 @@ mod tests {
                 config,
             )
         }
-    }
-
-    fn mesh(cell_count: usize) -> SphereMesh {
-        build_sphere_mesh(
-            fibonacci_sphere(FibonacciConfig::new(cell_count)).unwrap(),
-            1.0,
-        )
-        .unwrap()
     }
 
     #[test]
@@ -425,41 +333,35 @@ mod tests {
         fixture.tectonic_elevation.cell_elevations.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Input(StageInputError::Elevation))
+            Err(GeologyStageError::Input(StageInputError::Elevation))
         );
         fixture.tectonic_elevation.cell_elevations.push(0.5);
 
         fixture.hotspots.cell_intensities.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Geology(
-                GeologyInputError::Hotspots
-            ))
+            Err(GeologyStageError::Geology(GeologyInputError::Hotspots))
         );
         fixture.hotspots.cell_intensities.push(0.0);
 
         fixture.volcanic_arcs.cell_strengths.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Geology(
-                GeologyInputError::VolcanicArcs
-            ))
+            Err(GeologyStageError::Geology(GeologyInputError::VolcanicArcs))
         );
         fixture.volcanic_arcs.cell_strengths.push(0.0);
 
         fixture.cratons.cell_strengths.pop();
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Geology(
-                GeologyInputError::Cratons
-            ))
+            Err(GeologyStageError::Geology(GeologyInputError::Cratons))
         );
         fixture.cratons.cell_strengths.push(0.0);
 
         fixture.basins.cell_basins[0] = Some(0);
         assert_eq!(
             fixture.compose(&mesh, 0.6, GeologicalElevationConfig::default()),
-            Err(GeologicalElevationError::Geology(GeologyInputError::Basins))
+            Err(GeologyStageError::Geology(GeologyInputError::Basins))
         );
         fixture.basins.cell_basins[0] = None;
 
@@ -469,7 +371,7 @@ mod tests {
         };
         assert_eq!(
             fixture.compose(&mesh, 0.6, invalid),
-            Err(GeologicalElevationError::InvalidConfig)
+            Err(GeologyStageError::InvalidConfig)
         );
     }
 }

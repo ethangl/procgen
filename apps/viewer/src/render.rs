@@ -21,6 +21,8 @@ pub enum DiagnosticLayer {
     Deformation,
     Elevation,
     GeologicalElevation,
+    IsostaticSupport,
+    IsostaticElevation,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -36,7 +38,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 18] = [
+const DRAW_ORDER: &[DrawSurface] = &[
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -47,6 +49,8 @@ const DRAW_ORDER: [DrawSurface; 18] = [
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::Layer(DiagnosticLayer::GeologicalElevation),
+    DrawSurface::Layer(DiagnosticLayer::IsostaticSupport),
+    DrawSurface::Layer(DiagnosticLayer::IsostaticElevation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
@@ -107,7 +111,7 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: &[Self] = &[
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -118,6 +122,8 @@ impl DiagnosticLayer {
         Self::Deformation,
         Self::Elevation,
         Self::GeologicalElevation,
+        Self::IsostaticSupport,
+        Self::IsostaticElevation,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -142,17 +148,19 @@ impl DiagnosticLayer {
             Self::Delaunay => 1.1,
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
-            Self::Crust => 3.0,
-            Self::SeafloorAge => 3.1,
-            Self::BaseElevation => 3.2,
-            Self::Deformation => 3.3,
-            Self::Elevation => 3.5,
-            Self::GeologicalElevation => 3.6,
-            Self::Hotspots => 3.7,
-            Self::OceanicPeaks => 3.8,
-            Self::VolcanicArcs => 3.9,
-            Self::Cratons => 4.0,
-            Self::Basins => 4.1,
+            Self::Crust
+            | Self::SeafloorAge
+            | Self::BaseElevation
+            | Self::Deformation
+            | Self::Elevation
+            | Self::GeologicalElevation
+            | Self::IsostaticSupport
+            | Self::IsostaticElevation => 3.5,
+            Self::Hotspots
+            | Self::OceanicPeaks
+            | Self::VolcanicArcs
+            | Self::Cratons
+            | Self::Basins => 3.8,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -174,6 +182,8 @@ impl DiagnosticLayer {
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Tectonic elevation",
             Self::GeologicalElevation => "Geological elevation",
+            Self::IsostaticSupport => "Isostatic support",
+            Self::IsostaticElevation => "Adjusted elevation",
             Self::Hotspots => "Mantle hotspots",
             Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
@@ -219,6 +229,18 @@ impl DiagnosticLayer {
             Self::GeologicalElevation => scalar_field_asset(
                 &world.voronoi,
                 &world.geological_elevation.cell_elevations,
+                &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
+            Self::IsostaticSupport => scalar_field_asset(
+                &world.voronoi,
+                &world.isostasy.cell_support,
+                &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
+            Self::IsostaticElevation => scalar_field_asset(
+                &world.voronoi,
+                &world.isostasy.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
                 radius,
             ),
@@ -341,7 +363,7 @@ impl LayerSettings {
 impl Default for LayerSettings {
     fn default() -> Self {
         let mut visible = [false; DiagnosticLayer::COUNT];
-        visible[DiagnosticLayer::GeologicalElevation.index()] = true;
+        visible[DiagnosticLayer::IsostaticElevation.index()] = true;
         Self { visible }
     }
 }
@@ -381,7 +403,8 @@ fn setup_scene(
         })),
     ));
 
-    let diagnostic_assets = DiagnosticLayer::ALL.map(|layer| {
+    let diagnostic_assets = std::array::from_fn(|index| {
+        let layer = DiagnosticLayer::ALL[index];
         let handle = gizmo_assets.add(GizmoAsset::new());
         spawn_layer(&mut commands, handle.clone(), layer);
         handle
@@ -430,7 +453,7 @@ fn rebuild_diagnostic_assets(
     assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    for layer in DiagnosticLayer::ALL {
+    for &layer in DiagnosticLayer::ALL {
         *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build(&world);
     }
 }
@@ -443,9 +466,9 @@ fn sync_visible_layers(
     let mut layers = vec![0];
     layers.extend(
         DiagnosticLayer::ALL
-            .into_iter()
-            .filter(|&layer| settings.is_visible(layer))
-            .map(DiagnosticLayer::render_layer),
+            .iter()
+            .filter(|&&layer| settings.is_visible(layer))
+            .map(|&layer| layer.render_layer()),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
 }
@@ -656,7 +679,7 @@ mod tests {
 
     #[test]
     fn draw_order_covers_each_surface_once_with_unique_radii() {
-        for layer in DiagnosticLayer::ALL {
+        for &layer in DiagnosticLayer::ALL {
             assert_eq!(
                 DRAW_ORDER
                     .iter()

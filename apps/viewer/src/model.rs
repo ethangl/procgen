@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
-    GeologicalElevationInputs, HotspotField, HotspotFieldConfig, OceanicPeakField,
-    OceanicPeakFieldConfig, SedimentaryBasinField, SedimentaryBasinFieldConfig, VolcanicArcField,
-    VolcanicArcFieldConfig, compose_geological_elevation, derive_craton_field,
+    GeologicalElevationInputs, HotspotField, HotspotFieldConfig, IsostaticAdjustment,
+    IsostaticAdjustmentConfig, IsostaticAdjustmentInputs, OceanicPeakField, OceanicPeakFieldConfig,
+    SedimentaryBasinField, SedimentaryBasinFieldConfig, VolcanicArcField, VolcanicArcFieldConfig,
+    compose_geological_elevation, derive_craton_field, derive_isostatic_adjustment,
     derive_oceanic_peak_field, derive_sedimentary_basin_field, derive_volcanic_arc_field,
     generate_hotspot_field,
 };
@@ -42,6 +43,7 @@ pub struct GenerationSettings {
     pub cratons: CratonFieldConfig,
     pub basins: SedimentaryBasinFieldConfig,
     pub geological_elevation: GeologicalElevationConfig,
+    pub isostasy: IsostaticAdjustmentConfig,
 }
 
 impl Default for GenerationSettings {
@@ -77,6 +79,7 @@ impl Default for GenerationSettings {
             cratons: CratonFieldConfig::default(),
             basins: SedimentaryBasinFieldConfig::default(),
             geological_elevation: GeologicalElevationConfig::default(),
+            isostasy: IsostaticAdjustmentConfig::default(),
         }
     }
 }
@@ -157,6 +160,7 @@ pub struct GeneratedWorld {
     pub cratons: CratonField,
     pub basins: SedimentaryBasinField,
     pub geological_elevation: GeologicalElevation,
+    pub isostasy: IsostaticAdjustment,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -233,6 +237,20 @@ impl GeneratedWorld {
                 config.geological_elevation,
             )
         })?;
+        let isostasy = timings.record("Isostatic adjustment", || {
+            derive_isostatic_adjustment(
+                &voronoi,
+                IsostaticAdjustmentInputs {
+                    plates: &plates,
+                    crust: &crust,
+                    boundaries: &boundaries,
+                    cratons: &cratons,
+                    basins: &basins,
+                    geological_elevation: &geological_elevation,
+                },
+                config.isostasy,
+            )
+        })?;
 
         Ok(Self {
             voronoi,
@@ -251,6 +269,7 @@ impl GeneratedWorld {
             cratons,
             basins,
             geological_elevation,
+            isostasy,
             timings,
             config,
         })
@@ -345,6 +364,14 @@ mod tests {
             world.geological_elevation.cell_elevations.len(),
             world.voronoi.cell_count()
         );
+        assert_eq!(
+            world.isostasy.cell_support.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.isostasy.cell_elevations.len(),
+            world.voronoi.cell_count()
+        );
     }
 
     #[test]
@@ -420,6 +447,11 @@ mod tests {
                 craton_flattening: 0.6,
                 basin_flattening: 0.7,
             },
+            isostasy: IsostaticAdjustmentConfig {
+                adjustment_strength: 0.5,
+                maximum_boundary_distance: 6,
+                ..Default::default()
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -447,6 +479,7 @@ mod tests {
             world.config.geological_elevation,
             requested.geological_elevation
         );
+        assert_eq!(world.config.isostasy, requested.isostasy);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

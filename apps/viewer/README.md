@@ -20,12 +20,17 @@ Those fields are composed into a new geological elevation in stable hotspot,
 volcanic-arc, craton, then basin order. Cratons flatten toward the configured
 continental base and basins flatten toward their original component minima;
 sparse seamount and abyssal-hill candidates are not applied to elevation.
+Finally, deterministic isostatic support combines current-owner continental
+crust, final convergent and divergent boundary proximity, craton strength, and
+basin membership, then nudges a separate clamped elevation field toward that
+support. Oceanic cells and sedimentary-basin floors remain unchanged.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
 
 The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
-deformation, tectonic-elevation, geological-elevation, hotspot, volcanic-arc,
+deformation, tectonic-elevation, geological-elevation, isostatic-support,
+adjusted-elevation, hotspot, volcanic-arc,
 craton, basin, motion, and final-boundary diagnostics and reports aggregate
 statistics plus stage timings. Plate interiors use stable per-plate colors.
 Crust is blue for oceanic, amber for continental, and white where the classes

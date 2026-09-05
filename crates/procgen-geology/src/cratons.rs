@@ -1,5 +1,5 @@
 use crate::field::GeologyInputError;
-use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
+use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
 use procgen_tectonics::{
     CoarseElevation, CrustClass, CrustClassification, FieldSummary, PlatePartition, StageInputError,
 };
@@ -64,7 +64,7 @@ pub fn derive_craton_field(
     crust.validate(plates)?;
     elevation.validate(mesh)?;
 
-    let cell_boundary_distances = boundary_distances(mesh, plates);
+    let cell_boundary_distances = plate_boundary_distances(mesh, plates);
     let is_eligible =
         |cell| crust.cell_class(plates, cell) == CrustClass::Continental && elevation.is_land(cell);
     let cell_strengths: Vec<_> = cell_boundary_distances
@@ -107,14 +107,10 @@ pub fn derive_craton_field(
     })
 }
 
-fn boundary_distances(mesh: &SphereMesh, plates: &PlatePartition) -> Vec<Option<usize>> {
-    let mut boundary_cells = Vec::new();
-    for edge in &mesh.edges {
-        if plates.cell_plates[edge.cells[0]] != plates.cell_plates[edge.cells[1]] {
-            boundary_cells.extend(edge.cells);
-        }
-    }
-    multi_source_distances(mesh, &boundary_cells, |_, _| true)
+fn plate_boundary_distances(mesh: &SphereMesh, plates: &PlatePartition) -> Vec<Option<usize>> {
+    edge_cell_distances(mesh, |_, edge| {
+        plates.cell_plates[edge.cells[0]] != plates.cell_plates[edge.cells[1]]
+    })
 }
 
 fn strength_at_distance(distance: usize, config: CratonFieldConfig) -> f32 {
@@ -205,7 +201,7 @@ mod tests {
         );
         assert!(first.diagnostics.boundary_cell_count > 0);
         assert!(first.diagnostics.craton_cell_count > 0);
-        let distances = boundary_distances(&mesh, &plates);
+        let distances = plate_boundary_distances(&mesh, &plates);
         for edge in &mesh.edges {
             let edge_distances = edge.cells.map(|cell| distances[cell]);
             if plates.cell_plates[edge.cells[0]] != plates.cell_plates[edge.cells[1]] {
@@ -281,7 +277,7 @@ mod tests {
                 .all(|&strength| strength == 1.0)
         );
 
-        let distances = boundary_distances(&mesh, &plates);
+        let distances = plate_boundary_distances(&mesh, &plates);
         let boundary_cell = distances
             .iter()
             .position(|&distance| distance == Some(0))
@@ -332,7 +328,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            boundary_distances(&mesh, &plates)
+            plate_boundary_distances(&mesh, &plates)
                 .iter()
                 .all(Option::is_none)
         );
