@@ -1,6 +1,6 @@
 use crate::{
     BoundaryDeformation, CrustClass, CrustClassification, FieldSummary, PlatePartition,
-    stage::{StageInputError, validate_final_state},
+    stage::{StageInputError, validate_ownership_and_crust},
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
@@ -80,10 +80,7 @@ pub fn compose_coarse_elevation(
     config: CoarseElevationConfig,
 ) -> Result<CoarseElevation, CoarseElevationError> {
     validate_config(config)?;
-    validate_final_state(mesh, partition, crust, None)?;
-    if deformation.cell_deformation.len() != mesh.cell_count() {
-        return Err(CoarseElevationError::DeformationCountMismatch);
-    }
+    validate_inputs(mesh, partition, crust, deformation)?;
 
     let mut elevation: Vec<_> = (0..mesh.cell_count())
         .map(|cell| {
@@ -121,6 +118,19 @@ fn validate_config(config: CoarseElevationConfig) -> Result<(), CoarseElevationE
         || !(0.0..=1.0).contains(&config.smoothing_weight)
     {
         return Err(CoarseElevationError::InvalidConfig);
+    }
+    Ok(())
+}
+
+fn validate_inputs(
+    mesh: &SphereMesh,
+    partition: &PlatePartition,
+    crust: &CrustClassification,
+    deformation: &BoundaryDeformation,
+) -> Result<(), CoarseElevationError> {
+    validate_ownership_and_crust(mesh, partition, crust)?;
+    if deformation.cell_deformation.len() != mesh.cell_count() {
+        return Err(CoarseElevationError::DeformationCountMismatch);
     }
     Ok(())
 }

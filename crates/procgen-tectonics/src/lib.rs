@@ -57,5 +57,6 @@ pub use motion::{
 };
 pub use partition::{PlatePartition, PlatePartitionConfig, PlatePartitionError, partition_plates};
 pub use seafloor_age::{
-    SeafloorAge, SeafloorAgeConfig, SeafloorAgeDiagnostics, SeafloorAgeError, derive_seafloor_age,
+    SeafloorAge, SeafloorAgeConfig, SeafloorAgeDiagnostics, derive_seafloor_age,
 };
+pub use stage::StageInputError;

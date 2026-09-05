@@ -2,7 +2,7 @@ use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
     PlatePartition,
     field::summarize_field,
-    stage::{StageInputError, validate_final_state},
+    stage::{StageInputError, validate_boundaries, validate_ownership_and_crust},
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{collections::VecDeque, fmt};
@@ -139,7 +139,8 @@ pub fn derive_boundary_deformation(
     config: BoundaryDeformationConfig,
 ) -> Result<BoundaryDeformation, BoundaryDeformationError> {
     validate_config(config)?;
-    validate_final_state(mesh, partition, crust, Some(boundaries))?;
+    validate_ownership_and_crust(mesh, partition, crust)?;
+    validate_boundaries(mesh, boundaries)?;
 
     let sources = collect_boundary_sources(mesh, partition, crust, boundaries, &config);
     let source_cell_count = sources.iter().flatten().count();

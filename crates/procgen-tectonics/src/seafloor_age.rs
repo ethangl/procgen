@@ -1,10 +1,10 @@
 use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
     PlatePartition,
-    stage::{StageInputError, validate_final_state},
+    stage::{StageInputError, validate_boundaries, validate_ownership_and_crust},
 };
 use procgen_sphere_mesh::SphereMesh;
-use std::{collections::VecDeque, fmt};
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeafloorAgeConfig {
@@ -36,33 +36,6 @@ pub struct SeafloorAge {
     pub diagnostics: SeafloorAgeDiagnostics,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SeafloorAgeError {
-    Input(StageInputError),
-}
-
-impl fmt::Display for SeafloorAgeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for SeafloorAgeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-        }
-    }
-}
-
-impl From<StageInputError> for SeafloorAgeError {
-    fn from(error: StageInputError) -> Self {
-        Self::Input(error)
-    }
-}
-
 /// Derives seafloor hop age from the final divergent boundaries and ownership.
 ///
 /// Oceanic cells touching a divergent edge are age zero. A multi-source BFS
@@ -75,8 +48,9 @@ pub fn derive_seafloor_age(
     crust: &CrustClassification,
     boundaries: &BoundaryClassification,
     config: SeafloorAgeConfig,
-) -> Result<SeafloorAge, SeafloorAgeError> {
-    validate_final_state(mesh, partition, crust, Some(boundaries))?;
+) -> Result<SeafloorAge, StageInputError> {
+    validate_ownership_and_crust(mesh, partition, crust)?;
+    validate_boundaries(mesh, boundaries)?;
 
     let mut cell_ages = vec![None; mesh.cell_count()];
     let mut ridge_plates = vec![false; partition.plate_count];
@@ -306,7 +280,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(SeafloorAgeError::Input(StageInputError::Cells))
+            Err(StageInputError::Cells)
         );
 
         let wrong_crust = CrustClassification {
@@ -320,7 +294,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(SeafloorAgeError::Input(StageInputError::Plates))
+            Err(StageInputError::Plates)
         );
 
         let mut wrong_boundaries = boundaries;
@@ -333,7 +307,7 @@ mod tests {
                 &wrong_boundaries,
                 Default::default()
             ),
-            Err(SeafloorAgeError::Input(StageInputError::Boundaries))
+            Err(StageInputError::Boundaries)
         );
     }
 }
