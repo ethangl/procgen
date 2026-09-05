@@ -11,7 +11,8 @@ pub struct SedimentaryBasinFieldConfig {
     pub minimum_cell_count: usize,
     /// Maximum fraction of external component-neighbor incidences that may face ocean.
     pub maximum_ocean_perimeter_fraction: f32,
-    /// Added to a retained component's minimum elevation to describe its basin floor.
+    /// Added to a retained component's minimum elevation to describe the floor
+    /// consumed by a future, separate basin elevation-modifier stage.
     pub floor_offset: f32,
 }
 
@@ -28,14 +29,13 @@ impl Default for SedimentaryBasinFieldConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SedimentaryBasin {
-    /// Compact zero-based ID, stable under deterministic mesh and input ordering.
-    pub id: usize,
     /// Lowest-indexed cell in the connected component.
     pub root_cell: usize,
     pub cell_count: usize,
     pub ocean_perimeter_fraction: f32,
     pub minimum_elevation: f32,
-    /// Metadata only; this stage does not flatten or otherwise mutate elevation.
+    /// Metadata for a future, separate basin elevation modifier; this stage does
+    /// not flatten or otherwise mutate elevation.
     pub floor_elevation: f32,
 }
 
@@ -62,16 +62,26 @@ pub struct SedimentaryBasinField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SedimentaryBasinFieldError {
     Input(StageInputError),
-    InvalidConfig,
+    InvalidMaximumElevation,
+    EmptyMinimumBasin,
+    InvalidOceanPerimeterFraction,
+    InvalidFloorOffset,
 }
 
 impl fmt::Display for SedimentaryBasinFieldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(error) => error.fmt(formatter),
-            Self::InvalidConfig => formatter.write_str(
-                "basin maximum elevation must be finite and at or above sea level, minimum cell count must be positive, ocean perimeter fraction must be finite and between 0 and 1, and floor offset must be finite and nonnegative",
-            ),
+            Self::InvalidMaximumElevation => formatter
+                .write_str("basin maximum elevation must be finite and between sea level and 1"),
+            Self::EmptyMinimumBasin => {
+                formatter.write_str("minimum basin cell count must be at least one")
+            }
+            Self::InvalidOceanPerimeterFraction => formatter
+                .write_str("maximum ocean perimeter fraction must be finite and between 0 and 1"),
+            Self::InvalidFloorOffset => {
+                formatter.write_str("basin floor offset must be finite and nonnegative")
+            }
         }
     }
 }
@@ -80,7 +90,7 @@ impl std::error::Error for SedimentaryBasinFieldError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Input(error) => Some(error),
-            Self::InvalidConfig => None,
+            _ => None,
         }
     }
 }
@@ -118,8 +128,7 @@ pub fn derive_sedimentary_basin_field(
     let mut cell_basins = vec![None; mesh.cell_count()];
     let mut basins = Vec::new();
     let mut component_count = 0;
-    let mut rejected_small_component_count = 0;
-    let mut rejected_ocean_exposed_component_count = 0;
+    let mut rejections = RejectionCounts::default();
 
     for root_cell in 0..mesh.cell_count() {
         if !candidates[root_cell] || visited[root_cell] {
@@ -127,12 +136,8 @@ pub fn derive_sedimentary_basin_field(
         }
         component_count += 1;
         let component = collect_component(mesh, &candidates, elevation, &mut visited, root_cell);
-        let too_small = component.cells.len() < config.minimum_cell_count;
-        let too_exposed =
-            component.ocean_perimeter_fraction > config.maximum_ocean_perimeter_fraction;
-        rejected_small_component_count += usize::from(too_small);
-        rejected_ocean_exposed_component_count += usize::from(!too_small && too_exposed);
-        if too_small || too_exposed {
+        if let Some(rejection) = reject_reason(&component, config) {
+            rejections.record(rejection);
             continue;
         }
 
@@ -141,7 +146,6 @@ pub fn derive_sedimentary_basin_field(
             cell_basins[cell] = Some(id);
         }
         basins.push(SedimentaryBasin {
-            id,
             root_cell,
             cell_count: component.cells.len(),
             ocean_perimeter_fraction: component.ocean_perimeter_fraction,
@@ -168,8 +172,8 @@ pub fn derive_sedimentary_basin_field(
             component_count,
             basin_count: basins.len(),
             basin_cell_count,
-            rejected_small_component_count,
-            rejected_ocean_exposed_component_count,
+            rejected_small_component_count: rejections.small,
+            rejected_ocean_exposed_component_count: rejections.ocean_exposed,
             smallest_basin_cell_count,
             largest_basin_cell_count,
         },
@@ -181,6 +185,37 @@ struct Component {
     cells: Vec<usize>,
     ocean_perimeter_fraction: f32,
     minimum_elevation: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rejection {
+    TooSmall,
+    OceanExposed,
+}
+
+#[derive(Default)]
+struct RejectionCounts {
+    small: usize,
+    ocean_exposed: usize,
+}
+
+impl RejectionCounts {
+    fn record(&mut self, rejection: Rejection) {
+        match rejection {
+            Rejection::TooSmall => self.small += 1,
+            Rejection::OceanExposed => self.ocean_exposed += 1,
+        }
+    }
+}
+
+fn reject_reason(component: &Component, config: SedimentaryBasinFieldConfig) -> Option<Rejection> {
+    if component.cells.len() < config.minimum_cell_count {
+        Some(Rejection::TooSmall)
+    } else if component.ocean_perimeter_fraction > config.maximum_ocean_perimeter_fraction {
+        Some(Rejection::OceanExposed)
+    } else {
+        None
+    }
 }
 
 fn collect_component(
@@ -236,13 +271,19 @@ fn validate_inputs(
     if !config.maximum_elevation.is_finite()
         || config.maximum_elevation < SEA_LEVEL
         || config.maximum_elevation > 1.0
-        || config.minimum_cell_count == 0
-        || !config.maximum_ocean_perimeter_fraction.is_finite()
-        || !(0.0..=1.0).contains(&config.maximum_ocean_perimeter_fraction)
-        || !config.floor_offset.is_finite()
-        || config.floor_offset < 0.0
     {
-        return Err(SedimentaryBasinFieldError::InvalidConfig);
+        return Err(SedimentaryBasinFieldError::InvalidMaximumElevation);
+    }
+    if config.minimum_cell_count == 0 {
+        return Err(SedimentaryBasinFieldError::EmptyMinimumBasin);
+    }
+    if !config.maximum_ocean_perimeter_fraction.is_finite()
+        || !(0.0..=1.0).contains(&config.maximum_ocean_perimeter_fraction)
+    {
+        return Err(SedimentaryBasinFieldError::InvalidOceanPerimeterFraction);
+    }
+    if !config.floor_offset.is_finite() || config.floor_offset < 0.0 {
+        return Err(SedimentaryBasinFieldError::InvalidFloorOffset);
     }
     plates.validate(mesh)?;
     crust.validate(plates)?;
@@ -322,7 +363,6 @@ mod tests {
         );
         assert_eq!(elevation, original_elevation);
         assert_eq!(first.basins.len(), 1);
-        assert_eq!(first.basins[0].id, 0);
         assert_eq!(first.basins[0].root_cell, 0);
         assert!((first.basins[0].floor_elevation - 0.54).abs() < f32::EPSILON);
         assert_eq!(first.diagnostics.basin_cell_count, 12);
@@ -424,14 +464,6 @@ mod tests {
             field
                 .basins
                 .iter()
-                .map(|basin| basin.id)
-                .collect::<Vec<_>>(),
-            vec![0, 1]
-        );
-        assert_eq!(
-            field
-                .basins
-                .iter()
                 .map(|basin| basin.root_cell)
                 .collect::<Vec<_>>(),
             vec![first, second]
@@ -485,18 +517,77 @@ mod tests {
         assert_eq!(empty.cell_basins, vec![None; mesh.cell_count()]);
         assert_eq!(empty.diagnostics, SedimentaryBasinDiagnostics::default());
 
-        assert_eq!(
-            derive_sedimentary_basin_field(
-                &mesh,
-                &plates,
-                &crust,
-                &elevation,
+        let invalid_cases = [
+            (
+                SedimentaryBasinFieldConfig {
+                    maximum_elevation: 1.01,
+                    ..Default::default()
+                },
+                SedimentaryBasinFieldError::InvalidMaximumElevation,
+            ),
+            (
                 SedimentaryBasinFieldConfig {
                     minimum_cell_count: 0,
                     ..Default::default()
                 },
+                SedimentaryBasinFieldError::EmptyMinimumBasin,
             ),
-            Err(SedimentaryBasinFieldError::InvalidConfig)
+            (
+                SedimentaryBasinFieldConfig {
+                    maximum_ocean_perimeter_fraction: f32::NAN,
+                    ..Default::default()
+                },
+                SedimentaryBasinFieldError::InvalidOceanPerimeterFraction,
+            ),
+            (
+                SedimentaryBasinFieldConfig {
+                    floor_offset: -0.01,
+                    ..Default::default()
+                },
+                SedimentaryBasinFieldError::InvalidFloorOffset,
+            ),
+        ];
+        for (config, expected) in invalid_cases {
+            assert_eq!(
+                derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation, config),
+                Err(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn rejection_policy_prioritizes_size_before_ocean_exposure() {
+        let component = Component {
+            cells: vec![0],
+            ocean_perimeter_fraction: 1.0,
+            minimum_elevation: 0.55,
+        };
+        let config = SedimentaryBasinFieldConfig {
+            minimum_cell_count: 2,
+            maximum_ocean_perimeter_fraction: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(reject_reason(&component, config), Some(Rejection::TooSmall));
+        assert_eq!(
+            reject_reason(
+                &component,
+                SedimentaryBasinFieldConfig {
+                    minimum_cell_count: 1,
+                    ..config
+                }
+            ),
+            Some(Rejection::OceanExposed)
+        );
+        assert_eq!(
+            reject_reason(
+                &component,
+                SedimentaryBasinFieldConfig {
+                    minimum_cell_count: 1,
+                    maximum_ocean_perimeter_fraction: 1.0,
+                    ..config
+                }
+            ),
+            None
         );
     }
 }
