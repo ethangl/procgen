@@ -8,6 +8,7 @@ use procgen_tectonics::{BoundaryClass, CrustClass};
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
+const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 
 pub struct ViewerUiPlugin;
 
@@ -148,7 +149,7 @@ fn generation_controls(
         ui,
         "Steps",
         &mut generation.evolution.step_count,
-        0..=256,
+        EVOLUTION_STEP_RANGE,
         1.0,
     );
     slider(
@@ -179,7 +180,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Cells", world.voronoi.cell_count());
         stat(ui, "Vertices", world.voronoi.vertex_count());
         stat(ui, "Edges", world.voronoi.edge_count());
-        stat(ui, "Plates", world.evolution.partition.plate_count);
+        stat(ui, "Plates", world.plates.plate_count);
         stat(ui, "Sampling seed", world.config.fibonacci.seed);
         stat(ui, "Plate seed", world.config.plates.seed);
         stat(ui, "Crust seed", world.config.crust.seed);
@@ -204,10 +205,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Achieved ocean area",
             format!(
                 "{:.2}%",
-                world
-                    .crust
-                    .ocean_fraction(&world.voronoi, &world.evolution.partition)
-                    * 100.0
+                world.crust.ocean_fraction(&world.voronoi, &world.plates) * 100.0
             ),
         );
         stat(
@@ -225,31 +223,18 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     ui.add_space(6.0);
     ui.label("Plate evolution");
     egui::Grid::new("evolution").num_columns(2).show(ui, |ui| {
-        stat(
-            ui,
-            "Completed steps",
-            world.evolution.diagnostics.completed_step_count,
-        );
-        stat(
-            ui,
-            "Active steps",
-            world.evolution.diagnostics.active_step_count,
-        );
-        stat(ui, "Proposals", world.evolution.diagnostics.proposal_count);
+        stat(ui, "Active steps", world.evolution.active_step_count);
+        stat(ui, "Proposals", world.evolution.proposal_count);
         stat(
             ui,
             "Contested cell events",
-            world.evolution.diagnostics.contested_cell_count,
+            world.evolution.contested_cell_count,
         );
-        stat(
-            ui,
-            "Migration events",
-            world.evolution.diagnostics.migrated_cell_count,
-        );
+        stat(ui, "Migration events", world.evolution.migrated_cell_count);
         stat(
             ui,
             "Strongest migration",
-            format!("{:.3}", world.evolution.diagnostics.maximum_convergence),
+            format!("{:.3}", world.evolution.maximum_convergence),
         );
     });
 
@@ -259,17 +244,17 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Convergent",
-            world.evolution.boundaries.count(BoundaryClass::Convergent),
+            world.boundaries.count(BoundaryClass::Convergent),
         );
         stat(
             ui,
             "Divergent",
-            world.evolution.boundaries.count(BoundaryClass::Divergent),
+            world.boundaries.count(BoundaryClass::Divergent),
         );
         stat(
             ui,
             "Transform",
-            world.evolution.boundaries.count(BoundaryClass::Transform),
+            world.boundaries.count(BoundaryClass::Transform),
         );
     });
 

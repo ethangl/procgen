@@ -2,9 +2,10 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    CrustClassification, CrustClassificationConfig, PlateEvolution, PlateEvolutionConfig,
-    PlateKinematics, PlateKinematicsConfig, PlatePartitionConfig, classify_crust,
-    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
+    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateEvolution,
+    PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateKinematics, PlateKinematicsConfig,
+    PlatePartition, PlatePartitionConfig, classify_crust, evolve_plate_ownership,
+    generate_plate_kinematics, partition_plates,
 };
 use std::{
     error::Error,
@@ -104,9 +105,11 @@ impl GenerationTimings {
 #[derive(Resource)]
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
+    pub plates: PlatePartition,
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
-    pub evolution: PlateEvolution,
+    pub boundaries: BoundaryClassification,
+    pub evolution: PlateEvolutionDiagnostics,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -128,7 +131,7 @@ impl GeneratedWorld {
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(initial_plates.plate_count, config.kinematics)
         })?;
-        let evolution = timings.record("Plate evolution", || {
+        let evolution_result = timings.record("Plate evolution", || {
             evolve_plate_ownership(
                 &voronoi,
                 &initial_plates,
@@ -137,11 +140,18 @@ impl GeneratedWorld {
                 config.evolution,
             )
         })?;
+        let PlateEvolution {
+            partition: plates,
+            boundaries,
+            diagnostics: evolution,
+        } = evolution_result;
 
         Ok(Self {
             voronoi,
+            plates,
             crust,
             kinematics,
+            boundaries,
             evolution,
             timings,
             config,
@@ -173,7 +183,7 @@ fn regenerate_world(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use procgen_tectonics::CrustClass;
+    use procgen_tectonics::{CrustClass, PlateMigrationConfig};
 
     #[test]
     fn generates_consistent_viewer_counts() {
@@ -191,7 +201,7 @@ mod tests {
         assert_eq!(world.voronoi.edge_count(), 378);
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
         assert!(world.crust.plate_count(CrustClass::Continental) > 0);
-        assert!(world.evolution.diagnostics.migrated_cell_count > 0);
+        assert!(world.evolution.migrated_cell_count > 0);
     }
 
     #[test]
@@ -215,7 +225,7 @@ mod tests {
             kinematics: PlateKinematicsConfig::new(4),
             evolution: PlateEvolutionConfig {
                 step_count: 8,
-                migration: procgen_tectonics::PlateMigrationConfig {
+                migration: PlateMigrationConfig {
                     minimum_convergence: 0.4,
                 },
             },
@@ -234,9 +244,6 @@ mod tests {
         assert_eq!(world.config.kinematics, requested.kinematics);
         assert_eq!(world.config.evolution, requested.evolution);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
-        assert_eq!(
-            world.evolution.partition.plate_count,
-            requested.plates.plate_count()
-        );
+        assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }
 }

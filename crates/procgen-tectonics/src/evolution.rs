@@ -1,7 +1,7 @@
 use crate::{
     BoundaryClassification, BoundaryClassificationError, CrustClassification, PlateKinematics,
-    PlateMigrationConfig, PlateMigrationError, PlatePartition, classify_boundaries,
-    migrate_plates_once, migration::validate_migration_inputs,
+    PlateMigration, PlateMigrationConfig, PlateMigrationError, PlatePartition, classify_boundaries,
+    migrate_plates_once,
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
@@ -25,8 +25,6 @@ impl Default for PlateEvolutionConfig {
 /// Totals accumulated without retaining per-step or per-cell history.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlateEvolutionDiagnostics {
-    /// Complete classification-and-migration transitions applied.
-    pub completed_step_count: usize,
     /// Steps that produced at least one ownership change.
     pub active_step_count: usize,
     /// Qualifying convergent-edge proposals across all steps.
@@ -36,6 +34,17 @@ pub struct PlateEvolutionDiagnostics {
     /// Ownership-change events across all steps. A cell can migrate more than once.
     pub migrated_cell_count: usize,
     pub maximum_convergence: f32,
+}
+
+impl PlateEvolutionDiagnostics {
+    fn record_step(&mut self, step: &PlateMigration) {
+        let migrated_cell_count = step.migrated_cell_count();
+        self.active_step_count += usize::from(migrated_cell_count > 0);
+        self.proposal_count += step.proposal_count;
+        self.contested_cell_count += step.contested_cell_count;
+        self.migrated_cell_count += migrated_cell_count;
+        self.maximum_convergence = self.maximum_convergence.max(step.maximum_convergence());
+    }
 }
 
 /// Final ownership and boundary state after deterministic eager evolution.
@@ -87,24 +96,12 @@ pub fn evolve_plate_ownership(
 ) -> Result<PlateEvolution, PlateEvolutionError> {
     let mut partition = initial_partition.clone();
     let mut boundaries = classify_boundaries(mesh, &partition, kinematics)?;
-    validate_migration_inputs(mesh, &partition, crust, &boundaries, config.migration)?;
-    let mut diagnostics = PlateEvolutionDiagnostics {
-        completed_step_count: config.step_count,
-        ..PlateEvolutionDiagnostics::default()
-    };
+    let mut diagnostics = PlateEvolutionDiagnostics::default();
 
     for _ in 0..config.step_count {
         let migration =
             migrate_plates_once(mesh, &partition, crust, &boundaries, config.migration)?;
-        let migrated_cell_count = migration.migrated_cell_count();
-        diagnostics.active_step_count += usize::from(migrated_cell_count > 0);
-        diagnostics.proposal_count += migration.proposal_count;
-        diagnostics.contested_cell_count += migration.contested_cell_count;
-        diagnostics.migrated_cell_count += migrated_cell_count;
-        diagnostics.maximum_convergence = diagnostics
-            .maximum_convergence
-            .max(migration.maximum_convergence());
-
+        diagnostics.record_step(&migration);
         partition = migration.partition;
         boundaries = classify_boundaries(mesh, &partition, kinematics)?;
     }
@@ -166,7 +163,6 @@ mod tests {
         assert_eq!(
             first.diagnostics,
             PlateEvolutionDiagnostics {
-                completed_step_count: 5,
                 active_step_count: 5,
                 proposal_count: 601,
                 contested_cell_count: 101,
@@ -274,34 +270,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(evolution.partition, partition);
-        assert_eq!(
-            evolution.diagnostics,
-            PlateEvolutionDiagnostics {
-                completed_step_count: 4,
-                ..PlateEvolutionDiagnostics::default()
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_migration_configuration_even_with_zero_steps() {
-        let (mesh, partition, crust, kinematics) = fixture();
-        assert_eq!(
-            evolve_plate_ownership(
-                &mesh,
-                &partition,
-                &crust,
-                &kinematics,
-                PlateEvolutionConfig {
-                    step_count: 0,
-                    migration: PlateMigrationConfig {
-                        minimum_convergence: f32::NAN,
-                    },
-                },
-            ),
-            Err(PlateEvolutionError::Migration(
-                PlateMigrationError::InvalidMinimumConvergence
-            ))
-        );
+        assert_eq!(evolution.diagnostics, PlateEvolutionDiagnostics::default());
     }
 }
