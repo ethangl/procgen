@@ -125,10 +125,7 @@ impl LayerSettings {
 impl Default for LayerSettings {
     fn default() -> Self {
         let mut visible = [false; DiagnosticLayer::COUNT];
-        visible[DiagnosticLayer::Voronoi.index()] = true;
-        visible[DiagnosticLayer::Plates.index()] = true;
-        visible[DiagnosticLayer::Boundaries.index()] = true;
-        visible[DiagnosticLayer::Motion.index()] = true;
+        visible[DiagnosticLayer::Elevation.index()] = true;
         Self { visible }
     }
 }

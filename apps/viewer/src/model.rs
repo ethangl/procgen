@@ -30,17 +30,23 @@ impl Default for GenerationSettings {
             fibonacci: FibonacciConfig {
                 jitter: 0.5,
                 seed: 7,
-                ..FibonacciConfig::new(2_048)
+                ..FibonacciConfig::new(32_768)
             },
             plates: PlatePartitionConfig {
-                major_plate_count: 5,
-                minor_plate_count: 11,
+                major_plate_count: 11,
+                minor_plate_count: 111,
                 major_head_start_rounds: 5,
                 seed: 7,
             },
-            crust: CrustClassificationConfig::new(7),
+            crust: CrustClassificationConfig {
+                target_ocean_fraction: 0.75,
+                ..CrustClassificationConfig::new(7)
+            },
             kinematics: PlateKinematicsConfig::new(7),
-            evolution: PlateEvolutionConfig::default(),
+            evolution: PlateEvolutionConfig {
+                step_count: 11,
+                ..Default::default()
+            },
             elevation: CoarseElevationConfig::default(),
         }
     }
