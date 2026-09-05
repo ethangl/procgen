@@ -139,16 +139,17 @@ impl SphereMesh {
 }
 
 /// Collects connected components of eligible cells in ascending root-cell
-/// order. `passable` may impose an additional directed edge constraint.
+/// order. The first cell in each component is its lowest-indexed member.
+/// `passable` may impose an additional directed edge constraint.
 pub fn connected_components(
     mesh: &SphereMesh,
-    mut seed: impl FnMut(usize) -> bool,
+    mut eligible: impl FnMut(usize) -> bool,
     mut passable: impl FnMut(usize, usize) -> bool,
 ) -> Vec<Vec<usize>> {
     let mut visited = vec![false; mesh.cell_count()];
     let mut components = Vec::new();
     for root in 0..mesh.cell_count() {
-        if visited[root] || !seed(root) {
+        if visited[root] || !eligible(root) {
             continue;
         }
         let mut component = Vec::new();
@@ -158,7 +159,7 @@ pub fn connected_components(
             component.push(cell);
             for corner in mesh.cell_corners(cell) {
                 let neighbor = corner.neighbor;
-                if !visited[neighbor] && seed(neighbor) && passable(cell, neighbor) {
+                if !visited[neighbor] && eligible(neighbor) && passable(cell, neighbor) {
                     visited[neighbor] = true;
                     queue.push_back(neighbor);
                 }
@@ -259,6 +260,11 @@ mod tests {
             |cell, neighbor| (cell < 2) == (neighbor < 2),
         );
         assert_eq!(components, vec![vec![0, 1], vec![2, 3]]);
+        assert!(
+            components
+                .iter()
+                .all(|component| { component.first() == component.iter().min() })
+        );
 
         assert_eq!(
             connected_components(&mesh, |cell| cell % 2 == 0, |_, _| true),
