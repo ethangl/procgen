@@ -192,7 +192,10 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Achieved ocean area",
-            format!("{:.2}%", world.crust.achieved_ocean_fraction() * 100.0),
+            format!(
+                "{:.2}%",
+                world.crust.ocean_fraction(&world.voronoi, &world.plates) * 100.0
+            ),
         );
         stat(
             ui,
@@ -207,12 +210,14 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Oceanic cells",
-            world.crust.cell_count(CrustClass::Oceanic),
+            world.crust.cell_count(&world.plates, CrustClass::Oceanic),
         );
         stat(
             ui,
             "Continental cells",
-            world.crust.cell_count(CrustClass::Continental),
+            world
+                .crust
+                .cell_count(&world.plates, CrustClass::Continental),
         );
     });
 

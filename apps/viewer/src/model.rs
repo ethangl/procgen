@@ -33,7 +33,10 @@ impl Default for GenerationSettings {
                 major_head_start_rounds: 5,
                 seed: 7,
             },
-            crust: CrustClassificationConfig::new(0.7, 8),
+            crust: CrustClassificationConfig {
+                target_ocean_fraction: 0.7,
+                seed: 8,
+            },
             kinematics: PlateKinematicsConfig::new(7),
         }
     }
@@ -167,7 +170,10 @@ mod tests {
         let world = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(128),
             plates: PlatePartitionConfig::new(4, 4),
-            crust: CrustClassificationConfig::new(0.7, 10),
+            crust: CrustClassificationConfig {
+                target_ocean_fraction: 0.7,
+                seed: 10,
+            },
             kinematics: PlateKinematicsConfig::new(9),
         })
         .unwrap();
@@ -183,14 +189,20 @@ mod tests {
         let current = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(32),
             plates: PlatePartitionConfig::new(2, 2),
-            crust: CrustClassificationConfig::new(0.7, 4),
+            crust: CrustClassificationConfig {
+                target_ocean_fraction: 0.7,
+                seed: 4,
+            },
             kinematics: PlateKinematicsConfig::new(3),
         })
         .unwrap();
         let requested = GenerationSettings {
             fibonacci: FibonacciConfig::new(64),
             plates: PlatePartitionConfig::new(3, 3),
-            crust: CrustClassificationConfig::new(0.6, 5),
+            crust: CrustClassificationConfig {
+                target_ocean_fraction: 0.6,
+                seed: 5,
+            },
             kinematics: PlateKinematicsConfig::new(4),
         };
         app.insert_resource(current)

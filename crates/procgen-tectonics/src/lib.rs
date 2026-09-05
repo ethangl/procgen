@@ -1,8 +1,8 @@
 //! Deterministic tectonic state derived from spherical mesh topology.
 //!
-//! Plate partitioning, rigid spherical plate motion, and static boundary
-//! classification live here. Geological effects and time evolution remain
-//! separate later stages.
+//! Plate partitioning, rigid spherical plate motion, static boundary
+//! classification, and static crust classification live here. Geological
+//! effects and time evolution remain separate later stages.
 
 mod boundaries;
 mod crust;
@@ -32,3 +32,10 @@ pub use motion::{
     PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
 };
 pub use partition::{PlatePartition, PlatePartitionConfig, PlatePartitionError, partition_plates};
+
+fn count_of<T: PartialEq>(values: impl IntoIterator<Item = T>, target: T) -> usize {
+    values
+        .into_iter()
+        .filter(|candidate| *candidate == target)
+        .count()
+}

@@ -42,10 +42,7 @@ pub struct BoundaryClassification {
 
 impl BoundaryClassification {
     pub fn count(&self, class: BoundaryClass) -> usize {
-        self.edge_classes
-            .iter()
-            .filter(|&&candidate| candidate == class)
-            .count()
+        crate::count_of(self.edge_classes.iter().copied(), class)
     }
 }
 
