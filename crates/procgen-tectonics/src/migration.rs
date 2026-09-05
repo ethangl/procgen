@@ -177,7 +177,9 @@ fn proposal_precedes(candidate: CellMigration, current: CellMigration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{reference_partition, two_plate_boundary_partition};
+    use crate::test_support::{
+        empty_boundaries, fingerprint, reference_partition, two_plate_boundary_partition,
+    };
     use crate::{
         CrustClassificationConfig, PlateKinematicsConfig, classify_boundaries, classify_crust,
         generate_plate_kinematics,
@@ -209,11 +211,7 @@ mod tests {
         let crust = CrustClassification {
             plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
         };
-        let mut boundaries = BoundaryClassification {
-            edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
-            edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
-            edge_shear: vec![0.0; mesh.edge_count()],
-        };
+        let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 0.0];
         (mesh, edge_index, partition, crust, boundaries)
@@ -244,13 +242,13 @@ mod tests {
         );
         assert!(first.migrated_cell_count() > 0);
         assert!(first.contested_cell_count > 0);
-        let fingerprint = first
-            .partition
-            .cell_plates
-            .iter()
-            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &plate| {
-                (hash ^ plate as u64).wrapping_mul(0x0000_0100_0000_01b3)
-            });
+        let fingerprint = fingerprint(
+            first
+                .partition
+                .cell_plates
+                .iter()
+                .map(|&plate| plate as u64),
+        );
         assert_eq!(fingerprint, 13_160_498_416_595_985_480);
     }
 

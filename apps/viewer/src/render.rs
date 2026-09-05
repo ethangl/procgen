@@ -3,8 +3,8 @@ use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, pr
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
-    PlatePartition,
+    BoundaryClass, BoundaryClassification, CoarseElevation, CrustClass, CrustClassification,
+    PlateKinematics, PlatePartition,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -21,6 +21,14 @@ pub enum DiagnosticLayer {
 }
 
 const PLATE_BORDER_OFFSET: f32 = 0.004;
+const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.02, 0.08, 0.3)),
+    (0.5, Vec3::new(0.08, 0.65, 0.85)),
+    // Duplicate sea-level stop deliberately separates water from land.
+    (0.5, Vec3::new(0.16, 0.55, 0.18)),
+    (0.75, Vec3::new(0.55, 0.38, 0.16)),
+    (1.0, Vec3::new(0.96, 0.96, 0.94)),
+];
 
 impl DiagnosticLayer {
     pub const ALL: [Self; 8] = [
@@ -322,11 +330,7 @@ fn boundary_asset(
     })
 }
 
-fn elevation_asset(
-    mesh: &SphereMesh,
-    elevation: &procgen_tectonics::CoarseElevation,
-    radius: f32,
-) -> GizmoAsset {
+fn elevation_asset(mesh: &SphereMesh, elevation: &CoarseElevation, radius: f32) -> GizmoAsset {
     voronoi_edge_asset(mesh, |_, edge| {
         let value = (elevation.cell_elevations[edge.cells[0]]
             + elevation.cell_elevations[edge.cells[1]])
@@ -336,31 +340,21 @@ fn elevation_asset(
 }
 
 fn elevation_color(value: f32) -> Color {
-    let (low_value, low, high_value, high) = if value < 0.5 {
-        (
-            0.0,
-            Vec3::new(0.02, 0.08, 0.3),
-            0.5,
-            Vec3::new(0.08, 0.65, 0.85),
-        )
-    } else if value < 0.75 {
-        (
-            0.5,
-            Vec3::new(0.16, 0.55, 0.18),
-            0.75,
-            Vec3::new(0.55, 0.38, 0.16),
-        )
-    } else {
-        (
-            0.75,
-            Vec3::new(0.55, 0.38, 0.16),
-            1.0,
-            Vec3::new(0.96, 0.96, 0.94),
-        )
-    };
-    let t = ((value - low_value) / (high_value - low_value)).clamp(0.0, 1.0);
-    let color = low.lerp(high, t);
+    let color = piecewise_lerp(value, &ELEVATION_COLOR_STOPS);
     Color::srgba(color.x, color.y, color.z, 0.98)
+}
+
+fn piecewise_lerp(value: f32, stops: &[(f32, Vec3)]) -> Vec3 {
+    let value = value.clamp(stops[0].0, stops[stops.len() - 1].0);
+    for pair in stops.windows(2) {
+        let (low_value, low) = pair[0];
+        let (high_value, high) = pair[1];
+        if value < high_value {
+            let t = (value - low_value) / (high_value - low_value);
+            return low.lerp(high, t);
+        }
+    }
+    stops[stops.len() - 1].1
 }
 
 fn motion_asset(

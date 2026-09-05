@@ -157,7 +157,7 @@ impl<'mesh> PlateGrowth<'mesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{mesh, reference_partition_config};
+    use crate::test_support::{fingerprint, mesh, reference_partition_config};
     use std::collections::VecDeque;
 
     #[test]
@@ -197,12 +197,7 @@ mod tests {
     fn reference_partition_has_stable_fingerprint() {
         let mesh = mesh(512);
         let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
-        let fingerprint = partition
-            .cell_plates
-            .iter()
-            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &value| {
-                (hash ^ value as u64).wrapping_mul(0x0000_0100_0000_01b3)
-            });
+        let fingerprint = fingerprint(partition.cell_plates.iter().map(|&value| value as u64));
 
         assert_eq!(fingerprint, 2_459_160_733_919_900_345);
     }

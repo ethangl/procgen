@@ -4,7 +4,11 @@ use crate::model::{
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_tectonics::{BoundaryClass, CrustClass};
+use procgen_sphere::FibonacciConfig;
+use procgen_tectonics::{
+    BoundaryClass, BoundaryEffect, CoarseElevationConfig, CrustClass, CrustClassificationConfig,
+    PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
+};
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
@@ -62,187 +66,156 @@ fn generation_controls(
     generation: &mut GenerationSettings,
     regenerate: &mut MessageWriter<RegenerateWorld>,
 ) {
-    ui.label("Generation");
-    drag_value(
-        ui,
-        "Cells",
-        &mut generation.fibonacci.count,
-        4..=65_536,
-        16.0,
-    );
-    slider(ui, "Jitter", &mut generation.fibonacci.jitter, 0.0..=1.0);
+    section(ui, "Sampling", |ui| {
+        sampling_controls(ui, &mut generation.fibonacci)
+    });
+    section(ui, "Tectonic plates", |ui| {
+        plate_controls(ui, &mut generation.plates)
+    });
+    section(ui, "Static crust", |ui| {
+        crust_controls(ui, &mut generation.crust)
+    });
+    section(ui, "Plate kinematics", |ui| {
+        kinematics_controls(ui, &mut generation.kinematics)
+    });
+    section(ui, "Plate evolution", |ui| {
+        evolution_controls(ui, &mut generation.evolution, generation.kinematics)
+    });
+    section(ui, "Coarse elevation", |ui| {
+        elevation_controls(ui, &mut generation.elevation)
+    });
+    if ui.button("Regenerate").clicked() {
+        regenerate.write_default();
+    }
+}
+
+fn sampling_controls(ui: &mut egui::Ui, config: &mut FibonacciConfig) {
+    drag_value(ui, "Cells", &mut config.count, 4..=65_536, 16.0);
+    slider(ui, "Jitter", &mut config.jitter, 0.0..=1.0);
     drag_value(
         ui,
         "Sampling seed",
-        &mut generation.fibonacci.seed,
+        &mut config.seed,
         u64::MIN..=u64::MAX,
         1.0,
     );
+}
 
-    ui.add_space(4.0);
-    ui.label("Tectonic plates");
-    drag_value(
-        ui,
-        "Major",
-        &mut generation.plates.major_plate_count,
-        1..=128,
-        1.0,
-    );
-    drag_value(
-        ui,
-        "Minor",
-        &mut generation.plates.minor_plate_count,
-        0..=256,
-        1.0,
-    );
+fn plate_controls(ui: &mut egui::Ui, config: &mut PlatePartitionConfig) {
+    drag_value(ui, "Major", &mut config.major_plate_count, 1..=128, 1.0);
+    drag_value(ui, "Minor", &mut config.minor_plate_count, 0..=256, 1.0);
     drag_value(
         ui,
         "Major head start",
-        &mut generation.plates.major_head_start_rounds,
+        &mut config.major_head_start_rounds,
         0..=64,
         1.0,
     );
-    drag_value(
-        ui,
-        "Plate seed",
-        &mut generation.plates.seed,
-        u64::MIN..=u64::MAX,
-        1.0,
-    );
-    ui.add_space(4.0);
-    ui.label("Static crust");
+    drag_value(ui, "Plate seed", &mut config.seed, u64::MIN..=u64::MAX, 1.0);
+}
+
+fn crust_controls(ui: &mut egui::Ui, config: &mut CrustClassificationConfig) {
     slider(
         ui,
         "Target ocean",
-        &mut generation.crust.target_ocean_fraction,
+        &mut config.target_ocean_fraction,
         0.0..=1.0,
     );
-    drag_value(
-        ui,
-        "Crust seed",
-        &mut generation.crust.seed,
-        u64::MIN..=u64::MAX,
-        1.0,
-    );
-    ui.add_space(4.0);
-    ui.label("Plate kinematics");
+    drag_value(ui, "Crust seed", &mut config.seed, u64::MIN..=u64::MAX, 1.0);
+}
+
+fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
     drag_value(
         ui,
         "Motion seed",
-        &mut generation.kinematics.seed,
+        &mut config.seed,
         u64::MIN..=u64::MAX,
         1.0,
     );
     ui.horizontal(|ui| {
         ui.label("Angular speed");
         ui.add(
-            egui::DragValue::new(&mut generation.kinematics.minimum_angular_speed)
+            egui::DragValue::new(&mut config.minimum_angular_speed)
                 .range(ANGULAR_SPEED_RANGE)
                 .speed(ANGULAR_SPEED_STEP),
         );
         ui.label("to");
         ui.add(
-            egui::DragValue::new(&mut generation.kinematics.maximum_angular_speed)
+            egui::DragValue::new(&mut config.maximum_angular_speed)
                 .range(ANGULAR_SPEED_RANGE)
                 .speed(ANGULAR_SPEED_STEP),
         );
     });
-    ui.add_space(4.0);
-    ui.label("Plate evolution");
+}
+
+fn evolution_controls(
+    ui: &mut egui::Ui,
+    config: &mut PlateEvolutionConfig,
+    kinematics: PlateKinematicsConfig,
+) {
     drag_value(
         ui,
         "Steps",
-        &mut generation.evolution.step_count,
+        &mut config.step_count,
         EVOLUTION_STEP_RANGE,
         1.0,
     );
     slider(
         ui,
         "Minimum convergence",
-        &mut generation.evolution.migration.minimum_convergence,
-        0.0..=generation.kinematics.maximum_convergence(WORLD_RADIUS),
+        &mut config.migration.minimum_convergence,
+        0.0..=kinematics.maximum_convergence(WORLD_RADIUS),
     );
-    ui.add_space(4.0);
-    ui.label("Coarse elevation");
-    slider(
-        ui,
-        "Oceanic base",
-        &mut generation.elevation.oceanic_base,
-        0.0..=1.0,
-    );
+}
+
+fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
+    slider(ui, "Oceanic base", &mut config.oceanic_base, 0.0..=1.0);
     slider(
         ui,
         "Continental base",
-        &mut generation.elevation.continental_base,
+        &mut config.continental_base,
         0.0..=1.0,
     );
+    boundary_effect_controls(ui, "Convergent", &mut config.convergent);
+    boundary_effect_controls(ui, "Divergent", &mut config.divergent);
+    boundary_effect_controls(ui, "Transform", &mut config.transform);
+    boundary_effect_controls(ui, "Collision", &mut config.collision);
+    boundary_effect_controls(ui, "Trench", &mut config.trench);
     slider(
         ui,
-        "Convergent lift",
-        &mut generation.elevation.convergent_lift,
-        -1.0..=1.0,
-    );
-    slider(
-        ui,
-        "Divergent drop",
-        &mut generation.elevation.divergent_drop,
-        -1.0..=1.0,
-    );
-    slider(
-        ui,
-        "Transform lift",
-        &mut generation.elevation.transform_lift,
-        -1.0..=1.0,
-    );
-    drag_value(
-        ui,
-        "Boundary depth",
-        &mut generation.elevation.propagation_depth,
-        ELEVATION_DEPTH_RANGE,
-        1.0,
-    );
-    slider(
-        ui,
-        "Continental convergence",
-        &mut generation.elevation.continental_convergent_lift,
-        -1.0..=1.0,
-    );
-    drag_value(
-        ui,
-        "Mountain depth",
-        &mut generation.elevation.continental_convergent_depth,
-        ELEVATION_DEPTH_RANGE,
-        1.0,
-    );
-    slider(
-        ui,
-        "Oceanic trench",
-        &mut generation.elevation.oceanic_trench_drop,
-        -1.0..=1.0,
-    );
-    drag_value(
-        ui,
-        "Trench depth",
-        &mut generation.elevation.oceanic_trench_depth,
-        ELEVATION_DEPTH_RANGE,
-        1.0,
+        "Saturation speed",
+        &mut config.saturation_speed,
+        0.01..=20.0,
     );
     drag_value(
         ui,
         "Smoothing passes",
-        &mut generation.elevation.smoothing_passes,
+        &mut config.smoothing_passes,
         SMOOTHING_PASS_RANGE,
         1.0,
     );
     slider(
         ui,
         "Smoothing weight",
-        &mut generation.elevation.smoothing_weight,
+        &mut config.smoothing_weight,
         0.0..=1.0,
     );
-    if ui.button("Regenerate").clicked() {
-        regenerate.write_default();
-    }
+}
+
+fn boundary_effect_controls(ui: &mut egui::Ui, label: &str, effect: &mut BoundaryEffect) {
+    slider(
+        ui,
+        &format!("{label} offset"),
+        &mut effect.offset,
+        -1.0..=1.0,
+    );
+    drag_value(
+        ui,
+        &format!("{label} depth"),
+        &mut effect.depth,
+        ELEVATION_DEPTH_RANGE,
+        1.0,
+    );
 }
 
 fn layer_controls(ui: &mut egui::Ui, layers: &mut LayerSettings) {
@@ -257,8 +230,7 @@ fn layer_controls(ui: &mut egui::Ui, layers: &mut LayerSettings) {
 }
 
 fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    ui.label("Active world");
-    egui::Grid::new("stats").num_columns(2).show(ui, |ui| {
+    stat_grid(ui, "Active world", "stats", |ui| {
         stat(ui, "Cells", world.voronoi.cell_count());
         stat(ui, "Vertices", world.voronoi.vertex_count());
         stat(ui, "Edges", world.voronoi.edge_count());
@@ -274,9 +246,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         );
     });
 
-    ui.add_space(6.0);
-    ui.label("Static crust");
-    egui::Grid::new("crust").num_columns(2).show(ui, |ui| {
+    stat_grid(ui, "Static crust", "crust", |ui| {
         stat(
             ui,
             "Target ocean area",
@@ -302,9 +272,41 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         );
     });
 
-    ui.add_space(6.0);
-    ui.label("Coarse elevation");
-    egui::Grid::new("elevation").num_columns(2).show(ui, |ui| {
+    stat_grid(ui, "Plate evolution", "evolution", |ui| {
+        stat(ui, "Active steps", world.evolution.active_step_count);
+        stat(ui, "Proposals", world.evolution.proposal_count);
+        stat(
+            ui,
+            "Contested cell events",
+            world.evolution.contested_cell_count,
+        );
+        stat(ui, "Migration events", world.evolution.migrated_cell_count);
+        stat(
+            ui,
+            "Strongest migration",
+            format!("{:.3}", world.evolution.maximum_convergence),
+        );
+    });
+
+    stat_grid(ui, "Static boundaries", "boundaries", |ui| {
+        stat(
+            ui,
+            "Convergent",
+            world.boundaries.count(BoundaryClass::Convergent),
+        );
+        stat(
+            ui,
+            "Divergent",
+            world.boundaries.count(BoundaryClass::Divergent),
+        );
+        stat(
+            ui,
+            "Transform",
+            world.boundaries.count(BoundaryClass::Transform),
+        );
+    });
+
+    stat_grid(ui, "Coarse elevation", "elevation", |ui| {
         stat(
             ui,
             "Range",
@@ -329,53 +331,24 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.elevation.diagnostics.boundary_affected_cell_count,
         );
     });
-
-    ui.add_space(6.0);
-    ui.label("Plate evolution");
-    egui::Grid::new("evolution").num_columns(2).show(ui, |ui| {
-        stat(ui, "Active steps", world.evolution.active_step_count);
-        stat(ui, "Proposals", world.evolution.proposal_count);
-        stat(
-            ui,
-            "Contested cell events",
-            world.evolution.contested_cell_count,
-        );
-        stat(ui, "Migration events", world.evolution.migrated_cell_count);
-        stat(
-            ui,
-            "Strongest migration",
-            format!("{:.3}", world.evolution.maximum_convergence),
-        );
-    });
-
-    ui.add_space(6.0);
-    ui.label("Static boundaries");
-    egui::Grid::new("boundaries").num_columns(2).show(ui, |ui| {
-        stat(
-            ui,
-            "Convergent",
-            world.boundaries.count(BoundaryClass::Convergent),
-        );
-        stat(
-            ui,
-            "Divergent",
-            world.boundaries.count(BoundaryClass::Divergent),
-        );
-        stat(
-            ui,
-            "Transform",
-            world.boundaries.count(BoundaryClass::Transform),
-        );
-    });
-
-    ui.add_space(6.0);
-    ui.label("Timings");
-    egui::Grid::new("timings").num_columns(2).show(ui, |ui| {
+    stat_grid(ui, "Timings", "timings", |ui| {
         for stage in world.timings.stages() {
             stat(ui, stage.label, millis(stage.duration));
         }
         stat(ui, "Total", millis(world.timings.total()));
     });
+}
+
+fn section(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(4.0);
+    ui.label(title);
+    content(ui);
+}
+
+fn stat_grid(ui: &mut egui::Ui, title: &str, id: &str, content: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(6.0);
+    ui.label(title);
+    egui::Grid::new(id).num_columns(2).show(ui, content);
 }
 
 fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {

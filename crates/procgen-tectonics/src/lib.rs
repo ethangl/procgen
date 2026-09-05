@@ -33,8 +33,8 @@ pub use crust::{
     classify_crust,
 };
 pub use elevation::{
-    CoarseElevation, CoarseElevationConfig, CoarseElevationDiagnostics, CoarseElevationError,
-    derive_coarse_elevation,
+    BoundaryEffect, CoarseElevation, CoarseElevationConfig, CoarseElevationDiagnostics,
+    CoarseElevationError, derive_coarse_elevation,
 };
 pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,
