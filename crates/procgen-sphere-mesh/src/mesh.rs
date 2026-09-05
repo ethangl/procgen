@@ -182,3 +182,40 @@ fn spherical_polygon_area(center: Vec3, polygon: &[CellCorner], vertices: &[Vec3
     }
     area
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tetrahedron() -> SphereMesh {
+        let points = [
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-1.0, -1.0, 1.0),
+            Vec3::new(-1.0, 1.0, -1.0),
+            Vec3::new(1.0, -1.0, -1.0),
+        ]
+        .map(Vec3::normalized)
+        .to_vec();
+        SphereMesh::from_delaunay(&SphericalDelaunay::build(points).unwrap(), 1.0).unwrap()
+    }
+
+    #[test]
+    fn multi_source_distance_edges_are_explicit() {
+        let mesh = tetrahedron();
+
+        assert_eq!(
+            multi_source_distances(&mesh, &[], |_, _| true),
+            vec![None; 4]
+        );
+        assert_eq!(
+            multi_source_distances(&mesh, &[0], |_, _| false),
+            vec![Some(0), None, None, None]
+        );
+        let single_source = multi_source_distances(&mesh, &[0], |_, _| true);
+        assert_eq!(single_source, vec![Some(0), Some(1), Some(1), Some(1)]);
+        assert_eq!(
+            multi_source_distances(&mesh, &[0, 0], |_, _| true),
+            single_source
+        );
+    }
+}

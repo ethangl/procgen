@@ -67,12 +67,10 @@ pub fn derive_seafloor_age(
             ridge_cells.push(cell);
         }
     }
-    ridge_cells.sort_unstable();
-    ridge_cells.dedup();
-    let ridge_cell_count = ridge_cells.len();
     let mut cell_ages = multi_source_distances(mesh, &ridge_cells, |cell, neighbor| {
         partition.cell_plates[cell] == partition.cell_plates[neighbor]
     });
+    let ridge_cell_count = cell_ages.iter().filter(|&&age| age == Some(0)).count();
 
     let mut fallback_cell_count = 0;
     for (cell, age) in cell_ages.iter_mut().enumerate() {

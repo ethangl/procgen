@@ -54,22 +54,20 @@ pub fn derive_craton_field(
     elevation.validate(mesh)?;
 
     let cell_boundary_distances = boundary_distances(mesh, plates);
+    let is_eligible =
+        |cell| crust.cell_class(plates, cell) == CrustClass::Continental && elevation.is_land(cell);
     let cell_strengths: Vec<_> = cell_boundary_distances
         .iter()
         .enumerate()
         .map(|(cell, &distance)| {
-            let eligible = crust.cell_class(plates, cell) == CrustClass::Continental
-                && elevation.is_land(cell);
             distance
-                .filter(|_| eligible)
+                .filter(|_| is_eligible(cell))
                 .map_or(0.0, |distance| strength_at_distance(distance, config))
         })
         .collect();
 
     let continental_land_cell_count = (0..mesh.cell_count())
-        .filter(|&cell| {
-            crust.cell_class(plates, cell) == CrustClass::Continental && elevation.is_land(cell)
-        })
+        .filter(|&cell| is_eligible(cell))
         .count();
     let craton_cell_count = cell_strengths
         .iter()
@@ -105,8 +103,6 @@ fn boundary_distances(mesh: &SphereMesh, plates: &PlatePartition) -> Vec<Option<
             boundary_cells.extend(edge.cells);
         }
     }
-    boundary_cells.sort_unstable();
-    boundary_cells.dedup();
     multi_source_distances(mesh, &boundary_cells, |_, _| true)
 }
 
