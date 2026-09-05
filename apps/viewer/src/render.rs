@@ -1,7 +1,7 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
-use procgen_geology::VolcanicArcField;
+use procgen_geology::{OceanicPeakField, OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
@@ -21,6 +21,7 @@ pub enum DiagnosticLayer {
     Deformation,
     Elevation,
     Hotspots,
+    OceanicPeaks,
     VolcanicArcs,
     Cratons,
     Basins,
@@ -34,7 +35,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 16] = [
+const DRAW_ORDER: [DrawSurface; 17] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -45,6 +46,7 @@ const DRAW_ORDER: [DrawSurface; 16] = [
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
+    DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
     DrawSurface::Layer(DiagnosticLayer::Cratons),
     DrawSurface::Layer(DiagnosticLayer::Basins),
@@ -78,6 +80,17 @@ const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.65, Vec3::new(1.0, 0.25, 0.05)),
     (1.0, Vec3::new(1.0, 0.95, 0.25)),
 ];
+const OCEANIC_PEAK_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.06, 0.12)),
+    (0.25, Vec3::new(0.05, 0.35, 0.52)),
+    (0.65, Vec3::new(0.18, 0.78, 0.72)),
+    (1.0, Vec3::new(0.95, 0.9, 0.42)),
+];
+const SEAMOUNT_PEAK_COLOR: Vec3 = Vec3::new(1.0, 0.42, 0.08);
+const ABYSSAL_HILL_PEAK_COLOR: Vec3 = Vec3::new(0.55, 0.92, 1.0);
+const CELL_MARKER_SCALE: f32 = 0.32;
+const MINIMUM_CELL_MARKER_SIZE: f32 = 0.003;
+const MAXIMUM_CELL_MARKER_SIZE: f32 = 0.012;
 const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.055, 0.04)),
     (0.25, Vec3::new(0.55, 0.12, 0.02)),
@@ -92,7 +105,7 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -103,6 +116,7 @@ impl DiagnosticLayer {
         Self::Deformation,
         Self::Elevation,
         Self::Hotspots,
+        Self::OceanicPeaks,
         Self::VolcanicArcs,
         Self::Cratons,
         Self::Basins,
@@ -131,6 +145,7 @@ impl DiagnosticLayer {
             Self::Deformation => 3.3,
             Self::Elevation => 3.5,
             Self::Hotspots => 3.7,
+            Self::OceanicPeaks => 3.8,
             Self::VolcanicArcs => 3.9,
             Self::Cratons => 4.0,
             Self::Basins => 4.1,
@@ -155,6 +170,7 @@ impl DiagnosticLayer {
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Hotspots => "Mantle hotspots",
+            Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
             Self::Cratons => "Craton strength",
             Self::Basins => "Sedimentary basins",
@@ -201,6 +217,7 @@ impl DiagnosticLayer {
                 &HOTSPOT_COLOR_STOPS,
                 radius,
             ),
+            Self::OceanicPeaks => oceanic_peak_asset(&world.voronoi, &world.oceanic_peaks, radius),
             Self::VolcanicArcs => volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius),
             Self::Cratons => scalar_field_asset(
                 &world.voronoi,
@@ -213,6 +230,30 @@ impl DiagnosticLayer {
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn oceanic_peak_asset(mesh: &SphereMesh, field: &OceanicPeakField, radius: f32) -> GizmoAsset {
+    let mut asset = scalar_field_asset(
+        mesh,
+        &field.cell_densities,
+        &OCEANIC_PEAK_COLOR_STOPS,
+        radius,
+    );
+    let base_size = cell_marker_size(mesh);
+    for peak in &field.peaks {
+        let color = match peak.kind {
+            OceanicPeakKind::Seamount => SEAMOUNT_PEAK_COLOR,
+            OceanicPeakKind::AbyssalHill => ABYSSAL_HILL_PEAK_COLOR,
+        };
+        let position = to_bevy(peak.position.normalized()) * radius;
+        add_cross_marker(
+            &mut asset,
+            position,
+            base_size * (0.5 + peak.height.clamp(0.0, 1.5)),
+            opaque_color(color),
+        );
+    }
+    asset
 }
 
 fn basin_asset(mesh: &SphereMesh, cell_basins: &[Option<usize>], radius: f32) -> GizmoAsset {
@@ -233,12 +274,16 @@ fn volcanic_arc_asset(mesh: &SphereMesh, field: &VolcanicArcField, radius: f32) 
         &VOLCANIC_ARC_COLOR_STOPS,
         radius,
     );
-    let marker_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
+    let marker_size = cell_marker_size(mesh);
     let marker_color = VOLCANIC_ARC_COLOR_STOPS[VOLCANIC_ARC_COLOR_STOPS.len() - 1].1;
-    let marker_color = Color::srgba(marker_color.x, marker_color.y, marker_color.z, 1.0);
     for &peak_cell in field.segments.iter().flat_map(|segment| &segment.peaks) {
         let position = to_bevy(mesh.cell_centers[peak_cell].normalized()) * radius;
-        add_cross_marker(&mut asset, position, marker_size, marker_color);
+        add_cross_marker(
+            &mut asset,
+            position,
+            marker_size,
+            opaque_color(marker_color),
+        );
     }
     asset
 }
@@ -415,6 +460,15 @@ fn add_cross_marker(asset: &mut GizmoAsset, position: Vec3, size: f32, color: Co
     let bitangent = position.cross(tangent).normalize() * size;
     asset.line(position - tangent, position + tangent, color);
     asset.line(position - bitangent, position + bitangent, color);
+}
+
+fn cell_marker_size(mesh: &SphereMesh) -> f32 {
+    (CELL_MARKER_SCALE / (mesh.cell_count() as f32).sqrt())
+        .clamp(MINIMUM_CELL_MARKER_SIZE, MAXIMUM_CELL_MARKER_SIZE)
+}
+
+fn opaque_color(color: Vec3) -> Color {
+    Color::srgba(color.x, color.y, color.z, 1.0)
 }
 
 fn delaunay_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {

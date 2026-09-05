@@ -99,14 +99,20 @@ Completed foundations:
   mutates elevation and does not infer plate-continuity history. Sedimentary
   basins are compact, stable connected-component IDs for low-lying continental
   land, filtered by size and ocean-facing perimeter. The stage records component
-  summaries but does not flatten or otherwise modify elevation.
+  summaries but does not flatten or otherwise modify elevation. Oceanic peak
+  density uses deterministic max-wins overlap between hotspot intensity and
+  young nonzero seafloor age. An independent seeded pass emits stable sparse
+  seamount and abyssal-hill candidates with positions bounded inside their
+  source cells and strength-scaled diagnostic heights; it does not stamp cones,
+  mutate elevation, or produce a dense terrain field.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation
   controls, signed deformation, seafloor-age, base-elevation, and composed
   elevation layers, hotspot and volcanic-arc field visualization, craton
   distance/ramp controls and strength visualization, sedimentary-basin controls
-  and stable-ID visualization, aggregate diagnostics, and stage timings.
+  and stable-ID visualization, seamount/abyssal density and sparse-peak controls
+  and visualization, aggregate diagnostics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

@@ -1,4 +1,4 @@
-use crate::field::MaxWinsField;
+use crate::field::{GeologyInputError, MaxWinsField};
 use procgen_core::{RandomStream, Vec3, random_streams::HOTSPOT_POSITION};
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::{PlateKinematics, PlatePartition, StageInputError};
@@ -61,6 +61,17 @@ pub struct HotspotField {
     /// the lower hotspot index.
     pub cell_hotspots: Vec<Option<usize>>,
     pub diagnostics: HotspotDiagnostics,
+}
+
+impl HotspotField {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
+        if self.cell_intensities.len() != mesh.cell_count()
+            || self.cell_hotspots.len() != mesh.cell_count()
+        {
+            return Err(GeologyInputError::Hotspots);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -487,6 +498,20 @@ mod tests {
         assert_eq!(
             generate_hotspot_field(&mesh, &invalid_ownership, &kinematics, reference_config()),
             Err(HotspotFieldError::Input(StageInputError::PlateOwnership))
+        );
+    }
+
+    #[test]
+    fn validation_reports_misaligned_aggregate_fields() {
+        let (mesh, plates, kinematics) = fixture(32);
+        let mut field =
+            generate_hotspot_field(&mesh, &plates, &kinematics, reference_config()).unwrap();
+        field.cell_hotspots.pop();
+
+        assert_eq!(field.validate(&mesh), Err(GeologyInputError::Hotspots));
+        assert_eq!(
+            GeologyInputError::Hotspots.to_string(),
+            "hotspot aggregate fields must match the mesh cell count"
         );
     }
 }

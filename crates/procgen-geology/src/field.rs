@@ -1,10 +1,28 @@
-pub(crate) struct MaxWinsField {
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeologyInputError {
+    Hotspots,
+}
+
+impl fmt::Display for GeologyInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let field = match self {
+            Self::Hotspots => "hotspot aggregate",
+        };
+        write!(formatter, "{field} fields must match the mesh cell count")
+    }
+}
+
+impl std::error::Error for GeologyInputError {}
+
+pub(crate) struct MaxWinsField<T> {
     values: Vec<f32>,
-    winners: Vec<Option<usize>>,
+    winners: Vec<Option<T>>,
     contribution_counts: Vec<usize>,
 }
 
-impl MaxWinsField {
+impl<T: Copy + Ord> MaxWinsField<T> {
     pub(crate) fn new(cell_count: usize) -> Self {
         Self {
             values: vec![0.0; cell_count],
@@ -13,7 +31,7 @@ impl MaxWinsField {
         }
     }
 
-    pub(crate) fn claim(&mut self, cell: usize, value: f32, index: usize) {
+    pub(crate) fn claim(&mut self, cell: usize, value: f32, index: T) {
         self.contribution_counts[cell] += 1;
         let wins = self.winners[cell].is_none_or(|winner| {
             value > self.values[cell] || (value == self.values[cell] && index < winner)
@@ -38,7 +56,7 @@ impl MaxWinsField {
             .count()
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<f32>, Vec<Option<usize>>) {
+    pub(crate) fn into_parts(self) -> (Vec<f32>, Vec<Option<T>>) {
         (self.values, self.winners)
     }
 }
