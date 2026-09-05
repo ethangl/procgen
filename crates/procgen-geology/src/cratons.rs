@@ -1,10 +1,7 @@
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
 use procgen_tectonics::{
     CoarseElevation, CrustClass, CrustClassification, FieldSummary, PlatePartition, StageInputError,
 };
-use std::{collections::VecDeque, fmt};
-
-const SEA_LEVEL: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CratonFieldConfig {
@@ -36,44 +33,9 @@ pub struct CratonDiagnostics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CratonField {
-    /// Minimum graph distance from a final plate boundary. Worlds without a
-    /// plate boundary retain `None` for every cell.
-    pub cell_boundary_distances: Vec<Option<usize>>,
     /// Normalized present-day craton eligibility. This field never mutates elevation.
     pub cell_strengths: Vec<f32>,
     pub diagnostics: CratonDiagnostics,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CratonFieldError {
-    Input(StageInputError),
-    ElevationCellCountMismatch,
-}
-
-impl fmt::Display for CratonFieldError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(error) => error.fmt(formatter),
-            Self::ElevationCellCountMismatch => {
-                formatter.write_str("elevation values must match the mesh cell count")
-            }
-        }
-    }
-}
-
-impl std::error::Error for CratonFieldError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::ElevationCellCountMismatch => None,
-        }
-    }
-}
-
-impl From<StageInputError> for CratonFieldError {
-    fn from(error: StageInputError) -> Self {
-        Self::Input(error)
-    }
 }
 
 /// Derives a present-day craton-strength field from final plate-boundary
@@ -86,29 +48,37 @@ pub fn derive_craton_field(
     crust: &CrustClassification,
     elevation: &CoarseElevation,
     config: CratonFieldConfig,
-) -> Result<CratonField, CratonFieldError> {
-    validate_inputs(mesh, plates, crust, elevation)?;
+) -> Result<CratonField, StageInputError> {
+    plates.validate(mesh)?;
+    crust.validate(plates)?;
+    elevation.validate(mesh)?;
 
     let cell_boundary_distances = boundary_distances(mesh, plates);
-    let mut continental_land_cell_count = 0;
-    let mut craton_cell_count = 0;
-    let mut full_strength_cell_count = 0;
     let cell_strengths: Vec<_> = cell_boundary_distances
         .iter()
         .enumerate()
         .map(|(cell, &distance)| {
             let eligible = crust.cell_class(plates, cell) == CrustClass::Continental
-                && elevation.cell_elevations[cell] > SEA_LEVEL;
-            continental_land_cell_count += usize::from(eligible);
-            let strength = distance
+                && elevation.is_land(cell);
+            distance
                 .filter(|_| eligible)
-                .map_or(0.0, |distance| strength_at_distance(distance, config));
-            craton_cell_count += usize::from(strength > 0.0);
-            full_strength_cell_count += usize::from(strength == 1.0);
-            strength
+                .map_or(0.0, |distance| strength_at_distance(distance, config))
         })
         .collect();
 
+    let continental_land_cell_count = (0..mesh.cell_count())
+        .filter(|&cell| {
+            crust.cell_class(plates, cell) == CrustClass::Continental && elevation.is_land(cell)
+        })
+        .count();
+    let craton_cell_count = cell_strengths
+        .iter()
+        .filter(|&&strength| strength > 0.0)
+        .count();
+    let full_strength_cell_count = cell_strengths
+        .iter()
+        .filter(|&&strength| strength == 1.0)
+        .count();
     let boundary_cell_count = cell_boundary_distances
         .iter()
         .filter(|&&distance| distance == Some(0))
@@ -116,7 +86,6 @@ pub fn derive_craton_field(
     let maximum_boundary_distance = cell_boundary_distances.iter().flatten().copied().max();
 
     Ok(CratonField {
-        cell_boundary_distances,
         diagnostics: CratonDiagnostics {
             boundary_cell_count,
             continental_land_cell_count,
@@ -129,45 +98,16 @@ pub fn derive_craton_field(
     })
 }
 
-fn validate_inputs(
-    mesh: &SphereMesh,
-    plates: &PlatePartition,
-    crust: &CrustClassification,
-    elevation: &CoarseElevation,
-) -> Result<(), CratonFieldError> {
-    plates.validate(mesh)?;
-    crust.validate(plates)?;
-    if elevation.cell_elevations.len() != mesh.cell_count() {
-        return Err(CratonFieldError::ElevationCellCountMismatch);
-    }
-    Ok(())
-}
-
 fn boundary_distances(mesh: &SphereMesh, plates: &PlatePartition) -> Vec<Option<usize>> {
-    let mut distances = vec![None; mesh.cell_count()];
-    let mut queue = VecDeque::new();
+    let mut boundary_cells = Vec::new();
     for edge in &mesh.edges {
-        if plates.cell_plates[edge.cells[0]] == plates.cell_plates[edge.cells[1]] {
-            continue;
-        }
-        for cell in edge.cells {
-            if distances[cell].is_none() {
-                distances[cell] = Some(0);
-                queue.push_back(cell);
-            }
+        if plates.cell_plates[edge.cells[0]] != plates.cell_plates[edge.cells[1]] {
+            boundary_cells.extend(edge.cells);
         }
     }
-
-    while let Some(cell) = queue.pop_front() {
-        let next_distance = distances[cell].expect("queued cells have a distance") + 1;
-        for corner in mesh.cell_corners(cell) {
-            if distances[corner.neighbor].is_none() {
-                distances[corner.neighbor] = Some(next_distance);
-                queue.push_back(corner.neighbor);
-            }
-        }
-    }
-    distances
+    boundary_cells.sort_unstable();
+    boundary_cells.dedup();
+    multi_source_distances(mesh, &boundary_cells, |_, _| true)
 }
 
 fn strength_at_distance(distance: usize, config: CratonFieldConfig) -> f32 {
@@ -187,7 +127,8 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
     use procgen_tectonics::{
-        CrustClassificationConfig, PlatePartitionConfig, classify_crust, partition_plates,
+        CrustClassificationConfig, PlatePartitionConfig, SEA_LEVEL, classify_crust,
+        partition_plates,
     };
 
     fn fixture(
@@ -257,12 +198,18 @@ mod tests {
         );
         assert!(first.diagnostics.boundary_cell_count > 0);
         assert!(first.diagnostics.craton_cell_count > 0);
+        let distances = boundary_distances(&mesh, &plates);
         for edge in &mesh.edges {
-            let distances = edge.cells.map(|cell| first.cell_boundary_distances[cell]);
+            let edge_distances = edge.cells.map(|cell| distances[cell]);
             if plates.cell_plates[edge.cells[0]] != plates.cell_plates[edge.cells[1]] {
-                assert_eq!(distances, [Some(0), Some(0)]);
+                assert_eq!(edge_distances, [Some(0), Some(0)]);
             }
-            assert!(distances[0].unwrap().abs_diff(distances[1].unwrap()) <= 1);
+            assert!(
+                edge_distances[0]
+                    .unwrap()
+                    .abs_diff(edge_distances[1].unwrap())
+                    <= 1
+            );
         }
     }
 
@@ -298,17 +245,11 @@ mod tests {
         )
         .unwrap();
         let values = field
-            .cell_boundary_distances
+            .cell_strengths
             .iter()
-            .zip(&field.cell_strengths)
-            .flat_map(|(distance, strength)| {
-                [
-                    distance.map_or(u64::MAX, |distance| distance as u64),
-                    u64::from(strength.to_bits()),
-                ]
-            });
+            .map(|strength| u64::from(strength.to_bits()));
 
-        assert_eq!(fingerprint(values), 2_206_889_484_806_018_648);
+        assert_eq!(fingerprint(values), 15_008_142_936_841_976_928);
     }
 
     #[test]
@@ -333,13 +274,12 @@ mod tests {
                 .all(|&strength| strength == 1.0)
         );
 
-        let boundary_cell = hard_cutoff
-            .cell_boundary_distances
+        let distances = boundary_distances(&mesh, &plates);
+        let boundary_cell = distances
             .iter()
             .position(|&distance| distance == Some(0))
             .unwrap();
-        let interior_cell = hard_cutoff
-            .cell_boundary_distances
+        let interior_cell = distances
             .iter()
             .enumerate()
             .max_by_key(|(_, distance)| *distance)
@@ -361,11 +301,7 @@ mod tests {
         .unwrap();
         assert_eq!(ramped.cell_strengths[boundary_cell], 0.0);
         assert_eq!(ramped.cell_strengths[interior_cell], 0.0);
-        for (distance, &strength) in ramped
-            .cell_boundary_distances
-            .iter()
-            .zip(&ramped.cell_strengths)
-        {
+        for (distance, &strength) in distances.iter().zip(&ramped.cell_strengths) {
             if strength > 0.0 {
                 assert_eq!(strength, (distance.unwrap() as f32 / 2.0).min(1.0));
             }
@@ -388,7 +324,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(field.cell_boundary_distances.iter().all(Option::is_none));
+        assert!(
+            boundary_distances(&mesh, &plates)
+                .iter()
+                .all(Option::is_none)
+        );
         assert!(field.cell_strengths.iter().all(|&strength| strength == 0.0));
         assert_eq!(field.diagnostics.boundary_cell_count, 0);
         assert_eq!(field.diagnostics.craton_cell_count, 0);
@@ -409,7 +349,7 @@ mod tests {
                 &elevation,
                 CratonFieldConfig::default(),
             ),
-            Err(CratonFieldError::Input(StageInputError::Cells))
+            Err(StageInputError::Cells)
         );
 
         let mut invalid_crust = crust.clone();
@@ -422,7 +362,7 @@ mod tests {
                 &elevation,
                 CratonFieldConfig::default(),
             ),
-            Err(CratonFieldError::Input(StageInputError::Plates))
+            Err(StageInputError::Plates)
         );
 
         let mut invalid_elevation = elevation.clone();
@@ -435,7 +375,7 @@ mod tests {
                 &invalid_elevation,
                 CratonFieldConfig::default(),
             ),
-            Err(CratonFieldError::ElevationCellCountMismatch)
+            Err(StageInputError::Elevation)
         );
     }
 }

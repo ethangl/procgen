@@ -1,6 +1,7 @@
 use crate::{SphericalDelaunay, TopologyError};
 use procgen_core::Vec3;
 use rayon::prelude::*;
+use std::collections::VecDeque;
 
 // Workload-specific tuning belongs with the algorithm, not in `procgen-core`.
 const PARALLEL_THRESHOLD: usize = 16_384;
@@ -135,6 +136,39 @@ impl SphereMesh {
     pub fn cell_corners(&self, cell: usize) -> &[CellCorner] {
         &self.corners[self.cell_offsets[cell]..self.cell_offsets[cell + 1]]
     }
+}
+
+/// Computes minimum cell-hop distance from multiple sources while allowing a
+/// caller to constrain each graph traversal step.
+pub fn multi_source_distances(
+    mesh: &SphereMesh,
+    sources: &[usize],
+    mut passable: impl FnMut(usize, usize) -> bool,
+) -> Vec<Option<usize>> {
+    let mut distances = vec![None; mesh.cell_count()];
+    let mut queue = VecDeque::new();
+    for &source in sources {
+        assert!(
+            source < mesh.cell_count(),
+            "distance source must be a mesh cell"
+        );
+        if distances[source].is_none() {
+            distances[source] = Some(0);
+            queue.push_back(source);
+        }
+    }
+
+    while let Some(cell) = queue.pop_front() {
+        let next_distance = distances[cell].expect("queued cells have a distance") + 1;
+        for corner in mesh.cell_corners(cell) {
+            let neighbor = corner.neighbor;
+            if distances[neighbor].is_none() && passable(cell, neighbor) {
+                distances[neighbor] = Some(next_distance);
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    distances
 }
 
 fn spherical_polygon_area(center: Vec3, polygon: &[CellCorner], vertices: &[Vec3]) -> f32 {

@@ -39,7 +39,8 @@ pub use deformation::{
     BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile, derive_boundary_deformation,
 };
 pub use elevation::{
-    CoarseElevation, CoarseElevationConfig, CoarseElevationError, compose_coarse_elevation,
+    CoarseElevation, CoarseElevationConfig, CoarseElevationError, SEA_LEVEL,
+    compose_coarse_elevation,
 };
 pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,

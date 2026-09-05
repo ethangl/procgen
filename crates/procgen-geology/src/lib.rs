@@ -9,9 +9,7 @@ mod field;
 mod hotspots;
 mod volcanic_arcs;
 
-pub use cratons::{
-    CratonDiagnostics, CratonField, CratonFieldConfig, CratonFieldError, derive_craton_field,
-};
+pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
     HotspotTrailCell, generate_hotspot_field,

@@ -87,27 +87,23 @@ Completed foundations:
   Coarse elevation composes that base with boundary deformation once before
   simultaneous smoothing and clamping. None of these stages accumulates state
   during evolution.
-- `procgen-geology`: deterministic, explicitly seeded mantle-hotspot positions
-  and bounded decaying trails opposite final-owner plate motion. Trails remain
-  within final plate ownership, overlaps resolve by maximum intensity then
-  stable hotspot identity, and the resulting field is independent of elevation.
-  It also derives deterministic volcanic-arc fields from final mixed-crust
-  convergent boundaries. Contiguous edges are grouped by overriding continental
-  plate, arc cells are bounded inland on that plate, peak candidates are ranked
-  by normalized boundary strength, and segment, peak, and overlap ordering is
-  stable. Arc data remains independent of elevation. It also derives present-day
-  craton strength for above-sea-level continental cells from graph distance to
-  final plate boundaries, with configurable minimum distance and ramp width. The
-  craton field reads but never mutates elevation and does not infer
-  plate-continuity history.
+- `procgen-geology`: deterministic present-day geological fields derived from
+  completed tectonic state without feeding changes back into tectonics. Seeded
+  mantle hotspots have bounded decaying trails opposite final-owner plate
+  motion, constrained to final plate ownership with stable max-intensity overlap
+  resolution. Volcanic arcs group final mixed-crust convergent boundaries by
+  overriding continental plate, walk a bounded distance inland, and retain
+  strength-ranked peak candidates with stable segment, peak, and overlap
+  ordering. Craton strength applies only to above-sea-level continental cells
+  and ramps with graph distance from final plate boundaries. It reads but never
+  mutates elevation and does not infer plate-continuity history.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation
   controls, signed deformation, seafloor-age, base-elevation, and composed
-  elevation layers, plus hotspot controls, field visualization, aggregate
-  statistics, volcanic-arc controls and diagnostics, and stage timings.
-  Craton distance/ramp controls, a strength layer, aggregate diagnostics, and
-  stage timing are also included.
+  elevation layers, hotspot and volcanic-arc field visualization, craton
+  distance/ramp controls and strength visualization, aggregate diagnostics, and
+  stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

@@ -5,7 +5,7 @@ use procgen_geology::VolcanicArcField;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
-    PlatePartition, SeafloorAge,
+    PlatePartition, SEA_LEVEL, SeafloorAge,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,9 +64,9 @@ const SEAFLOOR_AGE_COLOR_STOPS: [(f32, Vec3); 3] = [
 ];
 const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.0, Vec3::new(0.02, 0.08, 0.3)),
-    (0.5, Vec3::new(0.08, 0.65, 0.85)),
+    (SEA_LEVEL, Vec3::new(0.08, 0.65, 0.85)),
     // Duplicate sea-level stop deliberately separates water from land.
-    (0.5, Vec3::new(0.16, 0.55, 0.18)),
+    (SEA_LEVEL, Vec3::new(0.16, 0.55, 0.18)),
     (0.75, Vec3::new(0.55, 0.38, 0.16)),
     (1.0, Vec3::new(0.96, 0.96, 0.94)),
 ];
