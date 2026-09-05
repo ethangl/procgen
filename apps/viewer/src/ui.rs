@@ -6,9 +6,9 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
-    BoundaryClass, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig, CrustClass,
-    CrustClassificationConfig, FieldSummary, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlatePartitionConfig, SeafloorAgeConfig,
+    BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
+    CoarseElevationConfig, CrustClass, CrustClassificationConfig, FieldSummary,
+    PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig, SeafloorAgeConfig,
 };
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
@@ -87,6 +87,9 @@ fn generation_controls(
     section(ui, "Seafloor age", |ui| {
         seafloor_age_controls(ui, &mut generation.seafloor_age)
     });
+    section(ui, "Base elevation", |ui| {
+        base_elevation_controls(ui, &mut generation.base_elevation)
+    });
     section(ui, "Boundary deformation", |ui| {
         deformation_controls(ui, &mut generation.deformation, generation.kinematics)
     });
@@ -106,6 +109,28 @@ fn seafloor_age_controls(ui: &mut egui::Ui, config: &mut SeafloorAgeConfig) {
         SEAFLOOR_AGE_RANGE,
         1.0,
     );
+}
+
+fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) {
+    slider(
+        ui,
+        "Continental base",
+        &mut config.continental_base,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Ridge elevation",
+        &mut config.ridge_elevation,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Deep ocean",
+        &mut config.deep_ocean_elevation,
+        0.0..=1.0,
+    );
+    drag_value(ui, "Cooling age", &mut config.cooling_age, 1..=256, 1.0);
 }
 
 fn sampling_controls(ui: &mut egui::Ui, config: &mut FibonacciConfig) {
@@ -207,13 +232,6 @@ fn deformation_controls(
 }
 
 fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
-    slider(ui, "Oceanic base", &mut config.oceanic_base, 0.0..=1.0);
-    slider(
-        ui,
-        "Continental base",
-        &mut config.continental_base,
-        0.0..=1.0,
-    );
     drag_value(
         ui,
         "Smoothing passes",
@@ -385,6 +403,34 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.deformation.diagnostics.subsided_cell_count,
         );
     });
+    stat_grid(ui, "Base elevation", "base_elevation", |ui| {
+        field_summary_stats(ui, &world.base_elevation.diagnostics.summary);
+        stat(
+            ui,
+            "Oceanic range",
+            format_field_range(&world.base_elevation.diagnostics.oceanic),
+        );
+        stat(
+            ui,
+            "Continental range",
+            format_field_range(&world.base_elevation.diagnostics.continental),
+        );
+        stat(
+            ui,
+            "Oceanic cells",
+            world.base_elevation.diagnostics.oceanic_cell_count,
+        );
+        stat(
+            ui,
+            "Continental cells",
+            world.base_elevation.diagnostics.continental_cell_count,
+        );
+        stat(
+            ui,
+            "At deep floor",
+            world.base_elevation.diagnostics.deep_ocean_cell_count,
+        );
+    });
     stat_grid(ui, "Coarse elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
     });
@@ -421,6 +467,10 @@ fn field_summary_stats(ui: &mut egui::Ui, summary: &FieldSummary) {
         format!("{:.3} - {:.3}", summary.minimum, summary.maximum),
     );
     stat(ui, "Mean", format!("{:.3}", summary.mean));
+}
+
+fn format_field_range(summary: &FieldSummary) -> String {
+    format!("{:.3} - {:.3}", summary.minimum, summary.maximum)
 }
 
 fn millis(duration: std::time::Duration) -> String {

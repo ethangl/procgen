@@ -16,6 +16,7 @@ pub enum DiagnosticLayer {
     Plates,
     Crust,
     SeafloorAge,
+    BaseElevation,
     Deformation,
     Elevation,
     Boundaries,
@@ -28,13 +29,14 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 11] = [
+const DRAW_ORDER: [DrawSurface; 12] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
     DrawSurface::Layer(DiagnosticLayer::Crust),
     DrawSurface::Layer(DiagnosticLayer::Points),
     DrawSurface::Layer(DiagnosticLayer::SeafloorAge),
+    DrawSurface::Layer(DiagnosticLayer::BaseElevation),
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::PlateBorders,
@@ -63,13 +65,14 @@ const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
         Self::SeafloorAge,
+        Self::BaseElevation,
         Self::Deformation,
         Self::Elevation,
         Self::Boundaries,
@@ -93,8 +96,9 @@ impl DiagnosticLayer {
             Self::Plates => 2.4,
             Self::Crust => 3.0,
             Self::SeafloorAge => 3.1,
-            Self::Deformation => 3.2,
-            Self::Elevation => 3.4,
+            Self::BaseElevation => 3.2,
+            Self::Deformation => 3.3,
+            Self::Elevation => 3.5,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -112,6 +116,7 @@ impl DiagnosticLayer {
             Self::Plates => "Tectonic plates",
             Self::Crust => "Crust classes",
             Self::SeafloorAge => "Seafloor age",
+            Self::BaseElevation => "Base elevation",
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Boundaries => "Boundary classes",
@@ -133,6 +138,12 @@ impl DiagnosticLayer {
             ),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
             Self::SeafloorAge => seafloor_age_asset(&world.voronoi, &world.seafloor_age, radius),
+            Self::BaseElevation => scalar_field_asset(
+                &world.voronoi,
+                &world.base_elevation.cell_elevations,
+                &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
             Self::Deformation => scalar_field_asset(
                 &world.voronoi,
                 &world.deformation.cell_deformation,

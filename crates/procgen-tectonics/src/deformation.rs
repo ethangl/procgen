@@ -127,6 +127,10 @@ impl From<StageInputError> for BoundaryDeformationError {
 /// Derives signed boundary deformation from final ownership, current-owner
 /// crust, and final boundary classes and strengths.
 ///
+/// Oceanic divergent sides are omitted because seafloor cooling already
+/// supplies their ridge-to-deep profile. Continental divergent sides retain
+/// the configured rift deformation.
+///
 /// Each boundary cell retains the strongest local source by absolute
 /// magnitude. Sources then propagate for a bounded number of mesh hops without
 /// crossing the final owning plate. Later overlaps also use maximum absolute
@@ -196,7 +200,11 @@ fn boundary_effect(
         }
         (BoundaryClass::Convergent, CrustClass::Oceanic, CrustClass::Continental) => config.trench,
         (BoundaryClass::Convergent, _, _) => config.convergent,
-        (BoundaryClass::Divergent, _, _) => config.divergent,
+        (BoundaryClass::Divergent, CrustClass::Oceanic, _) => BoundaryEffect {
+            offset: 0.0,
+            depth: 0,
+        },
+        (BoundaryClass::Divergent, CrustClass::Continental, _) => config.divergent,
         (BoundaryClass::Transform, _, _) => config.transform,
         (BoundaryClass::Interior, _, _) => unreachable!("interior edges are skipped"),
     }
@@ -302,7 +310,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_bits() as u64),
         );
-        assert_eq!(fingerprint, 16_915_549_137_106_129_144);
+        assert_eq!(fingerprint, 4_354_537_144_469_898_455);
     }
 
     #[test]
@@ -379,6 +387,36 @@ mod tests {
                 transform.cell_deformation[cell],
                 config.transform.offset * 3.0 / 4.0
             );
+        }
+    }
+
+    #[test]
+    fn divergent_deformation_skips_oceanic_sides_but_preserves_continental_rifts() {
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
+        };
+        let mut boundaries = empty_boundaries(&mesh);
+        boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
+        boundaries.edge_normal_speeds[edge_index] = [-1.0, -1.0];
+        let config = BoundaryDeformationConfig {
+            divergent: BoundaryEffect {
+                offset: -0.4,
+                depth: 0,
+            },
+            saturation_speed: 2.0,
+            ..Default::default()
+        };
+
+        let deformation =
+            derive_boundary_deformation(&mesh, &partition, &crust, &boundaries, config).unwrap();
+        for cell in edge.cells {
+            let expected = match crust.cell_class(&partition, cell) {
+                CrustClass::Continental => -0.4,
+                CrustClass::Oceanic => 0.0,
+            };
+            assert_eq!(deformation.cell_deformation[cell], expected);
         }
     }
 

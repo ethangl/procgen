@@ -75,18 +75,22 @@ Completed foundations:
   classes remain fixed while cell crust follows current ownership. A separate
   post-evolution stage derives signed per-cell deformation from current-owner
   crust and final boundary classes and strengths, with deterministic overlap
-  resolution and bounded within-plate propagation. Coarse elevation then
-  composes current-owner crust base elevation with deformation before
-  simultaneous smoothing and clamping. A separate seafloor-age stage derives
-  oceanic-cell hop distance from final divergent boundaries without feeding
-  either elevation or deformation; propagation stays within final plate
-  ownership and ridge-less oceanic plates receive a deterministic configured
-  fallback age. None of these stages accumulates state during evolution.
+  resolution and bounded within-plate propagation. Oceanic divergent
+  deformation is omitted because the bathymetric base already represents the
+  ridge profile; continental divergent deformation remains intact. A separate
+  seafloor-age stage derives oceanic-cell hop distance from final divergent
+  boundaries; propagation stays within final plate ownership and ridge-less
+  oceanic plates receive a deterministic configured fallback age. Base
+  elevation then keeps continental cells at their configured base and maps
+  oceanic age through a configurable square-root ridge-to-deep cooling curve.
+  Coarse elevation composes that base with boundary deformation once before
+  simultaneous smoothing and clamping. None of these stages accumulates state
+  during evolution.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
-  regeneration, evolution, deformation, and coarse-elevation controls, signed
-  deformation, seafloor-age, and elevation layers, aggregate statistics, and
-  stage timings.
+  regeneration, evolution, deformation, bathymetry, and coarse-elevation
+  controls, signed deformation, seafloor-age, base-elevation, and composed
+  elevation layers, aggregate statistics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout
