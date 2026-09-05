@@ -91,12 +91,17 @@ Completed foundations:
   and bounded decaying trails opposite final-owner plate motion. Trails remain
   within final plate ownership, overlaps resolve by maximum intensity then
   stable hotspot identity, and the resulting field is independent of elevation.
+  It also derives deterministic volcanic-arc fields from final mixed-crust
+  convergent boundaries. Contiguous edges are grouped by overriding continental
+  plate, arc cells are bounded inland on that plate, peak candidates are ranked
+  by normalized boundary strength, and segment, peak, and overlap ordering is
+  stable. Arc data remains independent of elevation.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation
   controls, signed deformation, seafloor-age, base-elevation, and composed
   elevation layers, plus hotspot controls, field visualization, aggregate
-  statistics, and stage timings.
+  statistics, volcanic-arc controls and diagnostics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

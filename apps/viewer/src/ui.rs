@@ -4,7 +4,7 @@ use crate::model::{
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_geology::HotspotFieldConfig;
+use procgen_geology::{HotspotFieldConfig, VolcanicArcFieldConfig};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
@@ -21,6 +21,9 @@ const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
+const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
@@ -102,6 +105,9 @@ fn generation_controls(
     });
     section(ui, "Mantle hotspots", |ui| {
         hotspot_controls(ui, &mut generation.hotspots)
+    });
+    section(ui, "Volcanic arcs", |ui| {
+        volcanic_arc_controls(ui, &mut generation.volcanic_arcs, generation.kinematics)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -297,6 +303,40 @@ fn hotspot_controls(ui: &mut egui::Ui, config: &mut HotspotFieldConfig) {
         &mut config.seed,
         u64::MIN..=u64::MAX,
         1.0,
+    );
+}
+
+fn volcanic_arc_controls(
+    ui: &mut egui::Ui,
+    config: &mut VolcanicArcFieldConfig,
+    kinematics: PlateKinematicsConfig,
+) {
+    drag_value(
+        ui,
+        "Minimum boundary edges",
+        &mut config.minimum_boundary_edges,
+        ARC_SEGMENT_EDGE_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Inland offset",
+        &mut config.inland_offset_cells,
+        ARC_INLAND_OFFSET_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Peak density divisor",
+        &mut config.peak_density_divisor,
+        ARC_PEAK_DENSITY_DIVISOR_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Strength saturation",
+        &mut config.strength_saturation,
+        0.01..=kinematics.maximum_convergence(WORLD_RADIUS).max(0.01),
     );
 }
 
@@ -508,6 +548,55 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 world.hotspots.diagnostics.shortest_trail_cells,
                 world.hotspots.diagnostics.longest_trail_cells
             ),
+        );
+    });
+    stat_grid(ui, "Volcanic arcs", "volcanic_arcs", |ui| {
+        stat(ui, "Segments", world.volcanic_arcs.segments.len());
+        stat(
+            ui,
+            "Qualifying edges",
+            world.volcanic_arcs.diagnostics.qualifying_edge_count,
+        );
+        stat(
+            ui,
+            "Boundary cells",
+            world.volcanic_arcs.diagnostics.boundary_cell_count,
+        );
+        stat(
+            ui,
+            "Arc cells",
+            world.volcanic_arcs.diagnostics.arc_cell_count,
+        );
+        stat(
+            ui,
+            "Affected cells",
+            world.volcanic_arcs.diagnostics.affected_cell_count,
+        );
+        stat(
+            ui,
+            "Overlap cells",
+            world.volcanic_arcs.diagnostics.overlap_cell_count,
+        );
+        stat(
+            ui,
+            "Peak candidates",
+            world.volcanic_arcs.diagnostics.peak_count,
+        );
+        stat(
+            ui,
+            "Short segments discarded",
+            world
+                .volcanic_arcs
+                .diagnostics
+                .discarded_short_segment_count,
+        );
+        stat(
+            ui,
+            "Landlocked discarded",
+            world
+                .volcanic_arcs
+                .diagnostics
+                .discarded_landlocked_segment_count,
         );
     });
     stat_grid(ui, "Timings", "timings", |ui| {

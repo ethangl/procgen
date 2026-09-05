@@ -1,3 +1,4 @@
+use crate::field::MaxWinsField;
 use procgen_core::{RandomStream, Vec3, random_streams::HOTSPOT_POSITION};
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::{PlateKinematics, PlatePartition, StageInputError};
@@ -105,9 +106,7 @@ pub fn generate_hotspot_field(
 
     let positions = RandomStream::new(config.seed, HOTSPOT_POSITION);
     let mut hotspots = Vec::with_capacity(config.hotspot_count);
-    let mut cell_intensities = vec![0.0; mesh.cell_count()];
-    let mut cell_hotspots = vec![None; mesh.cell_count()];
-    let mut contribution_counts = vec![0_usize; mesh.cell_count()];
+    let mut aggregate = MaxWinsField::new(mesh.cell_count());
     let mut stationary_source_count = 0;
 
     for hotspot_index in 0..config.hotspot_count {
@@ -118,13 +117,7 @@ pub fn generate_hotspot_field(
             trace_trail(mesh, plates, kinematics, plate, source_cell, config);
         stationary_source_count += usize::from(source_is_stationary);
         for point in &trail {
-            contribution_counts[point.cell] += 1;
-            // Hotspots are visited in ascending identity order, so retaining
-            // the existing claim on an equal intensity makes the lower id win.
-            if point.intensity > cell_intensities[point.cell] {
-                cell_intensities[point.cell] = point.intensity;
-                cell_hotspots[point.cell] = Some(hotspot_index);
-            }
+            aggregate.claim(point.cell, point.intensity, hotspot_index);
         }
         hotspots.push(Hotspot {
             mantle_position,
@@ -135,14 +128,8 @@ pub fn generate_hotspot_field(
     }
 
     let trail_cell_count = hotspots.iter().map(|hotspot| hotspot.trail.len()).sum();
-    let affected_cell_count = contribution_counts
-        .iter()
-        .filter(|&&count| count > 0)
-        .count();
-    let overlap_cell_count = contribution_counts
-        .iter()
-        .filter(|&&count| count > 1)
-        .count();
+    let affected_cell_count = aggregate.affected_cell_count();
+    let overlap_cell_count = aggregate.overlap_cell_count();
     let shortest_trail_cells = hotspots
         .iter()
         .map(|hotspot| hotspot.trail.len())
@@ -154,6 +141,7 @@ pub fn generate_hotspot_field(
         .max()
         .unwrap_or(0);
 
+    let (cell_intensities, cell_hotspots) = aggregate.into_parts();
     Ok(HotspotField {
         hotspots,
         cell_intensities,

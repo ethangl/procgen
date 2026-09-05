@@ -1,5 +1,3 @@
-use crate::{BoundaryClassification, CrustClassification, PlatePartition};
-use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,25 +22,3 @@ impl fmt::Display for StageInputError {
 }
 
 impl std::error::Error for StageInputError {}
-
-pub(crate) fn validate_ownership_and_crust(
-    mesh: &SphereMesh,
-    partition: &PlatePartition,
-    crust: &CrustClassification,
-) -> Result<(), StageInputError> {
-    partition.validate(mesh)?;
-    if crust.plate_classes.len() != partition.plate_count {
-        return Err(StageInputError::Plates);
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_boundaries(
-    mesh: &SphereMesh,
-    boundaries: &BoundaryClassification,
-) -> Result<(), StageInputError> {
-    if !boundaries.matches_edge_count(mesh.edge_count()) {
-        return Err(StageInputError::Boundaries);
-    }
-    Ok(())
-}

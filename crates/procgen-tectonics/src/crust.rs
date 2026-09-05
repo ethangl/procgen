@@ -1,4 +1,4 @@
-use crate::PlatePartition;
+use crate::{PlatePartition, StageInputError};
 use procgen_core::{RandomStream, random_streams::CRUST_PLATE_ORDER};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
@@ -32,6 +32,14 @@ pub struct CrustClassification {
 }
 
 impl CrustClassification {
+    /// Validates that every stable plate identity has one crust class.
+    pub fn validate(&self, partition: &PlatePartition) -> Result<(), StageInputError> {
+        if self.plate_classes.len() != partition.plate_count {
+            return Err(StageInputError::Plates);
+        }
+        Ok(())
+    }
+
     /// Derives a cell's crust class from its current plate ownership.
     pub fn cell_class(&self, partition: &PlatePartition, cell: usize) -> CrustClass {
         self.plate_classes[partition.cell_plates[cell]]
