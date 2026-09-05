@@ -133,15 +133,15 @@ impl GeneratedWorld {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;
         let migration = timings.record("Plate migration", || {
-            migrate_plates_once(
+            let migration = migrate_plates_once(
                 &voronoi,
                 &plates,
                 &crust,
                 &migration_boundaries,
                 config.migration,
-            )
+            )?;
+            migration.apply(&mut plates).map(|()| migration)
         })?;
-        migration.apply(&mut plates);
         let boundaries = timings.record("Boundaries", || {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;
