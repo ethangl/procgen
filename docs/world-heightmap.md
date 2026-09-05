@@ -66,12 +66,13 @@ Completed foundations:
 - `procgen-sphere-mesh`: spherical Delaunay/Voronoi topology, GPU-friendly CSR
   cell-corner rings, and cell areas.
 - `procgen-tectonics`: deterministic major/minor plate partitioning, rigid plate
-  angular velocities, local spherical tangent motion, and static convergent,
-  divergent, and transform boundary classification. Plate migration, crust,
-  and elevation remain later slices.
-- `procgen-viewer`: diagnostic GPU viewer with retained topology and tectonic
-  plate layers, orbit controls, deterministic regeneration, statistics, and
-  stage timings.
+  angular velocities, local spherical tangent motion, static convergent,
+  divergent, and transform boundary classification, and static per-plate crust
+  classification with area-weighted ocean coverage. Plate migration and
+  elevation remain later slices.
+- `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
+  plate, crust, motion, and boundary layers, orbit controls, deterministic
+  regeneration, statistics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout
