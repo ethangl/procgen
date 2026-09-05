@@ -96,12 +96,12 @@ pub fn classify_boundaries(
             continue;
         }
 
-        let position = (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]])
-            .normalized()
-            * mesh.radius;
+        let unit_position =
+            (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
+        let position = unit_position * mesh.radius;
         let normal =
             (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
-        let tangent = position.normalized().cross(normal).normalized();
+        let tangent = unit_position.cross(normal).normalized();
         let relative_velocity =
             kinematics.velocity_at(plate_0, position) - kinematics.velocity_at(plate_1, position);
         let convergence = relative_velocity.dot(normal);
@@ -127,6 +127,7 @@ mod tests {
     use crate::{
         PlateKinematicsConfig, PlatePartitionConfig, generate_plate_kinematics, partition_plates,
     };
+    use procgen_core::Vec3;
 
     #[test]
     fn classification_is_deterministic_complete_and_static() {
@@ -180,5 +181,30 @@ mod tests {
             BoundaryClass::from_relative_motion(0.25, 1.0),
             BoundaryClass::Transform
         );
+    }
+
+    #[test]
+    fn cell_to_cell_relative_motion_is_convergent() {
+        let mesh = mesh(32);
+        let edge = mesh.edges[0];
+        let mut cell_plates = vec![0; mesh.cell_count()];
+        cell_plates[edge.cells[1]] = 1;
+        let partition = PlatePartition {
+            cell_plates,
+            plate_seeds: vec![edge.cells[0], edge.cells[1]],
+            major_plate_count: 2,
+        };
+        let unit_position =
+            (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
+        let normal =
+            (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
+        let kinematics = PlateKinematics {
+            angular_velocities: vec![unit_position.cross(normal), Vec3::ZERO],
+        };
+
+        let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
+
+        assert_eq!(boundaries.edge_classes[0], BoundaryClass::Convergent);
+        assert!(boundaries.edge_convergence[0] > 0.0);
     }
 }
