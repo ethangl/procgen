@@ -10,6 +10,7 @@ mod cratons;
 mod elevation;
 mod field;
 mod hotspots;
+mod isostasy;
 mod oceanic_peaks;
 mod volcanic_arcs;
 
@@ -28,6 +29,10 @@ pub use elevation::{
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
     HotspotTrailCell, generate_hotspot_field,
+};
+pub use isostasy::{
+    IsostaticAdjustment, IsostaticAdjustmentConfig, IsostaticAdjustmentDiagnostics,
+    IsostaticAdjustmentError, IsostaticAdjustmentInputs, derive_isostatic_adjustment,
 };
 pub use oceanic_peaks::{
     OceanicPeak, OceanicPeakDiagnostics, OceanicPeakField, OceanicPeakFieldConfig,

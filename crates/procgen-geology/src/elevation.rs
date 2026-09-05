@@ -75,6 +75,15 @@ pub struct GeologicalElevation {
     pub diagnostics: GeologicalElevationDiagnostics,
 }
 
+impl GeologicalElevation {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_elevations.len() != mesh.cell_count() {
+            return Err(StageInputError::Elevation);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeologicalElevationError {
     Input(StageInputError),

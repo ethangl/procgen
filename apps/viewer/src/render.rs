@@ -21,6 +21,8 @@ pub enum DiagnosticLayer {
     Deformation,
     Elevation,
     GeologicalElevation,
+    IsostaticSupport,
+    IsostaticElevation,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -36,7 +38,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 18] = [
+const DRAW_ORDER: [DrawSurface; 20] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -47,6 +49,8 @@ const DRAW_ORDER: [DrawSurface; 18] = [
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::Layer(DiagnosticLayer::GeologicalElevation),
+    DrawSurface::Layer(DiagnosticLayer::IsostaticSupport),
+    DrawSurface::Layer(DiagnosticLayer::IsostaticElevation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
@@ -107,7 +111,7 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -118,6 +122,8 @@ impl DiagnosticLayer {
         Self::Deformation,
         Self::Elevation,
         Self::GeologicalElevation,
+        Self::IsostaticSupport,
+        Self::IsostaticElevation,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -148,11 +154,13 @@ impl DiagnosticLayer {
             Self::Deformation => 3.3,
             Self::Elevation => 3.5,
             Self::GeologicalElevation => 3.6,
-            Self::Hotspots => 3.7,
-            Self::OceanicPeaks => 3.8,
-            Self::VolcanicArcs => 3.9,
-            Self::Cratons => 4.0,
-            Self::Basins => 4.1,
+            Self::IsostaticSupport => 3.7,
+            Self::IsostaticElevation => 3.8,
+            Self::Hotspots => 3.9,
+            Self::OceanicPeaks => 4.0,
+            Self::VolcanicArcs => 4.1,
+            Self::Cratons => 4.2,
+            Self::Basins => 4.3,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -174,6 +182,8 @@ impl DiagnosticLayer {
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Tectonic elevation",
             Self::GeologicalElevation => "Geological elevation",
+            Self::IsostaticSupport => "Isostatic support",
+            Self::IsostaticElevation => "Adjusted elevation",
             Self::Hotspots => "Mantle hotspots",
             Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
@@ -219,6 +229,18 @@ impl DiagnosticLayer {
             Self::GeologicalElevation => scalar_field_asset(
                 &world.voronoi,
                 &world.geological_elevation.cell_elevations,
+                &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
+            Self::IsostaticSupport => scalar_field_asset(
+                &world.voronoi,
+                &world.isostasy.cell_support,
+                &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
+            Self::IsostaticElevation => scalar_field_asset(
+                &world.voronoi,
+                &world.isostasy.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
                 radius,
             ),
@@ -341,7 +363,7 @@ impl LayerSettings {
 impl Default for LayerSettings {
     fn default() -> Self {
         let mut visible = [false; DiagnosticLayer::COUNT];
-        visible[DiagnosticLayer::GeologicalElevation.index()] = true;
+        visible[DiagnosticLayer::IsostaticElevation.index()] = true;
         Self { visible }
     }
 }

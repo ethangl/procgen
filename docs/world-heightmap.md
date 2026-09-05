@@ -110,7 +110,12 @@ Completed foundations:
   configured continental base, and basin flattening toward each component's
   original deterministic minimum, in that stable order. It reports the
   aggregate actual delta of each effect and does not consume the sparse oceanic
-  peaks or mutate any input field.
+  peaks or mutate any input field. A final deterministic isostatic stage derives
+  per-cell support from current-owner continental crust, convergent and divergent
+  boundary proximity, craton strength, basin membership, and geological
+  elevation. It produces a separate clamped elevation field, keeps oceanic cells
+  unchanged, preserves basin floors, and reports aggregate rise and sink without
+  mutating its inputs.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and tectonic-elevation
@@ -120,7 +125,8 @@ Completed foundations:
   visualization, sedimentary-basin controls and stable-ID visualization,
   seamount/abyssal density and sparse-peak controls and visualization,
   geological-elevation effect controls and final layer, per-effect aggregate
-  diagnostics, and stage timings.
+  diagnostics, isostatic support and adjusted-elevation controls and layers,
+  aggregate rise/sink diagnostics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

@@ -3,8 +3,8 @@ use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_geology::{
-    CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, OceanicPeakFieldConfig,
-    SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
+    CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
+    OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
@@ -77,6 +77,9 @@ pub(super) fn generation_controls(
     });
     section(ui, "Geological elevation", |ui| {
         geological_elevation_controls(ui, &mut generation.geological_elevation)
+    });
+    section(ui, "Isostatic adjustment", |ui| {
+        isostatic_controls(ui, &mut generation.isostasy)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -408,6 +411,46 @@ fn geological_elevation_controls(ui: &mut egui::Ui, config: &mut GeologicalEleva
         "Basin flattening",
         &mut config.basin_flattening,
         0.0..=1.0,
+    );
+}
+
+fn isostatic_controls(ui: &mut egui::Ui, config: &mut IsostaticAdjustmentConfig) {
+    slider(
+        ui,
+        "Adjustment strength",
+        &mut config.adjustment_strength,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Continental support",
+        &mut config.continental_support,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Convergent bonus",
+        &mut config.convergent_support_bonus,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Divergent penalty",
+        &mut config.divergent_support_penalty,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Craton bonus",
+        &mut config.craton_support_bonus,
+        0.0..=1.0,
+    );
+    drag_value(
+        ui,
+        "Boundary distance",
+        &mut config.maximum_boundary_distance,
+        CRATON_DISTANCE_RANGE,
+        1.0,
     );
 }
 
