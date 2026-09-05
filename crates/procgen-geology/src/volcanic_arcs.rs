@@ -37,11 +37,6 @@ pub struct VolcanicArcCell {
     pub strength: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VolcanicPeakCandidate {
-    pub cell: usize,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolcanicArcSegment {
     pub overriding_plate: usize,
@@ -51,8 +46,8 @@ pub struct VolcanicArcSegment {
     pub boundary_cells: Vec<usize>,
     /// Inland cells in ascending order.
     pub arc_cells: Vec<VolcanicArcCell>,
-    /// Peak candidates in ascending cell order.
-    pub peaks: Vec<VolcanicPeakCandidate>,
+    /// Peak candidate cells in ascending order.
+    pub peaks: Vec<usize>,
     /// Actual inland depth used, which may be shallower than the requested bound.
     pub inland_depth: usize,
 }
@@ -398,10 +393,7 @@ fn walk_inland(
     })
 }
 
-fn select_peak_candidates(
-    arc_cells: &[VolcanicArcCell],
-    density_divisor: usize,
-) -> Vec<VolcanicPeakCandidate> {
+fn select_peak_candidates(arc_cells: &[VolcanicArcCell], density_divisor: usize) -> Vec<usize> {
     let peak_count = arc_cells.len().div_ceil(density_divisor);
     let mut peak_cells: Vec<_> = arc_cells.iter().collect();
     peak_cells.sort_unstable_by(|left, right| {
@@ -414,9 +406,7 @@ fn select_peak_candidates(
     peak_cells.sort_unstable_by_key(|arc_cell| arc_cell.cell);
     peak_cells
         .into_iter()
-        .map(|arc_cell| VolcanicPeakCandidate {
-            cell: arc_cell.cell,
-        })
+        .map(|arc_cell| arc_cell.cell)
         .collect()
 }
 
@@ -513,12 +503,7 @@ mod tests {
                     .windows(2)
                     .all(|pair| pair[0].cell < pair[1].cell)
             );
-            assert!(
-                segment
-                    .peaks
-                    .windows(2)
-                    .all(|pair| pair[0].cell < pair[1].cell)
-            );
+            assert!(segment.peaks.windows(2).all(|pair| pair[0] < pair[1]));
             assert!((1..=config.inland_offset_cells).contains(&segment.inland_depth));
             assert!(segment.arc_cells.iter().all(|arc_cell| {
                 plates.cell_plates[arc_cell.cell] == segment.overriding_plate
@@ -573,7 +558,7 @@ mod tests {
             .chain(segment.arc_cells.iter().flat_map(|arc_cell| {
                 [arc_cell.cell as u64, u64::from(arc_cell.strength.to_bits())]
             }))
-            .chain(segment.peaks.iter().map(|peak| peak.cell as u64))
+            .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
         assert_eq!(fingerprint(values), 5_753_623_188_708_739_124);
@@ -607,14 +592,7 @@ mod tests {
             );
             let mut expected: Vec<_> = expected.into_iter().map(|arc_cell| arc_cell.cell).collect();
             expected.sort_unstable();
-            assert_eq!(
-                segment
-                    .peaks
-                    .iter()
-                    .map(|peak| peak.cell)
-                    .collect::<Vec<_>>(),
-                expected
-            );
+            assert_eq!(segment.peaks, expected);
         }
         for cell in 0..mesh.cell_count() {
             let expected = field

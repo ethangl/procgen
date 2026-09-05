@@ -1,7 +1,6 @@
 use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
-    PlatePartition,
-    stage::{StageInputError, validate_boundaries, validate_ownership_and_crust},
+    PlatePartition, stage::StageInputError,
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::collections::VecDeque;
@@ -49,8 +48,9 @@ pub fn derive_seafloor_age(
     boundaries: &BoundaryClassification,
     config: SeafloorAgeConfig,
 ) -> Result<SeafloorAge, StageInputError> {
-    validate_ownership_and_crust(mesh, partition, crust)?;
-    validate_boundaries(mesh, boundaries)?;
+    partition.validate(mesh)?;
+    crust.validate(partition)?;
+    boundaries.validate(mesh)?;
 
     let mut cell_ages = vec![None; mesh.cell_count()];
     let mut ridge_plates = vec![false; partition.plate_count];

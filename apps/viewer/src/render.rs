@@ -202,8 +202,8 @@ fn volcanic_arc_asset(mesh: &SphereMesh, field: &VolcanicArcField, radius: f32) 
     let marker_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
     let marker_color = VOLCANIC_ARC_COLOR_STOPS[VOLCANIC_ARC_COLOR_STOPS.len() - 1].1;
     let marker_color = Color::srgba(marker_color.x, marker_color.y, marker_color.z, 1.0);
-    for peak in field.segments.iter().flat_map(|segment| &segment.peaks) {
-        let position = to_bevy(mesh.cell_centers[peak.cell].normalized()) * radius;
+    for &peak_cell in field.segments.iter().flat_map(|segment| &segment.peaks) {
+        let position = to_bevy(mesh.cell_centers[peak_cell].normalized()) * radius;
         add_cross_marker(&mut asset, position, marker_size, marker_color);
     }
     asset

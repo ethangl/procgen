@@ -14,5 +14,5 @@ pub use hotspots::{
 };
 pub use volcanic_arcs::{
     VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcField, VolcanicArcFieldConfig,
-    VolcanicArcFieldError, VolcanicArcSegment, VolcanicPeakCandidate, derive_volcanic_arc_field,
+    VolcanicArcFieldError, VolcanicArcSegment, derive_volcanic_arc_field,
 };
