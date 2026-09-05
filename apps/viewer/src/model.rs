@@ -122,26 +122,28 @@ impl GeneratedWorld {
         let voronoi = timings.record("Voronoi", || {
             SphereMesh::from_delaunay(&delaunay, WORLD_RADIUS)
         })?;
-        let mut plates = timings.record("Plate partition", || {
+        let initial_plates = timings.record("Plate partition", || {
             partition_plates(&voronoi, config.plates)
         })?;
-        let crust = timings.record("Crust", || classify_crust(&voronoi, &plates, config.crust))?;
+        let crust = timings.record("Crust", || {
+            classify_crust(&voronoi, &initial_plates, config.crust)
+        })?;
         let kinematics = timings.record("Plate kinematics", || {
-            generate_plate_kinematics(plates.plate_count, config.kinematics)
+            generate_plate_kinematics(initial_plates.plate_count, config.kinematics)
         })?;
         let migration_boundaries = timings.record("Pre-migration boundaries", || {
-            classify_boundaries(&voronoi, &plates, &kinematics)
+            classify_boundaries(&voronoi, &initial_plates, &kinematics)
         })?;
         let migration = timings.record("Plate migration", || {
-            let migration = migrate_plates_once(
+            migrate_plates_once(
                 &voronoi,
-                &plates,
+                &initial_plates,
                 &crust,
                 &migration_boundaries,
                 config.migration,
-            )?;
-            migration.apply(&mut plates).map(|()| migration)
+            )
         })?;
+        let plates = migration.partition.clone();
         let boundaries = timings.record("Boundaries", || {
             classify_boundaries(&voronoi, &plates, &kinematics)
         })?;

@@ -65,19 +65,6 @@ pub fn partition_plates(
     mesh: &SphereMesh,
     config: PlatePartitionConfig,
 ) -> Result<PlatePartition, PlatePartitionError> {
-    let growth = grow_plates(mesh, config)?;
-    Ok(PlatePartition {
-        plate_count: growth.plate_seeds.len(),
-        cell_plates: growth.cell_plates,
-    })
-}
-
-// Keep seed provenance available to partition-local invariant tests without
-// putting generation provenance into the mutable ownership type.
-fn grow_plates(
-    mesh: &SphereMesh,
-    config: PlatePartitionConfig,
-) -> Result<PlateGrowth<'_>, PlatePartitionError> {
     if config.major_plate_count == 0 {
         return Err(PlatePartitionError::NoMajorPlates);
     }
@@ -93,7 +80,10 @@ fn grow_plates(
     growth.grow(config.major_head_start_rounds);
     growth.seed_farthest(config.minor_plate_count)?;
     growth.grow(usize::MAX);
-    Ok(growth)
+    Ok(PlatePartition {
+        plate_count: growth.plate_seeds.len(),
+        cell_plates: growth.cell_plates,
+    })
 }
 
 struct PlateGrowth<'mesh> {
@@ -206,45 +196,48 @@ mod tests {
     #[test]
     fn reference_partition_has_stable_fingerprint() {
         let mesh = mesh(512);
-        let growth = grow_plates(&mesh, reference_partition_config()).unwrap();
-        let fingerprint = growth
+        let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
+        let fingerprint = partition
             .cell_plates
             .iter()
-            .chain(&growth.plate_seeds)
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &value| {
                 (hash ^ value as u64).wrapping_mul(0x0000_0100_0000_01b3)
             });
 
-        assert_eq!(fingerprint, 3_406_652_772_411_950_386);
+        assert_eq!(fingerprint, 2_459_160_733_919_900_345);
     }
 
     #[test]
-    fn every_plate_is_nonempty_connected_and_owns_its_seed() {
+    fn every_plate_is_nonempty_and_connected() {
         let mesh = mesh(512);
-        let growth = grow_plates(&mesh, reference_partition_config()).unwrap();
+        let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
 
         assert!(
-            growth
+            partition
                 .cell_plates
                 .iter()
-                .all(|&plate| plate < growth.plate_seeds.len())
+                .all(|&plate| plate < partition.plate_count)
         );
-        for (plate, &seed) in growth.plate_seeds.iter().enumerate() {
-            assert_eq!(growth.cell_plates[seed], plate);
-
-            let expected = growth
+        for plate in 0..partition.plate_count {
+            let start = partition
+                .cell_plates
+                .iter()
+                .position(|&cell_plate| cell_plate == plate)
+                .expect("every plate must own at least one cell");
+            let expected = partition
                 .cell_plates
                 .iter()
                 .filter(|&&cell_plate| cell_plate == plate)
                 .count();
             let mut visited = vec![false; mesh.cell_count()];
-            visited[seed] = true;
-            let mut queue = VecDeque::from([seed]);
+            visited[start] = true;
+            let mut queue = VecDeque::from([start]);
             let mut actual = 0;
             while let Some(cell) = queue.pop_front() {
                 actual += 1;
                 for corner in mesh.cell_corners(cell) {
-                    if !visited[corner.neighbor] && growth.cell_plates[corner.neighbor] == plate {
+                    if !visited[corner.neighbor] && partition.cell_plates[corner.neighbor] == plate
+                    {
                         visited[corner.neighbor] = true;
                         queue.push_back(corner.neighbor);
                     }

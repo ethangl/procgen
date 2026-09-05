@@ -215,12 +215,8 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     ui.add_space(6.0);
     ui.label("Single-step migration");
     egui::Grid::new("migration").num_columns(2).show(ui, |ui| {
-        stat(ui, "Proposals", world.migration.proposal_count());
-        stat(
-            ui,
-            "Contested cells",
-            world.migration.contested_cell_count(),
-        );
+        stat(ui, "Proposals", world.migration.proposal_count);
+        stat(ui, "Contested cells", world.migration.contested_cell_count);
         stat(ui, "Migrated cells", world.migration.migrated_cell_count());
         stat(
             ui,

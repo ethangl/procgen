@@ -20,63 +20,26 @@ impl Default for PlateMigrationConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellMigration {
-    pub from_plate: usize,
     pub to_plate: usize,
     pub boundary_edge: usize,
     pub convergence: f32,
 }
 
-/// Transition record for one migration step.
-///
-/// Apply it to the originating partition with [`Self::apply`].
+/// Updated ownership and diagnostics produced by one migration step.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlateMigration {
+    pub partition: PlatePartition,
     /// Winning ownership change per cell. `None` means ownership was retained.
     pub cell_changes: Vec<Option<CellMigration>>,
-    /// Qualifying convergent-edge proposal count per target cell.
-    ///
-    /// This dense diagnostic supports aggregate statistics and future
-    /// per-cell visualization of contested migration.
-    pub cell_proposal_counts: Vec<usize>,
+    /// Qualifying convergent-edge proposals before conflict resolution.
+    pub proposal_count: usize,
+    /// Cells targeted by more than one proposal.
+    pub contested_cell_count: usize,
 }
 
 impl PlateMigration {
-    /// Applies this transition to the partition it was computed from.
-    ///
-    /// Returns an error without changing the partition when its cell count or
-    /// recorded source ownership does not match this transition.
-    pub fn apply(&self, partition: &mut PlatePartition) -> Result<(), PlateMigrationError> {
-        if partition.cell_plates.len() != self.cell_changes.len() {
-            return Err(PlateMigrationError::CellCountMismatch);
-        }
-        for (cell, change) in self.cell_changes.iter().enumerate() {
-            if let Some(change) = change
-                && partition.cell_plates[cell] != change.from_plate
-            {
-                return Err(PlateMigrationError::SourceOwnershipMismatch);
-            }
-        }
-        for (cell, change) in self.cell_changes.iter().enumerate() {
-            if let Some(change) = change {
-                partition.cell_plates[cell] = change.to_plate;
-            }
-        }
-        Ok(())
-    }
-
     pub fn migrated_cell_count(&self) -> usize {
         self.cell_changes.iter().flatten().count()
-    }
-
-    pub fn proposal_count(&self) -> usize {
-        self.cell_proposal_counts.iter().sum()
-    }
-
-    pub fn contested_cell_count(&self) -> usize {
-        self.cell_proposal_counts
-            .iter()
-            .filter(|&&count| count > 1)
-            .count()
     }
 
     pub fn maximum_convergence(&self) -> f32 {
@@ -95,7 +58,6 @@ pub enum PlateMigrationError {
     CellCountMismatch,
     PlateCountMismatch,
     BoundaryCountMismatch,
-    SourceOwnershipMismatch,
 }
 
 impl fmt::Display for PlateMigrationError {
@@ -105,16 +67,13 @@ impl fmt::Display for PlateMigrationError {
                 formatter.write_str("minimum convergence must be finite and non-negative")
             }
             Self::CellCountMismatch => {
-                formatter.write_str("plate assignments must match the expected cell count")
+                formatter.write_str("plate assignments must match the mesh cell count")
             }
             Self::PlateCountMismatch => {
                 formatter.write_str("plate classes must match the partition plate count")
             }
             Self::BoundaryCountMismatch => {
                 formatter.write_str("boundary arrays must match the mesh edge count")
-            }
-            Self::SourceOwnershipMismatch => {
-                formatter.write_str("migration source plate must match current ownership")
             }
         }
     }
@@ -153,6 +112,7 @@ pub fn migrate_plates_once(
 
     let mut winners = vec![None; mesh.cell_count()];
     let mut proposal_counts = vec![0_usize; mesh.cell_count()];
+    let mut proposal_count = 0;
 
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let convergence = boundaries.convergence(edge_index);
@@ -177,21 +137,30 @@ pub fn migrate_plates_once(
         let retreating = 1 - advancing;
         let retreating_cell = edge.cells[retreating];
         let proposal = CellMigration {
-            from_plate: plates[retreating],
             to_plate: plates[advancing],
             boundary_edge: edge_index,
             convergence,
         };
 
+        proposal_count += 1;
         proposal_counts[retreating_cell] += 1;
         if winners[retreating_cell].is_none_or(|winner| proposal_precedes(proposal, winner)) {
             winners[retreating_cell] = Some(proposal);
         }
     }
 
+    let mut migrated_partition = partition.clone();
+    for (cell, change) in winners.iter().enumerate() {
+        if let Some(change) = change {
+            migrated_partition.cell_plates[cell] = change.to_plate;
+        }
+    }
+
     Ok(PlateMigration {
+        partition: migrated_partition,
         cell_changes: winners,
-        cell_proposal_counts: proposal_counts,
+        proposal_count,
+        contested_cell_count: proposal_counts.iter().filter(|&&count| count > 1).count(),
     })
 }
 
@@ -274,10 +243,9 @@ mod tests {
             .unwrap()
         );
         assert!(first.migrated_cell_count() > 0);
-        assert!(first.contested_cell_count() > 0);
-        let mut migrated_partition = partition.clone();
-        first.apply(&mut migrated_partition).unwrap();
-        let fingerprint = migrated_partition
+        assert!(first.contested_cell_count > 0);
+        let fingerprint = first
+            .partition
             .cell_plates
             .iter()
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &plate| {
@@ -302,23 +270,20 @@ mod tests {
         assert_eq!(
             migration.cell_changes[edge.cells[1]],
             Some(CellMigration {
-                from_plate: 1,
                 to_plate: 0,
                 boundary_edge: edge_index,
                 convergence: 1.0,
             })
         );
-        let mut migrated_partition = partition.clone();
-        migration.apply(&mut migrated_partition).unwrap();
 
-        assert_eq!(migrated_partition.cell_plates[edge.cells[1]], 0);
+        assert_eq!(migration.partition.cell_plates[edge.cells[1]], 0);
         assert_eq!(migration.migrated_cell_count(), 1);
         assert_eq!(
-            crust.cell_class(&migrated_partition, edge.cells[1]),
+            crust.cell_class(&migration.partition, edge.cells[1]),
             CrustClass::Continental
         );
         assert!(crust.ocean_fraction(&mesh, &partition) > 0.0);
-        assert_eq!(crust.ocean_fraction(&mesh, &migrated_partition), 0.0);
+        assert_eq!(crust.ocean_fraction(&mesh, &migration.partition), 0.0);
     }
 
     #[test]
@@ -335,9 +300,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(suppressed.migrated_cell_count(), 0);
-        let mut suppressed_partition = partition.clone();
-        suppressed.apply(&mut suppressed_partition).unwrap();
-        assert_eq!(suppressed_partition, partition);
+        assert_eq!(suppressed.partition, partition);
     }
 
     #[test]
@@ -355,47 +318,12 @@ mod tests {
             PlateMigrationConfig::default(),
         )
         .unwrap();
-        let mut same_crust_partition = partition.clone();
-        same_crust_migration
-            .apply(&mut same_crust_partition)
-            .unwrap();
-        assert_eq!(same_crust_partition.cell_plates[edge.cells[1]], 0);
-    }
-
-    #[test]
-    fn apply_rejects_misaligned_partition() {
-        let (mesh, edge_index, mut partition, crust, boundaries) = two_plate_convergent_fixture();
-        let edge = mesh.edges[edge_index];
-        let migration = migrate_plates_once(
-            &mesh,
-            &partition,
-            &crust,
-            &boundaries,
-            PlateMigrationConfig::default(),
-        )
-        .unwrap();
-
-        let mut short_partition = partition.clone();
-        short_partition.cell_plates.pop();
-        assert_eq!(
-            migration.apply(&mut short_partition),
-            Err(PlateMigrationError::CellCountMismatch)
-        );
-
-        partition.cell_plates[edge.cells[1]] = 0;
-        let changed_partition = partition.clone();
-
-        assert_eq!(
-            migration.apply(&mut partition),
-            Err(PlateMigrationError::SourceOwnershipMismatch)
-        );
-        assert_eq!(partition, changed_partition);
+        assert_eq!(same_crust_migration.partition.cell_plates[edge.cells[1]], 0);
     }
 
     #[test]
     fn strongest_then_stable_ids_resolve_conflicts() {
         let current = CellMigration {
-            from_plate: 0,
             to_plate: 4,
             boundary_edge: 8,
             convergence: 0.7,
