@@ -334,20 +334,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 
     stat_grid(ui, "Seafloor age", "seafloor_age", |ui| {
-        stat(
-            ui,
-            "Age range",
-            format!(
-                "{} - {} hops",
-                world.seafloor_age.diagnostics.minimum_age,
-                world.seafloor_age.diagnostics.maximum_age
-            ),
-        );
-        stat(
-            ui,
-            "Mean age",
-            format!("{:.2} hops", world.seafloor_age.diagnostics.mean_age),
-        );
+        field_summary_stats(ui, &world.seafloor_age.diagnostics.summary);
         stat(
             ui,
             "Oceanic cells",

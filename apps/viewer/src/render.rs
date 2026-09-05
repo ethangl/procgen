@@ -4,7 +4,7 @@ use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
-    PlatePartition,
+    PlatePartition, SeafloorAge,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +132,7 @@ impl DiagnosticLayer {
                 draw_radius(DrawSurface::PlateBorders),
             ),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
-            Self::SeafloorAge => seafloor_age_asset(world, radius),
+            Self::SeafloorAge => seafloor_age_asset(&world.voronoi, &world.seafloor_age, radius),
             Self::Deformation => scalar_field_asset(
                 &world.voronoi,
                 &world.deformation.cell_deformation,
@@ -151,18 +151,17 @@ impl DiagnosticLayer {
     }
 }
 
-fn seafloor_age_asset(world: &GeneratedWorld, radius: f32) -> GizmoAsset {
-    let maximum_age = world.seafloor_age.diagnostics.maximum_age.max(1) as f32;
-    voronoi_edge_asset(&world.voronoi, |_, edge| {
-        let ages = edge.cells.map(|cell| world.seafloor_age.cell_ages[cell]);
+fn seafloor_age_asset(mesh: &SphereMesh, age: &SeafloorAge, radius: f32) -> GizmoAsset {
+    let maximum_age = age.diagnostics.summary.maximum.max(1.0);
+    voronoi_edge_asset(mesh, |_, edge| {
+        let ages = edge.cells.map(|cell| age.cell_ages[cell]);
         let color = match ages {
             [None, None] => Color::srgba(0.18, 0.16, 0.14, 0.75),
             [Some(_), None] | [None, Some(_)] => Color::srgba(0.96, 0.96, 1.0, 1.0),
-            [Some(left), Some(right)] => {
-                let normalized = (left as f32 + right as f32) * 0.5 / maximum_age;
-                let color = piecewise_lerp(normalized, &SEAFLOOR_AGE_COLOR_STOPS);
-                Color::srgba(color.x, color.y, color.z, 0.98)
-            }
+            [Some(left), Some(right)] => scalar_edge_color(
+                [left as f32 / maximum_age, right as f32 / maximum_age],
+                &SEAFLOOR_AGE_COLOR_STOPS,
+            ),
         };
         Some((radius, color))
     })
@@ -405,10 +404,16 @@ fn scalar_field_asset(
     radius: f32,
 ) -> GizmoAsset {
     voronoi_edge_asset(mesh, |_, edge| {
-        let value = (values[edge.cells[0]] + values[edge.cells[1]]) * 0.5;
-        let color = piecewise_lerp(value, stops);
-        Some((radius, Color::srgba(color.x, color.y, color.z, 0.98)))
+        Some((
+            radius,
+            scalar_edge_color(edge.cells.map(|cell| values[cell]), stops),
+        ))
     })
+}
+
+fn scalar_edge_color(values: [f32; 2], stops: &[(f32, Vec3)]) -> Color {
+    let color = piecewise_lerp((values[0] + values[1]) * 0.5, stops);
+    Color::srgba(color.x, color.y, color.z, 0.98)
 }
 
 fn piecewise_lerp(value: f32, stops: &[(f32, Vec3)]) -> Vec3 {

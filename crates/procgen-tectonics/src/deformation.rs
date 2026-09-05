@@ -1,6 +1,8 @@
 use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
-    PlatePartition, field::summarize_field,
+    PlatePartition,
+    field::summarize_field,
+    stage::{StageInputError, validate_final_state},
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{collections::VecDeque, fmt};
@@ -93,9 +95,7 @@ pub struct BoundaryDeformation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundaryDeformationError {
     InvalidConfig,
-    CellCountMismatch,
-    PlateCountMismatch,
-    BoundaryCountMismatch,
+    Input(StageInputError),
 }
 
 impl fmt::Display for BoundaryDeformationError {
@@ -104,20 +104,25 @@ impl fmt::Display for BoundaryDeformationError {
             Self::InvalidConfig => formatter.write_str(
                 "deformation offsets must be finite and saturation speed must be finite and positive",
             ),
-            Self::CellCountMismatch => {
-                formatter.write_str("plate assignments must match the mesh cell count")
-            }
-            Self::PlateCountMismatch => {
-                formatter.write_str("plate classes must match the partition plate count")
-            }
-            Self::BoundaryCountMismatch => {
-                formatter.write_str("boundary arrays must match the mesh edge count")
-            }
+            Self::Input(error) => error.fmt(formatter),
         }
     }
 }
 
-impl std::error::Error for BoundaryDeformationError {}
+impl std::error::Error for BoundaryDeformationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidConfig => None,
+            Self::Input(error) => Some(error),
+        }
+    }
+}
+
+impl From<StageInputError> for BoundaryDeformationError {
+    fn from(error: StageInputError) -> Self {
+        Self::Input(error)
+    }
+}
 
 /// Derives signed boundary deformation from final ownership, current-owner
 /// crust, and final boundary classes and strengths.
@@ -133,7 +138,8 @@ pub fn derive_boundary_deformation(
     boundaries: &BoundaryClassification,
     config: BoundaryDeformationConfig,
 ) -> Result<BoundaryDeformation, BoundaryDeformationError> {
-    validate_inputs(mesh, partition, crust, boundaries, config)?;
+    validate_config(config)?;
+    validate_final_state(mesh, partition, crust, Some(boundaries))?;
 
     let sources = collect_boundary_sources(mesh, partition, crust, boundaries, &config);
     let source_cell_count = sources.iter().flatten().count();
@@ -161,9 +167,7 @@ fn collect_boundary_sources(
             continue;
         };
 
-        let classes = edge
-            .cells
-            .map(|cell| crust.plate_classes[partition.cell_plates[cell]]);
+        let classes = edge.cells.map(|cell| crust.cell_class(partition, cell));
         let scale = (strength / config.saturation_speed).min(1.0);
         for side in 0..2 {
             let effect = boundary_effect(config, class, classes[side], classes[1 - side]);
@@ -197,13 +201,7 @@ fn boundary_effect(
     }
 }
 
-fn validate_inputs(
-    mesh: &SphereMesh,
-    partition: &PlatePartition,
-    crust: &CrustClassification,
-    boundaries: &BoundaryClassification,
-    config: BoundaryDeformationConfig,
-) -> Result<(), BoundaryDeformationError> {
+fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDeformationError> {
     let effects = [
         config.convergent,
         config.divergent,
@@ -216,15 +214,6 @@ fn validate_inputs(
         || config.saturation_speed <= 0.0
     {
         return Err(BoundaryDeformationError::InvalidConfig);
-    }
-    if partition.cell_plates.len() != mesh.cell_count() {
-        return Err(BoundaryDeformationError::CellCountMismatch);
-    }
-    if crust.plate_classes.len() != partition.plate_count {
-        return Err(BoundaryDeformationError::PlateCountMismatch);
-    }
-    if !boundaries.matches_edge_count(mesh.edge_count()) {
-        return Err(BoundaryDeformationError::BoundaryCountMismatch);
     }
     Ok(())
 }
@@ -283,38 +272,13 @@ fn propagate_boundary_effects(
 mod tests {
     use super::*;
     use crate::test_support::{
-        empty_boundaries, fingerprint, mesh as test_mesh, reference_partition,
+        empty_boundaries, final_state_fixture, fingerprint, mesh as test_mesh,
         two_plate_boundary_partition,
     };
-    use crate::{
-        CrustClassificationConfig, PlateEvolutionConfig, PlateKinematicsConfig, classify_crust,
-        evolve_plate_ownership, generate_plate_kinematics,
-    };
-
-    fn final_fixture() -> (
-        SphereMesh,
-        PlatePartition,
-        CrustClassification,
-        BoundaryClassification,
-    ) {
-        let (mesh, initial) = reference_partition();
-        let crust = classify_crust(&mesh, &initial, CrustClassificationConfig::new(17)).unwrap();
-        let kinematics =
-            generate_plate_kinematics(initial.plate_count, PlateKinematicsConfig::new(7)).unwrap();
-        let evolution = evolve_plate_ownership(
-            &mesh,
-            &initial,
-            &crust,
-            &kinematics,
-            PlateEvolutionConfig::default(),
-        )
-        .unwrap();
-        (mesh, evolution.partition, crust, evolution.boundaries)
-    }
 
     #[test]
     fn deformation_is_deterministic_signed_and_stable() {
-        let (mesh, partition, crust, boundaries) = final_fixture();
+        let (mesh, partition, crust, boundaries) = final_state_fixture();
         let config = BoundaryDeformationConfig::default();
         let first =
             derive_boundary_deformation(&mesh, &partition, &crust, &boundaries, config).unwrap();
@@ -514,7 +478,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_configuration_and_mismatched_inputs() {
-        let (mesh, partition, crust, boundaries) = final_fixture();
+        let (mesh, partition, crust, boundaries) = final_state_fixture();
         assert_eq!(
             derive_boundary_deformation(
                 &mesh,
@@ -539,7 +503,7 @@ mod tests {
                 &boundaries,
                 BoundaryDeformationConfig::default()
             ),
-            Err(BoundaryDeformationError::CellCountMismatch)
+            Err(BoundaryDeformationError::Input(StageInputError::Cells))
         );
 
         let short_crust = CrustClassification {
@@ -553,7 +517,7 @@ mod tests {
                 &boundaries,
                 BoundaryDeformationConfig::default()
             ),
-            Err(BoundaryDeformationError::PlateCountMismatch)
+            Err(BoundaryDeformationError::Input(StageInputError::Plates))
         );
 
         let mut short_boundaries = boundaries.clone();
@@ -566,7 +530,7 @@ mod tests {
                 &short_boundaries,
                 BoundaryDeformationConfig::default()
             ),
-            Err(BoundaryDeformationError::BoundaryCountMismatch)
+            Err(BoundaryDeformationError::Input(StageInputError::Boundaries))
         );
     }
 }

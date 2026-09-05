@@ -2,7 +2,9 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
 use crate::{
-    BoundaryClass, BoundaryClassification, PlatePartition, PlatePartitionConfig, partition_plates,
+    BoundaryClass, BoundaryClassification, CrustClassification, CrustClassificationConfig,
+    PlateEvolutionConfig, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig,
+    classify_crust, evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 
 pub fn mesh(cell_count: usize) -> SphereMesh {
@@ -31,6 +33,27 @@ pub fn reference_partition() -> (SphereMesh, PlatePartition) {
     let mesh = mesh(512);
     let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
     (mesh, partition)
+}
+
+pub fn final_state_fixture() -> (
+    SphereMesh,
+    PlatePartition,
+    CrustClassification,
+    BoundaryClassification,
+) {
+    let (mesh, initial) = reference_partition();
+    let crust = classify_crust(&mesh, &initial, CrustClassificationConfig::new(17)).unwrap();
+    let kinematics =
+        generate_plate_kinematics(initial.plate_count, PlateKinematicsConfig::new(7)).unwrap();
+    let evolution = evolve_plate_ownership(
+        &mesh,
+        &initial,
+        &crust,
+        &kinematics,
+        PlateEvolutionConfig::default(),
+    )
+    .unwrap();
+    (mesh, evolution.partition, crust, evolution.boundaries)
 }
 
 pub fn two_plate_boundary_partition() -> (SphereMesh, usize, PlatePartition) {

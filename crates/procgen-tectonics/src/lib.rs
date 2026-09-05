@@ -16,6 +16,7 @@ mod migration;
 mod motion;
 mod partition;
 mod seafloor_age;
+mod stage;
 
 mod random_streams {
     // Keep stream ids globally unique so equal user-facing seeds do not

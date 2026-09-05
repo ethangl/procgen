@@ -1,5 +1,7 @@
 use crate::{
-    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
+    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
+    PlatePartition,
+    stage::{StageInputError, validate_final_state},
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{collections::VecDeque, fmt};
@@ -18,14 +20,12 @@ impl Default for SeafloorAgeConfig {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SeafloorAgeDiagnostics {
+    pub summary: FieldSummary,
     pub oceanic_cell_count: usize,
     pub ridge_cell_count: usize,
     pub ridge_plate_count: usize,
     pub ridge_less_plate_count: usize,
     pub fallback_cell_count: usize,
-    pub minimum_age: usize,
-    pub maximum_age: usize,
-    pub mean_age: f32,
 }
 
 /// Per-cell proxy seafloor age measured in mesh hops from the nearest final ridge.
@@ -38,28 +38,30 @@ pub struct SeafloorAge {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeafloorAgeError {
-    CellCountMismatch,
-    PlateCountMismatch,
-    BoundaryCountMismatch,
+    Input(StageInputError),
 }
 
 impl fmt::Display for SeafloorAgeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CellCountMismatch => {
-                formatter.write_str("plate assignments must match the mesh cell count")
-            }
-            Self::PlateCountMismatch => {
-                formatter.write_str("plate classes must match the partition plate count")
-            }
-            Self::BoundaryCountMismatch => {
-                formatter.write_str("boundary arrays must match the mesh edge count")
-            }
+            Self::Input(error) => error.fmt(formatter),
         }
     }
 }
 
-impl std::error::Error for SeafloorAgeError {}
+impl std::error::Error for SeafloorAgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Input(error) => Some(error),
+        }
+    }
+}
+
+impl From<StageInputError> for SeafloorAgeError {
+    fn from(error: StageInputError) -> Self {
+        Self::Input(error)
+    }
+}
 
 /// Derives seafloor hop age from the final divergent boundaries and ownership.
 ///
@@ -74,7 +76,7 @@ pub fn derive_seafloor_age(
     boundaries: &BoundaryClassification,
     config: SeafloorAgeConfig,
 ) -> Result<SeafloorAge, SeafloorAgeError> {
-    validate_inputs(mesh, partition, crust, boundaries)?;
+    validate_final_state(mesh, partition, crust, Some(boundaries))?;
 
     let mut cell_ages = vec![None; mesh.cell_count()];
     let mut ridge_plates = vec![false; partition.plate_count];
@@ -86,61 +88,47 @@ pub fn derive_seafloor_age(
         }
         for &cell in &edge.cells {
             let plate = partition.cell_plates[cell];
-            if crust.plate_classes[plate] != CrustClass::Oceanic {
+            if crust.cell_class(partition, cell) != CrustClass::Oceanic {
                 continue;
             }
             ridge_plates[plate] = true;
             if cell_ages[cell].is_none() {
                 cell_ages[cell] = Some(0);
-                queue.push_back(cell);
+                queue.push_back((cell, 0));
             }
         }
     }
+    let ridge_cell_count = queue.len();
 
-    while let Some(cell) = queue.pop_front() {
+    while let Some((cell, age)) = queue.pop_front() {
         let plate = partition.cell_plates[cell];
-        let next_age = cell_ages[cell].expect("queued cells have an age") + 1;
+        let next_age = age + 1;
         for corner in mesh.cell_corners(cell) {
             let neighbor = corner.neighbor;
             if cell_ages[neighbor].is_none() && partition.cell_plates[neighbor] == plate {
                 cell_ages[neighbor] = Some(next_age);
-                queue.push_back(neighbor);
+                queue.push_back((neighbor, next_age));
             }
         }
     }
 
-    let mut diagnostics = SeafloorAgeDiagnostics {
-        ridge_plate_count: ridge_plates.iter().filter(|&&has_ridge| has_ridge).count(),
-        ridge_less_plate_count: crust
-            .plate_classes
-            .iter()
-            .zip(&ridge_plates)
-            .filter(|&(class, has_ridge)| *class == CrustClass::Oceanic && !*has_ridge)
-            .count(),
-        ..Default::default()
-    };
-    let mut total_age = 0.0_f64;
-    let mut minimum_age = usize::MAX;
+    let mut fallback_cell_count = 0;
     for (cell, age) in cell_ages.iter_mut().enumerate() {
-        let plate = partition.cell_plates[cell];
-        if crust.plate_classes[plate] != CrustClass::Oceanic {
-            continue;
-        }
-        diagnostics.oceanic_cell_count += 1;
-        if age.is_none() {
+        if crust.cell_class(partition, cell) == CrustClass::Oceanic && age.is_none() {
             *age = Some(config.ridge_less_age);
-            diagnostics.fallback_cell_count += 1;
+            fallback_cell_count += 1;
         }
-        let age = age.expect("every oceanic cell receives an age");
-        diagnostics.ridge_cell_count += usize::from(age == 0 && ridge_plates[plate]);
-        minimum_age = minimum_age.min(age);
-        diagnostics.maximum_age = diagnostics.maximum_age.max(age);
-        total_age += age as f64;
     }
-    if diagnostics.oceanic_cell_count > 0 {
-        diagnostics.minimum_age = minimum_age;
-        diagnostics.mean_age = (total_age / diagnostics.oceanic_cell_count as f64) as f32;
-    }
+    let oceanic_ages: Vec<_> = cell_ages.iter().flatten().map(|&age| age as f32).collect();
+    let ridge_plate_count = ridge_plates.iter().filter(|&&has_ridge| has_ridge).count();
+    let diagnostics = SeafloorAgeDiagnostics {
+        summary: FieldSummary::from_values(&oceanic_ages),
+        oceanic_cell_count: oceanic_ages.len(),
+        ridge_cell_count,
+        ridge_plate_count,
+        ridge_less_plate_count: crust.plate_count(CrustClass::Oceanic) - ridge_plate_count,
+        fallback_cell_count,
+    };
 
     Ok(SeafloorAge {
         cell_ages,
@@ -148,57 +136,16 @@ pub fn derive_seafloor_age(
     })
 }
 
-fn validate_inputs(
-    mesh: &SphereMesh,
-    partition: &PlatePartition,
-    crust: &CrustClassification,
-    boundaries: &BoundaryClassification,
-) -> Result<(), SeafloorAgeError> {
-    if partition.cell_plates.len() != mesh.cell_count() {
-        return Err(SeafloorAgeError::CellCountMismatch);
-    }
-    if crust.plate_classes.len() != partition.plate_count {
-        return Err(SeafloorAgeError::PlateCountMismatch);
-    }
-    if !boundaries.matches_edge_count(mesh.edge_count()) {
-        return Err(SeafloorAgeError::BoundaryCountMismatch);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{empty_boundaries, fingerprint, reference_partition};
-    use crate::{
-        CrustClassificationConfig, PlateEvolutionConfig, PlateKinematicsConfig, classify_crust,
-        evolve_plate_ownership, generate_plate_kinematics,
+    use crate::test_support::{
+        empty_boundaries, final_state_fixture, fingerprint, reference_partition,
     };
-
-    fn final_fixture() -> (
-        SphereMesh,
-        PlatePartition,
-        CrustClassification,
-        BoundaryClassification,
-    ) {
-        let (mesh, initial) = reference_partition();
-        let crust = classify_crust(&mesh, &initial, CrustClassificationConfig::new(17)).unwrap();
-        let kinematics =
-            generate_plate_kinematics(initial.plate_count, PlateKinematicsConfig::new(7)).unwrap();
-        let evolution = evolve_plate_ownership(
-            &mesh,
-            &initial,
-            &crust,
-            &kinematics,
-            PlateEvolutionConfig::default(),
-        )
-        .unwrap();
-        (mesh, evolution.partition, crust, evolution.boundaries)
-    }
 
     #[test]
     fn final_age_field_is_deterministic_and_has_stable_aggregates() {
-        let (mesh, partition, crust, boundaries) = final_fixture();
+        let (mesh, partition, crust, boundaries) = final_state_fixture();
         let config = SeafloorAgeConfig::default();
         let first = derive_seafloor_age(&mesh, &partition, &crust, &boundaries, config).unwrap();
 
@@ -210,14 +157,16 @@ mod tests {
         assert_eq!(
             first.diagnostics,
             SeafloorAgeDiagnostics {
+                summary: FieldSummary {
+                    minimum: 0.0,
+                    maximum: 3.0,
+                    mean: 0.666_666_7,
+                },
                 oceanic_cell_count: 270,
                 ridge_cell_count: 147,
                 ridge_plate_count: 13,
                 ridge_less_plate_count: 0,
                 fallback_cell_count: 0,
-                minimum_age: 0,
-                maximum_age: 3,
-                mean_age: 0.666_666_7,
             }
         );
         assert_eq!(
@@ -270,6 +219,26 @@ mod tests {
             age.diagnostics.fallback_cell_count,
             age.diagnostics.oceanic_cell_count
         );
+    }
+
+    #[test]
+    fn all_continental_world_has_no_age_or_aggregates() {
+        let (mesh, partition) = reference_partition();
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental; partition.plate_count],
+        };
+
+        let age = derive_seafloor_age(
+            &mesh,
+            &partition,
+            &crust,
+            &empty_boundaries(&mesh),
+            SeafloorAgeConfig::default(),
+        )
+        .unwrap();
+
+        assert!(age.cell_ages.iter().all(Option::is_none));
+        assert_eq!(age.diagnostics, SeafloorAgeDiagnostics::default());
     }
 
     #[test]
@@ -337,7 +306,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(SeafloorAgeError::CellCountMismatch)
+            Err(SeafloorAgeError::Input(StageInputError::Cells))
         );
 
         let wrong_crust = CrustClassification {
@@ -351,7 +320,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(SeafloorAgeError::PlateCountMismatch)
+            Err(SeafloorAgeError::Input(StageInputError::Plates))
         );
 
         let mut wrong_boundaries = boundaries;
@@ -364,7 +333,7 @@ mod tests {
                 &wrong_boundaries,
                 Default::default()
             ),
-            Err(SeafloorAgeError::BoundaryCountMismatch)
+            Err(SeafloorAgeError::Input(StageInputError::Boundaries))
         );
     }
 }
