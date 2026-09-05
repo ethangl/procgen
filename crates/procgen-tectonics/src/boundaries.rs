@@ -1,4 +1,4 @@
-use crate::{PlateKinematics, PlatePartition};
+use crate::{PlateKinematics, PlatePartition, StageInputError};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
@@ -72,10 +72,15 @@ impl BoundaryClassification {
         }
     }
 
-    pub(crate) fn matches_edge_count(&self, edge_count: usize) -> bool {
-        self.edge_classes.len() == edge_count
-            && self.edge_normal_speeds.len() == edge_count
-            && self.edge_shear.len() == edge_count
+    /// Validates that every dense boundary attribute covers the mesh edges.
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.edge_classes.len() != mesh.edge_count()
+            || self.edge_normal_speeds.len() != mesh.edge_count()
+            || self.edge_shear.len() != mesh.edge_count()
+        {
+            return Err(StageInputError::Boundaries);
+        }
+        Ok(())
     }
 }
 

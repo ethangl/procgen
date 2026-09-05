@@ -200,19 +200,11 @@ fn volcanic_arc_asset(mesh: &SphereMesh, field: &VolcanicArcField, radius: f32) 
         radius,
     );
     let marker_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
+    let marker_color = VOLCANIC_ARC_COLOR_STOPS[VOLCANIC_ARC_COLOR_STOPS.len() - 1].1;
+    let marker_color = Color::srgba(marker_color.x, marker_color.y, marker_color.z, 1.0);
     for peak in field.segments.iter().flat_map(|segment| &segment.peaks) {
         let position = to_bevy(mesh.cell_centers[peak.cell].normalized()) * radius;
-        let reference = if position.y.abs() < 0.9 {
-            Vec3::Y
-        } else {
-            Vec3::X
-        };
-        let tangent = position.cross(reference).normalize() * marker_size;
-        let bitangent = position.cross(tangent).normalize() * marker_size;
-        let color_vector = piecewise_lerp(peak.intensity, &VOLCANIC_ARC_COLOR_STOPS);
-        let color = Color::srgba(color_vector.x, color_vector.y, color_vector.z, 1.0);
-        asset.line(position - tangent, position + tangent, color);
-        asset.line(position - bitangent, position + bitangent, color);
+        add_cross_marker(&mut asset, position, marker_size, marker_color);
     }
     asset
 }
@@ -374,18 +366,21 @@ fn point_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {
     let size = (0.018 / (points.len() as f32).sqrt().max(8.0)).max(0.001);
     for (index, &point) in points.iter().enumerate() {
         let point = to_bevy(point) * radius;
-        let reference = if point.y.abs() < 0.9 {
-            Vec3::Y
-        } else {
-            Vec3::X
-        };
-        let tangent = point.cross(reference).normalize() * size;
-        let bitangent = point.cross(tangent).normalize() * size;
-        let color = id_color(index);
-        asset.line(point - tangent, point + tangent, color);
-        asset.line(point - bitangent, point + bitangent, color);
+        add_cross_marker(&mut asset, point, size, id_color(index));
     }
     asset
+}
+
+fn add_cross_marker(asset: &mut GizmoAsset, position: Vec3, size: f32, color: Color) {
+    let reference = if position.y.abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let tangent = position.cross(reference).normalize() * size;
+    let bitangent = position.cross(tangent).normalize() * size;
+    asset.line(position - tangent, position + tangent, color);
+    asset.line(position - bitangent, position + bitangent, color);
 }
 
 fn delaunay_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {

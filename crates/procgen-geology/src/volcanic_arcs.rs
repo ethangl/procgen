@@ -1,3 +1,4 @@
+use crate::field::MaxWinsField;
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
@@ -11,8 +12,9 @@ pub struct VolcanicArcFieldConfig {
     pub minimum_boundary_edges: usize,
     /// Desired graph distance from the boundary on the overriding plate.
     pub inland_offset_cells: usize,
-    /// Stable stride through inland cells when choosing peak candidates.
-    pub peak_stride: usize,
+    /// Selects approximately one peak candidate per this many inland cells,
+    /// retaining the strongest candidates first.
+    pub peak_density_divisor: usize,
     /// Convergence at which diagnostic strength reaches one.
     pub strength_saturation: f32,
 }
@@ -22,7 +24,7 @@ impl Default for VolcanicArcFieldConfig {
         Self {
             minimum_boundary_edges: 3,
             inland_offset_cells: 2,
-            peak_stride: 2,
+            peak_density_divisor: 2,
             strength_saturation: 1.0,
         }
     }
@@ -38,8 +40,6 @@ pub struct VolcanicArcCell {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolcanicPeakCandidate {
     pub cell: usize,
-    /// Unitless candidate intensity derived only from boundary strength.
-    pub intensity: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +85,7 @@ pub enum VolcanicArcFieldError {
     Input(StageInputError),
     EmptyMinimumSegment,
     ZeroInlandOffset,
-    ZeroPeakStride,
+    ZeroPeakDensityDivisor,
     InvalidStrengthSaturation,
 }
 
@@ -97,7 +97,9 @@ impl fmt::Display for VolcanicArcFieldError {
                 formatter.write_str("minimum boundary edges must be at least one")
             }
             Self::ZeroInlandOffset => formatter.write_str("inland offset must be at least one"),
-            Self::ZeroPeakStride => formatter.write_str("peak stride must be at least one"),
+            Self::ZeroPeakDensityDivisor => {
+                formatter.write_str("peak density divisor must be at least one")
+            }
             Self::InvalidStrengthSaturation => {
                 formatter.write_str("strength saturation must be finite and greater than zero")
             }
@@ -124,7 +126,18 @@ impl From<StageInputError> for VolcanicArcFieldError {
 struct InlandClaim {
     strength: f32,
     source_edge: usize,
-    source_cell: usize,
+}
+
+struct BoundaryData {
+    edges_by_cell: Vec<Vec<usize>>,
+    claims: Vec<Option<InlandClaim>>,
+    qualifying_edge_count: usize,
+}
+
+struct BoundaryGroup {
+    overriding_plate: usize,
+    boundary_edges: Vec<usize>,
+    boundary_cells: Vec<usize>,
 }
 
 /// Derives present-day volcanic-arc fields from final mixed-crust convergent
@@ -138,51 +151,22 @@ pub fn derive_volcanic_arc_field(
 ) -> Result<VolcanicArcField, VolcanicArcFieldError> {
     validate_inputs(mesh, plates, crust, boundaries, config)?;
 
-    let mut boundary_cell_edges = vec![Vec::new(); mesh.cell_count()];
-    let mut qualifying_edge_count = 0;
-    for (edge_index, edge) in mesh.edges.iter().enumerate() {
-        if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent {
-            continue;
-        }
-        let classes = edge.cells.map(|cell| crust.cell_class(plates, cell));
-        if classes[0] == classes[1] {
-            continue;
-        }
-        let overriding_cell = if classes[0] == CrustClass::Continental {
-            edge.cells[0]
-        } else {
-            edge.cells[1]
-        };
-        boundary_cell_edges[overriding_cell].push(edge_index);
-        qualifying_edge_count += 1;
-    }
+    let boundary = collect_boundary_data(mesh, plates, crust, boundaries, config);
+    let boundary_cell_count = boundary.claims.iter().flatten().count();
+    let mut groups = group_boundaries(mesh, plates, &boundary);
+    let original_group_count = groups.len();
+    groups.retain(|group| group.boundary_edges.len() >= config.minimum_boundary_edges);
+    let discarded_short_segment_count = original_group_count - groups.len();
 
-    let boundary_cell_count = boundary_cell_edges
-        .iter()
-        .filter(|edges| !edges.is_empty())
-        .count();
-    let mut segments = group_segments(mesh, plates, &boundary_cell_edges);
-    let original_segment_count = segments.len();
-    segments.retain(|segment| segment.boundary_edges.len() >= config.minimum_boundary_edges);
-    let discarded_short_segment_count = original_segment_count - segments.len();
-
-    let blocked_boundary_cells: Vec<_> = boundary_cell_edges
-        .iter()
-        .map(|edges| !edges.is_empty())
+    let mut discarded_landlocked_segment_count = 0;
+    let mut segments: Vec<_> = groups
+        .into_iter()
+        .filter_map(|group| {
+            let segment = derive_segment(mesh, plates, &boundary.claims, config, group);
+            discarded_landlocked_segment_count += usize::from(segment.is_none());
+            segment
+        })
         .collect();
-    for segment in &mut segments {
-        derive_inland_cells(
-            mesh,
-            plates,
-            boundaries,
-            &blocked_boundary_cells,
-            config,
-            segment,
-        );
-    }
-    let before_landlocked = segments.len();
-    segments.retain(|segment| !segment.arc_cells.is_empty());
-    let discarded_landlocked_segment_count = before_landlocked - segments.len();
     segments.sort_unstable_by_key(|segment| {
         (
             segment.overriding_plate,
@@ -191,38 +175,25 @@ pub fn derive_volcanic_arc_field(
         )
     });
 
-    let mut cell_strengths = vec![0.0_f32; mesh.cell_count()];
-    let mut cell_segments = vec![None; mesh.cell_count()];
-    let mut contribution_counts = vec![0_usize; mesh.cell_count()];
+    let mut aggregate = MaxWinsField::new(mesh.cell_count());
     for (segment_index, segment) in segments.iter().enumerate() {
         for arc_cell in &segment.arc_cells {
-            contribution_counts[arc_cell.cell] += 1;
-            if cell_segments[arc_cell.cell].is_none()
-                || arc_cell.strength > cell_strengths[arc_cell.cell]
-            {
-                cell_strengths[arc_cell.cell] = arc_cell.strength;
-                cell_segments[arc_cell.cell] = Some(segment_index);
-            }
+            aggregate.claim(arc_cell.cell, arc_cell.strength, segment_index);
         }
     }
 
     let arc_cell_count = segments.iter().map(|segment| segment.arc_cells.len()).sum();
     let peak_count = segments.iter().map(|segment| segment.peaks.len()).sum();
-    let affected_cell_count = contribution_counts
-        .iter()
-        .filter(|&&count| count > 0)
-        .count();
-    let overlap_cell_count = contribution_counts
-        .iter()
-        .filter(|&&count| count > 1)
-        .count();
+    let affected_cell_count = aggregate.affected_cell_count();
+    let overlap_cell_count = aggregate.overlap_cell_count();
+    let (cell_strengths, cell_segments) = aggregate.into_parts();
 
     Ok(VolcanicArcField {
         segments,
         cell_strengths,
         cell_segments,
         diagnostics: VolcanicArcDiagnostics {
-            qualifying_edge_count,
+            qualifying_edge_count: boundary.qualifying_edge_count,
             boundary_cell_count,
             discarded_short_segment_count,
             discarded_landlocked_segment_count,
@@ -247,34 +218,67 @@ fn validate_inputs(
     if config.inland_offset_cells == 0 {
         return Err(VolcanicArcFieldError::ZeroInlandOffset);
     }
-    if config.peak_stride == 0 {
-        return Err(VolcanicArcFieldError::ZeroPeakStride);
+    if config.peak_density_divisor == 0 {
+        return Err(VolcanicArcFieldError::ZeroPeakDensityDivisor);
     }
     if !config.strength_saturation.is_finite() || config.strength_saturation <= 0.0 {
         return Err(VolcanicArcFieldError::InvalidStrengthSaturation);
     }
     plates.validate(mesh)?;
-    if crust.plate_classes.len() != plates.plate_count {
-        return Err(StageInputError::Plates.into());
-    }
-    if boundaries.edge_classes.len() != mesh.edge_count()
-        || boundaries.edge_normal_speeds.len() != mesh.edge_count()
-        || boundaries.edge_shear.len() != mesh.edge_count()
-    {
-        return Err(StageInputError::Boundaries.into());
-    }
+    crust.validate(plates)?;
+    boundaries.validate(mesh)?;
     Ok(())
 }
 
-fn group_segments(
+fn collect_boundary_data(
     mesh: &SphereMesh,
     plates: &PlatePartition,
-    boundary_cell_edges: &[Vec<usize>],
-) -> Vec<VolcanicArcSegment> {
+    crust: &CrustClassification,
+    boundaries: &BoundaryClassification,
+    config: VolcanicArcFieldConfig,
+) -> BoundaryData {
+    let mut data = BoundaryData {
+        edges_by_cell: vec![Vec::new(); mesh.cell_count()],
+        claims: vec![None; mesh.cell_count()],
+        qualifying_edge_count: 0,
+    };
+    for (edge_index, edge) in mesh.edges.iter().enumerate() {
+        if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent {
+            continue;
+        }
+        let classes = edge.cells.map(|cell| crust.cell_class(plates, cell));
+        if classes[0] == classes[1] {
+            continue;
+        }
+        let overriding_cell = if classes[0] == CrustClass::Continental {
+            edge.cells[0]
+        } else {
+            edge.cells[1]
+        };
+        let claim = InlandClaim {
+            strength: (boundaries.convergence(edge_index) / config.strength_saturation)
+                .clamp(0.0, 1.0),
+            source_edge: edge_index,
+        };
+        let current = &mut data.claims[overriding_cell];
+        if current.is_none_or(|existing| claim_precedes(claim, existing)) {
+            *current = Some(claim);
+        }
+        data.edges_by_cell[overriding_cell].push(edge_index);
+        data.qualifying_edge_count += 1;
+    }
+    data
+}
+
+fn group_boundaries(
+    mesh: &SphereMesh,
+    plates: &PlatePartition,
+    boundary: &BoundaryData,
+) -> Vec<BoundaryGroup> {
     let mut visited = vec![false; mesh.cell_count()];
-    let mut segments = Vec::new();
+    let mut groups = Vec::new();
     for start in 0..mesh.cell_count() {
-        if visited[start] || boundary_cell_edges[start].is_empty() {
+        if visited[start] || boundary.claims[start].is_none() {
             continue;
         }
         let overriding_plate = plates.cell_plates[start];
@@ -284,99 +288,122 @@ fn group_segments(
         visited[start] = true;
         while let Some(cell) = queue.pop_front() {
             boundary_cells.push(cell);
-            boundary_edges.extend_from_slice(&boundary_cell_edges[cell]);
-            let mut neighbors: Vec<_> = mesh
-                .cell_corners(cell)
-                .iter()
-                .map(|corner| corner.neighbor)
-                .filter(|&neighbor| {
-                    !visited[neighbor]
-                        && !boundary_cell_edges[neighbor].is_empty()
-                        && plates.cell_plates[neighbor] == overriding_plate
-                })
-                .collect();
-            neighbors.sort_unstable();
-            for neighbor in neighbors {
-                visited[neighbor] = true;
-                queue.push_back(neighbor);
+            boundary_edges.extend_from_slice(&boundary.edges_by_cell[cell]);
+            for corner in mesh.cell_corners(cell) {
+                let neighbor = corner.neighbor;
+                if !visited[neighbor]
+                    && boundary.claims[neighbor].is_some()
+                    && plates.cell_plates[neighbor] == overriding_plate
+                {
+                    visited[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
             }
         }
         boundary_cells.sort_unstable();
         boundary_edges.sort_unstable();
         boundary_edges.dedup();
-        segments.push(VolcanicArcSegment {
+        groups.push(BoundaryGroup {
             overriding_plate,
             boundary_edges,
             boundary_cells,
-            arc_cells: Vec::new(),
-            peaks: Vec::new(),
-            inland_depth: 0,
         });
     }
-    segments
+    groups
 }
 
-fn derive_inland_cells(
+fn derive_segment(
     mesh: &SphereMesh,
     plates: &PlatePartition,
-    boundaries: &BoundaryClassification,
-    blocked_boundary_cells: &[bool],
+    boundary_claims: &[Option<InlandClaim>],
     config: VolcanicArcFieldConfig,
-    segment: &mut VolcanicArcSegment,
-) {
-    let mut visited = blocked_boundary_cells.to_vec();
-    let mut claims = vec![None; mesh.cell_count()];
-    for &cell in &segment.boundary_cells {
-        claims[cell] = strongest_boundary_claim(cell, mesh, boundaries, segment, config);
-    }
-    let mut frontier = segment.boundary_cells.clone();
-    let mut deepest = Vec::new();
+    group: BoundaryGroup,
+) -> Option<VolcanicArcSegment> {
+    let (arc_cells, inland_depth) = walk_inland(
+        mesh,
+        plates,
+        boundary_claims,
+        group.overriding_plate,
+        &group.boundary_cells,
+        config.inland_offset_cells,
+    )?;
+    let peaks = select_peak_candidates(&arc_cells, config.peak_density_divisor);
+    Some(VolcanicArcSegment {
+        overriding_plate: group.overriding_plate,
+        boundary_edges: group.boundary_edges,
+        boundary_cells: group.boundary_cells,
+        arc_cells,
+        peaks,
+        inland_depth,
+    })
+}
 
-    for depth in 1..=config.inland_offset_cells {
-        let mut next_claims: Vec<Option<InlandClaim>> = vec![None; mesh.cell_count()];
-        for &cell in &frontier {
-            let claim = claims[cell].expect("every frontier cell has a boundary claim");
-            let mut neighbors: Vec<_> = mesh
-                .cell_corners(cell)
-                .iter()
-                .map(|corner| corner.neighbor)
-                .collect();
-            neighbors.sort_unstable();
-            for neighbor in neighbors {
-                if visited[neighbor] || plates.cell_plates[neighbor] != segment.overriding_plate {
+fn walk_inland(
+    mesh: &SphereMesh,
+    plates: &PlatePartition,
+    boundary_claims: &[Option<InlandClaim>],
+    overriding_plate: usize,
+    boundary_cells: &[usize],
+    maximum_depth: usize,
+) -> Option<(Vec<VolcanicArcCell>, usize)> {
+    let mut visited: Vec<_> = boundary_claims.iter().map(Option::is_some).collect();
+    let mut claim_buffer = vec![None; mesh.cell_count()];
+    let mut touched = Vec::new();
+    let mut frontier: Vec<_> = boundary_cells
+        .iter()
+        .filter_map(|&cell| boundary_claims[cell].map(|claim| (cell, claim)))
+        .collect();
+    let mut inland_depth = 0;
+
+    for depth in 1..=maximum_depth {
+        touched.clear();
+        for &(cell, claim) in &frontier {
+            for corner in mesh.cell_corners(cell) {
+                let neighbor = corner.neighbor;
+                if visited[neighbor] || plates.cell_plates[neighbor] != overriding_plate {
                     continue;
                 }
-                let slot = &mut next_claims[neighbor];
+                touched.push(neighbor);
+                let slot = &mut claim_buffer[neighbor];
                 if slot.is_none_or(|existing| claim_precedes(claim, existing)) {
                     *slot = Some(claim);
                 }
             }
         }
-        let next: Vec<_> = next_claims
+        touched.sort_unstable();
+        touched.dedup();
+        let next: Vec<_> = touched
             .iter()
-            .enumerate()
-            .filter_map(|(cell, claim)| claim.map(|claim| (cell, claim)))
+            .filter_map(|&cell| claim_buffer[cell].take().map(|claim| (cell, claim)))
             .collect();
         if next.is_empty() {
             break;
         }
-        frontier.clear();
-        deepest.clear();
-        for (cell, claim) in next {
+        for &(cell, _) in &next {
             visited[cell] = true;
-            claims[cell] = Some(claim);
-            frontier.push(cell);
-            deepest.push(VolcanicArcCell {
-                cell,
-                strength: claim.strength,
-            });
         }
-        segment.inland_depth = depth;
+        frontier = next;
+        inland_depth = depth;
     }
 
-    segment.arc_cells = deepest;
-    let peak_count = segment.arc_cells.len().div_ceil(config.peak_stride);
-    let mut peak_cells: Vec<_> = segment.arc_cells.iter().collect();
+    (inland_depth > 0).then(|| {
+        let cells = frontier
+            .into_iter()
+            .map(|(cell, claim)| VolcanicArcCell {
+                cell,
+                strength: claim.strength,
+            })
+            .collect();
+        (cells, inland_depth)
+    })
+}
+
+fn select_peak_candidates(
+    arc_cells: &[VolcanicArcCell],
+    density_divisor: usize,
+) -> Vec<VolcanicPeakCandidate> {
+    let peak_count = arc_cells.len().div_ceil(density_divisor);
+    let mut peak_cells: Vec<_> = arc_cells.iter().collect();
     peak_cells.sort_unstable_by(|left, right| {
         right
             .strength
@@ -385,44 +412,17 @@ fn derive_inland_cells(
     });
     peak_cells.truncate(peak_count);
     peak_cells.sort_unstable_by_key(|arc_cell| arc_cell.cell);
-    segment.peaks = peak_cells
+    peak_cells
         .into_iter()
         .map(|arc_cell| VolcanicPeakCandidate {
             cell: arc_cell.cell,
-            intensity: 0.7 + 0.3 * arc_cell.strength,
         })
-        .collect();
-}
-
-fn strongest_boundary_claim(
-    cell: usize,
-    mesh: &SphereMesh,
-    boundaries: &BoundaryClassification,
-    segment: &VolcanicArcSegment,
-    config: VolcanicArcFieldConfig,
-) -> Option<InlandClaim> {
-    segment
-        .boundary_edges
-        .iter()
-        .copied()
-        .filter(|&edge| mesh.edges[edge].cells.contains(&cell))
-        .map(|edge| InlandClaim {
-            strength: (boundaries.convergence(edge) / config.strength_saturation).clamp(0.0, 1.0),
-            source_edge: edge,
-            source_cell: cell,
-        })
-        .max_by(|left, right| {
-            left.strength
-                .total_cmp(&right.strength)
-                .then_with(|| right.source_edge.cmp(&left.source_edge))
-        })
+        .collect()
 }
 
 fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> bool {
     candidate.strength > existing.strength
-        || (candidate.strength == existing.strength
-            && (candidate.source_edge, candidate.source_cell)
-                < (existing.source_edge, existing.source_cell))
+        || (candidate.strength == existing.strength && candidate.source_edge < existing.source_edge)
 }
 
 #[cfg(test)]
@@ -573,15 +573,10 @@ mod tests {
             .chain(segment.arc_cells.iter().flat_map(|arc_cell| {
                 [arc_cell.cell as u64, u64::from(arc_cell.strength.to_bits())]
             }))
-            .chain(
-                segment
-                    .peaks
-                    .iter()
-                    .flat_map(|peak| [peak.cell as u64, u64::from(peak.intensity.to_bits())]),
-            )
+            .chain(segment.peaks.iter().map(|peak| peak.cell as u64))
         });
 
-        assert_eq!(fingerprint(values), 6_110_771_280_322_516_547);
+        assert_eq!(fingerprint(values), 5_753_623_188_708_739_124);
     }
 
     #[test]
@@ -590,7 +585,7 @@ mod tests {
         let config = VolcanicArcFieldConfig {
             minimum_boundary_edges: 1,
             inland_offset_cells: 3,
-            peak_stride: 2,
+            peak_density_divisor: 2,
             strength_saturation: 2.0,
         };
         let field = derive_volcanic_arc_field(&mesh, &plates, &crust, &boundaries, config).unwrap();
@@ -604,7 +599,12 @@ mod tests {
                     .total_cmp(&left.strength)
                     .then_with(|| left.cell.cmp(&right.cell))
             });
-            expected.truncate(segment.arc_cells.len().div_ceil(config.peak_stride));
+            expected.truncate(
+                segment
+                    .arc_cells
+                    .len()
+                    .div_ceil(config.peak_density_divisor),
+            );
             let mut expected: Vec<_> = expected.into_iter().map(|arc_cell| arc_cell.cell).collect();
             expected.sort_unstable();
             assert_eq!(
@@ -615,15 +615,6 @@ mod tests {
                     .collect::<Vec<_>>(),
                 expected
             );
-            for peak in &segment.peaks {
-                let strength = segment
-                    .arc_cells
-                    .iter()
-                    .find(|arc_cell| arc_cell.cell == peak.cell)
-                    .unwrap()
-                    .strength;
-                assert_eq!(peak.intensity, 0.7 + 0.3 * strength);
-            }
         }
         for cell in 0..mesh.cell_count() {
             let expected = field
@@ -710,10 +701,10 @@ mod tests {
             ),
             (
                 VolcanicArcFieldConfig {
-                    peak_stride: 0,
+                    peak_density_divisor: 0,
                     ..Default::default()
                 },
-                VolcanicArcFieldError::ZeroPeakStride,
+                VolcanicArcFieldError::ZeroPeakDensityDivisor,
             ),
             (
                 VolcanicArcFieldConfig {

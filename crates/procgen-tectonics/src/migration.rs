@@ -106,7 +106,7 @@ pub fn migrate_plates_once(
     if crust.plate_classes.len() != partition.plate_count {
         return Err(PlateMigrationError::PlateCountMismatch);
     }
-    if !boundaries.matches_edge_count(mesh.edge_count()) {
+    if boundaries.validate(mesh).is_err() {
         return Err(PlateMigrationError::BoundaryCountMismatch);
     }
 

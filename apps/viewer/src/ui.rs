@@ -23,7 +23,7 @@ const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
-const ARC_PEAK_STRIDE_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
+const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
@@ -327,9 +327,9 @@ fn volcanic_arc_controls(
     );
     drag_value(
         ui,
-        "Peak stride",
-        &mut config.peak_stride,
-        ARC_PEAK_STRIDE_RANGE,
+        "Peak density divisor",
+        &mut config.peak_density_divisor,
+        ARC_PEAK_DENSITY_DIVISOR_RANGE,
         1.0,
     );
     slider(

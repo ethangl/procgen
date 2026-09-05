@@ -349,7 +349,7 @@ mod tests {
             volcanic_arcs: VolcanicArcFieldConfig {
                 minimum_boundary_edges: 2,
                 inland_offset_cells: 3,
-                peak_stride: 3,
+                peak_density_divisor: 3,
                 strength_saturation: 0.75,
             },
         };

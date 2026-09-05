@@ -4,6 +4,7 @@
 //! tectonic generation. Geological fields are deliberately independent of
 //! elevation and rendering.
 
+mod field;
 mod hotspots;
 mod volcanic_arcs;
 

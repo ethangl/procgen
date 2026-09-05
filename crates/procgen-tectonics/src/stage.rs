@@ -31,18 +31,12 @@ pub(crate) fn validate_ownership_and_crust(
     crust: &CrustClassification,
 ) -> Result<(), StageInputError> {
     partition.validate(mesh)?;
-    if crust.plate_classes.len() != partition.plate_count {
-        return Err(StageInputError::Plates);
-    }
-    Ok(())
+    crust.validate(partition)
 }
 
 pub(crate) fn validate_boundaries(
     mesh: &SphereMesh,
     boundaries: &BoundaryClassification,
 ) -> Result<(), StageInputError> {
-    if !boundaries.matches_edge_count(mesh.edge_count()) {
-        return Err(StageInputError::Boundaries);
-    }
-    Ok(())
+    boundaries.validate(mesh)
 }
