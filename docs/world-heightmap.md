@@ -104,7 +104,12 @@ Completed foundations:
   young nonzero seafloor age. An independent seeded pass emits stable sparse
   seamount and abyssal-hill candidates with positions bounded inside their
   source cells and strength-scaled diagnostic heights; it does not stamp cones,
-  mutate elevation, or produce a dense terrain field.
+  mutate elevation, or produce a dense terrain field. A separate geological
+  elevation stage copies coarse tectonic elevation, then applies hotspot uplift,
+  volcanic-arc uplift, craton flattening toward the configured continental base,
+  and basin flattening toward each component's original deterministic minimum,
+  in that stable order. It reports the aggregate actual delta of each effect and
+  does not consume the sparse oceanic peaks or mutate any input field.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation
@@ -112,7 +117,8 @@ Completed foundations:
   elevation layers, hotspot and volcanic-arc field visualization, craton
   distance/ramp controls and strength visualization, sedimentary-basin controls
   and stable-ID visualization, seamount/abyssal density and sparse-peak controls
-  and visualization, aggregate diagnostics, and stage timings.
+  and visualization, geological-elevation effect controls and final layer,
+  per-effect aggregate diagnostics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

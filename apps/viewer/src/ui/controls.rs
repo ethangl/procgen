@@ -3,8 +3,8 @@ use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_geology::{
-    CratonFieldConfig, HotspotFieldConfig, OceanicPeakFieldConfig, SedimentaryBasinFieldConfig,
-    VolcanicArcFieldConfig,
+    CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, OceanicPeakFieldConfig,
+    SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
@@ -74,6 +74,9 @@ pub(super) fn generation_controls(
     });
     section(ui, "Sedimentary basins", |ui| {
         basin_controls(ui, &mut generation.basins)
+    });
+    section(ui, "Geological elevation", |ui| {
+        geological_elevation_controls(ui, &mut generation.geological_elevation)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -382,6 +385,28 @@ fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig) {
         ui,
         "Maximum ocean perimeter",
         &mut config.maximum_ocean_perimeter_fraction,
+        0.0..=1.0,
+    );
+}
+
+fn geological_elevation_controls(ui: &mut egui::Ui, config: &mut GeologicalElevationConfig) {
+    slider(ui, "Hotspot uplift", &mut config.hotspot_uplift, 0.0..=1.0);
+    slider(
+        ui,
+        "Volcanic-arc uplift",
+        &mut config.volcanic_arc_uplift,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Craton flattening",
+        &mut config.craton_flattening,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Basin flattening",
+        &mut config.basin_flattening,
         0.0..=1.0,
     );
 }

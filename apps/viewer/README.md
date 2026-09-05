@@ -16,17 +16,23 @@ elevation. Present-day geology fields are then derived without modifying that
 elevation: mantle-hotspot trails follow final-owner plate motion, volcanic arcs
 walk inland from final mixed-crust convergent boundaries, and craton strength
 ramps across continental land by graph distance from final plate boundaries.
+Those fields are composed into a new geological elevation in stable hotspot,
+volcanic-arc, craton, then basin order. Cratons flatten toward the configured
+continental base and basins flatten toward their original component minima;
+sparse seamount and abyssal-hill candidates are not applied to elevation.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
 
 The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
-deformation, composed-elevation, hotspot, volcanic-arc, craton, motion, and
-final-boundary diagnostics and reports aggregate statistics plus stage timings.
+deformation, tectonic-elevation, geological-elevation, hotspot, volcanic-arc,
+craton, basin, motion, and final-boundary diagnostics and reports aggregate
+statistics plus stage timings.
 Plate interiors use stable per-plate colors. Crust is blue for oceanic, amber
 for continental, and white where the classes meet. Seafloor age runs from cyan
-ridge cells to dark blue old crust, with continental cells brown. Base and
-composed elevation use a deep-water-through-highland color ramp. Deformation
+ridge cells to dark blue old crust, with continental cells brown. Base,
+tectonic, and geological elevation use a deep-water-through-highland color ramp.
+Deformation
 runs from blue subsidence through dark zero to orange uplift. Motion arrows
 sample each plate's local tangent velocity field. Static boundaries are red for
 convergent, blue for divergent, and yellow for transform. Volcanic arcs use an

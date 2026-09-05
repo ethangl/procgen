@@ -6,6 +6,7 @@
 
 mod basins;
 mod cratons;
+mod elevation;
 mod field;
 mod hotspots;
 mod oceanic_peaks;
@@ -18,6 +19,10 @@ pub use basins::{
     SedimentaryBasinFieldConfig, SedimentaryBasinFieldError, derive_sedimentary_basin_field,
 };
 pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
+pub use elevation::{
+    ElevationEffectDiagnostics, GeologicalElevation, GeologicalElevationConfig,
+    GeologicalElevationDiagnostics, GeologicalElevationError, compose_geological_elevation,
+};
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
     HotspotTrailCell, generate_hotspot_field,
