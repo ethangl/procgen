@@ -26,9 +26,11 @@ impl CrustClassificationConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CrustClassification {
     pub plate_classes: Vec<CrustClass>,
+    /// Area-weighted ocean fraction achieved when this classification was made.
+    pub ocean_fraction: f32,
 }
 
 impl CrustClassification {
@@ -106,7 +108,10 @@ pub fn classify_crust(
         }
     }
 
-    Ok(CrustClassification { plate_classes })
+    Ok(CrustClassification {
+        plate_classes,
+        ocean_fraction: (ocean_area / total_area) as f32,
+    })
 }
 
 #[cfg(test)]
@@ -162,15 +167,7 @@ mod tests {
             );
         }
 
-        let measured_ocean_area: f64 = mesh
-            .cell_areas
-            .iter()
-            .enumerate()
-            .filter(|(cell, _)| crust.cell_class(&partition, *cell) == CrustClass::Oceanic)
-            .map(|(_, &area)| f64::from(area))
-            .sum();
-        let total_area: f64 = mesh.cell_areas.iter().map(|&area| f64::from(area)).sum();
-        assert!((measured_ocean_area / total_area - 0.7).abs() < 0.1);
+        assert!((crust.ocean_fraction - 0.7).abs() < 0.1);
     }
 
     #[test]
@@ -224,6 +221,8 @@ mod tests {
                 .iter()
                 .all(|&class| class == CrustClass::Oceanic)
         );
+        assert_eq!(continental.ocean_fraction, 0.0);
+        assert_eq!(oceanic.ocean_fraction, 1.0);
     }
 
     #[test]

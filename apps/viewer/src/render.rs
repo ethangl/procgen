@@ -19,7 +19,7 @@ pub enum DiagnosticLayer {
     Motion,
 }
 
-const PLATE_BORDER_RADIUS: f32 = 1.013;
+const PLATE_BORDER_OFFSET: f32 = 0.004;
 
 impl DiagnosticLayer {
     pub const ALL: [Self; 7] = [
@@ -54,7 +54,7 @@ impl DiagnosticLayer {
     }
 
     // Radius order defines the intended composition: Delaunay, Voronoi, plate
-    // interiors, crust, points, PLATE_BORDER_RADIUS, boundaries, then motion.
+    // interiors, crust, points, plate borders, boundaries, then motion.
     const fn radius(self) -> f32 {
         match self {
             Self::Points => 1.012,
@@ -113,7 +113,6 @@ impl Default for LayerSettings {
         let mut visible = [false; DiagnosticLayer::COUNT];
         visible[DiagnosticLayer::Voronoi.index()] = true;
         visible[DiagnosticLayer::Plates.index()] = true;
-        visible[DiagnosticLayer::Crust.index()] = true;
         visible[DiagnosticLayer::Boundaries.index()] = true;
         visible[DiagnosticLayer::Motion.index()] = true;
         Self { visible }
@@ -272,7 +271,10 @@ fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition, radius: f32) -> Gizmo
         if left_plate == right_plate {
             Some((radius, id_color(left_plate)))
         } else {
-            Some((PLATE_BORDER_RADIUS, Color::srgba(0.95, 0.95, 1.0, 0.98)))
+            Some((
+                radius + PLATE_BORDER_OFFSET,
+                Color::srgba(0.95, 0.95, 1.0, 0.98),
+            ))
         }
     })
 }

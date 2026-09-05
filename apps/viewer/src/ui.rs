@@ -2,7 +2,7 @@ use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, Regener
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_tectonics::BoundaryClass;
+use procgen_tectonics::{BoundaryClass, CrustClass};
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
@@ -63,13 +63,7 @@ fn generation_controls(
         4..=65_536,
         16.0,
     );
-    ui.horizontal(|ui| {
-        ui.label("Jitter");
-        ui.add(egui::Slider::new(
-            &mut generation.fibonacci.jitter,
-            0.0..=1.0,
-        ));
-    });
+    slider(ui, "Jitter", &mut generation.fibonacci.jitter, 0.0..=1.0);
     drag_value(
         ui,
         "Sampling seed",
@@ -110,13 +104,12 @@ fn generation_controls(
     );
     ui.add_space(4.0);
     ui.label("Static crust");
-    ui.horizontal(|ui| {
-        ui.label("Target ocean");
-        ui.add(egui::Slider::new(
-            &mut generation.crust.target_ocean_fraction,
-            0.0..=1.0,
-        ));
-    });
+    slider(
+        ui,
+        "Target ocean",
+        &mut generation.crust.target_ocean_fraction,
+        0.0..=1.0,
+    );
     drag_value(
         ui,
         "Crust seed",
@@ -192,19 +185,17 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Achieved ocean area",
-            format!("{:.2}%", world.crust_summary.ocean_fraction * 100.0),
+            format!("{:.2}%", world.crust.ocean_fraction * 100.0),
         );
-        stat(ui, "Oceanic plates", world.crust_summary.oceanic_plates);
+        stat(
+            ui,
+            "Oceanic plates",
+            world.crust.plate_count(CrustClass::Oceanic),
+        );
         stat(
             ui,
             "Continental plates",
-            world.crust_summary.continental_plates,
-        );
-        stat(ui, "Oceanic cells", world.crust_summary.oceanic_cells);
-        stat(
-            ui,
-            "Continental cells",
-            world.crust_summary.continental_cells,
+            world.crust.plate_count(CrustClass::Continental),
         );
     });
 
@@ -258,5 +249,12 @@ fn drag_value<T: egui::emath::Numeric>(
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(egui::DragValue::new(value).range(range).speed(speed));
+    });
+}
+
+fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(egui::Slider::new(value, range));
     });
 }
