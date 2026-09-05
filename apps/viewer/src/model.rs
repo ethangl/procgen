@@ -1,5 +1,8 @@
 use bevy::prelude::*;
-use procgen_geology::{HotspotField, HotspotFieldConfig, generate_hotspot_field};
+use procgen_geology::{
+    HotspotField, HotspotFieldConfig, VolcanicArcField, VolcanicArcFieldConfig,
+    derive_volcanic_arc_field, generate_hotspot_field,
+};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
@@ -30,6 +33,7 @@ pub struct GenerationSettings {
     pub deformation: BoundaryDeformationConfig,
     pub elevation: CoarseElevationConfig,
     pub hotspots: HotspotFieldConfig,
+    pub volcanic_arcs: VolcanicArcFieldConfig,
 }
 
 impl Default for GenerationSettings {
@@ -60,6 +64,7 @@ impl Default for GenerationSettings {
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
             hotspots: HotspotFieldConfig::new(7),
+            volcanic_arcs: VolcanicArcFieldConfig::default(),
         }
     }
 }
@@ -135,6 +140,7 @@ pub struct GeneratedWorld {
     pub deformation: BoundaryDeformation,
     pub elevation: CoarseElevation,
     pub hotspots: HotspotField,
+    pub volcanic_arcs: VolcanicArcField,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -185,6 +191,9 @@ impl GeneratedWorld {
         let hotspots = timings.record("Mantle hotspots", || {
             generate_hotspot_field(&voronoi, &plates, &kinematics, config.hotspots)
         })?;
+        let volcanic_arcs = timings.record("Volcanic arcs", || {
+            derive_volcanic_arc_field(&voronoi, &plates, &crust, &boundaries, config.volcanic_arcs)
+        })?;
 
         Ok(Self {
             voronoi,
@@ -198,6 +207,7 @@ impl GeneratedWorld {
             deformation,
             elevation,
             hotspots,
+            volcanic_arcs,
             timings,
             config,
         })
@@ -243,6 +253,7 @@ mod tests {
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
             hotspots: HotspotFieldConfig::new(7),
+            volcanic_arcs: VolcanicArcFieldConfig::default(),
         })
         .unwrap();
 
@@ -280,6 +291,10 @@ mod tests {
             world.hotspots.hotspots.len(),
             world.config.hotspots.hotspot_count
         );
+        assert_eq!(
+            world.volcanic_arcs.cell_strengths.len(),
+            world.voronoi.cell_count()
+        );
     }
 
     #[test]
@@ -296,6 +311,7 @@ mod tests {
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
             hotspots: HotspotFieldConfig::new(7),
+            volcanic_arcs: VolcanicArcFieldConfig::default(),
         })
         .unwrap();
         let requested = GenerationSettings {
@@ -330,6 +346,12 @@ mod tests {
                 maximum_trail_cells: 6,
                 seed: 5,
             },
+            volcanic_arcs: VolcanicArcFieldConfig {
+                minimum_boundary_edges: 2,
+                inland_offset_cells: 3,
+                peak_stride: 3,
+                strength_saturation: 0.75,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -349,6 +371,7 @@ mod tests {
         assert_eq!(world.config.deformation, requested.deformation);
         assert_eq!(world.config.elevation, requested.elevation);
         assert_eq!(world.config.hotspots, requested.hotspots);
+        assert_eq!(world.config.volcanic_arcs, requested.volcanic_arcs);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

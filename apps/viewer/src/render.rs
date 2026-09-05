@@ -1,6 +1,7 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
+use procgen_geology::VolcanicArcField;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
@@ -20,6 +21,7 @@ pub enum DiagnosticLayer {
     Deformation,
     Elevation,
     Hotspots,
+    VolcanicArcs,
     Boundaries,
     Motion,
 }
@@ -30,7 +32,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 13] = [
+const DRAW_ORDER: [DrawSurface; 14] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -41,6 +43,7 @@ const DRAW_ORDER: [DrawSurface; 13] = [
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
+    DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
     DrawSurface::PlateBorders,
     DrawSurface::Layer(DiagnosticLayer::Boundaries),
     DrawSurface::Layer(DiagnosticLayer::Motion),
@@ -71,9 +74,15 @@ const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.65, Vec3::new(1.0, 0.25, 0.05)),
     (1.0, Vec3::new(1.0, 0.95, 0.25)),
 ];
+const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.08, 0.055, 0.04)),
+    (0.25, Vec3::new(0.55, 0.12, 0.02)),
+    (0.65, Vec3::new(1.0, 0.42, 0.03)),
+    (1.0, Vec3::new(1.0, 0.95, 0.28)),
+];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -84,6 +93,7 @@ impl DiagnosticLayer {
         Self::Deformation,
         Self::Elevation,
         Self::Hotspots,
+        Self::VolcanicArcs,
         Self::Boundaries,
         Self::Motion,
     ];
@@ -109,6 +119,7 @@ impl DiagnosticLayer {
             Self::Deformation => 3.3,
             Self::Elevation => 3.5,
             Self::Hotspots => 3.7,
+            Self::VolcanicArcs => 3.9,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -130,6 +141,7 @@ impl DiagnosticLayer {
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Hotspots => "Mantle hotspots",
+            Self::VolcanicArcs => "Volcanic arcs",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
         }
@@ -173,10 +185,36 @@ impl DiagnosticLayer {
                 &HOTSPOT_COLOR_STOPS,
                 radius,
             ),
+            Self::VolcanicArcs => volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn volcanic_arc_asset(mesh: &SphereMesh, field: &VolcanicArcField, radius: f32) -> GizmoAsset {
+    let mut asset = scalar_field_asset(
+        mesh,
+        &field.cell_strengths,
+        &VOLCANIC_ARC_COLOR_STOPS,
+        radius,
+    );
+    let marker_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
+    for peak in field.segments.iter().flat_map(|segment| &segment.peaks) {
+        let position = to_bevy(mesh.cell_centers[peak.cell].normalized()) * radius;
+        let reference = if position.y.abs() < 0.9 {
+            Vec3::Y
+        } else {
+            Vec3::X
+        };
+        let tangent = position.cross(reference).normalize() * marker_size;
+        let bitangent = position.cross(tangent).normalize() * marker_size;
+        let color_vector = piecewise_lerp(peak.intensity, &VOLCANIC_ARC_COLOR_STOPS);
+        let color = Color::srgba(color_vector.x, color_vector.y, color_vector.z, 1.0);
+        asset.line(position - tangent, position + tangent, color);
+        asset.line(position - bitangent, position + bitangent, color);
+    }
+    asset
 }
 
 fn seafloor_age_asset(mesh: &SphereMesh, age: &SeafloorAge, radius: f32) -> GizmoAsset {
