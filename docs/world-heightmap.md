@@ -77,12 +77,16 @@ Completed foundations:
   crust and final boundary classes and strengths, with deterministic overlap
   resolution and bounded within-plate propagation. Coarse elevation then
   composes current-owner crust base elevation with deformation before
-  simultaneous smoothing and clamping. Neither stage accumulates state during
-  evolution.
+  simultaneous smoothing and clamping. A separate seafloor-age stage derives
+  oceanic-cell hop distance from final divergent boundaries without feeding
+  either elevation or deformation; propagation stays within final plate
+  ownership and ridge-less oceanic plates receive a deterministic configured
+  fallback age. None of these stages accumulates state during evolution.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, and coarse-elevation controls, signed
-  deformation and elevation layers, aggregate statistics, and stage timings.
+  deformation, seafloor-age, and elevation layers, aggregate statistics, and
+  stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

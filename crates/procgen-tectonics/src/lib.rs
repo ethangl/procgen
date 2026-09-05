@@ -3,8 +3,8 @@
 //! Plate partitioning, rigid spherical plate motion, static boundary
 //! classification, static crust classification, one-step plate migration,
 //! deterministic multi-step ownership evolution, post-evolution boundary
-//! deformation, and coarse elevation composition live here. Geological effects
-//! remain separate later stages.
+//! deformation, seafloor hop age, and coarse elevation composition live here.
+//! Geological effects remain separate later stages.
 
 mod boundaries;
 mod crust;
@@ -15,6 +15,7 @@ mod field;
 mod migration;
 mod motion;
 mod partition;
+mod seafloor_age;
 
 mod random_streams {
     // Keep stream ids globally unique so equal user-facing seeds do not
@@ -54,3 +55,6 @@ pub use motion::{
     PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
 };
 pub use partition::{PlatePartition, PlatePartitionConfig, PlatePartitionError, partition_plates};
+pub use seafloor_age::{
+    SeafloorAge, SeafloorAgeConfig, SeafloorAgeDiagnostics, SeafloorAgeError, derive_seafloor_age,
+};

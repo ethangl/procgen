@@ -15,6 +15,7 @@ pub enum DiagnosticLayer {
     Voronoi,
     Plates,
     Crust,
+    SeafloorAge,
     Deformation,
     Elevation,
     Boundaries,
@@ -27,12 +28,13 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 10] = [
+const DRAW_ORDER: [DrawSurface; 11] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
     DrawSurface::Layer(DiagnosticLayer::Crust),
     DrawSurface::Layer(DiagnosticLayer::Points),
+    DrawSurface::Layer(DiagnosticLayer::SeafloorAge),
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::PlateBorders,
@@ -46,6 +48,11 @@ const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
     (0.0, Vec3::new(0.12, 0.12, 0.16)),
     (0.5, Vec3::new(1.0, 0.38, 0.08)),
 ];
+const SEAFLOOR_AGE_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (0.0, Vec3::new(0.35, 0.95, 1.0)),
+    (0.5, Vec3::new(0.08, 0.4, 0.8)),
+    (1.0, Vec3::new(0.015, 0.05, 0.2)),
+];
 const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.0, Vec3::new(0.02, 0.08, 0.3)),
     (0.5, Vec3::new(0.08, 0.65, 0.85)),
@@ -56,12 +63,13 @@ const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
+        Self::SeafloorAge,
         Self::Deformation,
         Self::Elevation,
         Self::Boundaries,
@@ -84,6 +92,7 @@ impl DiagnosticLayer {
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
             Self::Crust => 3.0,
+            Self::SeafloorAge => 3.1,
             Self::Deformation => 3.2,
             Self::Elevation => 3.4,
             Self::Boundaries => 4.0,
@@ -102,6 +111,7 @@ impl DiagnosticLayer {
             Self::Voronoi => "Voronoi",
             Self::Plates => "Tectonic plates",
             Self::Crust => "Crust classes",
+            Self::SeafloorAge => "Seafloor age",
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Boundaries => "Boundary classes",
@@ -122,6 +132,7 @@ impl DiagnosticLayer {
                 draw_radius(DrawSurface::PlateBorders),
             ),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
+            Self::SeafloorAge => seafloor_age_asset(world, radius),
             Self::Deformation => scalar_field_asset(
                 &world.voronoi,
                 &world.deformation.cell_deformation,
@@ -138,6 +149,23 @@ impl DiagnosticLayer {
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn seafloor_age_asset(world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+    let maximum_age = world.seafloor_age.diagnostics.maximum_age.max(1) as f32;
+    voronoi_edge_asset(&world.voronoi, |_, edge| {
+        let ages = edge.cells.map(|cell| world.seafloor_age.cell_ages[cell]);
+        let color = match ages {
+            [None, None] => Color::srgba(0.18, 0.16, 0.14, 0.75),
+            [Some(_), None] | [None, Some(_)] => Color::srgba(0.96, 0.96, 1.0, 1.0),
+            [Some(left), Some(right)] => {
+                let normalized = (left as f32 + right as f32) * 0.5 / maximum_age;
+                let color = piecewise_lerp(normalized, &SEAFLOOR_AGE_COLOR_STOPS);
+                Color::srgba(color.x, color.y, color.z, 0.98)
+            }
+        };
+        Some((radius, color))
+    })
 }
 
 fn draw_radius(surface: DrawSurface) -> f32 {
