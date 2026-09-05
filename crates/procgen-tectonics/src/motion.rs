@@ -10,18 +10,12 @@ pub struct PlateKinematicsConfig {
 }
 
 impl PlateKinematicsConfig {
-    pub const fn new() -> Self {
+    pub const fn new(seed: u64) -> Self {
         Self {
-            seed: 0,
+            seed,
             minimum_angular_speed: 0.5,
             maximum_angular_speed: 1.0,
         }
-    }
-}
-
-impl Default for PlateKinematicsConfig {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -97,22 +91,12 @@ mod tests {
 
     #[test]
     fn angular_velocities_are_deterministic_and_bounded() {
-        let config = PlateKinematicsConfig {
-            seed: 17,
-            ..PlateKinematicsConfig::new()
-        };
+        let config = PlateKinematicsConfig::new(17);
         let first = generate_plate_kinematics(12, config).unwrap();
         assert_eq!(first, generate_plate_kinematics(12, config).unwrap());
         assert_ne!(
             first,
-            generate_plate_kinematics(
-                12,
-                PlateKinematicsConfig {
-                    seed: 18,
-                    ..PlateKinematicsConfig::new()
-                },
-            )
-            .unwrap()
+            generate_plate_kinematics(12, PlateKinematicsConfig::new(18)).unwrap()
         );
         assert!(first.angular_velocities.iter().all(|velocity| {
             (config.minimum_angular_speed..=config.maximum_angular_speed)

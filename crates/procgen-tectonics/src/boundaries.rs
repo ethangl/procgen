@@ -4,10 +4,10 @@ use std::fmt;
 
 const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
 /// Dense per-edge classification. `Interior` is the sentinel for non-boundary
 /// edges so the array remains directly indexable by mesh edge id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum BoundaryClass {
     Interior,
     Convergent,
@@ -145,14 +145,9 @@ mod tests {
             },
         )
         .unwrap();
-        let kinematics = generate_plate_kinematics(
-            partition.plate_count(),
-            PlateKinematicsConfig {
-                seed: 7,
-                ..PlateKinematicsConfig::new()
-            },
-        )
-        .unwrap();
+        let kinematics =
+            generate_plate_kinematics(partition.plate_count(), PlateKinematicsConfig::new(7))
+                .unwrap();
 
         let first = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
         assert_eq!(
