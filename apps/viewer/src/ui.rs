@@ -15,6 +15,7 @@ const ANGULAR_SPEED_STEP: f64 = 0.01;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const ELEVATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
 
@@ -82,7 +83,7 @@ fn generation_controls(
         evolution_controls(ui, &mut generation.evolution, generation.kinematics)
     });
     section(ui, "Coarse elevation", |ui| {
-        elevation_controls(ui, &mut generation.elevation)
+        elevation_controls(ui, &mut generation.elevation, generation.kinematics)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -168,7 +169,11 @@ fn evolution_controls(
     );
 }
 
-fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
+fn elevation_controls(
+    ui: &mut egui::Ui,
+    config: &mut CoarseElevationConfig,
+    kinematics: PlateKinematicsConfig,
+) {
     slider(ui, "Oceanic base", &mut config.oceanic_base, 0.0..=1.0);
     slider(
         ui,
@@ -181,11 +186,12 @@ fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
     boundary_effect_controls(ui, "Transform", &mut config.transform);
     boundary_effect_controls(ui, "Collision", &mut config.collision);
     boundary_effect_controls(ui, "Trench", &mut config.trench);
+    let maximum_strength = kinematics.maximum_convergence(WORLD_RADIUS).max(0.01);
     slider(
         ui,
         "Saturation speed",
         &mut config.saturation_speed,
-        0.01..=20.0,
+        0.01..=maximum_strength,
     );
     drag_value(
         ui,
@@ -340,15 +346,15 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
 }
 
 fn section(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(4.0);
+    ui.add_space(SECTION_SPACING);
     ui.label(title);
     content(ui);
 }
 
 fn stat_grid(ui: &mut egui::Ui, title: &str, id: &str, content: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(6.0);
-    ui.label(title);
-    egui::Grid::new(id).num_columns(2).show(ui, content);
+    section(ui, title, |ui| {
+        egui::Grid::new(id).num_columns(2).show(ui, content);
+    });
 }
 
 fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {

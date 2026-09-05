@@ -70,6 +70,35 @@ pub struct CoarseElevationDiagnostics {
     pub boundary_affected_cell_count: usize,
 }
 
+impl CoarseElevationDiagnostics {
+    fn summarize(elevations: &[f32], source_cells: usize, affected_cells: usize) -> Self {
+        let Some((&first, rest)) = elevations.split_first() else {
+            return Self {
+                boundary_source_cell_count: source_cells,
+                boundary_affected_cell_count: affected_cells,
+                ..Self::default()
+            };
+        };
+        let (minimum, maximum, total) = rest.iter().fold(
+            (first, first, f64::from(first)),
+            |(minimum, maximum, total), &value| {
+                (
+                    minimum.min(value),
+                    maximum.max(value),
+                    total + f64::from(value),
+                )
+            },
+        );
+        Self {
+            minimum,
+            maximum,
+            mean: (total / elevations.len() as f64) as f32,
+            boundary_source_cell_count: source_cells,
+            boundary_affected_cell_count: affected_cells,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoarseElevation {
     pub cell_elevations: Vec<f32>,
@@ -148,27 +177,15 @@ pub fn derive_coarse_elevation(
         .iter_mut()
         .for_each(|value| *value = value.clamp(0.0, 1.0));
 
-    let minimum = elevation
-        .iter()
-        .copied()
-        .min_by(f32::total_cmp)
-        .unwrap_or(0.0);
-    let maximum = elevation
-        .iter()
-        .copied()
-        .max_by(f32::total_cmp)
-        .unwrap_or(0.0);
-    let mean = elevation.iter().map(|&value| value as f64).sum::<f64>() / elevation.len() as f64;
+    let diagnostics = CoarseElevationDiagnostics::summarize(
+        &elevation,
+        boundary_source_cell_count,
+        boundary_affected_cell_count,
+    );
 
     Ok(CoarseElevation {
         cell_elevations: elevation,
-        diagnostics: CoarseElevationDiagnostics {
-            minimum,
-            maximum,
-            mean: mean as f32,
-            boundary_source_cell_count,
-            boundary_affected_cell_count,
-        },
+        diagnostics,
     })
 }
 
@@ -182,15 +199,14 @@ fn collect_boundary_sources(
     let mut sources = vec![None; mesh.cell_count()];
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let class = boundaries.edge_classes[edge_index];
-        if class == BoundaryClass::Interior {
+        let Some(strength) = boundaries.strength(edge_index) else {
             continue;
-        }
+        };
 
         let classes = edge
             .cells
             .map(|cell| crust.plate_classes[partition.cell_plates[cell]]);
-        let scale =
-            (boundary_strength(boundaries, edge_index, class) / config.saturation_speed).min(1.0);
+        let scale = (strength / config.saturation_speed).min(1.0);
         for side in 0..2 {
             let effect = boundary_effect(config, class, classes[side], classes[1 - side]);
             retain_stronger_source(
@@ -223,20 +239,6 @@ fn boundary_effect(
     }
 }
 
-fn boundary_strength(
-    boundaries: &BoundaryClassification,
-    edge: usize,
-    class: BoundaryClass,
-) -> f32 {
-    match class {
-        BoundaryClass::Convergent | BoundaryClass::Divergent => boundaries.convergence(edge).abs(),
-        // Transform classification is shear-dominated, so convergence would
-        // systematically suppress the very edges this effect represents.
-        BoundaryClass::Transform => boundaries.edge_shear[edge],
-        BoundaryClass::Interior => unreachable!("interior edges are skipped"),
-    }
-}
-
 fn validate_inputs(
     mesh: &SphereMesh,
     partition: &PlatePartition,
@@ -252,11 +254,8 @@ fn validate_inputs(
         config.trench,
     ];
     if effects.iter().any(|effect| !effect.offset.is_finite())
-        || !config.oceanic_base.is_finite()
-        || !config.continental_base.is_finite()
         || !config.saturation_speed.is_finite()
         || config.saturation_speed <= 0.0
-        || !config.smoothing_weight.is_finite()
         || !(0.0..=1.0).contains(&config.oceanic_base)
         || !(0.0..=1.0).contains(&config.continental_base)
         || !(0.0..=1.0).contains(&config.smoothing_weight)
