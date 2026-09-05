@@ -3,9 +3,11 @@
 //! Plate partitioning, rigid spherical plate motion, static boundary
 //! classification, static crust classification, one-step plate migration,
 //! deterministic multi-step ownership evolution, post-evolution boundary
-//! deformation, seafloor hop age, and coarse elevation composition live here.
-//! Geological effects remain separate later stages.
+//! deformation, seafloor hop age, oceanic bathymetric base elevation, and
+//! coarse elevation composition live here. Geological effects remain separate
+//! later stages.
 
+mod base_elevation;
 mod boundaries;
 mod crust;
 mod deformation;
@@ -30,6 +32,10 @@ mod random_streams {
 #[cfg(test)]
 mod test_support;
 
+pub use base_elevation::{
+    BaseElevation, BaseElevationConfig, BaseElevationDiagnostics, BaseElevationError,
+    derive_base_elevation,
+};
 pub use boundaries::{
     BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
 };

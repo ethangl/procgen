@@ -2,12 +2,13 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BoundaryClassification, BoundaryDeformation, BoundaryDeformationConfig, CoarseElevation,
-    CoarseElevationConfig, CrustClassification, CrustClassificationConfig, PlateEvolution,
-    PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateKinematics, PlateKinematicsConfig,
-    PlatePartition, PlatePartitionConfig, SeafloorAge, SeafloorAgeConfig, classify_crust,
-    compose_coarse_elevation, derive_boundary_deformation, derive_seafloor_age,
-    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
+    BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation,
+    BoundaryDeformationConfig, CoarseElevation, CoarseElevationConfig, CrustClassification,
+    CrustClassificationConfig, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
+    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, SeafloorAge,
+    SeafloorAgeConfig, classify_crust, compose_coarse_elevation, derive_base_elevation,
+    derive_boundary_deformation, derive_seafloor_age, evolve_plate_ownership,
+    generate_plate_kinematics, partition_plates,
 };
 use std::{
     error::Error,
@@ -24,6 +25,7 @@ pub struct GenerationSettings {
     pub kinematics: PlateKinematicsConfig,
     pub evolution: PlateEvolutionConfig,
     pub seafloor_age: SeafloorAgeConfig,
+    pub base_elevation: BaseElevationConfig,
     pub deformation: BoundaryDeformationConfig,
     pub elevation: CoarseElevationConfig,
 }
@@ -52,6 +54,7 @@ impl Default for GenerationSettings {
                 ..Default::default()
             },
             seafloor_age: SeafloorAgeConfig::default(),
+            base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
         }
@@ -125,6 +128,7 @@ pub struct GeneratedWorld {
     pub boundaries: BoundaryClassification,
     pub evolution: PlateEvolutionDiagnostics,
     pub seafloor_age: SeafloorAge,
+    pub base_elevation: BaseElevation,
     pub deformation: BoundaryDeformation,
     pub elevation: CoarseElevation,
     pub timings: GenerationTimings,
@@ -165,11 +169,14 @@ impl GeneratedWorld {
         let seafloor_age = timings.record("Seafloor age", || {
             derive_seafloor_age(&voronoi, &plates, &crust, &boundaries, config.seafloor_age)
         })?;
+        let base_elevation = timings.record("Base elevation", || {
+            derive_base_elevation(&seafloor_age, config.base_elevation)
+        })?;
         let deformation = timings.record("Boundary deformation", || {
             derive_boundary_deformation(&voronoi, &plates, &crust, &boundaries, config.deformation)
         })?;
         let elevation = timings.record("Coarse elevation", || {
-            compose_coarse_elevation(&voronoi, &plates, &crust, &deformation, config.elevation)
+            compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)
         })?;
 
         Ok(Self {
@@ -180,6 +187,7 @@ impl GeneratedWorld {
             boundaries,
             evolution,
             seafloor_age,
+            base_elevation,
             deformation,
             elevation,
             timings,
@@ -223,6 +231,7 @@ mod tests {
             kinematics: PlateKinematicsConfig::new(9),
             evolution: PlateEvolutionConfig::default(),
             seafloor_age: SeafloorAgeConfig::default(),
+            base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
         })
@@ -239,6 +248,10 @@ mod tests {
             world.voronoi.cell_count()
         );
         assert!(world.seafloor_age.diagnostics.oceanic_cell_count > 0);
+        assert_eq!(
+            world.base_elevation.cell_elevations.len(),
+            world.voronoi.cell_count()
+        );
         assert_eq!(
             world.deformation.cell_deformation.len(),
             world.voronoi.cell_count()
@@ -262,6 +275,7 @@ mod tests {
             kinematics: PlateKinematicsConfig::new(3),
             evolution: PlateEvolutionConfig::default(),
             seafloor_age: SeafloorAgeConfig::default(),
+            base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
         })
@@ -281,6 +295,10 @@ mod tests {
                 },
             },
             seafloor_age: SeafloorAgeConfig { ridge_less_age: 16 },
+            base_elevation: BaseElevationConfig {
+                cooling_age: 12,
+                ..Default::default()
+            },
             deformation: BoundaryDeformationConfig {
                 saturation_speed: 1.5,
                 ..Default::default()
@@ -304,6 +322,7 @@ mod tests {
         assert_eq!(world.config.kinematics, requested.kinematics);
         assert_eq!(world.config.evolution, requested.evolution);
         assert_eq!(world.config.seafloor_age, requested.seafloor_age);
+        assert_eq!(world.config.base_elevation, requested.base_elevation);
         assert_eq!(world.config.deformation, requested.deformation);
         assert_eq!(world.config.elevation, requested.elevation);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);

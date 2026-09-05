@@ -18,7 +18,10 @@ pub struct BoundaryEffect {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundaryDeformationConfig {
     pub convergent: BoundaryEffect,
-    pub divergent: BoundaryEffect,
+    /// Continental side of a divergent boundary.
+    pub rift: BoundaryEffect,
+    /// Oceanic side of a divergent boundary.
+    pub ridge: BoundaryEffect,
     pub transform: BoundaryEffect,
     /// Continental side of a mixed-crust convergent boundary.
     pub collision: BoundaryEffect,
@@ -35,9 +38,13 @@ impl Default for BoundaryDeformationConfig {
                 offset: 0.4,
                 depth: 3,
             },
-            divergent: BoundaryEffect {
+            rift: BoundaryEffect {
                 offset: -0.4,
                 depth: 3,
+            },
+            ridge: BoundaryEffect {
+                offset: 0.0,
+                depth: 0,
             },
             transform: BoundaryEffect {
                 offset: 0.4,
@@ -196,7 +203,8 @@ fn boundary_effect(
         }
         (BoundaryClass::Convergent, CrustClass::Oceanic, CrustClass::Continental) => config.trench,
         (BoundaryClass::Convergent, _, _) => config.convergent,
-        (BoundaryClass::Divergent, _, _) => config.divergent,
+        (BoundaryClass::Divergent, CrustClass::Oceanic, _) => config.ridge,
+        (BoundaryClass::Divergent, CrustClass::Continental, _) => config.rift,
         (BoundaryClass::Transform, _, _) => config.transform,
         (BoundaryClass::Interior, _, _) => unreachable!("interior edges are skipped"),
     }
@@ -205,7 +213,8 @@ fn boundary_effect(
 fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDeformationError> {
     let effects = [
         config.convergent,
-        config.divergent,
+        config.rift,
+        config.ridge,
         config.transform,
         config.collision,
         config.trench,
@@ -302,7 +311,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_bits() as u64),
         );
-        assert_eq!(fingerprint, 16_915_549_137_106_129_144);
+        assert_eq!(fingerprint, 4_354_537_144_469_898_455);
     }
 
     #[test]
@@ -340,16 +349,16 @@ mod tests {
     }
 
     #[test]
-    fn divergent_uses_normal_strength_and_transform_uses_shear() {
+    fn continental_rift_uses_normal_strength_and_transform_uses_shear() {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
         let crust = CrustClassification {
             plate_classes: vec![CrustClass::Continental; 2],
         };
         let config = BoundaryDeformationConfig {
-            divergent: BoundaryEffect {
+            rift: BoundaryEffect {
                 depth: 0,
-                ..BoundaryDeformationConfig::default().divergent
+                ..BoundaryDeformationConfig::default().rift
             },
             transform: BoundaryEffect {
                 depth: 0,
@@ -365,10 +374,7 @@ mod tests {
         let divergent =
             derive_boundary_deformation(&mesh, &partition, &crust, &boundaries, config).unwrap();
         for cell in edge.cells {
-            assert_eq!(
-                divergent.cell_deformation[cell],
-                config.divergent.offset / 4.0
-            );
+            assert_eq!(divergent.cell_deformation[cell], config.rift.offset / 4.0);
         }
 
         boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
@@ -379,6 +385,54 @@ mod tests {
                 transform.cell_deformation[cell],
                 config.transform.offset * 3.0 / 4.0
             );
+        }
+    }
+
+    #[test]
+    fn divergent_deformation_uses_configured_ridge_and_rift_effects() {
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
+        };
+        let mut boundaries = empty_boundaries(&mesh);
+        boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
+        boundaries.edge_normal_speeds[edge_index] = [-1.0, -1.0];
+        let default_ridge = BoundaryDeformationConfig {
+            rift: BoundaryEffect {
+                offset: -0.4,
+                depth: 0,
+            },
+            saturation_speed: 2.0,
+            ..Default::default()
+        };
+        let deformation =
+            derive_boundary_deformation(&mesh, &partition, &crust, &boundaries, default_ridge)
+                .unwrap();
+        for cell in edge.cells {
+            let expected = match crust.cell_class(&partition, cell) {
+                CrustClass::Continental => -0.4,
+                CrustClass::Oceanic => 0.0,
+            };
+            assert_eq!(deformation.cell_deformation[cell], expected);
+        }
+
+        let configured_ridge = BoundaryDeformationConfig {
+            ridge: BoundaryEffect {
+                offset: 0.2,
+                depth: 0,
+            },
+            ..default_ridge
+        };
+        let deformation =
+            derive_boundary_deformation(&mesh, &partition, &crust, &boundaries, configured_ridge)
+                .unwrap();
+        for cell in edge.cells {
+            let expected = match crust.cell_class(&partition, cell) {
+                CrustClass::Continental => -0.4,
+                CrustClass::Oceanic => 0.2,
+            };
+            assert_eq!(deformation.cell_deformation[cell], expected);
         }
     }
 

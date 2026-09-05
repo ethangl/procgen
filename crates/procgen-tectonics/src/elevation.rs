@@ -1,14 +1,9 @@
-use crate::{
-    BoundaryDeformation, CrustClass, CrustClassification, FieldSummary, PlatePartition,
-    stage::{StageInputError, validate_ownership_and_crust},
-};
+use crate::{BaseElevation, BoundaryDeformation, FieldSummary};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CoarseElevationConfig {
-    pub oceanic_base: f32,
-    pub continental_base: f32,
     pub smoothing_passes: usize,
     pub smoothing_weight: f32,
 }
@@ -16,8 +11,6 @@ pub struct CoarseElevationConfig {
 impl Default for CoarseElevationConfig {
     fn default() -> Self {
         Self {
-            oceanic_base: 0.15,
-            continental_base: 0.65,
             smoothing_passes: 2,
             smoothing_weight: 0.2,
         }
@@ -33,63 +26,43 @@ pub struct CoarseElevation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoarseElevationError {
     InvalidConfig,
-    Input(StageInputError),
-    DeformationCountMismatch,
+    FieldCountMismatch,
 }
 
 impl fmt::Display for CoarseElevationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidConfig => formatter.write_str(
-                "base elevations must be finite and between 0 and 1, and smoothing weight must be finite and between 0 and 1",
-            ),
-            Self::Input(error) => error.fmt(formatter),
-            Self::DeformationCountMismatch => {
-                formatter.write_str("deformation values must match the mesh cell count")
+            Self::InvalidConfig => {
+                formatter.write_str("smoothing weight must be finite and between 0 and 1")
             }
+            Self::FieldCountMismatch => formatter
+                .write_str("base elevation and deformation values must match the mesh cell count"),
         }
     }
 }
 
-impl std::error::Error for CoarseElevationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidConfig | Self::DeformationCountMismatch => None,
-            Self::Input(error) => Some(error),
-        }
-    }
-}
+impl std::error::Error for CoarseElevationError {}
 
-impl From<StageInputError> for CoarseElevationError {
-    fn from(error: StageInputError) -> Self {
-        Self::Input(error)
-    }
-}
-
-/// Composes normalized coarse elevation from current-owner crust and a
-/// separately derived signed deformation field.
+/// Composes normalized coarse elevation from separately derived base elevation
+/// and signed boundary deformation fields.
 ///
-/// Base crust elevation and deformation are added once, smoothed
-/// simultaneously, and clamped. Ownership evolution and boundary derivation
-/// remain separate stages with no elevation history or inter-step state.
+/// Base elevation and deformation are added once, smoothed simultaneously, and
+/// clamped. Ownership evolution, seafloor age, and boundary derivation remain
+/// separate stages with no elevation history or inter-step state.
 pub fn compose_coarse_elevation(
     mesh: &SphereMesh,
-    partition: &PlatePartition,
-    crust: &CrustClassification,
+    base_elevation: &BaseElevation,
     deformation: &BoundaryDeformation,
     config: CoarseElevationConfig,
 ) -> Result<CoarseElevation, CoarseElevationError> {
     validate_config(config)?;
-    validate_inputs(mesh, partition, crust, deformation)?;
+    validate_inputs(mesh, base_elevation, deformation)?;
 
-    let mut elevation: Vec<_> = (0..mesh.cell_count())
-        .map(|cell| {
-            let base = match crust.cell_class(partition, cell) {
-                CrustClass::Oceanic => config.oceanic_base,
-                CrustClass::Continental => config.continental_base,
-            };
-            base + deformation.cell_deformation[cell]
-        })
+    let mut elevation: Vec<_> = base_elevation
+        .cell_elevations
+        .iter()
+        .zip(&deformation.cell_deformation)
+        .map(|(&base, &deformation)| base + deformation)
         .collect();
 
     smooth(
@@ -110,13 +83,7 @@ pub fn compose_coarse_elevation(
 }
 
 fn validate_config(config: CoarseElevationConfig) -> Result<(), CoarseElevationError> {
-    if !config.oceanic_base.is_finite()
-        || !config.continental_base.is_finite()
-        || !config.smoothing_weight.is_finite()
-        || !(0.0..=1.0).contains(&config.oceanic_base)
-        || !(0.0..=1.0).contains(&config.continental_base)
-        || !(0.0..=1.0).contains(&config.smoothing_weight)
-    {
+    if !config.smoothing_weight.is_finite() || !(0.0..=1.0).contains(&config.smoothing_weight) {
         return Err(CoarseElevationError::InvalidConfig);
     }
     Ok(())
@@ -124,13 +91,13 @@ fn validate_config(config: CoarseElevationConfig) -> Result<(), CoarseElevationE
 
 fn validate_inputs(
     mesh: &SphereMesh,
-    partition: &PlatePartition,
-    crust: &CrustClassification,
+    base_elevation: &BaseElevation,
     deformation: &BoundaryDeformation,
 ) -> Result<(), CoarseElevationError> {
-    validate_ownership_and_crust(mesh, partition, crust)?;
-    if deformation.cell_deformation.len() != mesh.cell_count() {
-        return Err(CoarseElevationError::DeformationCountMismatch);
+    if base_elevation.cell_elevations.len() != mesh.cell_count()
+        || deformation.cell_deformation.len() != mesh.cell_count()
+    {
+        return Err(CoarseElevationError::FieldCountMismatch);
     }
     Ok(())
 }
@@ -155,15 +122,22 @@ fn smooth(mesh: &SphereMesh, elevation: &mut Vec<f32>, passes: usize, weight: f3
 mod tests {
     use super::*;
     use crate::test_support::{final_state_fixture, fingerprint, two_plate_boundary_partition};
-    use crate::{BoundaryDeformationConfig, derive_boundary_deformation};
+    use crate::{
+        BaseElevationConfig, BaseElevationDiagnostics, BoundaryDeformationConfig,
+        SeafloorAgeConfig, derive_base_elevation, derive_boundary_deformation, derive_seafloor_age,
+    };
 
-    fn final_fixture() -> (
-        SphereMesh,
-        PlatePartition,
-        CrustClassification,
-        BoundaryDeformation,
-    ) {
+    fn final_fixture() -> (SphereMesh, BaseElevation, BoundaryDeformation) {
         let (mesh, partition, crust, boundaries) = final_state_fixture();
+        let age = derive_seafloor_age(
+            &mesh,
+            &partition,
+            &crust,
+            &boundaries,
+            SeafloorAgeConfig::default(),
+        )
+        .unwrap();
+        let base = derive_base_elevation(&age, BaseElevationConfig::default()).unwrap();
         let deformation = derive_boundary_deformation(
             &mesh,
             &partition,
@@ -172,19 +146,18 @@ mod tests {
             BoundaryDeformationConfig::default(),
         )
         .unwrap();
-        (mesh, partition, crust, deformation)
+        (mesh, base, deformation)
     }
 
     #[test]
     fn composition_is_deterministic_normalized_and_preserves_the_pipeline_fingerprint() {
-        let (mesh, partition, crust, deformation) = final_fixture();
+        let (mesh, base, deformation) = final_fixture();
         let config = CoarseElevationConfig::default();
-        let first =
-            compose_coarse_elevation(&mesh, &partition, &crust, &deformation, config).unwrap();
+        let first = compose_coarse_elevation(&mesh, &base, &deformation, config).unwrap();
 
         assert_eq!(
             first,
-            compose_coarse_elevation(&mesh, &partition, &crust, &deformation, config).unwrap()
+            compose_coarse_elevation(&mesh, &base, &deformation, config).unwrap()
         );
         assert!(
             first
@@ -198,45 +171,48 @@ mod tests {
                 .iter()
                 .map(|value| value.to_bits() as u64),
         );
-        assert_eq!(fingerprint, 4_072_787_338_629_474_632);
+        assert_eq!(fingerprint, 18_396_277_247_688_344_762);
     }
 
     #[test]
-    fn base_elevation_follows_current_owner_crust_and_adds_deformation() {
-        let (mesh, _, mut partition) = two_plate_boundary_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic, CrustClass::Continental],
-        };
+    fn composition_adds_base_and_deformation_exactly_once() {
+        let (mesh, _, _) = two_plate_boundary_partition();
         let cell = mesh.edges[0].cells[0];
-        let mut cell_deformation = vec![0.0; mesh.cell_count()];
-        cell_deformation[cell] = 0.1;
+        let mut base_values = vec![0.2; mesh.cell_count()];
+        base_values[cell] = 0.3;
+        let base = BaseElevation {
+            cell_elevations: base_values,
+            diagnostics: BaseElevationDiagnostics::default(),
+        };
+        let mut deformation_values = vec![0.0; mesh.cell_count()];
+        deformation_values[cell] = 0.1;
         let deformation = BoundaryDeformation {
-            cell_deformation,
+            cell_deformation: deformation_values,
             diagnostics: Default::default(),
         };
-        let config = CoarseElevationConfig {
-            smoothing_passes: 0,
-            ..Default::default()
-        };
 
-        let original =
-            compose_coarse_elevation(&mesh, &partition, &crust, &deformation, config).unwrap();
-        assert_eq!(original.cell_elevations[cell], config.oceanic_base + 0.1);
-
-        partition.cell_plates[cell] = 1;
-        let changed =
-            compose_coarse_elevation(&mesh, &partition, &crust, &deformation, config).unwrap();
-        assert_eq!(changed.cell_elevations[cell], config.continental_base + 0.1);
+        let composed = compose_coarse_elevation(
+            &mesh,
+            &base,
+            &deformation,
+            CoarseElevationConfig {
+                smoothing_passes: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(composed.cell_elevations[cell], 0.4);
     }
 
     #[test]
     fn composition_smooths_simultaneously_then_clamps() {
-        let (mesh, _, partition) = two_plate_boundary_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Continental; 2],
-        };
+        let (mesh, _, _) = two_plate_boundary_partition();
         let source = mesh.edges[0].cells[0];
         let neighbor = mesh.cell_corners(source)[0].neighbor;
+        let base = BaseElevation {
+            cell_elevations: vec![0.65; mesh.cell_count()],
+            diagnostics: Default::default(),
+        };
         let mut cell_deformation = vec![0.0; mesh.cell_count()];
         cell_deformation[source] = 1.0;
         cell_deformation[neighbor] = -1.0;
@@ -246,8 +222,7 @@ mod tests {
         };
         let unsmoothed = compose_coarse_elevation(
             &mesh,
-            &partition,
-            &crust,
+            &base,
             &deformation,
             CoarseElevationConfig {
                 smoothing_passes: 0,
@@ -260,13 +235,11 @@ mod tests {
 
         let smoothed = compose_coarse_elevation(
             &mesh,
-            &partition,
-            &crust,
+            &base,
             &deformation,
             CoarseElevationConfig {
                 smoothing_passes: 1,
                 smoothing_weight: 1.0,
-                ..Default::default()
             },
         )
         .unwrap();
@@ -275,13 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_configuration_and_mismatched_inputs() {
-        let (mesh, partition, crust, deformation) = final_fixture();
+    fn rejects_invalid_configuration_and_mismatched_fields() {
+        let (mesh, base, deformation) = final_fixture();
         assert_eq!(
             compose_coarse_elevation(
                 &mesh,
-                &partition,
-                &crust,
+                &base,
                 &deformation,
                 CoarseElevationConfig {
                     smoothing_weight: 1.1,
@@ -291,31 +263,18 @@ mod tests {
             Err(CoarseElevationError::InvalidConfig)
         );
 
-        let mut short_partition = partition.clone();
-        short_partition.cell_plates.pop();
-        assert_eq!(
-            compose_coarse_elevation(
-                &mesh,
-                &short_partition,
-                &crust,
-                &deformation,
-                CoarseElevationConfig::default()
-            ),
-            Err(CoarseElevationError::Input(StageInputError::Cells))
-        );
-
-        let short_crust = CrustClassification {
-            plate_classes: crust.plate_classes[..crust.plate_classes.len() - 1].to_vec(),
+        let short_base = BaseElevation {
+            cell_elevations: base.cell_elevations[..mesh.cell_count() - 1].to_vec(),
+            diagnostics: base.diagnostics,
         };
         assert_eq!(
             compose_coarse_elevation(
                 &mesh,
-                &partition,
-                &short_crust,
+                &short_base,
                 &deformation,
                 CoarseElevationConfig::default()
             ),
-            Err(CoarseElevationError::Input(StageInputError::Plates))
+            Err(CoarseElevationError::FieldCountMismatch)
         );
 
         let short_deformation = BoundaryDeformation {
@@ -325,12 +284,11 @@ mod tests {
         assert_eq!(
             compose_coarse_elevation(
                 &mesh,
-                &partition,
-                &crust,
+                &base,
                 &short_deformation,
                 CoarseElevationConfig::default()
             ),
-            Err(CoarseElevationError::DeformationCountMismatch)
+            Err(CoarseElevationError::FieldCountMismatch)
         );
     }
 }
