@@ -4,6 +4,7 @@ use crate::model::{
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use procgen_geology::HotspotFieldConfig;
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
@@ -18,6 +19,8 @@ const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const SEAFLOOR_AGE_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
@@ -96,6 +99,9 @@ fn generation_controls(
     });
     section(ui, "Coarse elevation", |ui| {
         elevation_controls(ui, &mut generation.elevation)
+    });
+    section(ui, "Mantle hotspots", |ui| {
+        hotspot_controls(ui, &mut generation.hotspots)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -270,6 +276,30 @@ fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
     );
 }
 
+fn hotspot_controls(ui: &mut egui::Ui, config: &mut HotspotFieldConfig) {
+    drag_value(
+        ui,
+        "Hotspots",
+        &mut config.hotspot_count,
+        HOTSPOT_COUNT_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Maximum trail cells",
+        &mut config.maximum_trail_cells,
+        HOTSPOT_TRAIL_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Hotspot seed",
+        &mut config.seed,
+        u64::MIN..=u64::MAX,
+        1.0,
+    );
+}
+
 fn boundary_effect_controls(ui: &mut egui::Ui, label: &str, effect: &mut BoundaryEffect) {
     slider(
         ui,
@@ -307,6 +337,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Plate seed", world.config.plates.seed);
         stat(ui, "Crust seed", world.config.crust.seed);
         stat(ui, "Motion seed", world.config.kinematics.seed);
+        stat(ui, "Hotspot seed", world.config.hotspots.seed);
         stat(
             ui,
             "Jitter",
@@ -446,6 +477,38 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
     stat_grid(ui, "Coarse elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
+    });
+    stat_grid(ui, "Mantle hotspots", "hotspots", |ui| {
+        stat(ui, "Hotspots", world.hotspots.diagnostics.hotspot_count);
+        stat(
+            ui,
+            "Trail cells",
+            world.hotspots.diagnostics.trail_cell_count,
+        );
+        stat(
+            ui,
+            "Affected cells",
+            world.hotspots.diagnostics.affected_cell_count,
+        );
+        stat(
+            ui,
+            "Overlap cells",
+            world.hotspots.diagnostics.overlap_cell_count,
+        );
+        stat(
+            ui,
+            "Stationary sources",
+            world.hotspots.diagnostics.stationary_source_count,
+        );
+        stat(
+            ui,
+            "Trail length range",
+            format!(
+                "{} - {}",
+                world.hotspots.diagnostics.shortest_trail_cells,
+                world.hotspots.diagnostics.longest_trail_cells
+            ),
+        );
     });
     stat_grid(ui, "Timings", "timings", |ui| {
         for stage in world.timings.stages() {

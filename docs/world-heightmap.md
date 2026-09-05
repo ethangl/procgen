@@ -87,11 +87,16 @@ Completed foundations:
   Coarse elevation composes that base with boundary deformation once before
   simultaneous smoothing and clamping. None of these stages accumulates state
   during evolution.
+- `procgen-geology`: deterministic, explicitly seeded mantle-hotspot positions
+  and bounded decaying trails opposite final-owner plate motion. Trails remain
+  within final plate ownership, overlaps resolve by maximum intensity then
+  stable hotspot identity, and the resulting field is independent of elevation.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation
   controls, signed deformation, seafloor-age, base-elevation, and composed
-  elevation layers, aggregate statistics, and stage timings.
+  elevation layers, plus hotspot controls, field visualization, aggregate
+  statistics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

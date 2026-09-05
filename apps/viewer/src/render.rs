@@ -1,6 +1,7 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
+use procgen_geology::HotspotField;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
@@ -19,6 +20,7 @@ pub enum DiagnosticLayer {
     BaseElevation,
     Deformation,
     Elevation,
+    Hotspots,
     Boundaries,
     Motion,
 }
@@ -29,7 +31,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 12] = [
+const DRAW_ORDER: [DrawSurface; 13] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -39,6 +41,7 @@ const DRAW_ORDER: [DrawSurface; 12] = [
     DrawSurface::Layer(DiagnosticLayer::BaseElevation),
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
+    DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::PlateBorders,
     DrawSurface::Layer(DiagnosticLayer::Boundaries),
     DrawSurface::Layer(DiagnosticLayer::Motion),
@@ -63,9 +66,15 @@ const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.75, Vec3::new(0.55, 0.38, 0.16)),
     (1.0, Vec3::new(0.96, 0.96, 0.94)),
 ];
+const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.08, 0.06, 0.12)),
+    (0.25, Vec3::new(0.55, 0.08, 0.3)),
+    (0.65, Vec3::new(1.0, 0.25, 0.05)),
+    (1.0, Vec3::new(1.0, 0.95, 0.25)),
+];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -75,6 +84,7 @@ impl DiagnosticLayer {
         Self::BaseElevation,
         Self::Deformation,
         Self::Elevation,
+        Self::Hotspots,
         Self::Boundaries,
         Self::Motion,
     ];
@@ -99,6 +109,7 @@ impl DiagnosticLayer {
             Self::BaseElevation => 3.2,
             Self::Deformation => 3.3,
             Self::Elevation => 3.5,
+            Self::Hotspots => 3.7,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -119,6 +130,7 @@ impl DiagnosticLayer {
             Self::BaseElevation => "Base elevation",
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
+            Self::Hotspots => "Mantle hotspots",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
         }
@@ -156,10 +168,20 @@ impl DiagnosticLayer {
                 &ELEVATION_COLOR_STOPS,
                 radius,
             ),
+            Self::Hotspots => hotspot_asset(&world.voronoi, &world.hotspots, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn hotspot_asset(mesh: &SphereMesh, hotspots: &HotspotField, radius: f32) -> GizmoAsset {
+    scalar_field_asset(
+        mesh,
+        &hotspots.cell_intensities,
+        &HOTSPOT_COLOR_STOPS,
+        radius,
+    )
 }
 
 fn seafloor_age_asset(mesh: &SphereMesh, age: &SeafloorAge, radius: f32) -> GizmoAsset {
