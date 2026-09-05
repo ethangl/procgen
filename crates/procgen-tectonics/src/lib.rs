@@ -2,11 +2,13 @@
 //!
 //! Plate partitioning, rigid spherical plate motion, static boundary
 //! classification, static crust classification, one-step plate migration,
-//! deterministic multi-step ownership evolution, and post-evolution coarse
-//! elevation live here. Geological effects remain separate later stages.
+//! deterministic multi-step ownership evolution, post-evolution boundary
+//! deformation, and coarse elevation composition live here. Geological effects
+//! remain separate later stages.
 
 mod boundaries;
 mod crust;
+mod deformation;
 mod elevation;
 mod evolution;
 mod migration;
@@ -32,9 +34,13 @@ pub use crust::{
     CrustClass, CrustClassification, CrustClassificationConfig, CrustClassificationError,
     classify_crust,
 };
+pub use deformation::{
+    BoundaryDeformation, BoundaryDeformationConfig, BoundaryDeformationDiagnostics,
+    BoundaryDeformationError, BoundaryEffect, derive_boundary_deformation,
+};
 pub use elevation::{
-    BoundaryEffect, CoarseElevation, CoarseElevationConfig, CoarseElevationDiagnostics,
-    CoarseElevationError, derive_coarse_elevation,
+    CoarseElevation, CoarseElevationConfig, CoarseElevationDiagnostics, CoarseElevationError,
+    compose_coarse_elevation,
 };
 pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,

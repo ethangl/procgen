@@ -3,8 +3,8 @@ use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, pr
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CoarseElevation, CrustClass, CrustClassification,
-    PlateKinematics, PlatePartition,
+    BoundaryClass, BoundaryClassification, BoundaryDeformation, CoarseElevation, CrustClass,
+    CrustClassification, PlateKinematics, PlatePartition,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -15,12 +15,18 @@ pub enum DiagnosticLayer {
     Voronoi,
     Plates,
     Crust,
+    Deformation,
     Elevation,
     Boundaries,
     Motion,
 }
 
 const PLATE_BORDER_OFFSET: f32 = 0.004;
+const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (-0.5, Vec3::new(0.08, 0.35, 0.95)),
+    (0.0, Vec3::new(0.12, 0.12, 0.16)),
+    (0.5, Vec3::new(1.0, 0.38, 0.08)),
+];
 const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.0, Vec3::new(0.02, 0.08, 0.3)),
     (0.5, Vec3::new(0.08, 0.65, 0.85)),
@@ -31,12 +37,13 @@ const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
+        Self::Deformation,
         Self::Elevation,
         Self::Boundaries,
         Self::Motion,
@@ -58,6 +65,7 @@ impl DiagnosticLayer {
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
             Self::Crust => 3.0,
+            Self::Deformation => 3.2,
             Self::Elevation => 3.4,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
@@ -65,7 +73,8 @@ impl DiagnosticLayer {
     }
 
     // Radius order defines the intended composition: Delaunay, Voronoi, plate
-    // interiors, crust/elevation, points, plate borders, boundaries, then motion.
+    // interiors, crust/deformation/elevation, points, plate borders, boundaries,
+    // then motion.
     const fn radius(self) -> f32 {
         match self {
             Self::Points => 1.012,
@@ -73,6 +82,7 @@ impl DiagnosticLayer {
             Self::Voronoi => 1.006,
             Self::Plates => 1.009,
             Self::Crust => 1.011,
+            Self::Deformation => 1.012,
             Self::Elevation => 1.013,
             Self::Boundaries => 1.017,
             Self::Motion => 1.035,
@@ -86,6 +96,7 @@ impl DiagnosticLayer {
             Self::Voronoi => "Voronoi",
             Self::Plates => "Tectonic plates",
             Self::Crust => "Crust classes",
+            Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
@@ -100,6 +111,7 @@ impl DiagnosticLayer {
             Self::Voronoi => voronoi_asset(&world.voronoi, radius),
             Self::Plates => plate_asset(&world.voronoi, &world.plates, radius),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
+            Self::Deformation => deformation_asset(&world.voronoi, &world.deformation, radius),
             Self::Elevation => elevation_asset(&world.voronoi, &world.elevation, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
@@ -333,6 +345,20 @@ fn elevation_asset(mesh: &SphereMesh, elevation: &CoarseElevation, radius: f32) 
             + elevation.cell_elevations[edge.cells[1]])
             * 0.5;
         Some((radius, elevation_color(value)))
+    })
+}
+
+fn deformation_asset(
+    mesh: &SphereMesh,
+    deformation: &BoundaryDeformation,
+    radius: f32,
+) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |_, edge| {
+        let value = (deformation.cell_deformation[edge.cells[0]]
+            + deformation.cell_deformation[edge.cells[1]])
+            * 0.5;
+        let color = piecewise_lerp(value, &DEFORMATION_COLOR_STOPS);
+        Some((radius, Color::srgba(color.x, color.y, color.z, 0.98)))
     })
 }
 

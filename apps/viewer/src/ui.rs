@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
-    BoundaryClass, BoundaryEffect, CoarseElevationConfig, CrustClass, CrustClassificationConfig,
-    PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
+    BoundaryClass, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig, CrustClass,
+    CrustClassificationConfig, PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
 };
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
@@ -82,8 +82,11 @@ fn generation_controls(
     section(ui, "Plate evolution", |ui| {
         evolution_controls(ui, &mut generation.evolution, generation.kinematics)
     });
+    section(ui, "Boundary deformation", |ui| {
+        deformation_controls(ui, &mut generation.deformation, generation.kinematics)
+    });
     section(ui, "Coarse elevation", |ui| {
-        elevation_controls(ui, &mut generation.elevation, generation.kinematics)
+        elevation_controls(ui, &mut generation.elevation)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -169,18 +172,11 @@ fn evolution_controls(
     );
 }
 
-fn elevation_controls(
+fn deformation_controls(
     ui: &mut egui::Ui,
-    config: &mut CoarseElevationConfig,
+    config: &mut BoundaryDeformationConfig,
     kinematics: PlateKinematicsConfig,
 ) {
-    slider(ui, "Oceanic base", &mut config.oceanic_base, 0.0..=1.0);
-    slider(
-        ui,
-        "Continental base",
-        &mut config.continental_base,
-        0.0..=1.0,
-    );
     boundary_effect_controls(ui, "Convergent", &mut config.convergent);
     boundary_effect_controls(ui, "Divergent", &mut config.divergent);
     boundary_effect_controls(ui, "Transform", &mut config.transform);
@@ -192,6 +188,16 @@ fn elevation_controls(
         "Saturation speed",
         &mut config.saturation_speed,
         0.01..=maximum_strength,
+    );
+}
+
+fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
+    slider(ui, "Oceanic base", &mut config.oceanic_base, 0.0..=1.0);
+    slider(
+        ui,
+        "Continental base",
+        &mut config.continental_base,
+        0.0..=1.0,
     );
     drag_value(
         ui,
@@ -312,6 +318,41 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         );
     });
 
+    stat_grid(ui, "Boundary deformation", "deformation", |ui| {
+        stat(
+            ui,
+            "Range",
+            format!(
+                "{:.3} - {:.3}",
+                world.deformation.diagnostics.minimum, world.deformation.diagnostics.maximum
+            ),
+        );
+        stat(
+            ui,
+            "Mean",
+            format!("{:.3}", world.deformation.diagnostics.mean),
+        );
+        stat(
+            ui,
+            "Sources",
+            world.deformation.diagnostics.source_cell_count,
+        );
+        stat(
+            ui,
+            "Affected",
+            world.deformation.diagnostics.affected_cell_count,
+        );
+        stat(
+            ui,
+            "Uplifted",
+            world.deformation.diagnostics.uplifted_cell_count,
+        );
+        stat(
+            ui,
+            "Subsided",
+            world.deformation.diagnostics.subsided_cell_count,
+        );
+    });
     stat_grid(ui, "Coarse elevation", "elevation", |ui| {
         stat(
             ui,
@@ -325,16 +366,6 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Mean",
             format!("{:.3}", world.elevation.diagnostics.mean),
-        );
-        stat(
-            ui,
-            "Boundary sources",
-            world.elevation.diagnostics.boundary_source_cell_count,
-        );
-        stat(
-            ui,
-            "Boundary affected",
-            world.elevation.diagnostics.boundary_affected_cell_count,
         );
     });
     stat_grid(ui, "Timings", "timings", |ui| {
