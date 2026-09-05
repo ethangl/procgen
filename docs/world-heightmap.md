@@ -68,13 +68,15 @@ Completed foundations:
 - `procgen-tectonics`: deterministic major/minor plate partitioning, rigid plate
   angular velocities, local spherical tangent motion, static convergent,
   divergent, and transform boundary classification, and static per-plate crust
-  classification with area-weighted ocean coverage. It also supports one
-  deterministic, simultaneous ownership-migration step at convergent boundaries;
-  per-plate crust classes remain fixed while cell crust follows current ownership.
-  Elevation and multi-step evolution remain later slices.
+  classification with area-weighted ocean coverage. It repeatedly reclassifies
+  current boundaries and applies deterministic, simultaneous ownership migration
+  for a configured step count. The result retains final ownership and boundaries
+  plus aggregate evolution diagnostics, without step history. Per-plate crust
+  classes remain fixed while cell crust follows current ownership. Elevation
+  remains a later slice.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
-  plate, crust, motion, boundary, and migration layers, orbit controls,
-  deterministic regeneration, statistics, and stage timings.
+  plate, crust, motion, and boundary layers, orbit controls, deterministic
+  regeneration, evolution controls and aggregate statistics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

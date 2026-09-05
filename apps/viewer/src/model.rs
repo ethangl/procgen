@@ -2,10 +2,10 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateKinematics,
-    PlateKinematicsConfig, PlateMigration, PlateMigrationConfig, PlatePartition,
-    PlatePartitionConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
-    migrate_plates_once, partition_plates,
+    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateEvolution,
+    PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateKinematics, PlateKinematicsConfig,
+    PlatePartition, PlatePartitionConfig, classify_crust, evolve_plate_ownership,
+    generate_plate_kinematics, partition_plates,
 };
 use std::{
     error::Error,
@@ -20,7 +20,7 @@ pub struct GenerationSettings {
     pub plates: PlatePartitionConfig,
     pub crust: CrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
-    pub migration: PlateMigrationConfig,
+    pub evolution: PlateEvolutionConfig,
 }
 
 impl Default for GenerationSettings {
@@ -39,7 +39,7 @@ impl Default for GenerationSettings {
             },
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(7),
-            migration: PlateMigrationConfig::default(),
+            evolution: PlateEvolutionConfig::default(),
         }
     }
 }
@@ -108,8 +108,8 @@ pub struct GeneratedWorld {
     pub plates: PlatePartition,
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
-    pub migration: PlateMigration,
     pub boundaries: BoundaryClassification,
+    pub evolution: PlateEvolutionDiagnostics,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -131,30 +131,28 @@ impl GeneratedWorld {
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(initial_plates.plate_count, config.kinematics)
         })?;
-        let migration_boundaries = timings.record("Pre-migration boundaries", || {
-            classify_boundaries(&voronoi, &initial_plates, &kinematics)
-        })?;
-        let migration = timings.record("Plate migration", || {
-            migrate_plates_once(
+        let evolution_result = timings.record("Plate evolution", || {
+            evolve_plate_ownership(
                 &voronoi,
                 &initial_plates,
                 &crust,
-                &migration_boundaries,
-                config.migration,
+                &kinematics,
+                config.evolution,
             )
         })?;
-        let plates = migration.partition.clone();
-        let boundaries = timings.record("Boundaries", || {
-            classify_boundaries(&voronoi, &plates, &kinematics)
-        })?;
+        let PlateEvolution {
+            partition: plates,
+            boundaries,
+            diagnostics: evolution,
+        } = evolution_result;
 
         Ok(Self {
             voronoi,
             plates,
             crust,
             kinematics,
-            migration,
             boundaries,
+            evolution,
             timings,
             config,
         })
@@ -185,7 +183,7 @@ fn regenerate_world(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use procgen_tectonics::CrustClass;
+    use procgen_tectonics::{CrustClass, PlateMigrationConfig};
 
     #[test]
     fn generates_consistent_viewer_counts() {
@@ -194,7 +192,7 @@ mod tests {
             plates: PlatePartitionConfig::new(4, 4),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(9),
-            migration: PlateMigrationConfig::default(),
+            evolution: PlateEvolutionConfig::default(),
         })
         .unwrap();
 
@@ -203,7 +201,7 @@ mod tests {
         assert_eq!(world.voronoi.edge_count(), 378);
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
         assert!(world.crust.plate_count(CrustClass::Continental) > 0);
-        assert!(world.migration.migrated_cell_count() > 0);
+        assert!(world.evolution.migrated_cell_count > 0);
     }
 
     #[test]
@@ -214,7 +212,7 @@ mod tests {
             plates: PlatePartitionConfig::new(2, 2),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(3),
-            migration: PlateMigrationConfig::default(),
+            evolution: PlateEvolutionConfig::default(),
         })
         .unwrap();
         let requested = GenerationSettings {
@@ -225,8 +223,11 @@ mod tests {
                 seed: 7,
             },
             kinematics: PlateKinematicsConfig::new(4),
-            migration: PlateMigrationConfig {
-                minimum_convergence: 0.4,
+            evolution: PlateEvolutionConfig {
+                step_count: 8,
+                migration: PlateMigrationConfig {
+                    minimum_convergence: 0.4,
+                },
             },
         };
         app.insert_resource(current)
@@ -241,7 +242,7 @@ mod tests {
         assert_eq!(world.config.plates, requested.plates);
         assert_eq!(world.config.crust, requested.crust);
         assert_eq!(world.config.kinematics, requested.kinematics);
-        assert_eq!(world.config.migration, requested.migration);
+        assert_eq!(world.config.evolution, requested.evolution);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

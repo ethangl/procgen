@@ -8,6 +8,7 @@ use procgen_tectonics::{BoundaryClass, CrustClass};
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
+const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 
 pub struct ViewerUiPlugin;
 
@@ -143,11 +144,18 @@ fn generation_controls(
         );
     });
     ui.add_space(4.0);
-    ui.label("Plate migration");
+    ui.label("Plate evolution");
+    drag_value(
+        ui,
+        "Steps",
+        &mut generation.evolution.step_count,
+        EVOLUTION_STEP_RANGE,
+        1.0,
+    );
     slider(
         ui,
         "Minimum convergence",
-        &mut generation.migration.minimum_convergence,
+        &mut generation.evolution.migration.minimum_convergence,
         0.0..=generation.kinematics.maximum_convergence(WORLD_RADIUS),
     );
     if ui.button("Regenerate").clicked() {
@@ -213,15 +221,20 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 
     ui.add_space(6.0);
-    ui.label("Single-step migration");
-    egui::Grid::new("migration").num_columns(2).show(ui, |ui| {
-        stat(ui, "Proposals", world.migration.proposal_count);
-        stat(ui, "Contested cells", world.migration.contested_cell_count);
-        stat(ui, "Migrated cells", world.migration.migrated_cell_count());
+    ui.label("Plate evolution");
+    egui::Grid::new("evolution").num_columns(2).show(ui, |ui| {
+        stat(ui, "Active steps", world.evolution.active_step_count);
+        stat(ui, "Proposals", world.evolution.proposal_count);
+        stat(
+            ui,
+            "Contested cell events",
+            world.evolution.contested_cell_count,
+        );
+        stat(ui, "Migration events", world.evolution.migrated_cell_count);
         stat(
             ui,
             "Strongest migration",
-            format!("{:.3}", world.migration.maximum_convergence()),
+            format!("{:.3}", world.evolution.maximum_convergence),
         );
     });
 
