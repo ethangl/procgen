@@ -1,9 +1,11 @@
 use bevy::prelude::*;
 use procgen_geology::{
-    CratonField, CratonFieldConfig, HotspotField, HotspotFieldConfig, OceanicPeakField,
+    CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
+    GeologicalElevationInputs, HotspotField, HotspotFieldConfig, OceanicPeakField,
     OceanicPeakFieldConfig, SedimentaryBasinField, SedimentaryBasinFieldConfig, VolcanicArcField,
-    VolcanicArcFieldConfig, derive_craton_field, derive_oceanic_peak_field,
-    derive_sedimentary_basin_field, derive_volcanic_arc_field, generate_hotspot_field,
+    VolcanicArcFieldConfig, compose_geological_elevation, derive_craton_field,
+    derive_oceanic_peak_field, derive_sedimentary_basin_field, derive_volcanic_arc_field,
+    generate_hotspot_field,
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
@@ -39,6 +41,7 @@ pub struct GenerationSettings {
     pub volcanic_arcs: VolcanicArcFieldConfig,
     pub cratons: CratonFieldConfig,
     pub basins: SedimentaryBasinFieldConfig,
+    pub geological_elevation: GeologicalElevationConfig,
 }
 
 impl Default for GenerationSettings {
@@ -73,6 +76,7 @@ impl Default for GenerationSettings {
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
             basins: SedimentaryBasinFieldConfig::default(),
+            geological_elevation: GeologicalElevationConfig::default(),
         }
     }
 }
@@ -152,6 +156,7 @@ pub struct GeneratedWorld {
     pub volcanic_arcs: VolcanicArcField,
     pub cratons: CratonField,
     pub basins: SedimentaryBasinField,
+    pub geological_elevation: GeologicalElevation,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -196,7 +201,7 @@ impl GeneratedWorld {
         let deformation = timings.record("Boundary deformation", || {
             derive_boundary_deformation(&voronoi, &plates, &crust, &boundaries, config.deformation)
         })?;
-        let elevation = timings.record("Coarse elevation", || {
+        let elevation = timings.record("Tectonic elevation", || {
             compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)
         })?;
         let hotspots = timings.record("Mantle hotspots", || {
@@ -213,6 +218,20 @@ impl GeneratedWorld {
         })?;
         let basins = timings.record("Sedimentary basins", || {
             derive_sedimentary_basin_field(&voronoi, &plates, &crust, &elevation, config.basins)
+        })?;
+        let geological_elevation = timings.record("Geological elevation", || {
+            compose_geological_elevation(
+                &voronoi,
+                GeologicalElevationInputs {
+                    tectonic_elevation: &elevation,
+                    hotspots: &hotspots,
+                    volcanic_arcs: &volcanic_arcs,
+                    cratons: &cratons,
+                    basins: &basins,
+                    continental_base: config.base_elevation.continental_base,
+                },
+                config.geological_elevation,
+            )
         })?;
 
         Ok(Self {
@@ -231,6 +250,7 @@ impl GeneratedWorld {
             volcanic_arcs,
             cratons,
             basins,
+            geological_elevation,
             timings,
             config,
         })
@@ -321,6 +341,10 @@ mod tests {
             world.voronoi.cell_count()
         );
         assert_eq!(world.basins.cell_basins.len(), world.voronoi.cell_count());
+        assert_eq!(
+            world.geological_elevation.cell_elevations.len(),
+            world.voronoi.cell_count()
+        );
     }
 
     #[test]
@@ -390,6 +414,12 @@ mod tests {
                 minimum_cell_count: 4,
                 maximum_ocean_perimeter_fraction: 0.4,
             },
+            geological_elevation: GeologicalElevationConfig {
+                hotspot_uplift: 0.1,
+                volcanic_arc_uplift: 0.15,
+                craton_flattening: 0.6,
+                basin_flattening: 0.7,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -413,6 +443,10 @@ mod tests {
         assert_eq!(world.config.volcanic_arcs, requested.volcanic_arcs);
         assert_eq!(world.config.cratons, requested.cratons);
         assert_eq!(world.config.basins, requested.basins);
+        assert_eq!(
+            world.config.geological_elevation,
+            requested.geological_elevation
+        );
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

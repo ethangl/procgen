@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(field.validate(&mesh), Err(GeologyInputError::Hotspots));
         assert_eq!(
             GeologyInputError::Hotspots.to_string(),
-            "hotspot aggregate fields must match the mesh cell count"
+            "hotspot aggregate field is inconsistent with the mesh"
         );
     }
 }

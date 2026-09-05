@@ -1,11 +1,13 @@
 //! Deterministic geological fields derived from completed tectonic state.
 //!
 //! This crate consumes completed tectonic state without feeding data back into
-//! tectonic generation. Geological fields never mutate elevation and remain
+//! tectonic generation. Geological fields never mutate tectonic elevation;
+//! composition produces a separate elevation field. All stages remain
 //! independent of rendering.
 
 mod basins;
 mod cratons;
+mod elevation;
 mod field;
 mod hotspots;
 mod oceanic_peaks;
@@ -18,6 +20,11 @@ pub use basins::{
     SedimentaryBasinFieldConfig, SedimentaryBasinFieldError, derive_sedimentary_basin_field,
 };
 pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
+pub use elevation::{
+    ElevationEffectDiagnostics, GeologicalElevation, GeologicalElevationConfig,
+    GeologicalElevationDiagnostics, GeologicalElevationError, GeologicalElevationInputs,
+    compose_geological_elevation,
+};
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
     HotspotTrailCell, generate_hotspot_field,

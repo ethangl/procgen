@@ -1,6 +1,7 @@
 use super::{field_summary_stats, format_field_range, millis, stat, stat_grid};
 use crate::model::GeneratedWorld;
 use bevy_egui::egui;
+use procgen_geology::ElevationEffectDiagnostics;
 use procgen_tectonics::{BoundaryClass, CrustClass};
 
 pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
@@ -17,6 +18,7 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     oceanic_peak_summary(ui, world);
     craton_summary(ui, world);
     basin_summary(ui, world);
+    geological_elevation_summary(ui, world);
     timing_summary(ui, world);
 }
 
@@ -185,7 +187,7 @@ fn base_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
 }
 
 fn elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    stat_grid(ui, "Coarse elevation", "elevation", |ui| {
+    stat_grid(ui, "Tectonic elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
     });
 }
@@ -389,6 +391,31 @@ fn basin_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ),
         );
     });
+}
+
+fn geological_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.geological_elevation.diagnostics;
+    stat_grid(ui, "Geological elevation", "geological_elevation", |ui| {
+        field_summary_stats(ui, &diagnostics.elevation);
+        effect_stats(ui, "Hotspots", diagnostics.hotspots);
+        effect_stats(ui, "Volcanic arcs", diagnostics.volcanic_arcs);
+        effect_stats(ui, "Cratons", diagnostics.cratons);
+        effect_stats(ui, "Basins", diagnostics.basins);
+    });
+}
+
+fn effect_stats(ui: &mut egui::Ui, label: &str, effect: ElevationEffectDiagnostics) {
+    stat(ui, &format!("{label} affected"), effect.affected_cell_count);
+    stat(
+        ui,
+        &format!("{label} total delta"),
+        format!("{:.3}", effect.total_delta),
+    );
+    stat(
+        ui,
+        &format!("{label} max abs delta"),
+        format!("{:.3}", effect.maximum_absolute_delta),
+    );
 }
 
 fn timing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
