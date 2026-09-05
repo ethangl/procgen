@@ -3,11 +3,11 @@ use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, pr
 use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CoarseElevation, CrustClass, CrustClassification,
-    PlateKinematics, PlatePartition,
+    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
+    PlatePartition,
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum DiagnosticLayer {
     Points,
@@ -15,12 +15,37 @@ pub enum DiagnosticLayer {
     Voronoi,
     Plates,
     Crust,
+    Deformation,
     Elevation,
     Boundaries,
     Motion,
 }
 
-const PLATE_BORDER_OFFSET: f32 = 0.004;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrawSurface {
+    Layer(DiagnosticLayer),
+    PlateBorders,
+}
+
+const DRAW_ORDER: [DrawSurface; 10] = [
+    DrawSurface::Layer(DiagnosticLayer::Delaunay),
+    DrawSurface::Layer(DiagnosticLayer::Voronoi),
+    DrawSurface::Layer(DiagnosticLayer::Plates),
+    DrawSurface::Layer(DiagnosticLayer::Crust),
+    DrawSurface::Layer(DiagnosticLayer::Points),
+    DrawSurface::Layer(DiagnosticLayer::Deformation),
+    DrawSurface::Layer(DiagnosticLayer::Elevation),
+    DrawSurface::PlateBorders,
+    DrawSurface::Layer(DiagnosticLayer::Boundaries),
+    DrawSurface::Layer(DiagnosticLayer::Motion),
+];
+const DRAW_RADIUS_BASE: f32 = 1.0;
+const DRAW_RADIUS_STEP: f32 = 0.004;
+const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (-0.5, Vec3::new(0.08, 0.35, 0.95)),
+    (0.0, Vec3::new(0.12, 0.12, 0.16)),
+    (0.5, Vec3::new(1.0, 0.38, 0.08)),
+];
 const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.0, Vec3::new(0.02, 0.08, 0.3)),
     (0.5, Vec3::new(0.08, 0.65, 0.85)),
@@ -31,12 +56,13 @@ const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
+        Self::Deformation,
         Self::Elevation,
         Self::Boundaries,
         Self::Motion,
@@ -58,25 +84,15 @@ impl DiagnosticLayer {
             Self::Voronoi => 1.5,
             Self::Plates => 2.4,
             Self::Crust => 3.0,
+            Self::Deformation => 3.2,
             Self::Elevation => 3.4,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
     }
 
-    // Radius order defines the intended composition: Delaunay, Voronoi, plate
-    // interiors, crust/elevation, points, plate borders, boundaries, then motion.
-    const fn radius(self) -> f32 {
-        match self {
-            Self::Points => 1.012,
-            Self::Delaunay => 1.000,
-            Self::Voronoi => 1.006,
-            Self::Plates => 1.009,
-            Self::Crust => 1.011,
-            Self::Elevation => 1.013,
-            Self::Boundaries => 1.017,
-            Self::Motion => 1.035,
-        }
+    fn radius(self) -> f32 {
+        draw_radius(DrawSurface::Layer(self))
     }
 
     pub const fn label(self) -> &'static str {
@@ -86,6 +102,7 @@ impl DiagnosticLayer {
             Self::Voronoi => "Voronoi",
             Self::Plates => "Tectonic plates",
             Self::Crust => "Crust classes",
+            Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
@@ -98,13 +115,37 @@ impl DiagnosticLayer {
             Self::Points => point_asset(&world.voronoi, radius),
             Self::Delaunay => delaunay_asset(&world.voronoi, radius),
             Self::Voronoi => voronoi_asset(&world.voronoi, radius),
-            Self::Plates => plate_asset(&world.voronoi, &world.plates, radius),
+            Self::Plates => plate_asset(
+                &world.voronoi,
+                &world.plates,
+                radius,
+                draw_radius(DrawSurface::PlateBorders),
+            ),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
-            Self::Elevation => elevation_asset(&world.voronoi, &world.elevation, radius),
+            Self::Deformation => scalar_field_asset(
+                &world.voronoi,
+                &world.deformation.cell_deformation,
+                &DEFORMATION_COLOR_STOPS,
+                radius,
+            ),
+            Self::Elevation => scalar_field_asset(
+                &world.voronoi,
+                &world.elevation.cell_elevations,
+                &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn draw_radius(surface: DrawSurface) -> f32 {
+    let position = DRAW_ORDER
+        .iter()
+        .position(|&candidate| candidate == surface)
+        .expect("every draw surface must have a declared order");
+    DRAW_RADIUS_BASE + position as f32 * DRAW_RADIUS_STEP
 }
 
 #[derive(Resource)]
@@ -273,7 +314,12 @@ fn voronoi_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {
     voronoi_edge_asset(mesh, |_, edge| Some((radius, id_color(edge.cells[0]))))
 }
 
-fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition, radius: f32) -> GizmoAsset {
+fn plate_asset(
+    mesh: &SphereMesh,
+    plates: &PlatePartition,
+    radius: f32,
+    border_radius: f32,
+) -> GizmoAsset {
     voronoi_edge_asset(mesh, |_, edge| {
         let left_plate = plates.cell_plates[edge.cells[0]];
         let right_plate = plates.cell_plates[edge.cells[1]];
@@ -282,10 +328,7 @@ fn plate_asset(mesh: &SphereMesh, plates: &PlatePartition, radius: f32) -> Gizmo
         if left_plate == right_plate {
             Some((radius, id_color(left_plate)))
         } else {
-            Some((
-                radius + PLATE_BORDER_OFFSET,
-                Color::srgba(0.95, 0.95, 1.0, 0.98),
-            ))
+            Some((border_radius, Color::srgba(0.95, 0.95, 1.0, 0.98)))
         }
     })
 }
@@ -327,18 +370,17 @@ fn boundary_asset(
     })
 }
 
-fn elevation_asset(mesh: &SphereMesh, elevation: &CoarseElevation, radius: f32) -> GizmoAsset {
+fn scalar_field_asset(
+    mesh: &SphereMesh,
+    values: &[f32],
+    stops: &[(f32, Vec3)],
+    radius: f32,
+) -> GizmoAsset {
     voronoi_edge_asset(mesh, |_, edge| {
-        let value = (elevation.cell_elevations[edge.cells[0]]
-            + elevation.cell_elevations[edge.cells[1]])
-            * 0.5;
-        Some((radius, elevation_color(value)))
+        let value = (values[edge.cells[0]] + values[edge.cells[1]]) * 0.5;
+        let color = piecewise_lerp(value, stops);
+        Some((radius, Color::srgba(color.x, color.y, color.z, 0.98)))
     })
-}
-
-fn elevation_color(value: f32) -> Color {
-    let color = piecewise_lerp(value, &ELEVATION_COLOR_STOPS);
-    Color::srgba(color.x, color.y, color.z, 0.98)
 }
 
 fn piecewise_lerp(value: f32, stops: &[(f32, Vec3)]) -> Vec3 {
@@ -413,4 +455,32 @@ fn to_bevy(point: SphereVec3) -> Vec3 {
 fn id_color(id: usize) -> Color {
     let hue = (id as f32 * 137.508) % 360.0;
     Color::hsla(hue, 0.62, 0.62, 0.95)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_order_covers_each_surface_once_with_unique_radii() {
+        for layer in DiagnosticLayer::ALL {
+            assert_eq!(
+                DRAW_ORDER
+                    .iter()
+                    .filter(|&&surface| surface == DrawSurface::Layer(layer))
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            DRAW_ORDER
+                .iter()
+                .filter(|&&surface| surface == DrawSurface::PlateBorders)
+                .count(),
+            1
+        );
+
+        let radii: Vec<_> = DRAW_ORDER.iter().copied().map(draw_radius).collect();
+        assert!(radii.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }

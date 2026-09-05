@@ -73,13 +73,16 @@ Completed foundations:
   for a configured step count. The result retains final ownership and boundaries
   plus aggregate evolution diagnostics, without step history. Per-plate crust
   classes remain fixed while cell crust follows current ownership. A separate
-  post-evolution stage derives normalized coarse elevation from current-owner
-  crust and final boundaries, with bounded within-plate propagation and
-  simultaneous smoothing. It does not accumulate elevation during evolution.
+  post-evolution stage derives signed per-cell deformation from current-owner
+  crust and final boundary classes and strengths, with deterministic overlap
+  resolution and bounded within-plate propagation. Coarse elevation then
+  composes current-owner crust base elevation with deformation before
+  simultaneous smoothing and clamping. Neither stage accumulates state during
+  evolution.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
-  regeneration, evolution and coarse-elevation controls, an elevation layer,
-  aggregate statistics, and stage timings.
+  regeneration, evolution, deformation, and coarse-elevation controls, signed
+  deformation and elevation layers, aggregate statistics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout
