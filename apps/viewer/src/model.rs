@@ -270,16 +270,7 @@ mod tests {
             plates: PlatePartitionConfig::new(4, 4),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(9),
-            evolution: PlateEvolutionConfig::default(),
-            seafloor_age: SeafloorAgeConfig::default(),
-            base_elevation: BaseElevationConfig::default(),
-            deformation: BoundaryDeformationConfig::default(),
-            elevation: CoarseElevationConfig::default(),
-            hotspots: HotspotFieldConfig::new(7),
-            oceanic_peaks: OceanicPeakFieldConfig::new(7),
-            volcanic_arcs: VolcanicArcFieldConfig::default(),
-            cratons: CratonFieldConfig::default(),
-            basins: SedimentaryBasinFieldConfig::default(),
+            ..GenerationSettings::default()
         })
         .unwrap();
 
@@ -340,16 +331,7 @@ mod tests {
             plates: PlatePartitionConfig::new(2, 2),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(3),
-            evolution: PlateEvolutionConfig::default(),
-            seafloor_age: SeafloorAgeConfig::default(),
-            base_elevation: BaseElevationConfig::default(),
-            deformation: BoundaryDeformationConfig::default(),
-            elevation: CoarseElevationConfig::default(),
-            hotspots: HotspotFieldConfig::new(7),
-            oceanic_peaks: OceanicPeakFieldConfig::new(7),
-            volcanic_arcs: VolcanicArcFieldConfig::default(),
-            cratons: CratonFieldConfig::default(),
-            basins: SedimentaryBasinFieldConfig::default(),
+            ..GenerationSettings::default()
         })
         .unwrap();
         let requested = GenerationSettings {

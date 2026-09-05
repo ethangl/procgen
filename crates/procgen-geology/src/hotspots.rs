@@ -64,6 +64,28 @@ pub struct HotspotField {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HotspotFieldInputError;
+
+impl fmt::Display for HotspotFieldInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("hotspot aggregate fields must match the mesh cell count")
+    }
+}
+
+impl std::error::Error for HotspotFieldInputError {}
+
+impl HotspotField {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), HotspotFieldInputError> {
+        if self.cell_intensities.len() != mesh.cell_count()
+            || self.cell_hotspots.len() != mesh.cell_count()
+        {
+            return Err(HotspotFieldInputError);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotspotFieldError {
     Input(StageInputError),
     EmptyTrail,
@@ -487,6 +509,20 @@ mod tests {
         assert_eq!(
             generate_hotspot_field(&mesh, &invalid_ownership, &kinematics, reference_config()),
             Err(HotspotFieldError::Input(StageInputError::PlateOwnership))
+        );
+    }
+
+    #[test]
+    fn validation_reports_misaligned_aggregate_fields() {
+        let (mesh, plates, kinematics) = fixture(32);
+        let mut field =
+            generate_hotspot_field(&mesh, &plates, &kinematics, reference_config()).unwrap();
+        field.cell_hotspots.pop();
+
+        assert_eq!(field.validate(&mesh), Err(HotspotFieldInputError));
+        assert_eq!(
+            HotspotFieldInputError.to_string(),
+            "hotspot aggregate fields must match the mesh cell count"
         );
     }
 }

@@ -463,6 +463,23 @@ fn layer_controls(ui: &mut egui::Ui, layers: &mut LayerSettings) {
 }
 
 fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    active_world_summary(ui, world);
+    crust_summary(ui, world);
+    evolution_summary(ui, world);
+    boundary_summary(ui, world);
+    seafloor_age_summary(ui, world);
+    deformation_summary(ui, world);
+    base_elevation_summary(ui, world);
+    elevation_summary(ui, world);
+    hotspot_summary(ui, world);
+    volcanic_arc_summary(ui, world);
+    oceanic_peak_summary(ui, world);
+    craton_summary(ui, world);
+    basin_summary(ui, world);
+    timing_summary(ui, world);
+}
+
+fn active_world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Active world", "stats", |ui| {
         stat(ui, "Cells", world.voronoi.cell_count());
         stat(ui, "Vertices", world.voronoi.vertex_count());
@@ -480,7 +497,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             format!("{:.2}", world.config.fibonacci.jitter),
         );
     });
+}
 
+fn crust_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Static crust", "crust", |ui| {
         stat(
             ui,
@@ -506,7 +525,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.crust.plate_count(CrustClass::Continental),
         );
     });
+}
 
+fn evolution_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Plate evolution", "evolution", |ui| {
         stat(ui, "Active steps", world.evolution.active_step_count);
         stat(ui, "Proposals", world.evolution.proposal_count);
@@ -522,7 +543,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             format!("{:.3}", world.evolution.maximum_convergence),
         );
     });
+}
 
+fn boundary_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Static boundaries", "boundaries", |ui| {
         stat(
             ui,
@@ -540,7 +563,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.boundaries.count(BoundaryClass::Transform),
         );
     });
+}
 
+fn seafloor_age_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Seafloor age", "seafloor_age", |ui| {
         field_summary_stats(ui, &world.seafloor_age.diagnostics.summary);
         stat(
@@ -569,7 +594,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.seafloor_age.diagnostics.fallback_cell_count,
         );
     });
+}
 
+fn deformation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Boundary deformation", "deformation", |ui| {
         field_summary_stats(ui, &world.deformation.diagnostics.summary);
         stat(
@@ -593,6 +620,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.deformation.diagnostics.subsided_cell_count,
         );
     });
+}
+
+fn base_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Base elevation", "base_elevation", |ui| {
         field_summary_stats(ui, &world.base_elevation.diagnostics.summary);
         stat(
@@ -611,9 +641,15 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.base_elevation.diagnostics.continental_cell_count,
         );
     });
+}
+
+fn elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Coarse elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
     });
+}
+
+fn hotspot_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Mantle hotspots", "hotspots", |ui| {
         stat(ui, "Hotspots", world.hotspots.hotspots.len());
         stat(
@@ -646,6 +682,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ),
         );
     });
+}
+
+fn volcanic_arc_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Volcanic arcs", "volcanic_arcs", |ui| {
         stat(ui, "Segments", world.volcanic_arcs.segments.len());
         stat(
@@ -695,6 +734,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 .discarded_landlocked_segment_count,
         );
     });
+}
+
+fn oceanic_peak_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Seamounts and abyssal hills", "oceanic_peaks", |ui| {
         field_summary_stats(ui, &world.oceanic_peaks.diagnostics.density);
         stat(
@@ -737,6 +779,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             format_field_range(&world.oceanic_peaks.diagnostics.height),
         );
     });
+}
+
+fn craton_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Cratons", "cratons", |ui| {
         field_summary_stats(ui, &world.cratons.diagnostics.strength);
         stat(
@@ -769,6 +814,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 .map_or_else(|| "None".to_owned(), |distance| distance.to_string()),
         );
     });
+}
+
+fn basin_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Sedimentary basins", "basins", |ui| {
         stat(
             ui,
@@ -800,6 +848,9 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ),
         );
     });
+}
+
+fn timing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Timings", "timings", |ui| {
         for stage in world.timings.stages() {
             stat(ui, stage.label, millis(stage.duration));

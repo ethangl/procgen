@@ -136,6 +136,34 @@ impl SphereMesh {
     pub fn cell_corners(&self, cell: usize) -> &[CellCorner] {
         &self.corners[self.cell_offsets[cell]..self.cell_offsets[cell + 1]]
     }
+
+    /// Interpolates a surface position within one triangle of a cell's fan.
+    /// Weights correspond to the cell center, the selected corner, and the
+    /// next corner in ring order; they must be finite, nonnegative, and sum to one.
+    pub fn interpolate_cell_triangle(
+        &self,
+        cell: usize,
+        corner_index: usize,
+        weights: [f32; 3],
+    ) -> Vec3 {
+        let corners = self.cell_corners(cell);
+        assert!(corner_index < corners.len(), "cell corner must exist");
+        assert!(
+            weights
+                .iter()
+                .all(|weight| weight.is_finite() && *weight >= 0.0),
+            "cell interpolation weights must be finite and nonnegative"
+        );
+        assert!(
+            (weights.iter().sum::<f32>() - 1.0).abs() <= 1.0e-6,
+            "cell interpolation weights must sum to one"
+        );
+        let next_corner_index = (corner_index + 1) % corners.len();
+        let position = self.cell_centers[cell] * weights[0]
+            + self.vertices[corners[corner_index].vertex] * weights[1]
+            + self.vertices[corners[next_corner_index].vertex] * weights[2];
+        position.normalized() * self.radius
+    }
 }
 
 /// Collects connected components of eligible cells in ascending root-cell
@@ -249,6 +277,19 @@ mod tests {
             multi_source_distances(&mesh, &[0, 0], |_, _| true),
             single_source
         );
+    }
+
+    #[test]
+    fn cell_triangle_interpolation_stays_in_the_selected_cell() {
+        let mesh = tetrahedron();
+        let position = mesh.interpolate_cell_triangle(0, 0, [0.25, 0.5, 0.25]);
+        let center = mesh.cell_centers[0].normalized();
+
+        assert!((position.length() - mesh.radius).abs() < 1.0e-6);
+        for corner in mesh.cell_corners(0) {
+            let neighbor = mesh.cell_centers[corner.neighbor].normalized();
+            assert!(position.dot(center) + 1.0e-6 >= position.dot(neighbor));
+        }
     }
 
     #[test]

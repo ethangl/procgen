@@ -34,6 +34,15 @@ pub struct SeafloorAge {
     pub diagnostics: SeafloorAgeDiagnostics,
 }
 
+impl SeafloorAge {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_ages.len() != mesh.cell_count() {
+            return Err(StageInputError::SeafloorAge);
+        }
+        Ok(())
+    }
+}
+
 /// Derives seafloor hop age from the final divergent boundaries and ownership.
 ///
 /// Oceanic cells touching a divergent edge are age zero. A multi-source BFS
@@ -294,6 +303,21 @@ mod tests {
                 Default::default()
             ),
             Err(StageInputError::Boundaries)
+        );
+    }
+
+    #[test]
+    fn validation_reports_misaligned_age_values() {
+        let (mesh, _, _, _) = final_state_fixture();
+        let age = SeafloorAge {
+            cell_ages: vec![None; mesh.cell_count() - 1],
+            diagnostics: Default::default(),
+        };
+
+        assert_eq!(age.validate(&mesh), Err(StageInputError::SeafloorAge));
+        assert_eq!(
+            StageInputError::SeafloorAge.to_string(),
+            "seafloor-age values must match the mesh cell count"
         );
     }
 }

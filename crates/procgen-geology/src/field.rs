@@ -1,10 +1,10 @@
-pub(crate) struct MaxWinsField {
+pub(crate) struct MaxWinsField<T> {
     values: Vec<f32>,
-    winners: Vec<Option<usize>>,
+    winners: Vec<Option<T>>,
     contribution_counts: Vec<usize>,
 }
 
-impl MaxWinsField {
+impl<T: Copy + Ord> MaxWinsField<T> {
     pub(crate) fn new(cell_count: usize) -> Self {
         Self {
             values: vec![0.0; cell_count],
@@ -13,7 +13,7 @@ impl MaxWinsField {
         }
     }
 
-    pub(crate) fn claim(&mut self, cell: usize, value: f32, index: usize) {
+    pub(crate) fn claim(&mut self, cell: usize, value: f32, index: T) {
         self.contribution_counts[cell] += 1;
         let wins = self.winners[cell].is_none_or(|winner| {
             value > self.values[cell] || (value == self.values[cell] && index < winner)
@@ -38,7 +38,7 @@ impl MaxWinsField {
             .count()
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<f32>, Vec<Option<usize>>) {
+    pub(crate) fn into_parts(self) -> (Vec<f32>, Vec<Option<T>>) {
         (self.values, self.winners)
     }
 }

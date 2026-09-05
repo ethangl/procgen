@@ -1,4 +1,4 @@
-use crate::{HotspotField, field::MaxWinsField};
+use crate::{HotspotField, HotspotFieldInputError, field::MaxWinsField};
 use procgen_core::{
     RandomStream, Vec3,
     random_streams::{OCEANIC_PEAK_POSITION, OCEANIC_PEAK_PRESENCE},
@@ -38,21 +38,10 @@ impl OceanicPeakFieldConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OceanicPeakKind {
-    Seamount = 0,
-    AbyssalHill = 1,
-}
-
-impl OceanicPeakKind {
-    const fn from_index(index: usize) -> Self {
-        match index {
-            0 => Self::Seamount,
-            1 => Self::AbyssalHill,
-            _ => unreachable!(),
-        }
-    }
+    Seamount,
+    AbyssalHill,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,6 +82,7 @@ pub struct OceanicPeakField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OceanicPeakFieldError {
     Input(StageInputError),
+    Hotspots(HotspotFieldInputError),
     EmptyYoungAgeRange,
     InvalidDensityScale,
     InvalidPositionOffset,
@@ -103,6 +93,7 @@ impl fmt::Display for OceanicPeakFieldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(error) => error.fmt(formatter),
+            Self::Hotspots(error) => error.fmt(formatter),
             Self::EmptyYoungAgeRange => {
                 formatter.write_str("maximum young seafloor age must be at least one")
             }
@@ -122,6 +113,7 @@ impl std::error::Error for OceanicPeakFieldError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Input(error) => Some(error),
+            Self::Hotspots(error) => Some(error),
             _ => None,
         }
     }
@@ -130,6 +122,12 @@ impl std::error::Error for OceanicPeakFieldError {
 impl From<StageInputError> for OceanicPeakFieldError {
     fn from(error: StageInputError) -> Self {
         Self::Input(error)
+    }
+}
+
+impl From<HotspotFieldInputError> for OceanicPeakFieldError {
+    fn from(error: HotspotFieldInputError) -> Self {
+        Self::Hotspots(error)
     }
 }
 
@@ -158,7 +156,7 @@ pub fn derive_oceanic_peak_field(
             (hotspots.cell_intensities[cell] * config.seamount_density_scale).clamp(0.0, 1.0);
         if seamount_density > 0.0 {
             hotspot_candidate_cell_count += 1;
-            aggregate.claim(cell, seamount_density, OceanicPeakKind::Seamount as usize);
+            aggregate.claim(cell, seamount_density, OceanicPeakKind::Seamount);
         }
 
         if (1..=config.maximum_young_age).contains(&age) {
@@ -167,17 +165,13 @@ pub fn derive_oceanic_peak_field(
             let hill_density = age_strength * config.abyssal_hill_density_scale;
             if hill_density > 0.0 {
                 young_seafloor_candidate_cell_count += 1;
-                aggregate.claim(cell, hill_density, OceanicPeakKind::AbyssalHill as usize);
+                aggregate.claim(cell, hill_density, OceanicPeakKind::AbyssalHill);
             }
         }
     }
 
     let overlap_cell_count = aggregate.overlap_cell_count();
-    let (cell_densities, winners) = aggregate.into_parts();
-    let cell_kinds: Vec<_> = winners
-        .into_iter()
-        .map(|winner| winner.map(OceanicPeakKind::from_index))
-        .collect();
+    let (cell_densities, cell_kinds) = aggregate.into_parts();
     let presence = RandomStream::new(config.seed, OCEANIC_PEAK_PRESENCE);
     let positions = RandomStream::new(config.seed, OCEANIC_PEAK_POSITION);
     let peaks: Vec<_> = (0..mesh.cell_count())
@@ -254,12 +248,8 @@ fn validate_inputs(
     {
         return Err(OceanicPeakFieldError::InvalidHeight);
     }
-    if hotspots.cell_intensities.len() != mesh.cell_count()
-        || hotspots.cell_hotspots.len() != mesh.cell_count()
-        || seafloor_age.cell_ages.len() != mesh.cell_count()
-    {
-        return Err(StageInputError::Cells.into());
-    }
+    hotspots.validate(mesh)?;
+    seafloor_age.validate(mesh)?;
     Ok(())
 }
 
@@ -271,7 +261,6 @@ fn position_in_cell(
 ) -> Vec3 {
     let corners = mesh.cell_corners(cell);
     let corner_index = stream.sample_u64(cell as u64, 0) as usize % corners.len();
-    let next_corner_index = (corner_index + 1) % corners.len();
     let mut first_weight = stream.unit_f32(cell as u64, 1);
     let mut second_weight = stream.unit_f32(cell as u64, 2);
     if first_weight + second_weight > 1.0 {
@@ -280,11 +269,15 @@ fn position_in_cell(
     }
     first_weight *= maximum_offset;
     second_weight *= maximum_offset;
-    let center_weight = 1.0 - first_weight - second_weight;
-    let position = mesh.cell_centers[cell] * center_weight
-        + mesh.vertices[corners[corner_index].vertex] * first_weight
-        + mesh.vertices[corners[next_corner_index].vertex] * second_weight;
-    position.normalized() * mesh.radius
+    mesh.interpolate_cell_triangle(
+        cell,
+        corner_index,
+        [
+            1.0 - first_weight - second_weight,
+            first_weight,
+            second_weight,
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -378,7 +371,10 @@ mod tests {
         let values = field.peaks.iter().flat_map(|peak| {
             [
                 peak.cell as u64,
-                peak.kind as u64,
+                match peak.kind {
+                    OceanicPeakKind::Seamount => 0,
+                    OceanicPeakKind::AbyssalHill => 1,
+                },
                 u64::from(peak.position.x.to_bits()),
                 u64::from(peak.position.y.to_bits()),
                 u64::from(peak.position.z.to_bits()),
@@ -473,7 +469,14 @@ mod tests {
         hotspots.cell_intensities.pop();
         assert_eq!(
             derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(7)),
-            Err(OceanicPeakFieldError::Input(StageInputError::Cells))
+            Err(OceanicPeakFieldError::Hotspots(HotspotFieldInputError))
+        );
+
+        let (hotspots, mut ages) = inputs(&mesh);
+        ages.cell_ages.pop();
+        assert_eq!(
+            derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(7)),
+            Err(OceanicPeakFieldError::Input(StageInputError::SeafloorAge))
         );
     }
 }

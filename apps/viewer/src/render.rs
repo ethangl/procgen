@@ -86,6 +86,11 @@ const OCEANIC_PEAK_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.65, Vec3::new(0.18, 0.78, 0.72)),
     (1.0, Vec3::new(0.95, 0.9, 0.42)),
 ];
+const OCEANIC_PEAK_MARKER_COLORS: [Vec3; 2] =
+    [Vec3::new(1.0, 0.42, 0.08), Vec3::new(0.55, 0.92, 1.0)];
+const CELL_MARKER_SCALE: f32 = 0.32;
+const MINIMUM_CELL_MARKER_SIZE: f32 = 0.003;
+const MAXIMUM_CELL_MARKER_SIZE: f32 = 0.012;
 const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.055, 0.04)),
     (0.25, Vec3::new(0.55, 0.12, 0.02)),
@@ -234,18 +239,18 @@ fn oceanic_peak_asset(mesh: &SphereMesh, field: &OceanicPeakField, radius: f32) 
         &OCEANIC_PEAK_COLOR_STOPS,
         radius,
     );
-    let base_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
+    let base_size = cell_marker_size(mesh);
     for peak in &field.peaks {
         let color = match peak.kind {
-            OceanicPeakKind::Seamount => Color::srgba(1.0, 0.42, 0.08, 1.0),
-            OceanicPeakKind::AbyssalHill => Color::srgba(0.55, 0.92, 1.0, 1.0),
+            OceanicPeakKind::Seamount => OCEANIC_PEAK_MARKER_COLORS[0],
+            OceanicPeakKind::AbyssalHill => OCEANIC_PEAK_MARKER_COLORS[1],
         };
         let position = to_bevy(peak.position.normalized()) * radius;
         add_cross_marker(
             &mut asset,
             position,
             base_size * (0.5 + peak.height.clamp(0.0, 1.5)),
-            color,
+            opaque_color(color),
         );
     }
     asset
@@ -269,12 +274,16 @@ fn volcanic_arc_asset(mesh: &SphereMesh, field: &VolcanicArcField, radius: f32) 
         &VOLCANIC_ARC_COLOR_STOPS,
         radius,
     );
-    let marker_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
+    let marker_size = cell_marker_size(mesh);
     let marker_color = VOLCANIC_ARC_COLOR_STOPS[VOLCANIC_ARC_COLOR_STOPS.len() - 1].1;
-    let marker_color = Color::srgba(marker_color.x, marker_color.y, marker_color.z, 1.0);
     for &peak_cell in field.segments.iter().flat_map(|segment| &segment.peaks) {
         let position = to_bevy(mesh.cell_centers[peak_cell].normalized()) * radius;
-        add_cross_marker(&mut asset, position, marker_size, marker_color);
+        add_cross_marker(
+            &mut asset,
+            position,
+            marker_size,
+            opaque_color(marker_color),
+        );
     }
     asset
 }
@@ -451,6 +460,15 @@ fn add_cross_marker(asset: &mut GizmoAsset, position: Vec3, size: f32, color: Co
     let bitangent = position.cross(tangent).normalize() * size;
     asset.line(position - tangent, position + tangent, color);
     asset.line(position - bitangent, position + bitangent, color);
+}
+
+fn cell_marker_size(mesh: &SphereMesh) -> f32 {
+    (CELL_MARKER_SCALE / (mesh.cell_count() as f32).sqrt())
+        .clamp(MINIMUM_CELL_MARKER_SIZE, MAXIMUM_CELL_MARKER_SIZE)
+}
+
+fn opaque_color(color: Vec3) -> Color {
+    Color::srgba(color.x, color.y, color.z, 1.0)
 }
 
 fn delaunay_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {

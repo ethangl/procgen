@@ -18,7 +18,7 @@ pub use basins::{
 pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_craton_field};
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
-    HotspotTrailCell, generate_hotspot_field,
+    HotspotFieldInputError, HotspotTrailCell, generate_hotspot_field,
 };
 pub use oceanic_peaks::{
     OceanicPeak, OceanicPeakDiagnostics, OceanicPeakField, OceanicPeakFieldConfig,
