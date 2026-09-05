@@ -8,12 +8,13 @@ use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BoundaryClass, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig, CrustClass,
     CrustClassificationConfig, FieldSummary, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlatePartitionConfig,
+    PlatePartitionConfig, SeafloorAgeConfig,
 };
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+const SEAFLOOR_AGE_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SECTION_SPACING: f32 = 6.0;
@@ -83,6 +84,9 @@ fn generation_controls(
     section(ui, "Plate evolution", |ui| {
         evolution_controls(ui, &mut generation.evolution, generation.kinematics)
     });
+    section(ui, "Seafloor age", |ui| {
+        seafloor_age_controls(ui, &mut generation.seafloor_age)
+    });
     section(ui, "Boundary deformation", |ui| {
         deformation_controls(ui, &mut generation.deformation, generation.kinematics)
     });
@@ -92,6 +96,16 @@ fn generation_controls(
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn seafloor_age_controls(ui: &mut egui::Ui, config: &mut SeafloorAgeConfig) {
+    drag_value(
+        ui,
+        "Ridge-less age",
+        &mut config.ridge_less_age,
+        SEAFLOOR_AGE_RANGE,
+        1.0,
+    );
 }
 
 fn sampling_controls(ui: &mut egui::Ui, config: &mut FibonacciConfig) {
@@ -316,6 +330,35 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Transform",
             world.boundaries.count(BoundaryClass::Transform),
+        );
+    });
+
+    stat_grid(ui, "Seafloor age", "seafloor_age", |ui| {
+        field_summary_stats(ui, &world.seafloor_age.diagnostics.summary);
+        stat(
+            ui,
+            "Oceanic cells",
+            world.seafloor_age.diagnostics.oceanic_cell_count,
+        );
+        stat(
+            ui,
+            "Ridge cells",
+            world.seafloor_age.diagnostics.ridge_cell_count,
+        );
+        stat(
+            ui,
+            "Ridge plates",
+            world.seafloor_age.diagnostics.ridge_plate_count,
+        );
+        stat(
+            ui,
+            "Ridge-less plates",
+            world.seafloor_age.diagnostics.ridge_less_plate_count,
+        );
+        stat(
+            ui,
+            "Fallback cells",
+            world.seafloor_age.diagnostics.fallback_cell_count,
         );
     });
 
