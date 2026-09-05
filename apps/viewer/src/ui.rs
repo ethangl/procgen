@@ -4,7 +4,9 @@ use crate::model::{
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_geology::{CratonFieldConfig, HotspotFieldConfig, VolcanicArcFieldConfig};
+use procgen_geology::{
+    CratonFieldConfig, HotspotFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
+};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
@@ -25,6 +27,7 @@ const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const CRATON_DISTANCE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
+const BASIN_CELL_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=256;
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
@@ -112,6 +115,9 @@ fn generation_controls(
     });
     section(ui, "Cratons", |ui| {
         craton_controls(ui, &mut generation.cratons)
+    });
+    section(ui, "Sedimentary basins", |ui| {
+        basin_controls(ui, &mut generation.basins)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -359,6 +365,29 @@ fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
         CRATON_DISTANCE_RANGE,
         1.0,
     );
+}
+
+fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig) {
+    slider(
+        ui,
+        "Maximum elevation",
+        &mut config.maximum_elevation,
+        procgen_tectonics::SEA_LEVEL..=1.0,
+    );
+    drag_value(
+        ui,
+        "Minimum cells",
+        &mut config.minimum_cell_count,
+        BASIN_CELL_COUNT_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Maximum ocean perimeter",
+        &mut config.maximum_ocean_perimeter_fraction,
+        0.0..=1.0,
+    );
+    slider(ui, "Floor offset", &mut config.floor_offset, 0.0..=0.25);
 }
 
 fn boundary_effect_controls(ui: &mut egui::Ui, label: &str, effect: &mut BoundaryEffect) {
@@ -650,6 +679,38 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 .diagnostics
                 .maximum_boundary_distance
                 .map_or_else(|| "None".to_owned(), |distance| distance.to_string()),
+        );
+    });
+    stat_grid(ui, "Sedimentary basins", "basins", |ui| {
+        stat(
+            ui,
+            "Candidates",
+            world.basins.diagnostics.candidate_cell_count,
+        );
+        stat(ui, "Components", world.basins.diagnostics.component_count);
+        stat(ui, "Basins", world.basins.diagnostics.basin_count);
+        stat(ui, "Basin cells", world.basins.diagnostics.basin_cell_count);
+        stat(
+            ui,
+            "Rejected small",
+            world.basins.diagnostics.rejected_small_component_count,
+        );
+        stat(
+            ui,
+            "Rejected ocean-exposed",
+            world
+                .basins
+                .diagnostics
+                .rejected_ocean_exposed_component_count,
+        );
+        stat(
+            ui,
+            "Basin size range",
+            format!(
+                "{} - {}",
+                world.basins.diagnostics.smallest_basin_cell_count,
+                world.basins.diagnostics.largest_basin_cell_count
+            ),
         );
     });
     stat_grid(ui, "Timings", "timings", |ui| {

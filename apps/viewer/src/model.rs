@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use procgen_geology::{
-    CratonField, CratonFieldConfig, HotspotField, HotspotFieldConfig, VolcanicArcField,
-    VolcanicArcFieldConfig, derive_craton_field, derive_volcanic_arc_field, generate_hotspot_field,
+    CratonField, CratonFieldConfig, HotspotField, HotspotFieldConfig, SedimentaryBasinField,
+    SedimentaryBasinFieldConfig, VolcanicArcField, VolcanicArcFieldConfig, derive_craton_field,
+    derive_sedimentary_basin_field, derive_volcanic_arc_field, generate_hotspot_field,
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
@@ -35,6 +36,7 @@ pub struct GenerationSettings {
     pub hotspots: HotspotFieldConfig,
     pub volcanic_arcs: VolcanicArcFieldConfig,
     pub cratons: CratonFieldConfig,
+    pub basins: SedimentaryBasinFieldConfig,
 }
 
 impl Default for GenerationSettings {
@@ -67,6 +69,7 @@ impl Default for GenerationSettings {
             hotspots: HotspotFieldConfig::new(7),
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
+            basins: SedimentaryBasinFieldConfig::default(),
         }
     }
 }
@@ -144,6 +147,7 @@ pub struct GeneratedWorld {
     pub hotspots: HotspotField,
     pub volcanic_arcs: VolcanicArcField,
     pub cratons: CratonField,
+    pub basins: SedimentaryBasinField,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -200,6 +204,9 @@ impl GeneratedWorld {
         let cratons = timings.record("Cratons", || {
             derive_craton_field(&voronoi, &plates, &crust, &elevation, config.cratons)
         })?;
+        let basins = timings.record("Sedimentary basins", || {
+            derive_sedimentary_basin_field(&voronoi, &plates, &crust, &elevation, config.basins)
+        })?;
 
         Ok(Self {
             voronoi,
@@ -215,6 +222,7 @@ impl GeneratedWorld {
             hotspots,
             volcanic_arcs,
             cratons,
+            basins,
             timings,
             config,
         })
@@ -262,6 +270,7 @@ mod tests {
             hotspots: HotspotFieldConfig::new(7),
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
+            basins: SedimentaryBasinFieldConfig::default(),
         })
         .unwrap();
 
@@ -307,6 +316,7 @@ mod tests {
             world.cratons.cell_strengths.len(),
             world.voronoi.cell_count()
         );
+        assert_eq!(world.basins.cell_basins.len(), world.voronoi.cell_count());
     }
 
     #[test]
@@ -325,6 +335,7 @@ mod tests {
             hotspots: HotspotFieldConfig::new(7),
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
+            basins: SedimentaryBasinFieldConfig::default(),
         })
         .unwrap();
         let requested = GenerationSettings {
@@ -369,6 +380,12 @@ mod tests {
                 minimum_boundary_distance: 4,
                 ramp_width: 5,
             },
+            basins: SedimentaryBasinFieldConfig {
+                maximum_elevation: 0.62,
+                minimum_cell_count: 4,
+                maximum_ocean_perimeter_fraction: 0.4,
+                floor_offset: 0.03,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -390,6 +407,7 @@ mod tests {
         assert_eq!(world.config.hotspots, requested.hotspots);
         assert_eq!(world.config.volcanic_arcs, requested.volcanic_arcs);
         assert_eq!(world.config.cratons, requested.cratons);
+        assert_eq!(world.config.basins, requested.basins);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

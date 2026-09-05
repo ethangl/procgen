@@ -96,14 +96,17 @@ Completed foundations:
   strength-ranked peak candidates with stable segment, peak, and overlap
   ordering. Craton strength applies only to above-sea-level continental cells
   and ramps with graph distance from final plate boundaries. It reads but never
-  mutates elevation and does not infer plate-continuity history.
+  mutates elevation and does not infer plate-continuity history. Sedimentary
+  basins are compact, stable connected-component IDs for low-lying continental
+  land, filtered by size and ocean-facing perimeter. Per-basin floor elevation
+  is metadata only; the stage does not flatten or otherwise modify elevation.
 - `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
   plate, crust, motion, and boundary layers, orbit controls, deterministic
   regeneration, evolution, deformation, bathymetry, and coarse-elevation
   controls, signed deformation, seafloor-age, base-elevation, and composed
   elevation layers, hotspot and volcanic-arc field visualization, craton
-  distance/ramp controls and strength visualization, aggregate diagnostics, and
-  stage timings.
+  distance/ramp controls and strength visualization, sedimentary-basin controls
+  and stable-ID visualization, aggregate diagnostics, and stage timings.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

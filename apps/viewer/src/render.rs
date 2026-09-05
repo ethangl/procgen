@@ -23,6 +23,7 @@ pub enum DiagnosticLayer {
     Hotspots,
     VolcanicArcs,
     Cratons,
+    Basins,
     Boundaries,
     Motion,
 }
@@ -33,7 +34,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 15] = [
+const DRAW_ORDER: [DrawSurface; 16] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -46,6 +47,7 @@ const DRAW_ORDER: [DrawSurface; 15] = [
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
     DrawSurface::Layer(DiagnosticLayer::Cratons),
+    DrawSurface::Layer(DiagnosticLayer::Basins),
     DrawSurface::PlateBorders,
     DrawSurface::Layer(DiagnosticLayer::Boundaries),
     DrawSurface::Layer(DiagnosticLayer::Motion),
@@ -90,7 +92,7 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -103,6 +105,7 @@ impl DiagnosticLayer {
         Self::Hotspots,
         Self::VolcanicArcs,
         Self::Cratons,
+        Self::Basins,
         Self::Boundaries,
         Self::Motion,
     ];
@@ -130,6 +133,7 @@ impl DiagnosticLayer {
             Self::Hotspots => 3.7,
             Self::VolcanicArcs => 3.9,
             Self::Cratons => 4.0,
+            Self::Basins => 4.1,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -153,6 +157,7 @@ impl DiagnosticLayer {
             Self::Hotspots => "Mantle hotspots",
             Self::VolcanicArcs => "Volcanic arcs",
             Self::Cratons => "Craton strength",
+            Self::Basins => "Sedimentary basins",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
         }
@@ -203,10 +208,24 @@ impl DiagnosticLayer {
                 &CRATON_COLOR_STOPS,
                 radius,
             ),
+            Self::Basins => basin_asset(&world.voronoi, &world.basins.cell_basins, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn basin_asset(mesh: &SphereMesh, cell_basins: &[Option<usize>], radius: f32) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |_, edge| {
+        let basins = edge.cells.map(|cell| cell_basins[cell]);
+        let color = match basins {
+            [None, None] => Color::srgba(0.045, 0.065, 0.075, 0.7),
+            [Some(left), Some(right)] if left == right => id_color(left),
+            [Some(id), None] | [None, Some(id)] => id_color(id),
+            [Some(_), Some(_)] => Color::srgba(0.95, 0.98, 1.0, 1.0),
+        };
+        Some((radius, color))
+    })
 }
 
 fn volcanic_arc_asset(mesh: &SphereMesh, field: &VolcanicArcField, radius: f32) -> GizmoAsset {
