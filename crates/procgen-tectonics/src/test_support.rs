@@ -1,3 +1,4 @@
+pub use procgen_core::fingerprint;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
@@ -75,12 +76,4 @@ pub fn empty_boundaries(mesh: &SphereMesh) -> BoundaryClassification {
         edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
         edge_shear: vec![0.0; mesh.edge_count()],
     }
-}
-
-pub fn fingerprint(values: impl IntoIterator<Item = u64>) -> u64 {
-    values
-        .into_iter()
-        .fold(0xcbf2_9ce4_8422_2325, |hash, value| {
-            (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
-        })
 }

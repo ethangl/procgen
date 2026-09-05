@@ -479,7 +479,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         field_summary_stats(ui, &world.elevation.diagnostics);
     });
     stat_grid(ui, "Mantle hotspots", "hotspots", |ui| {
-        stat(ui, "Hotspots", world.hotspots.diagnostics.hotspot_count);
+        stat(ui, "Hotspots", world.hotspots.hotspots.len());
         stat(
             ui,
             "Trail cells",

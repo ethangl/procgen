@@ -1,5 +1,5 @@
-use crate::{PlatePartition, random_streams::CRUST_PLATE_ORDER};
-use procgen_core::RandomStream;
+use crate::PlatePartition;
+use procgen_core::{RandomStream, random_streams::CRUST_PLATE_ORDER};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 

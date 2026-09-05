@@ -1,5 +1,5 @@
-use crate::random_streams::FIRST_MAJOR_SEED;
-use procgen_core::RandomStream;
+use crate::StageInputError;
+use procgen_core::{RandomStream, random_streams::FIRST_MAJOR_PLATE_SEED};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
@@ -34,6 +34,22 @@ pub struct PlatePartition {
     pub cell_plates: Vec<usize>,
     /// Number of stable plate identities addressable by `cell_plates`.
     pub plate_count: usize,
+}
+
+impl PlatePartition {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_plates.len() != mesh.cell_count() {
+            return Err(StageInputError::Cells);
+        }
+        if self
+            .cell_plates
+            .iter()
+            .any(|&plate| plate >= self.plate_count)
+        {
+            return Err(StageInputError::PlateOwnership);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +88,7 @@ pub fn partition_plates(
         return Err(PlatePartitionError::TooManyPlates);
     }
 
-    let first_seed = (RandomStream::new(config.seed, FIRST_MAJOR_SEED).sample_u64(0, 0)
+    let first_seed = (RandomStream::new(config.seed, FIRST_MAJOR_PLATE_SEED).sample_u64(0, 0)
         % mesh.cell_count() as u64) as usize;
     let mut growth = PlateGrowth::new(mesh);
     growth.seed(first_seed);

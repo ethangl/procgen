@@ -277,7 +277,7 @@ mod tests {
             world.voronoi.cell_count()
         );
         assert_eq!(
-            world.hotspots.diagnostics.hotspot_count,
+            world.hotspots.hotspots.len(),
             world.config.hotspots.hotspot_count
         );
     }

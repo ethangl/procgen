@@ -1,7 +1,6 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
-use procgen_geology::HotspotField;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
@@ -168,20 +167,16 @@ impl DiagnosticLayer {
                 &ELEVATION_COLOR_STOPS,
                 radius,
             ),
-            Self::Hotspots => hotspot_asset(&world.voronoi, &world.hotspots, radius),
+            Self::Hotspots => scalar_field_asset(
+                &world.voronoi,
+                &world.hotspots.cell_intensities,
+                &HOTSPOT_COLOR_STOPS,
+                radius,
+            ),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
-}
-
-fn hotspot_asset(mesh: &SphereMesh, hotspots: &HotspotField, radius: f32) -> GizmoAsset {
-    scalar_field_asset(
-        mesh,
-        &hotspots.cell_intensities,
-        &HOTSPOT_COLOR_STOPS,
-        radius,
-    )
 }
 
 fn seafloor_age_asset(mesh: &SphereMesh, age: &SeafloorAge, radius: f32) -> GizmoAsset {

@@ -1,9 +1,8 @@
-use procgen_core::{RandomStream, Vec3};
+use procgen_core::{RandomStream, Vec3, random_streams::HOTSPOT_POSITION};
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{PlateKinematics, PlatePartition};
+use procgen_tectonics::{PlateKinematics, PlatePartition, StageInputError};
 use std::fmt;
 
-const HOTSPOT_POSITION: u64 = 0;
 const STATIONARY_SPEED_SQUARED: f32 = 1.0e-12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +43,6 @@ pub struct Hotspot {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HotspotDiagnostics {
-    pub hotspot_count: usize,
     pub trail_cell_count: usize,
     pub affected_cell_count: usize,
     pub overlap_cell_count: usize,
@@ -66,30 +64,33 @@ pub struct HotspotField {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotspotFieldError {
+    Input(StageInputError),
     EmptyTrail,
-    CellCountMismatch,
-    PlateCountMismatch,
-    InvalidPlateOwnership,
 }
 
 impl fmt::Display for HotspotFieldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Input(error) => error.fmt(formatter),
             Self::EmptyTrail => formatter.write_str("maximum trail cells must be at least one"),
-            Self::CellCountMismatch => {
-                formatter.write_str("plate assignments must match the mesh cell count")
-            }
-            Self::PlateCountMismatch => {
-                formatter.write_str("plate angular velocities must match the partition plate count")
-            }
-            Self::InvalidPlateOwnership => {
-                formatter.write_str("every cell must reference a valid plate")
-            }
         }
     }
 }
 
-impl std::error::Error for HotspotFieldError {}
+impl std::error::Error for HotspotFieldError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Input(error) => Some(error),
+            Self::EmptyTrail => None,
+        }
+    }
+}
+
+impl From<StageInputError> for HotspotFieldError {
+    fn from(error: StageInputError) -> Self {
+        Self::Input(error)
+    }
+}
 
 /// Generates fixed mantle hotspots and present-day trails opposite each
 /// source plate's local motion. Trail walking is constrained to final plate
@@ -110,23 +111,20 @@ pub fn generate_hotspot_field(
     let mut stationary_source_count = 0;
 
     for hotspot_index in 0..config.hotspot_count {
-        let mantle_position = random_sphere_position(positions, hotspot_index as u64, mesh.radius);
+        let mantle_position = positions.unit_vector(hotspot_index as u64) * mesh.radius;
         let source_cell = nearest_cell(mesh, mantle_position);
         let plate = plates.cell_plates[source_cell];
-        let source_velocity = kinematics.velocity_at(plate, mesh.cell_centers[source_cell]);
-        if source_velocity.length_squared() <= STATIONARY_SPEED_SQUARED {
-            stationary_source_count += 1;
-        }
-
-        let trail = trace_trail(mesh, plates, kinematics, plate, source_cell, config);
+        let (trail, source_is_stationary) =
+            trace_trail(mesh, plates, kinematics, plate, source_cell, config);
+        stationary_source_count += usize::from(source_is_stationary);
         for point in &trail {
             contribution_counts[point.cell] += 1;
-            resolve_overlap(
-                &mut cell_intensities[point.cell],
-                &mut cell_hotspots[point.cell],
-                point.intensity,
-                hotspot_index,
-            );
+            // Hotspots are visited in ascending identity order, so retaining
+            // the existing claim on an equal intensity makes the lower id win.
+            if point.intensity > cell_intensities[point.cell] {
+                cell_intensities[point.cell] = point.intensity;
+                cell_hotspots[point.cell] = Some(hotspot_index);
+            }
         }
         hotspots.push(Hotspot {
             mantle_position,
@@ -161,7 +159,6 @@ pub fn generate_hotspot_field(
         cell_intensities,
         cell_hotspots,
         diagnostics: HotspotDiagnostics {
-            hotspot_count: config.hotspot_count,
             trail_cell_count,
             affected_cell_count,
             overlap_cell_count,
@@ -181,27 +178,9 @@ fn validate_inputs(
     if config.maximum_trail_cells == 0 {
         return Err(HotspotFieldError::EmptyTrail);
     }
-    if plates.cell_plates.len() != mesh.cell_count() {
-        return Err(HotspotFieldError::CellCountMismatch);
-    }
-    if kinematics.angular_velocities.len() != plates.plate_count {
-        return Err(HotspotFieldError::PlateCountMismatch);
-    }
-    if plates
-        .cell_plates
-        .iter()
-        .any(|&plate| plate >= plates.plate_count)
-    {
-        return Err(HotspotFieldError::InvalidPlateOwnership);
-    }
+    plates.validate(mesh)?;
+    kinematics.validate(plates)?;
     Ok(())
-}
-
-fn random_sphere_position(stream: RandomStream, item: u64, radius: f32) -> Vec3 {
-    let y = stream.signed_f32(item, 0);
-    let longitude = stream.unit_f32(item, 1) * std::f32::consts::TAU;
-    let ring = (1.0 - y * y).max(0.0).sqrt();
-    Vec3::new(ring * longitude.cos(), y, ring * longitude.sin()) * radius
 }
 
 fn nearest_cell(mesh: &SphereMesh, position: Vec3) -> usize {
@@ -224,20 +203,21 @@ fn trace_trail(
     plate: usize,
     source_cell: usize,
     config: HotspotFieldConfig,
-) -> Vec<HotspotTrailCell> {
+) -> (Vec<HotspotTrailCell>, bool) {
     let mut trail = Vec::with_capacity(config.maximum_trail_cells);
-    let mut visited = vec![false; mesh.cell_count()];
     let mut current = source_cell;
+    let mut source_is_stationary = false;
 
     for step in 0..config.maximum_trail_cells {
-        visited[current] = true;
         trail.push(HotspotTrailCell {
             cell: current,
             intensity: 1.0 - step as f32 / config.maximum_trail_cells as f32,
         });
 
         let velocity = kinematics.velocity_at(plate, mesh.cell_centers[current]);
-        if velocity.length_squared() <= STATIONARY_SPEED_SQUARED {
+        let stationary = velocity.length_squared() <= STATIONARY_SPEED_SQUARED;
+        source_is_stationary |= step == 0 && stationary;
+        if stationary {
             break;
         }
         let trail_direction = -velocity;
@@ -245,7 +225,10 @@ fn trace_trail(
             .cell_corners(current)
             .iter()
             .map(|corner| corner.neighbor)
-            .filter(|&neighbor| !visited[neighbor] && plates.cell_plates[neighbor] == plate)
+            .filter(|&neighbor| {
+                plates.cell_plates[neighbor] == plate
+                    && !trail.iter().any(|point| point.cell == neighbor)
+            })
             .filter_map(|neighbor| {
                 let direction = mesh.cell_centers[neighbor] - mesh.cell_centers[current];
                 let alignment = direction.dot(trail_direction);
@@ -261,27 +244,13 @@ fn trace_trail(
         };
         current = next;
     }
-    trail
-}
-
-fn resolve_overlap(
-    existing_intensity: &mut f32,
-    existing_hotspot: &mut Option<usize>,
-    candidate_intensity: f32,
-    candidate_hotspot: usize,
-) {
-    let wins = candidate_intensity > *existing_intensity
-        || (candidate_intensity == *existing_intensity
-            && existing_hotspot.is_none_or(|existing| candidate_hotspot < existing));
-    if wins {
-        *existing_intensity = candidate_intensity;
-        *existing_hotspot = Some(candidate_hotspot);
-    }
+    (trail, source_is_stationary)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
     use procgen_tectonics::{
@@ -320,14 +289,6 @@ mod tests {
             maximum_trail_cells: 7,
             seed: 17,
         }
-    }
-
-    fn fingerprint(values: impl IntoIterator<Item = u64>) -> u64 {
-        values
-            .into_iter()
-            .fold(0xcbf2_9ce4_8422_2325, |hash, value| {
-                (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
-            })
     }
 
     #[test]
@@ -383,7 +344,7 @@ mod tests {
             )
         });
 
-        assert_eq!(fingerprint(values), 1_555_277_303_608_472_132);
+        assert_eq!(fingerprint(values), 12_311_312_604_747_609_208);
     }
 
     #[test]
@@ -522,7 +483,7 @@ mod tests {
         invalid_cells.cell_plates.pop();
         assert_eq!(
             generate_hotspot_field(&mesh, &invalid_cells, &kinematics, reference_config()),
-            Err(HotspotFieldError::CellCountMismatch)
+            Err(HotspotFieldError::Input(StageInputError::Cells))
         );
 
         let invalid_kinematics = PlateKinematics {
@@ -530,14 +491,14 @@ mod tests {
         };
         assert_eq!(
             generate_hotspot_field(&mesh, &plates, &invalid_kinematics, reference_config()),
-            Err(HotspotFieldError::PlateCountMismatch)
+            Err(HotspotFieldError::Input(StageInputError::Plates))
         );
 
         let mut invalid_ownership = plates.clone();
         invalid_ownership.cell_plates[0] = plates.plate_count;
         assert_eq!(
             generate_hotspot_field(&mesh, &invalid_ownership, &kinematics, reference_config()),
-            Err(HotspotFieldError::InvalidPlateOwnership)
+            Err(HotspotFieldError::Input(StageInputError::PlateOwnership))
         );
     }
 }
