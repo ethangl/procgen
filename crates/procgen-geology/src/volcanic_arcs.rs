@@ -1,4 +1,4 @@
-use crate::field::{GeologyInputError, MaxWinsField};
+use crate::field::MaxWinsField;
 use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
@@ -73,17 +73,6 @@ pub struct VolcanicArcField {
     /// lower stable segment index.
     pub cell_segments: Vec<Option<usize>>,
     pub diagnostics: VolcanicArcDiagnostics,
-}
-
-impl VolcanicArcField {
-    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
-        if self.cell_strengths.len() != mesh.cell_count()
-            || self.cell_segments.len() != mesh.cell_count()
-        {
-            return Err(GeologyInputError::VolcanicArcs);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

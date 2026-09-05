@@ -1,4 +1,3 @@
-use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
     CoarseElevation, CrustClass, CrustClassification, PlatePartition, SEA_LEVEL, StageInputError,
@@ -50,15 +49,6 @@ pub struct SedimentaryBasinField {
     pub cell_basins: Vec<Option<usize>>,
     pub basins: Vec<SedimentaryBasin>,
     pub diagnostics: SedimentaryBasinDiagnostics,
-}
-
-impl SedimentaryBasinField {
-    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
-        if self.cell_basins.len() != mesh.cell_count() {
-            return Err(GeologyInputError::Basins);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

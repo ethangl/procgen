@@ -84,11 +84,7 @@ fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
 }
 
 fn field_summary_stats(ui: &mut egui::Ui, summary: &FieldSummary) {
-    stat(
-        ui,
-        "Range",
-        format!("{:.3} - {:.3}", summary.minimum, summary.maximum),
-    );
+    stat(ui, "Range", format_field_range(summary));
     stat(ui, "Mean", format!("{:.3}", summary.mean));
 }
 
