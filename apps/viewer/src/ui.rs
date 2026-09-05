@@ -4,7 +4,7 @@ use crate::model::{
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_geology::{HotspotFieldConfig, VolcanicArcFieldConfig};
+use procgen_geology::{CratonFieldConfig, HotspotFieldConfig, VolcanicArcFieldConfig};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
@@ -24,6 +24,7 @@ const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
+const CRATON_DISTANCE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
@@ -108,6 +109,9 @@ fn generation_controls(
     });
     section(ui, "Volcanic arcs", |ui| {
         volcanic_arc_controls(ui, &mut generation.volcanic_arcs, generation.kinematics)
+    });
+    section(ui, "Cratons", |ui| {
+        craton_controls(ui, &mut generation.cratons)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
@@ -337,6 +341,23 @@ fn volcanic_arc_controls(
         "Strength saturation",
         &mut config.strength_saturation,
         0.01..=kinematics.maximum_convergence(WORLD_RADIUS).max(0.01),
+    );
+}
+
+fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
+    drag_value(
+        ui,
+        "Minimum boundary distance",
+        &mut config.minimum_boundary_distance,
+        CRATON_DISTANCE_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Ramp width",
+        &mut config.ramp_width,
+        CRATON_DISTANCE_RANGE,
+        1.0,
     );
 }
 
@@ -597,6 +618,38 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 .volcanic_arcs
                 .diagnostics
                 .discarded_landlocked_segment_count,
+        );
+    });
+    stat_grid(ui, "Cratons", "cratons", |ui| {
+        field_summary_stats(ui, &world.cratons.diagnostics.strength);
+        stat(
+            ui,
+            "Boundary cells",
+            world.cratons.diagnostics.boundary_cell_count,
+        );
+        stat(
+            ui,
+            "Continental land cells",
+            world.cratons.diagnostics.continental_land_cell_count,
+        );
+        stat(
+            ui,
+            "Craton cells",
+            world.cratons.diagnostics.craton_cell_count,
+        );
+        stat(
+            ui,
+            "Full-strength cells",
+            world.cratons.diagnostics.full_strength_cell_count,
+        );
+        stat(
+            ui,
+            "Maximum boundary distance",
+            world
+                .cratons
+                .diagnostics
+                .maximum_boundary_distance
+                .map_or_else(|| "None".to_owned(), |distance| distance.to_string()),
         );
     });
     stat_grid(ui, "Timings", "timings", |ui| {

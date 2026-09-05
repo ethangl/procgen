@@ -22,6 +22,7 @@ pub enum DiagnosticLayer {
     Elevation,
     Hotspots,
     VolcanicArcs,
+    Cratons,
     Boundaries,
     Motion,
 }
@@ -32,7 +33,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 14] = [
+const DRAW_ORDER: [DrawSurface; 15] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -44,6 +45,7 @@ const DRAW_ORDER: [DrawSurface; 14] = [
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
+    DrawSurface::Layer(DiagnosticLayer::Cratons),
     DrawSurface::PlateBorders,
     DrawSurface::Layer(DiagnosticLayer::Boundaries),
     DrawSurface::Layer(DiagnosticLayer::Motion),
@@ -80,9 +82,15 @@ const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.65, Vec3::new(1.0, 0.42, 0.03)),
     (1.0, Vec3::new(1.0, 0.95, 0.28)),
 ];
+const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.06, 0.08, 0.07)),
+    (0.25, Vec3::new(0.18, 0.34, 0.22)),
+    (0.65, Vec3::new(0.55, 0.68, 0.32)),
+    (1.0, Vec3::new(0.92, 0.86, 0.5)),
+];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -94,6 +102,7 @@ impl DiagnosticLayer {
         Self::Elevation,
         Self::Hotspots,
         Self::VolcanicArcs,
+        Self::Cratons,
         Self::Boundaries,
         Self::Motion,
     ];
@@ -120,6 +129,7 @@ impl DiagnosticLayer {
             Self::Elevation => 3.5,
             Self::Hotspots => 3.7,
             Self::VolcanicArcs => 3.9,
+            Self::Cratons => 4.0,
             Self::Boundaries => 4.0,
             Self::Motion => 2.6,
         }
@@ -142,6 +152,7 @@ impl DiagnosticLayer {
             Self::Elevation => "Coarse elevation",
             Self::Hotspots => "Mantle hotspots",
             Self::VolcanicArcs => "Volcanic arcs",
+            Self::Cratons => "Craton strength",
             Self::Boundaries => "Boundary classes",
             Self::Motion => "Plate motion",
         }
@@ -186,6 +197,12 @@ impl DiagnosticLayer {
                 radius,
             ),
             Self::VolcanicArcs => volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius),
+            Self::Cratons => scalar_field_asset(
+                &world.voronoi,
+                &world.cratons.cell_strengths,
+                &CRATON_COLOR_STOPS,
+                radius,
+            ),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
