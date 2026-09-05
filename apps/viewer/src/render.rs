@@ -1,7 +1,7 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use procgen_core::Vec3 as SphereVec3;
-use procgen_geology::VolcanicArcField;
+use procgen_geology::{OceanicPeakField, OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
@@ -21,6 +21,7 @@ pub enum DiagnosticLayer {
     Deformation,
     Elevation,
     Hotspots,
+    OceanicPeaks,
     VolcanicArcs,
     Cratons,
     Basins,
@@ -34,7 +35,7 @@ enum DrawSurface {
     PlateBorders,
 }
 
-const DRAW_ORDER: [DrawSurface; 16] = [
+const DRAW_ORDER: [DrawSurface; 17] = [
     DrawSurface::Layer(DiagnosticLayer::Delaunay),
     DrawSurface::Layer(DiagnosticLayer::Voronoi),
     DrawSurface::Layer(DiagnosticLayer::Plates),
@@ -45,6 +46,7 @@ const DRAW_ORDER: [DrawSurface; 16] = [
     DrawSurface::Layer(DiagnosticLayer::Deformation),
     DrawSurface::Layer(DiagnosticLayer::Elevation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
+    DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
     DrawSurface::Layer(DiagnosticLayer::Cratons),
     DrawSurface::Layer(DiagnosticLayer::Basins),
@@ -78,6 +80,12 @@ const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.65, Vec3::new(1.0, 0.25, 0.05)),
     (1.0, Vec3::new(1.0, 0.95, 0.25)),
 ];
+const OCEANIC_PEAK_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.06, 0.12)),
+    (0.25, Vec3::new(0.05, 0.35, 0.52)),
+    (0.65, Vec3::new(0.18, 0.78, 0.72)),
+    (1.0, Vec3::new(0.95, 0.9, 0.42)),
+];
 const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.055, 0.04)),
     (0.25, Vec3::new(0.55, 0.12, 0.02)),
@@ -92,7 +100,7 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
 ];
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
@@ -103,6 +111,7 @@ impl DiagnosticLayer {
         Self::Deformation,
         Self::Elevation,
         Self::Hotspots,
+        Self::OceanicPeaks,
         Self::VolcanicArcs,
         Self::Cratons,
         Self::Basins,
@@ -131,6 +140,7 @@ impl DiagnosticLayer {
             Self::Deformation => 3.3,
             Self::Elevation => 3.5,
             Self::Hotspots => 3.7,
+            Self::OceanicPeaks => 3.8,
             Self::VolcanicArcs => 3.9,
             Self::Cratons => 4.0,
             Self::Basins => 4.1,
@@ -155,6 +165,7 @@ impl DiagnosticLayer {
             Self::Deformation => "Boundary deformation",
             Self::Elevation => "Coarse elevation",
             Self::Hotspots => "Mantle hotspots",
+            Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
             Self::Cratons => "Craton strength",
             Self::Basins => "Sedimentary basins",
@@ -201,6 +212,7 @@ impl DiagnosticLayer {
                 &HOTSPOT_COLOR_STOPS,
                 radius,
             ),
+            Self::OceanicPeaks => oceanic_peak_asset(&world.voronoi, &world.oceanic_peaks, radius),
             Self::VolcanicArcs => volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius),
             Self::Cratons => scalar_field_asset(
                 &world.voronoi,
@@ -213,6 +225,30 @@ impl DiagnosticLayer {
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn oceanic_peak_asset(mesh: &SphereMesh, field: &OceanicPeakField, radius: f32) -> GizmoAsset {
+    let mut asset = scalar_field_asset(
+        mesh,
+        &field.cell_densities,
+        &OCEANIC_PEAK_COLOR_STOPS,
+        radius,
+    );
+    let base_size = (0.32 / (mesh.cell_count() as f32).sqrt()).clamp(0.003, 0.012);
+    for peak in &field.peaks {
+        let color = match peak.kind {
+            OceanicPeakKind::Seamount => Color::srgba(1.0, 0.42, 0.08, 1.0),
+            OceanicPeakKind::AbyssalHill => Color::srgba(0.55, 0.92, 1.0, 1.0),
+        };
+        let position = to_bevy(peak.position.normalized()) * radius;
+        add_cross_marker(
+            &mut asset,
+            position,
+            base_size * (0.5 + peak.height.clamp(0.0, 1.5)),
+            color,
+        );
+    }
+    asset
 }
 
 fn basin_asset(mesh: &SphereMesh, cell_basins: &[Option<usize>], radius: f32) -> GizmoAsset {

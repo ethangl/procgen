@@ -8,6 +8,7 @@ mod basins;
 mod cratons;
 mod field;
 mod hotspots;
+mod oceanic_peaks;
 mod volcanic_arcs;
 
 pub use basins::{
@@ -18,6 +19,10 @@ pub use cratons::{CratonDiagnostics, CratonField, CratonFieldConfig, derive_crat
 pub use hotspots::{
     Hotspot, HotspotDiagnostics, HotspotField, HotspotFieldConfig, HotspotFieldError,
     HotspotTrailCell, generate_hotspot_field,
+};
+pub use oceanic_peaks::{
+    OceanicPeak, OceanicPeakDiagnostics, OceanicPeakField, OceanicPeakFieldConfig,
+    OceanicPeakFieldError, OceanicPeakKind, derive_oceanic_peak_field,
 };
 pub use volcanic_arcs::{
     VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcField, VolcanicArcFieldConfig,

@@ -5,7 +5,8 @@ use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_geology::{
-    CratonFieldConfig, HotspotFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
+    CratonFieldConfig, HotspotFieldConfig, OceanicPeakFieldConfig, SedimentaryBasinFieldConfig,
+    VolcanicArcFieldConfig,
 };
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
@@ -23,6 +24,7 @@ const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
@@ -109,6 +111,9 @@ fn generation_controls(
     });
     section(ui, "Mantle hotspots", |ui| {
         hotspot_controls(ui, &mut generation.hotspots)
+    });
+    section(ui, "Seamounts and abyssal hills", |ui| {
+        oceanic_peak_controls(ui, &mut generation.oceanic_peaks)
     });
     section(ui, "Volcanic arcs", |ui| {
         volcanic_arc_controls(ui, &mut generation.volcanic_arcs, generation.kinematics)
@@ -350,6 +355,47 @@ fn volcanic_arc_controls(
     );
 }
 
+fn oceanic_peak_controls(ui: &mut egui::Ui, config: &mut OceanicPeakFieldConfig) {
+    drag_value(
+        ui,
+        "Maximum young age",
+        &mut config.maximum_young_age,
+        OCEANIC_PEAK_AGE_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Seamount density",
+        &mut config.seamount_density_scale,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Abyssal-hill density",
+        &mut config.abyssal_hill_density_scale,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Position offset",
+        &mut config.maximum_position_offset,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Seamount height",
+        &mut config.maximum_seamount_height,
+        0.0..=2.0,
+    );
+    slider(
+        ui,
+        "Abyssal-hill height",
+        &mut config.maximum_abyssal_hill_height,
+        0.0..=2.0,
+    );
+    drag_value(ui, "Peak seed", &mut config.seed, u64::MIN..=u64::MAX, 1.0);
+}
+
 fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
     drag_value(
         ui,
@@ -427,6 +473,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Crust seed", world.config.crust.seed);
         stat(ui, "Motion seed", world.config.kinematics.seed);
         stat(ui, "Hotspot seed", world.config.hotspots.seed);
+        stat(ui, "Peak seed", world.config.oceanic_peaks.seed);
         stat(
             ui,
             "Jitter",
@@ -646,6 +693,48 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 .volcanic_arcs
                 .diagnostics
                 .discarded_landlocked_segment_count,
+        );
+    });
+    stat_grid(ui, "Seamounts and abyssal hills", "oceanic_peaks", |ui| {
+        field_summary_stats(ui, &world.oceanic_peaks.diagnostics.density);
+        stat(
+            ui,
+            "Oceanic cells",
+            world.oceanic_peaks.diagnostics.oceanic_cell_count,
+        );
+        stat(
+            ui,
+            "Hotspot candidates",
+            world.oceanic_peaks.diagnostics.hotspot_candidate_cell_count,
+        );
+        stat(
+            ui,
+            "Young-age candidates",
+            world
+                .oceanic_peaks
+                .diagnostics
+                .young_seafloor_candidate_cell_count,
+        );
+        stat(
+            ui,
+            "Overlap cells",
+            world.oceanic_peaks.diagnostics.overlap_cell_count,
+        );
+        stat(ui, "Peaks", world.oceanic_peaks.diagnostics.peak_count);
+        stat(
+            ui,
+            "Seamount peaks",
+            world.oceanic_peaks.diagnostics.seamount_peak_count,
+        );
+        stat(
+            ui,
+            "Abyssal-hill peaks",
+            world.oceanic_peaks.diagnostics.abyssal_hill_peak_count,
+        );
+        stat(
+            ui,
+            "Height range",
+            format_field_range(&world.oceanic_peaks.diagnostics.height),
         );
     });
     stat_grid(ui, "Cratons", "cratons", |ui| {

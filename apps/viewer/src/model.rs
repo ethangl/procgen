@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use procgen_geology::{
-    CratonField, CratonFieldConfig, HotspotField, HotspotFieldConfig, SedimentaryBasinField,
-    SedimentaryBasinFieldConfig, VolcanicArcField, VolcanicArcFieldConfig, derive_craton_field,
+    CratonField, CratonFieldConfig, HotspotField, HotspotFieldConfig, OceanicPeakField,
+    OceanicPeakFieldConfig, SedimentaryBasinField, SedimentaryBasinFieldConfig, VolcanicArcField,
+    VolcanicArcFieldConfig, derive_craton_field, derive_oceanic_peak_field,
     derive_sedimentary_basin_field, derive_volcanic_arc_field, generate_hotspot_field,
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
@@ -34,6 +35,7 @@ pub struct GenerationSettings {
     pub deformation: BoundaryDeformationConfig,
     pub elevation: CoarseElevationConfig,
     pub hotspots: HotspotFieldConfig,
+    pub oceanic_peaks: OceanicPeakFieldConfig,
     pub volcanic_arcs: VolcanicArcFieldConfig,
     pub cratons: CratonFieldConfig,
     pub basins: SedimentaryBasinFieldConfig,
@@ -67,6 +69,7 @@ impl Default for GenerationSettings {
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
             hotspots: HotspotFieldConfig::new(7),
+            oceanic_peaks: OceanicPeakFieldConfig::new(7),
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
             basins: SedimentaryBasinFieldConfig::default(),
@@ -145,6 +148,7 @@ pub struct GeneratedWorld {
     pub deformation: BoundaryDeformation,
     pub elevation: CoarseElevation,
     pub hotspots: HotspotField,
+    pub oceanic_peaks: OceanicPeakField,
     pub volcanic_arcs: VolcanicArcField,
     pub cratons: CratonField,
     pub basins: SedimentaryBasinField,
@@ -198,6 +202,9 @@ impl GeneratedWorld {
         let hotspots = timings.record("Mantle hotspots", || {
             generate_hotspot_field(&voronoi, &plates, &kinematics, config.hotspots)
         })?;
+        let oceanic_peaks = timings.record("Oceanic peaks", || {
+            derive_oceanic_peak_field(&voronoi, &hotspots, &seafloor_age, config.oceanic_peaks)
+        })?;
         let volcanic_arcs = timings.record("Volcanic arcs", || {
             derive_volcanic_arc_field(&voronoi, &plates, &crust, &boundaries, config.volcanic_arcs)
         })?;
@@ -220,6 +227,7 @@ impl GeneratedWorld {
             deformation,
             elevation,
             hotspots,
+            oceanic_peaks,
             volcanic_arcs,
             cratons,
             basins,
@@ -268,6 +276,7 @@ mod tests {
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
             hotspots: HotspotFieldConfig::new(7),
+            oceanic_peaks: OceanicPeakFieldConfig::new(7),
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
             basins: SedimentaryBasinFieldConfig::default(),
@@ -309,6 +318,10 @@ mod tests {
             world.config.hotspots.hotspot_count
         );
         assert_eq!(
+            world.oceanic_peaks.cell_densities.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
             world.volcanic_arcs.cell_strengths.len(),
             world.voronoi.cell_count()
         );
@@ -333,6 +346,7 @@ mod tests {
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
             hotspots: HotspotFieldConfig::new(7),
+            oceanic_peaks: OceanicPeakFieldConfig::new(7),
             volcanic_arcs: VolcanicArcFieldConfig::default(),
             cratons: CratonFieldConfig::default(),
             basins: SedimentaryBasinFieldConfig::default(),
@@ -370,6 +384,15 @@ mod tests {
                 maximum_trail_cells: 6,
                 seed: 5,
             },
+            oceanic_peaks: OceanicPeakFieldConfig {
+                maximum_young_age: 6,
+                seamount_density_scale: 0.8,
+                abyssal_hill_density_scale: 0.4,
+                maximum_position_offset: 0.7,
+                maximum_seamount_height: 0.9,
+                maximum_abyssal_hill_height: 0.2,
+                seed: 13,
+            },
             volcanic_arcs: VolcanicArcFieldConfig {
                 minimum_boundary_edges: 2,
                 inland_offset_cells: 3,
@@ -404,6 +427,7 @@ mod tests {
         assert_eq!(world.config.deformation, requested.deformation);
         assert_eq!(world.config.elevation, requested.elevation);
         assert_eq!(world.config.hotspots, requested.hotspots);
+        assert_eq!(world.config.oceanic_peaks, requested.oceanic_peaks);
         assert_eq!(world.config.volcanic_arcs, requested.volcanic_arcs);
         assert_eq!(world.config.cratons, requested.cratons);
         assert_eq!(world.config.basins, requested.basins);
