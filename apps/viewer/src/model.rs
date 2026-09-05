@@ -2,10 +2,10 @@ use bevy::prelude::*;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BoundaryClassification, CrustClassification, CrustClassificationConfig, PlateEvolution,
-    PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateKinematics, PlateKinematicsConfig,
-    PlatePartition, PlatePartitionConfig, classify_crust, evolve_plate_ownership,
-    generate_plate_kinematics, partition_plates,
+    BoundaryClassification, CoarseElevation, CoarseElevationConfig, CrustClassification,
+    CrustClassificationConfig, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
+    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, classify_crust,
+    derive_coarse_elevation, evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 use std::{
     error::Error,
@@ -21,6 +21,7 @@ pub struct GenerationSettings {
     pub crust: CrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
     pub evolution: PlateEvolutionConfig,
+    pub elevation: CoarseElevationConfig,
 }
 
 impl Default for GenerationSettings {
@@ -29,17 +30,24 @@ impl Default for GenerationSettings {
             fibonacci: FibonacciConfig {
                 jitter: 0.5,
                 seed: 7,
-                ..FibonacciConfig::new(2_048)
+                ..FibonacciConfig::new(32_768)
             },
             plates: PlatePartitionConfig {
-                major_plate_count: 5,
-                minor_plate_count: 11,
+                major_plate_count: 11,
+                minor_plate_count: 111,
                 major_head_start_rounds: 5,
                 seed: 7,
             },
-            crust: CrustClassificationConfig::new(7),
+            crust: CrustClassificationConfig {
+                target_ocean_fraction: 0.75,
+                ..CrustClassificationConfig::new(7)
+            },
             kinematics: PlateKinematicsConfig::new(7),
-            evolution: PlateEvolutionConfig::default(),
+            evolution: PlateEvolutionConfig {
+                step_count: 11,
+                ..Default::default()
+            },
+            elevation: CoarseElevationConfig::default(),
         }
     }
 }
@@ -110,6 +118,7 @@ pub struct GeneratedWorld {
     pub kinematics: PlateKinematics,
     pub boundaries: BoundaryClassification,
     pub evolution: PlateEvolutionDiagnostics,
+    pub elevation: CoarseElevation,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -145,6 +154,9 @@ impl GeneratedWorld {
             boundaries,
             diagnostics: evolution,
         } = evolution_result;
+        let elevation = timings.record("Coarse elevation", || {
+            derive_coarse_elevation(&voronoi, &plates, &crust, &boundaries, config.elevation)
+        })?;
 
         Ok(Self {
             voronoi,
@@ -153,6 +165,7 @@ impl GeneratedWorld {
             kinematics,
             boundaries,
             evolution,
+            elevation,
             timings,
             config,
         })
@@ -193,6 +206,7 @@ mod tests {
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(9),
             evolution: PlateEvolutionConfig::default(),
+            elevation: CoarseElevationConfig::default(),
         })
         .unwrap();
 
@@ -202,6 +216,12 @@ mod tests {
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
         assert!(world.crust.plate_count(CrustClass::Continental) > 0);
         assert!(world.evolution.migrated_cell_count > 0);
+        assert_eq!(
+            world.elevation.cell_elevations.len(),
+            world.voronoi.cell_count()
+        );
+        assert!(world.elevation.diagnostics.minimum >= 0.0);
+        assert!(world.elevation.diagnostics.maximum <= 1.0);
     }
 
     #[test]
@@ -213,6 +233,7 @@ mod tests {
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(3),
             evolution: PlateEvolutionConfig::default(),
+            elevation: CoarseElevationConfig::default(),
         })
         .unwrap();
         let requested = GenerationSettings {
@@ -229,6 +250,10 @@ mod tests {
                     minimum_convergence: 0.4,
                 },
             },
+            elevation: CoarseElevationConfig {
+                smoothing_passes: 4,
+                ..Default::default()
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -243,6 +268,7 @@ mod tests {
         assert_eq!(world.config.crust, requested.crust);
         assert_eq!(world.config.kinematics, requested.kinematics);
         assert_eq!(world.config.evolution, requested.evolution);
+        assert_eq!(world.config.elevation, requested.elevation);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

@@ -59,6 +59,19 @@ impl BoundaryClassification {
         speeds[0] + speeds[1]
     }
 
+    /// Motion magnitude relevant to the edge's boundary class. Normal motion
+    /// drives convergent and divergent edges; shear drives transform edges.
+    /// Interior edges have no boundary strength.
+    pub fn strength(&self, edge: usize) -> Option<f32> {
+        match self.edge_classes[edge] {
+            BoundaryClass::Convergent | BoundaryClass::Divergent => {
+                Some(self.convergence(edge).abs())
+            }
+            BoundaryClass::Transform => Some(self.edge_shear[edge]),
+            BoundaryClass::Interior => None,
+        }
+    }
+
     pub(crate) fn matches_edge_count(&self, edge_count: usize) -> bool {
         self.edge_classes.len() == edge_count
             && self.edge_normal_speeds.len() == edge_count
@@ -191,6 +204,23 @@ mod tests {
             BoundaryClass::from_relative_motion(0.25, 1.0),
             BoundaryClass::Transform
         );
+    }
+
+    #[test]
+    fn boundary_strength_uses_class_relevant_motion() {
+        let boundaries = BoundaryClassification {
+            edge_classes: vec![
+                BoundaryClass::Interior,
+                BoundaryClass::Convergent,
+                BoundaryClass::Transform,
+            ],
+            edge_normal_speeds: vec![[0.0, 0.0], [0.4, 0.6], [0.1, 0.2]],
+            edge_shear: vec![0.0, 0.2, 1.5],
+        };
+
+        assert_eq!(boundaries.strength(0), None);
+        assert_eq!(boundaries.strength(1), Some(1.0));
+        assert_eq!(boundaries.strength(2), Some(1.5));
     }
 
     #[test]

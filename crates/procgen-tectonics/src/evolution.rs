@@ -116,7 +116,7 @@ pub fn evolve_plate_ownership(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::reference_partition;
+    use crate::test_support::{fingerprint, reference_partition};
     use crate::{
         CrustClassificationConfig, PlateKinematicsConfig, classify_crust, generate_plate_kinematics,
     };
@@ -152,13 +152,13 @@ mod tests {
         assert!(first.diagnostics.migrated_cell_count > 0);
         assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
 
-        let fingerprint = first
-            .partition
-            .cell_plates
-            .iter()
-            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &plate| {
-                (hash ^ plate as u64).wrapping_mul(0x0000_0100_0000_01b3)
-            });
+        let fingerprint = fingerprint(
+            first
+                .partition
+                .cell_plates
+                .iter()
+                .map(|&plate| plate as u64),
+        );
         assert_eq!(fingerprint, 9_637_389_478_425_232_066);
         assert_eq!(
             first.diagnostics,
