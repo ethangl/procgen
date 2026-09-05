@@ -1,4 +1,4 @@
-use crate::{BoundaryDeformation, CrustClass, CrustClassification, PlatePartition};
+use crate::{BoundaryDeformation, CrustClass, CrustClassification, FieldSummary, PlatePartition};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
@@ -21,40 +21,10 @@ impl Default for CoarseElevationConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CoarseElevationDiagnostics {
-    pub minimum: f32,
-    pub maximum: f32,
-    pub mean: f32,
-}
-
-impl CoarseElevationDiagnostics {
-    fn summarize(elevations: &[f32]) -> Self {
-        let Some((&first, rest)) = elevations.split_first() else {
-            return Self::default();
-        };
-        let (minimum, maximum, total) = rest.iter().fold(
-            (first, first, f64::from(first)),
-            |(minimum, maximum, total), &value| {
-                (
-                    minimum.min(value),
-                    maximum.max(value),
-                    total + f64::from(value),
-                )
-            },
-        );
-        Self {
-            minimum,
-            maximum,
-            mean: (total / elevations.len() as f64) as f32,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoarseElevation {
     pub cell_elevations: Vec<f32>,
-    pub diagnostics: CoarseElevationDiagnostics,
+    pub diagnostics: FieldSummary,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,7 +94,7 @@ pub fn compose_coarse_elevation(
         .iter_mut()
         .for_each(|value| *value = value.clamp(0.0, 1.0));
 
-    let diagnostics = CoarseElevationDiagnostics::summarize(&elevation);
+    let diagnostics = FieldSummary::from_values(&elevation);
     Ok(CoarseElevation {
         cell_elevations: elevation,
         diagnostics,

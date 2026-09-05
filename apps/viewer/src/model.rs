@@ -230,7 +230,7 @@ mod tests {
             world.deformation.cell_deformation.len(),
             world.voronoi.cell_count()
         );
-        assert!(world.deformation.diagnostics.affected_cell_count > 0);
+        assert!(world.deformation.diagnostics.affected_cell_count() > 0);
         assert_eq!(
             world.elevation.cell_elevations.len(),
             world.voronoi.cell_count()

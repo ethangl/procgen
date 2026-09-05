@@ -1,5 +1,6 @@
 use crate::{
-    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
+    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
+    PlatePartition, field::summarize_field,
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{collections::VecDeque, fmt};
@@ -55,42 +56,30 @@ impl Default for BoundaryDeformationConfig {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BoundaryDeformationDiagnostics {
-    pub minimum: f32,
-    pub maximum: f32,
-    pub mean: f32,
+    pub summary: FieldSummary,
     pub source_cell_count: usize,
-    pub affected_cell_count: usize,
     pub uplifted_cell_count: usize,
     pub subsided_cell_count: usize,
 }
 
 impl BoundaryDeformationDiagnostics {
     fn summarize(deformation: &[f32], source_cell_count: usize) -> Self {
-        let Some((&first, rest)) = deformation.split_first() else {
-            return Self {
-                source_cell_count,
-                ..Self::default()
-            };
-        };
-        let (minimum, maximum, total) = rest.iter().fold(
-            (first, first, f64::from(first)),
-            |(minimum, maximum, total), &value| {
-                (
-                    minimum.min(value),
-                    maximum.max(value),
-                    total + f64::from(value),
-                )
-            },
-        );
+        let mut uplifted_cell_count = 0;
+        let mut subsided_cell_count = 0;
+        let summary = summarize_field(deformation, |value| {
+            uplifted_cell_count += usize::from(value > 0.0);
+            subsided_cell_count += usize::from(value < 0.0);
+        });
         Self {
-            minimum,
-            maximum,
-            mean: (total / deformation.len() as f64) as f32,
+            summary,
             source_cell_count,
-            affected_cell_count: deformation.iter().filter(|&&value| value != 0.0).count(),
-            uplifted_cell_count: deformation.iter().filter(|&&value| value > 0.0).count(),
-            subsided_cell_count: deformation.iter().filter(|&&value| value < 0.0).count(),
+            uplifted_cell_count,
+            subsided_cell_count,
         }
+    }
+
+    pub const fn affected_cell_count(&self) -> usize {
+        self.uplifted_cell_count + self.subsided_cell_count
     }
 }
 
@@ -334,13 +323,13 @@ mod tests {
             first,
             derive_boundary_deformation(&mesh, &partition, &crust, &boundaries, config).unwrap()
         );
-        assert!(first.diagnostics.minimum < 0.0);
-        assert!(first.diagnostics.maximum > 0.0);
+        assert!(first.diagnostics.summary.minimum < 0.0);
+        assert!(first.diagnostics.summary.maximum > 0.0);
         assert_eq!(
-            first.diagnostics.affected_cell_count,
+            first.diagnostics.affected_cell_count(),
             first.diagnostics.uplifted_cell_count + first.diagnostics.subsided_cell_count
         );
-        assert!(first.diagnostics.affected_cell_count >= first.diagnostics.source_cell_count);
+        assert!(first.diagnostics.affected_cell_count() >= first.diagnostics.source_cell_count);
 
         let fingerprint = fingerprint(
             first

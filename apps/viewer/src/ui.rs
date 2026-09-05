@@ -7,13 +7,14 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BoundaryClass, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig, CrustClass,
-    CrustClassificationConfig, PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
+    CrustClassificationConfig, FieldSummary, PlateEvolutionConfig, PlateKinematicsConfig,
+    PlatePartitionConfig,
 };
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
-const ELEVATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SECTION_SPACING: f32 = 6.0;
 
@@ -225,7 +226,7 @@ fn boundary_effect_controls(ui: &mut egui::Ui, label: &str, effect: &mut Boundar
         ui,
         &format!("{label} depth"),
         &mut effect.depth,
-        ELEVATION_DEPTH_RANGE,
+        DEFORMATION_DEPTH_RANGE,
         1.0,
     );
 }
@@ -319,19 +320,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 
     stat_grid(ui, "Boundary deformation", "deformation", |ui| {
-        stat(
-            ui,
-            "Range",
-            format!(
-                "{:.3} - {:.3}",
-                world.deformation.diagnostics.minimum, world.deformation.diagnostics.maximum
-            ),
-        );
-        stat(
-            ui,
-            "Mean",
-            format!("{:.3}", world.deformation.diagnostics.mean),
-        );
+        field_summary_stats(ui, &world.deformation.diagnostics.summary);
         stat(
             ui,
             "Sources",
@@ -340,7 +329,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Affected",
-            world.deformation.diagnostics.affected_cell_count,
+            world.deformation.diagnostics.affected_cell_count(),
         );
         stat(
             ui,
@@ -354,19 +343,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         );
     });
     stat_grid(ui, "Coarse elevation", "elevation", |ui| {
-        stat(
-            ui,
-            "Range",
-            format!(
-                "{:.3} - {:.3}",
-                world.elevation.diagnostics.minimum, world.elevation.diagnostics.maximum
-            ),
-        );
-        stat(
-            ui,
-            "Mean",
-            format!("{:.3}", world.elevation.diagnostics.mean),
-        );
+        field_summary_stats(ui, &world.elevation.diagnostics);
     });
     stat_grid(ui, "Timings", "timings", |ui| {
         for stage in world.timings.stages() {
@@ -392,6 +369,15 @@ fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
     ui.label(label);
     ui.monospace(value.to_string());
     ui.end_row();
+}
+
+fn field_summary_stats(ui: &mut egui::Ui, summary: &FieldSummary) {
+    stat(
+        ui,
+        "Range",
+        format!("{:.3} - {:.3}", summary.minimum, summary.maximum),
+    );
+    stat(ui, "Mean", format!("{:.3}", summary.mean));
 }
 
 fn millis(duration: std::time::Duration) -> String {

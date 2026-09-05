@@ -11,6 +11,7 @@ mod crust;
 mod deformation;
 mod elevation;
 mod evolution;
+mod field;
 mod migration;
 mod motion;
 mod partition;
@@ -39,13 +40,13 @@ pub use deformation::{
     BoundaryDeformationError, BoundaryEffect, derive_boundary_deformation,
 };
 pub use elevation::{
-    CoarseElevation, CoarseElevationConfig, CoarseElevationDiagnostics, CoarseElevationError,
-    compose_coarse_elevation,
+    CoarseElevation, CoarseElevationConfig, CoarseElevationError, compose_coarse_elevation,
 };
 pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,
     evolve_plate_ownership,
 };
+pub use field::FieldSummary;
 pub use migration::{
     CellMigration, PlateMigration, PlateMigrationConfig, PlateMigrationError, migrate_plates_once,
 };
