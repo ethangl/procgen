@@ -4,7 +4,7 @@ use procgen_core::Vec3 as SphereVec3;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
-    PlatePartition,
+    PlateMigration, PlatePartition,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -16,19 +16,21 @@ pub enum DiagnosticLayer {
     Plates,
     Crust,
     Boundaries,
+    Migration,
     Motion,
 }
 
 const PLATE_BORDER_OFFSET: f32 = 0.004;
 
 impl DiagnosticLayer {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
         Self::Boundaries,
+        Self::Migration,
         Self::Motion,
     ];
     const COUNT: usize = Self::ALL.len();
@@ -49,12 +51,13 @@ impl DiagnosticLayer {
             Self::Plates => 2.4,
             Self::Crust => 3.0,
             Self::Boundaries => 4.0,
+            Self::Migration => 4.8,
             Self::Motion => 2.6,
         }
     }
 
     // Radius order defines the intended composition: Delaunay, Voronoi, plate
-    // interiors, crust, points, plate borders, boundaries, then motion.
+    // interiors, crust, points, plate borders, boundaries, migration, then motion.
     const fn radius(self) -> f32 {
         match self {
             Self::Points => 1.012,
@@ -63,6 +66,7 @@ impl DiagnosticLayer {
             Self::Plates => 1.009,
             Self::Crust => 1.011,
             Self::Boundaries => 1.017,
+            Self::Migration => 1.023,
             Self::Motion => 1.035,
         }
     }
@@ -75,6 +79,7 @@ impl DiagnosticLayer {
             Self::Plates => "Tectonic plates",
             Self::Crust => "Crust classes",
             Self::Boundaries => "Boundary classes",
+            Self::Migration => "Plate migration",
             Self::Motion => "Plate motion",
         }
     }
@@ -88,6 +93,7 @@ impl DiagnosticLayer {
             Self::Plates => plate_asset(&world.voronoi, &world.plates, radius),
             Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
             Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
+            Self::Migration => migration_asset(&world.voronoi, &world.migration, radius),
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
@@ -114,6 +120,7 @@ impl Default for LayerSettings {
         visible[DiagnosticLayer::Voronoi.index()] = true;
         visible[DiagnosticLayer::Plates.index()] = true;
         visible[DiagnosticLayer::Boundaries.index()] = true;
+        visible[DiagnosticLayer::Migration.index()] = true;
         visible[DiagnosticLayer::Motion.index()] = true;
         Self { visible }
     }
@@ -311,6 +318,25 @@ fn boundary_asset(
             BoundaryClass::Convergent => Color::srgba(1.0, 0.25, 0.18, 1.0),
             BoundaryClass::Divergent => Color::srgba(0.15, 0.6, 1.0, 1.0),
             BoundaryClass::Transform => Color::srgba(1.0, 0.78, 0.12, 1.0),
+        };
+        Some((radius, color))
+    })
+}
+
+fn migration_asset(mesh: &SphereMesh, migration: &PlateMigration, radius: f32) -> GizmoAsset {
+    voronoi_edge_asset(mesh, |edge_index, edge| {
+        let changes = edge.cells.map(|cell| migration.cell_changes[cell]);
+        if !changes.iter().any(Option::is_some) {
+            return None;
+        }
+        let is_winning_edge = changes
+            .iter()
+            .flatten()
+            .any(|change| change.boundary_edge == edge_index);
+        let color = if is_winning_edge {
+            Color::srgba(1.0, 0.95, 0.4, 1.0)
+        } else {
+            Color::srgba(0.95, 0.2, 0.85, 0.98)
         };
         Some((radius, color))
     })
