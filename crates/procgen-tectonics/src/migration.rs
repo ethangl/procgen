@@ -129,29 +129,24 @@ pub fn migrate_plates_once(
             continue;
         }
 
-        let [cell_0, cell_1] = edge.cells;
-        let plate_0 = partition.cell_plates[cell_0];
-        let plate_1 = partition.cell_plates[cell_1];
-        if plate_0 == plate_1 {
+        let plates = edge.cells.map(|cell| partition.cell_plates[cell]);
+        if plates[0] == plates[1] {
             continue;
         }
 
-        let (to_plate, retreating_cell) =
-            match (crust.plate_classes[plate_0], crust.plate_classes[plate_1]) {
-                (CrustClass::Oceanic, CrustClass::Continental) => (plate_1, cell_0),
-                (CrustClass::Continental, CrustClass::Oceanic) => (plate_0, cell_1),
-                _ => {
-                    let [push_0, push_1] = boundaries.edge_normal_speeds[edge_index];
-                    if push_0 > push_1 || (push_0 == push_1 && plate_0 < plate_1) {
-                        (plate_0, cell_1)
-                    } else {
-                        (plate_1, cell_0)
-                    }
-                }
-            };
+        let [class_0, class_1] = plates.map(|plate| crust.plate_classes[plate]);
+        let [push_0, push_1] = boundaries.edge_normal_speeds[edge_index];
+        let advancing = match (class_0, class_1) {
+            (CrustClass::Oceanic, CrustClass::Continental) => 1,
+            (CrustClass::Continental, CrustClass::Oceanic) => 0,
+            _ if push_0 > push_1 || (push_0 == push_1 && plates[0] < plates[1]) => 0,
+            _ => 1,
+        };
+        let retreating = 1 - advancing;
+        let retreating_cell = edge.cells[retreating];
         let proposal = CellMigration {
-            from_plate: partition.cell_plates[retreating_cell],
-            to_plate,
+            from_plate: plates[retreating],
+            to_plate: plates[advancing],
             boundary_edge: edge_index,
             convergence,
         };
@@ -186,10 +181,10 @@ fn proposal_precedes(candidate: CellMigration, current: CellMigration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mesh;
+    use crate::test_support::{reference_partition, two_plate_boundary_partition};
     use crate::{
-        CrustClassificationConfig, PlateKinematicsConfig, PlatePartitionConfig,
-        classify_boundaries, classify_crust, generate_plate_kinematics, partition_plates,
+        CrustClassificationConfig, PlateKinematicsConfig, classify_boundaries, classify_crust,
+        generate_plate_kinematics,
     };
 
     fn fixture() -> (
@@ -198,17 +193,7 @@ mod tests {
         CrustClassification,
         BoundaryClassification,
     ) {
-        let mesh = mesh(512);
-        let partition = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                major_plate_count: 5,
-                minor_plate_count: 11,
-                major_head_start_rounds: 2,
-                seed: 7,
-            },
-        )
-        .unwrap();
+        let (mesh, partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
         let kinematics =
             generate_plate_kinematics(partition.plate_count(), PlateKinematicsConfig::new(7))
@@ -270,26 +255,18 @@ mod tests {
 
     #[test]
     fn continental_plate_overrides_oceanic_cell() {
-        let mesh = mesh(32);
-        let edge = mesh.edges[0];
-        let mut cell_plates = vec![1; mesh.cell_count()];
-        cell_plates[edge.cells[0]] = 0;
-        let partition = PlatePartition {
-            cell_plates,
-            plate_seeds: vec![edge.cells[0], edge.cells[1]],
-            major_plate_count: 2,
-            minor_plate_count: 0,
-        };
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
         let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic, CrustClass::Continental],
+            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
         };
         let mut boundaries = BoundaryClassification {
             edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
             edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
             edge_shear: vec![0.0; mesh.edge_count()],
         };
-        boundaries.edge_classes[0] = BoundaryClass::Convergent;
-        boundaries.edge_normal_speeds[0] = [1.0, 0.0];
+        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
+        boundaries.edge_normal_speeds[edge_index] = [1.0, 0.0];
 
         let migration = migrate_plates_once(
             &mesh,
@@ -300,10 +277,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(migration.partition.cell_plates[edge.cells[0]], 1);
+        assert_eq!(migration.partition.cell_plates[edge.cells[1]], 0);
         assert_eq!(migration.migrated_cell_count(), 1);
         assert_eq!(
-            crust.cell_class(&migration.partition, edge.cells[0]),
+            crust.cell_class(&migration.partition, edge.cells[1]),
             CrustClass::Continental
         );
         assert!(crust.ocean_fraction(&mesh, &partition) > 0.0);

@@ -32,16 +32,12 @@ impl PlatePartitionConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatePartition {
     pub cell_plates: Vec<usize>,
-    /// Original seed cell per plate. Seeds are generation provenance and are
-    /// not guaranteed to remain owned by their plate after migration.
-    pub plate_seeds: Vec<usize>,
-    pub major_plate_count: usize,
-    pub minor_plate_count: usize,
+    pub plate_count: usize,
 }
 
 impl PlatePartition {
     pub fn plate_count(&self) -> usize {
-        self.major_plate_count + self.minor_plate_count
+        self.plate_count
     }
 }
 
@@ -74,6 +70,17 @@ pub fn partition_plates(
     mesh: &SphereMesh,
     config: PlatePartitionConfig,
 ) -> Result<PlatePartition, PlatePartitionError> {
+    let growth = grow_plates(mesh, config)?;
+    Ok(PlatePartition {
+        plate_count: growth.plate_seeds.len(),
+        cell_plates: growth.cell_plates,
+    })
+}
+
+fn grow_plates(
+    mesh: &SphereMesh,
+    config: PlatePartitionConfig,
+) -> Result<PlateGrowth<'_>, PlatePartitionError> {
     if config.major_plate_count == 0 {
         return Err(PlatePartitionError::NoMajorPlates);
     }
@@ -89,12 +96,7 @@ pub fn partition_plates(
     growth.grow(config.major_head_start_rounds);
     growth.seed_farthest(config.minor_plate_count)?;
     growth.grow(usize::MAX);
-    Ok(PlatePartition {
-        cell_plates: growth.cell_plates,
-        plate_seeds: growth.plate_seeds,
-        major_plate_count: config.major_plate_count,
-        minor_plate_count: config.minor_plate_count,
-    })
+    Ok(growth)
 }
 
 struct PlateGrowth<'mesh> {
@@ -168,17 +170,8 @@ impl<'mesh> PlateGrowth<'mesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mesh;
+    use crate::test_support::{mesh, reference_partition_config};
     use std::collections::VecDeque;
-
-    fn config() -> PlatePartitionConfig {
-        PlatePartitionConfig {
-            major_plate_count: 5,
-            minor_plate_count: 11,
-            major_head_start_rounds: 2,
-            seed: 7,
-        }
-    }
 
     #[test]
     fn rejects_invalid_plate_counts() {
@@ -196,14 +189,17 @@ mod tests {
     #[test]
     fn partition_is_deterministic_and_seeded() {
         let mesh = mesh(512);
-        let first = partition_plates(&mesh, config()).unwrap();
-        assert_eq!(first, partition_plates(&mesh, config()).unwrap());
+        let first = partition_plates(&mesh, reference_partition_config()).unwrap();
+        assert_eq!(
+            first,
+            partition_plates(&mesh, reference_partition_config()).unwrap()
+        );
 
         let changed = partition_plates(
             &mesh,
             PlatePartitionConfig {
                 seed: 8,
-                ..config()
+                ..reference_partition_config()
             },
         )
         .unwrap();
@@ -213,11 +209,11 @@ mod tests {
     #[test]
     fn reference_partition_has_stable_fingerprint() {
         let mesh = mesh(512);
-        let partition = partition_plates(&mesh, config()).unwrap();
-        let fingerprint = partition
+        let growth = grow_plates(&mesh, reference_partition_config()).unwrap();
+        let fingerprint = growth
             .cell_plates
             .iter()
-            .chain(&partition.plate_seeds)
+            .chain(&growth.plate_seeds)
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &value| {
                 (hash ^ value as u64).wrapping_mul(0x0000_0100_0000_01b3)
             });
@@ -228,18 +224,18 @@ mod tests {
     #[test]
     fn every_plate_is_nonempty_connected_and_owns_its_seed() {
         let mesh = mesh(512);
-        let partition = partition_plates(&mesh, config()).unwrap();
+        let growth = grow_plates(&mesh, reference_partition_config()).unwrap();
 
         assert!(
-            partition
+            growth
                 .cell_plates
                 .iter()
-                .all(|&plate| plate < partition.plate_count())
+                .all(|&plate| plate < growth.plate_seeds.len())
         );
-        for (plate, &seed) in partition.plate_seeds.iter().enumerate() {
-            assert_eq!(partition.cell_plates[seed], plate);
+        for (plate, &seed) in growth.plate_seeds.iter().enumerate() {
+            assert_eq!(growth.cell_plates[seed], plate);
 
-            let expected = partition
+            let expected = growth
                 .cell_plates
                 .iter()
                 .filter(|&&cell_plate| cell_plate == plate)
@@ -251,8 +247,7 @@ mod tests {
             while let Some(cell) = queue.pop_front() {
                 actual += 1;
                 for corner in mesh.cell_corners(cell) {
-                    if !visited[corner.neighbor] && partition.cell_plates[corner.neighbor] == plate
-                    {
+                    if !visited[corner.neighbor] && growth.cell_plates[corner.neighbor] == plate {
                         visited[corner.neighbor] = true;
                         queue.push_back(corner.neighbor);
                     }

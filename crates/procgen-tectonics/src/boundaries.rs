@@ -52,7 +52,8 @@ impl BoundaryClassification {
     /// Signed normal closing speed. Positive values converge; negative values
     /// diverge.
     pub fn convergence(&self, edge: usize) -> f32 {
-        self.edge_normal_speeds[edge].iter().sum()
+        let speeds = self.edge_normal_speeds[edge];
+        speeds[0] + speeds[1]
     }
 
     pub(crate) fn matches_edge_count(&self, edge_count: usize) -> bool {
@@ -141,25 +142,13 @@ pub fn classify_boundaries(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mesh;
-    use crate::{
-        PlateKinematicsConfig, PlatePartitionConfig, generate_plate_kinematics, partition_plates,
-    };
+    use crate::test_support::{reference_partition, two_plate_boundary_partition};
+    use crate::{PlateKinematicsConfig, generate_plate_kinematics};
     use procgen_core::Vec3;
 
     #[test]
     fn classification_is_deterministic_complete_and_static() {
-        let mesh = mesh(512);
-        let partition = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                major_plate_count: 5,
-                minor_plate_count: 11,
-                major_head_start_rounds: 2,
-                seed: 7,
-            },
-        )
-        .unwrap();
+        let (mesh, partition) = reference_partition();
         let kinematics =
             generate_plate_kinematics(partition.plate_count(), PlateKinematicsConfig::new(7))
                 .unwrap();
@@ -203,16 +192,8 @@ mod tests {
 
     #[test]
     fn cell_to_cell_relative_motion_is_convergent() {
-        let mesh = mesh(32);
-        let edge = mesh.edges[0];
-        let mut cell_plates = vec![0; mesh.cell_count()];
-        cell_plates[edge.cells[1]] = 1;
-        let partition = PlatePartition {
-            cell_plates,
-            plate_seeds: vec![edge.cells[0], edge.cells[1]],
-            major_plate_count: 2,
-            minor_plate_count: 0,
-        };
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
         let unit_position =
             (mesh.vertices[edge.vertices[0]] + mesh.vertices[edge.vertices[1]]).normalized();
         let normal =
@@ -223,7 +204,10 @@ mod tests {
 
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
 
-        assert_eq!(boundaries.edge_classes[0], BoundaryClass::Convergent);
-        assert!(boundaries.convergence(0) > 0.0);
+        assert_eq!(
+            boundaries.edge_classes[edge_index],
+            BoundaryClass::Convergent
+        );
+        assert!(boundaries.convergence(edge_index) > 0.0);
     }
 }

@@ -326,18 +326,19 @@ fn boundary_asset(
 fn migration_asset(mesh: &SphereMesh, migration: &PlateMigration, radius: f32) -> GizmoAsset {
     voronoi_edge_asset(mesh, |edge_index, edge| {
         let changes = edge.cells.map(|cell| migration.cell_changes[cell]);
-        changes.iter().any(Option::is_some).then(|| {
-            let is_winning_edge = changes
-                .iter()
-                .flatten()
-                .any(|change| change.boundary_edge == edge_index);
-            let color = if is_winning_edge {
-                Color::srgba(1.0, 0.95, 0.4, 1.0)
-            } else {
-                Color::srgba(0.95, 0.2, 0.85, 0.98)
-            };
-            (radius, color)
-        })
+        if !changes.iter().any(Option::is_some) {
+            return None;
+        }
+        let is_winning_edge = changes
+            .iter()
+            .flatten()
+            .any(|change| change.boundary_edge == edge_index);
+        let color = if is_winning_edge {
+            Color::srgba(1.0, 0.95, 0.4, 1.0)
+        } else {
+            Color::srgba(0.95, 0.2, 0.85, 0.98)
+        };
+        Some((radius, color))
     })
 }
 

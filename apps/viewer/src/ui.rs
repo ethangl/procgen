@@ -193,7 +193,10 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Achieved ocean area",
-            format!("{:.2}%", world.ocean_fraction * 100.0),
+            format!(
+                "{:.2}%",
+                world.crust.ocean_fraction(&world.voronoi, world.plates()) * 100.0
+            ),
         );
         stat(
             ui,

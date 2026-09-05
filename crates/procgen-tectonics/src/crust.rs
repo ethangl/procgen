@@ -125,27 +125,11 @@ pub fn classify_crust(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mesh;
-    use crate::{PlatePartitionConfig, partition_plates};
-
-    fn fixture() -> (SphereMesh, PlatePartition) {
-        let mesh = mesh(512);
-        let partition = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                major_plate_count: 5,
-                minor_plate_count: 11,
-                major_head_start_rounds: 2,
-                seed: 7,
-            },
-        )
-        .unwrap();
-        (mesh, partition)
-    }
+    use crate::test_support::reference_partition;
 
     #[test]
     fn classification_is_deterministic_and_seeded() {
-        let (mesh, partition) = fixture();
+        let (mesh, partition) = reference_partition();
         let config = CrustClassificationConfig::new(17);
         let first = classify_crust(&mesh, &partition, config).unwrap();
 
@@ -164,7 +148,7 @@ mod tests {
 
     #[test]
     fn cell_crust_follows_plate_ownership_and_area_drives_fraction() {
-        let (mesh, partition) = fixture();
+        let (mesh, partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
 
         assert_eq!(crust.plate_classes.len(), partition.plate_count());
@@ -180,7 +164,7 @@ mod tests {
 
     #[test]
     fn derived_cell_crust_tracks_current_plate_ownership() {
-        let (mesh, mut partition) = fixture();
+        let (mesh, mut partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
         let cell = 0;
         let original_class = crust.cell_class(&partition, cell);
@@ -197,7 +181,7 @@ mod tests {
 
     #[test]
     fn fraction_extremes_classify_every_plate() {
-        let (mesh, partition) = fixture();
+        let (mesh, partition) = reference_partition();
         let continental = classify_crust(
             &mesh,
             &partition,
@@ -235,7 +219,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_inputs() {
-        let (mesh, partition) = fixture();
+        let (mesh, partition) = reference_partition();
         for target in [-0.1, 1.1, f32::NAN] {
             assert_eq!(
                 classify_crust(
