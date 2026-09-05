@@ -1,7 +1,10 @@
-use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
+use crate::model::{
+    GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld, WORLD_RADIUS,
+};
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use procgen_tectonics::{BoundaryClass, CrustClass};
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
@@ -141,7 +144,9 @@ fn generation_controls(
     });
     ui.add_space(4.0);
     ui.label("Plate migration");
-    let maximum_convergence = (generation.kinematics.maximum_angular_speed * 2.0).max(0.1);
+    // Each side can approach at omega * radius, so opposing speeds add.
+    let maximum_convergence =
+        (generation.kinematics.maximum_angular_speed * WORLD_RADIUS * 2.0).max(0.1);
     slider(
         ui,
         "Minimum convergence",
@@ -193,35 +198,54 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Achieved ocean area",
-            format!("{:.2}%", world.statistics.ocean_fraction * 100.0),
+            format!(
+                "{:.2}%",
+                world.crust.ocean_fraction(&world.voronoi, &world.plates) * 100.0
+            ),
         );
-        stat(ui, "Oceanic plates", world.statistics.oceanic_plate_count);
+        stat(
+            ui,
+            "Oceanic plates",
+            world.crust.plate_count(CrustClass::Oceanic),
+        );
         stat(
             ui,
             "Continental plates",
-            world.statistics.continental_plate_count,
+            world.crust.plate_count(CrustClass::Continental),
         );
     });
 
     ui.add_space(6.0);
     ui.label("Single-step migration");
     egui::Grid::new("migration").num_columns(2).show(ui, |ui| {
-        stat(ui, "Proposals", world.statistics.migration_proposal_count);
-        stat(ui, "Contested cells", world.statistics.contested_cell_count);
-        stat(ui, "Migrated cells", world.statistics.migrated_cell_count);
+        stat(ui, "Proposals", world.migration.proposal_count);
+        stat(ui, "Contested cells", world.migration.contested_cell_count);
+        stat(ui, "Migrated cells", world.migration.migrated_cell_count());
         stat(
             ui,
             "Strongest migration",
-            format!("{:.3}", world.statistics.maximum_migration_convergence),
+            format!("{:.3}", world.migration.maximum_convergence()),
         );
     });
 
     ui.add_space(6.0);
     ui.label("Static boundaries");
     egui::Grid::new("boundaries").num_columns(2).show(ui, |ui| {
-        stat(ui, "Convergent", world.statistics.convergent_boundary_count);
-        stat(ui, "Divergent", world.statistics.divergent_boundary_count);
-        stat(ui, "Transform", world.statistics.transform_boundary_count);
+        stat(
+            ui,
+            "Convergent",
+            world.boundaries.count(BoundaryClass::Convergent),
+        );
+        stat(
+            ui,
+            "Divergent",
+            world.boundaries.count(BoundaryClass::Divergent),
+        );
+        stat(
+            ui,
+            "Transform",
+            world.boundaries.count(BoundaryClass::Transform),
+        );
     });
 
     ui.add_space(6.0);

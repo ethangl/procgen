@@ -38,6 +38,15 @@ pub struct PlateMigration {
 }
 
 impl PlateMigration {
+    /// Applies this transition to the partition it was computed from.
+    pub fn apply(&self, partition: &mut PlatePartition) {
+        for (cell, change) in self.cell_changes.iter().enumerate() {
+            if let Some(change) = change {
+                partition.cell_plates[cell] = change.to_plate;
+            }
+        }
+    }
+
     pub fn migrated_cell_count(&self) -> usize {
         self.cell_changes.iter().flatten().count()
     }
@@ -81,7 +90,7 @@ impl fmt::Display for PlateMigrationError {
 
 impl std::error::Error for PlateMigrationError {}
 
-/// Advances plate ownership by one simultaneous boundary-migration step.
+/// Computes one simultaneous boundary-migration transition.
 ///
 /// Only sufficiently strong convergent edges propose changes. Continental
 /// plates override oceanic plates; equal-crust boundaries advance whichever
@@ -96,7 +105,7 @@ pub fn migrate_plates_once(
     crust: &CrustClassification,
     boundaries: &BoundaryClassification,
     config: PlateMigrationConfig,
-) -> Result<(PlatePartition, PlateMigration), PlateMigrationError> {
+) -> Result<PlateMigration, PlateMigrationError> {
     if !config.minimum_convergence.is_finite() || config.minimum_convergence < 0.0 {
         return Err(PlateMigrationError::InvalidMinimumConvergence);
     }
@@ -151,21 +160,11 @@ pub fn migrate_plates_once(
         }
     }
 
-    let mut migrated_partition = partition.clone();
-    for (cell, change) in winners.iter().enumerate() {
-        if let Some(change) = change {
-            migrated_partition.cell_plates[cell] = change.to_plate;
-        }
-    }
-
-    Ok((
-        migrated_partition,
-        PlateMigration {
-            cell_changes: winners,
-            proposal_count,
-            contested_cell_count: proposal_counts.iter().filter(|&&count| count > 1).count(),
-        },
-    ))
+    Ok(PlateMigration {
+        cell_changes: winners,
+        proposal_count,
+        contested_cell_count: proposal_counts.iter().filter(|&&count| count > 1).count(),
+    })
 }
 
 fn proposal_precedes(candidate: CellMigration, current: CellMigration) -> bool {
@@ -202,7 +201,7 @@ mod tests {
     #[test]
     fn one_step_is_deterministic_simultaneous_and_keeps_plate_classes() {
         let (mesh, partition, crust, boundaries) = fixture();
-        let (migrated_partition, first) = migrate_plates_once(
+        let first = migrate_plates_once(
             &mesh,
             &partition,
             &crust,
@@ -212,7 +211,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            (migrated_partition.clone(), first.clone()),
+            first,
             migrate_plates_once(
                 &mesh,
                 &partition,
@@ -224,22 +223,8 @@ mod tests {
         );
         assert!(first.migrated_cell_count() > 0);
         assert!(first.contested_cell_count > 0);
-        for (cell, change) in first.cell_changes.iter().enumerate() {
-            if let Some(change) = change {
-                assert_eq!(partition.cell_plates[cell], change.from_plate);
-                assert_eq!(migrated_partition.cell_plates[cell], change.to_plate);
-                assert_eq!(
-                    crust.cell_class(&migrated_partition, cell),
-                    crust.plate_classes[change.to_plate]
-                );
-            } else {
-                assert_eq!(
-                    migrated_partition.cell_plates[cell],
-                    partition.cell_plates[cell]
-                );
-            }
-        }
-
+        let mut migrated_partition = partition.clone();
+        first.apply(&mut migrated_partition);
         let fingerprint = migrated_partition
             .cell_plates
             .iter()
@@ -264,7 +249,7 @@ mod tests {
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 0.0];
 
-        let (migrated_partition, migration) = migrate_plates_once(
+        let migration = migrate_plates_once(
             &mesh,
             &partition,
             &crust,
@@ -272,6 +257,17 @@ mod tests {
             PlateMigrationConfig::default(),
         )
         .unwrap();
+        assert_eq!(
+            migration.cell_changes[edge.cells[1]],
+            Some(CellMigration {
+                from_plate: 1,
+                to_plate: 0,
+                boundary_edge: edge_index,
+                convergence: 1.0,
+            })
+        );
+        let mut migrated_partition = partition.clone();
+        migration.apply(&mut migrated_partition);
 
         assert_eq!(migrated_partition.cell_plates[edge.cells[1]], 0);
         assert_eq!(migration.migrated_cell_count(), 1);
@@ -282,7 +278,7 @@ mod tests {
         assert!(crust.ocean_fraction(&mesh, &partition) > 0.0);
         assert_eq!(crust.ocean_fraction(&mesh, &migrated_partition), 0.0);
 
-        let (suppressed_partition, suppressed) = migrate_plates_once(
+        let suppressed = migrate_plates_once(
             &mesh,
             &partition,
             &crust,
@@ -293,12 +289,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(suppressed.migrated_cell_count(), 0);
+        let mut suppressed_partition = partition.clone();
+        suppressed.apply(&mut suppressed_partition);
         assert_eq!(suppressed_partition, partition);
 
         let same_crust = CrustClassification {
             plate_classes: vec![CrustClass::Continental; 2],
         };
-        let (same_crust_partition, _) = migrate_plates_once(
+        let same_crust_migration = migrate_plates_once(
             &mesh,
             &partition,
             &same_crust,
@@ -306,6 +304,8 @@ mod tests {
             PlateMigrationConfig::default(),
         )
         .unwrap();
+        let mut same_crust_partition = partition.clone();
+        same_crust_migration.apply(&mut same_crust_partition);
         assert_eq!(same_crust_partition.cell_plates[edge.cells[1]], 0);
     }
 

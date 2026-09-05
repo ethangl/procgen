@@ -29,6 +29,9 @@ impl BoundaryClass {
     }
 }
 
+/// Dense structure-of-arrays boundary state. Each attribute remains contiguous
+/// for data-parallel CPU access and future backend transfer; stage boundaries
+/// validate that all arrays cover the same mesh edges.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundaryClassification {
     pub edge_classes: Vec<BoundaryClass>,
