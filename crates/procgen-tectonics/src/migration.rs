@@ -97,18 +97,7 @@ pub fn migrate_plates_once(
     boundaries: &BoundaryClassification,
     config: PlateMigrationConfig,
 ) -> Result<PlateMigration, PlateMigrationError> {
-    if !config.minimum_convergence.is_finite() || config.minimum_convergence < 0.0 {
-        return Err(PlateMigrationError::InvalidMinimumConvergence);
-    }
-    if partition.cell_plates.len() != mesh.cell_count() {
-        return Err(PlateMigrationError::CellCountMismatch);
-    }
-    if crust.plate_classes.len() != partition.plate_count {
-        return Err(PlateMigrationError::PlateCountMismatch);
-    }
-    if !boundaries.matches_edge_count(mesh.edge_count()) {
-        return Err(PlateMigrationError::BoundaryCountMismatch);
-    }
+    validate_migration_inputs(mesh, partition, crust, boundaries, config)?;
 
     let mut winners = vec![None; mesh.cell_count()];
     let mut proposal_counts = vec![0_usize; mesh.cell_count()];
@@ -162,6 +151,29 @@ pub fn migrate_plates_once(
         proposal_count,
         contested_cell_count: proposal_counts.iter().filter(|&&count| count > 1).count(),
     })
+}
+
+pub(crate) fn validate_migration_inputs(
+    mesh: &SphereMesh,
+    partition: &PlatePartition,
+    crust: &CrustClassification,
+    boundaries: &BoundaryClassification,
+    config: PlateMigrationConfig,
+) -> Result<(), PlateMigrationError> {
+    if !config.minimum_convergence.is_finite() || config.minimum_convergence < 0.0 {
+        return Err(PlateMigrationError::InvalidMinimumConvergence);
+    }
+    if partition.cell_plates.len() != mesh.cell_count() {
+        return Err(PlateMigrationError::CellCountMismatch);
+    }
+    if crust.plate_classes.len() != partition.plate_count {
+        return Err(PlateMigrationError::PlateCountMismatch);
+    }
+    if !boundaries.matches_edge_count(mesh.edge_count()) {
+        return Err(PlateMigrationError::BoundaryCountMismatch);
+    }
+
+    Ok(())
 }
 
 fn proposal_precedes(candidate: CellMigration, current: CellMigration) -> bool {

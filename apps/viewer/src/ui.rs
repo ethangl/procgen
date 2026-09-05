@@ -143,11 +143,18 @@ fn generation_controls(
         );
     });
     ui.add_space(4.0);
-    ui.label("Plate migration");
+    ui.label("Plate evolution");
+    drag_value(
+        ui,
+        "Steps",
+        &mut generation.evolution.step_count,
+        0..=256,
+        1.0,
+    );
     slider(
         ui,
         "Minimum convergence",
-        &mut generation.migration.minimum_convergence,
+        &mut generation.evolution.migration.minimum_convergence,
         0.0..=generation.kinematics.maximum_convergence(WORLD_RADIUS),
     );
     if ui.button("Regenerate").clicked() {
@@ -172,7 +179,7 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(ui, "Cells", world.voronoi.cell_count());
         stat(ui, "Vertices", world.voronoi.vertex_count());
         stat(ui, "Edges", world.voronoi.edge_count());
-        stat(ui, "Plates", world.plates.plate_count);
+        stat(ui, "Plates", world.evolution.partition.plate_count);
         stat(ui, "Sampling seed", world.config.fibonacci.seed);
         stat(ui, "Plate seed", world.config.plates.seed);
         stat(ui, "Crust seed", world.config.crust.seed);
@@ -197,7 +204,10 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Achieved ocean area",
             format!(
                 "{:.2}%",
-                world.crust.ocean_fraction(&world.voronoi, &world.plates) * 100.0
+                world
+                    .crust
+                    .ocean_fraction(&world.voronoi, &world.evolution.partition)
+                    * 100.0
             ),
         );
         stat(
@@ -213,15 +223,33 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 
     ui.add_space(6.0);
-    ui.label("Single-step migration");
-    egui::Grid::new("migration").num_columns(2).show(ui, |ui| {
-        stat(ui, "Proposals", world.migration.proposal_count);
-        stat(ui, "Contested cells", world.migration.contested_cell_count);
-        stat(ui, "Migrated cells", world.migration.migrated_cell_count());
+    ui.label("Plate evolution");
+    egui::Grid::new("evolution").num_columns(2).show(ui, |ui| {
+        stat(
+            ui,
+            "Completed steps",
+            world.evolution.diagnostics.completed_step_count,
+        );
+        stat(
+            ui,
+            "Active steps",
+            world.evolution.diagnostics.active_step_count,
+        );
+        stat(ui, "Proposals", world.evolution.diagnostics.proposal_count);
+        stat(
+            ui,
+            "Contested cell events",
+            world.evolution.diagnostics.contested_cell_count,
+        );
+        stat(
+            ui,
+            "Migration events",
+            world.evolution.diagnostics.migrated_cell_count,
+        );
         stat(
             ui,
             "Strongest migration",
-            format!("{:.3}", world.migration.maximum_convergence()),
+            format!("{:.3}", world.evolution.diagnostics.maximum_convergence),
         );
     });
 
@@ -231,17 +259,17 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Convergent",
-            world.boundaries.count(BoundaryClass::Convergent),
+            world.evolution.boundaries.count(BoundaryClass::Convergent),
         );
         stat(
             ui,
             "Divergent",
-            world.boundaries.count(BoundaryClass::Divergent),
+            world.evolution.boundaries.count(BoundaryClass::Divergent),
         );
         stat(
             ui,
             "Transform",
-            world.boundaries.count(BoundaryClass::Transform),
+            world.evolution.boundaries.count(BoundaryClass::Transform),
         );
     });
 
