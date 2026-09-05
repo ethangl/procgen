@@ -7,8 +7,9 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryClass, BoundaryDeformationConfig, BoundaryEffect,
-    CoarseElevationConfig, CrustClass, CrustClassificationConfig, FieldSummary,
-    PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig, SeafloorAgeConfig,
+    CoarseElevationConfig, ContinentalRiftProfile, CrustClass, CrustClassificationConfig,
+    FieldSummary, PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
+    SeafloorAgeConfig,
 };
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
@@ -218,8 +219,7 @@ fn deformation_controls(
     kinematics: PlateKinematicsConfig,
 ) {
     boundary_effect_controls(ui, "Convergent", &mut config.convergent);
-    boundary_effect_controls(ui, "Rift", &mut config.rift);
-    boundary_effect_controls(ui, "Ridge", &mut config.ridge);
+    continental_rift_controls(ui, &mut config.rift);
     boundary_effect_controls(ui, "Transform", &mut config.transform);
     boundary_effect_controls(ui, "Collision", &mut config.collision);
     boundary_effect_controls(ui, "Trench", &mut config.trench);
@@ -229,6 +229,28 @@ fn deformation_controls(
         "Saturation speed",
         &mut config.saturation_speed,
         0.01..=maximum_strength,
+    );
+}
+
+fn continental_rift_controls(ui: &mut egui::Ui, profile: &mut ContinentalRiftProfile) {
+    slider(
+        ui,
+        "Rift center offset",
+        &mut profile.center_offset,
+        -1.0..=-0.01,
+    );
+    slider(
+        ui,
+        "Rift flank offset",
+        &mut profile.flank_offset,
+        (profile.center_offset + 0.001)..=-0.001,
+    );
+    drag_value(
+        ui,
+        "Rift decay depth",
+        &mut profile.decay_depth,
+        2..=*DEFORMATION_DEPTH_RANGE.end(),
+        1.0,
     );
 }
 
@@ -402,6 +424,21 @@ fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             ui,
             "Subsided",
             world.deformation.diagnostics.subsided_cell_count,
+        );
+        stat(
+            ui,
+            "Rift sources",
+            world.deformation.diagnostics.rift_source_cell_count,
+        );
+        stat(
+            ui,
+            "Rift centers",
+            world.deformation.diagnostics.rift_center_cell_count,
+        );
+        stat(
+            ui,
+            "Rift flanks",
+            world.deformation.diagnostics.rift_flank_cell_count,
         );
     });
     stat_grid(ui, "Base elevation", "base_elevation", |ui| {

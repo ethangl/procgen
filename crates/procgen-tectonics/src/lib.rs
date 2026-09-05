@@ -45,7 +45,7 @@ pub use crust::{
 };
 pub use deformation::{
     BoundaryDeformation, BoundaryDeformationConfig, BoundaryDeformationDiagnostics,
-    BoundaryDeformationError, BoundaryEffect, derive_boundary_deformation,
+    BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile, derive_boundary_deformation,
 };
 pub use elevation::{
     CoarseElevation, CoarseElevationConfig, CoarseElevationError, compose_coarse_elevation,
