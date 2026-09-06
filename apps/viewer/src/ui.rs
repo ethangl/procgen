@@ -5,7 +5,6 @@ use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, Regener
 use crate::render::{DiagnosticLayer, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use procgen_tectonics::FieldSummary;
 
 const SECTION_SPACING: f32 = 6.0;
 
@@ -69,31 +68,6 @@ fn section(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) 
     ui.add_space(SECTION_SPACING);
     ui.label(title);
     content(ui);
-}
-
-fn stat_grid(ui: &mut egui::Ui, title: &str, id: &str, content: impl FnOnce(&mut egui::Ui)) {
-    section(ui, title, |ui| {
-        egui::Grid::new(id).num_columns(2).show(ui, content);
-    });
-}
-
-fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
-    ui.label(label);
-    ui.monospace(value.to_string());
-    ui.end_row();
-}
-
-fn field_summary_stats(ui: &mut egui::Ui, summary: &FieldSummary) {
-    stat(ui, "Range", format_field_range(summary));
-    stat(ui, "Mean", format!("{:.3}", summary.mean));
-}
-
-fn format_field_range(summary: &FieldSummary) -> String {
-    format!("{:.3} - {:.3}", summary.minimum, summary.maximum)
-}
-
-fn millis(duration: std::time::Duration) -> String {
-    format!("{:.2} ms", duration.as_secs_f64() * 1_000.0)
 }
 
 fn drag_value<T: egui::emath::Numeric>(
