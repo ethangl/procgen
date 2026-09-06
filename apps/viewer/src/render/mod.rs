@@ -46,6 +46,9 @@ impl Default for LayerSettings {
 #[derive(Resource)]
 struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
 
+#[derive(Component)]
+struct DiagnosticLayerEntity(DiagnosticLayer);
+
 pub struct DiagnosticRenderPlugin;
 
 impl Plugin for DiagnosticRenderPlugin {
@@ -55,8 +58,8 @@ impl Plugin for DiagnosticRenderPlugin {
             .add_systems(
                 Update,
                 (
-                    rebuild_diagnostic_assets.run_if(diagnostic_assets_need_rebuild),
-                    sync_visible_layers.run_if(resource_changed::<LayerSettings>),
+                    rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
+                    sync_layer_render_state.run_if(resource_changed::<LayerSettings>),
                 ),
             );
     }
@@ -100,7 +103,9 @@ fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: Diagn
             },
             depth_bias: -0.0005,
         },
+        DiagnosticLayerEntity(layer),
         RenderLayers::layer(layer.render_layer()),
+        Transform::IDENTITY,
     ));
 }
 
@@ -125,27 +130,25 @@ fn spawn_axes(commands: &mut Commands, assets: &mut Assets<GizmoAsset>) {
 
 fn rebuild_diagnostic_assets(
     world: Res<GeneratedWorld>,
-    settings: Res<LayerSettings>,
     assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
     for &layer in DiagnosticLayer::ALL {
         *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() =
-            layer.build_asset(&world, settings.draw_radius(layer));
+            layer.build_asset(&world, DRAW_RADIUS_BASE);
     }
 }
 
-fn diagnostic_assets_need_rebuild(
-    world: Res<GeneratedWorld>,
-    settings: Res<LayerSettings>,
-) -> bool {
-    world.is_changed() || settings.is_changed()
-}
-
-fn sync_visible_layers(
+fn sync_layer_render_state(
     settings: Res<LayerSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
+    mut layer_transforms: Query<(&DiagnosticLayerEntity, &mut Transform)>,
 ) {
+    for (layer, mut transform) in &mut layer_transforms {
+        let scale = settings.draw_radius(layer.0) / DRAW_RADIUS_BASE;
+        transform.scale = Vec3::splat(scale);
+    }
+
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
     let mut layers = vec![0];
     layers.extend(
