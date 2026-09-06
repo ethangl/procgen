@@ -39,12 +39,12 @@ fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Emissivity",
             format!("{:.3}", world.config.radiative_equilibrium.emissivity),
         );
-        field_stats(ui, "Daily", "K", &diagnostics.daily);
-        field_stats(ui, "Annual", "K", &diagnostics.annual);
+        area_weighted_stats(ui, "Daily", "K", &diagnostics.daily);
+        area_weighted_stats(ui, "Annual", "K", &diagnostics.annual);
     });
 }
 
-fn field_stats(ui: &mut egui::Ui, prefix: &str, unit: &str, summary: &AreaWeightedSummary) {
+fn area_weighted_stats(ui: &mut egui::Ui, prefix: &str, unit: &str, summary: &AreaWeightedSummary) {
     stat(
         ui,
         &format!("{prefix} range"),
@@ -86,8 +86,8 @@ fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 diagnostics.stellar_flux_watts_per_square_meter
             ),
         );
-        field_stats(ui, "Daily", "W/m2", &diagnostics.daily_mean);
-        field_stats(ui, "Annual", "W/m2", &diagnostics.annual_mean);
+        area_weighted_stats(ui, "Daily", "W/m2", &diagnostics.daily_mean);
+        area_weighted_stats(ui, "Annual", "W/m2", &diagnostics.annual_mean);
         stat(ui, "Polar-night cells", diagnostics.polar_night_cell_count);
         stat(ui, "Polar-day cells", diagnostics.polar_day_cell_count);
         stat(
