@@ -23,6 +23,7 @@ pub enum DiagnosticLayer {
     IsostaticSupport,
     IsostaticElevation,
     Insolation,
+    CoupledAlbedo,
     DailyTemperature,
     AnnualTemperature,
     SeasonalTemperature,
@@ -111,6 +112,13 @@ const FRACTION_COLOR_STOPS: [(f32, Vec3); 3] = [
     (0.0, Vec3::new(0.03, 0.05, 0.1)),
     (0.5, Vec3::new(0.16, 0.68, 0.7)),
     (1.0, Vec3::new(1.0, 0.75, 0.15)),
+];
+
+const ALBEDO_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.08)),
+    (0.2, Vec3::new(0.12, 0.3, 0.55)),
+    (0.6, Vec3::new(0.72, 0.82, 0.88)),
+    (1.0, Vec3::new(1.0, 1.0, 1.0)),
 ];
 
 const WIND_SPEED_COLOR_STOPS: [(f32, Vec3); 5] = [
@@ -236,6 +244,7 @@ impl DiagnosticLayer {
         Self::IsostaticSupport,
         Self::IsostaticElevation,
         Self::Insolation,
+        Self::CoupledAlbedo,
         Self::DailyTemperature,
         Self::AnnualTemperature,
         Self::SeasonalTemperature,
@@ -352,6 +361,12 @@ impl DiagnosticLayer {
                 "Daily-mean insolation",
                 FIELD_LINE_WIDTH,
                 |world, radius| insolation_asset(&world.voronoi, &world.solar_forcing, radius),
+            ),
+            Self::CoupledAlbedo => LayerSpec::scalar(
+                "Coupled surface albedo",
+                FIELD_LINE_WIDTH,
+                |world| &world.cell_albedo,
+                &ALBEDO_COLOR_STOPS,
             ),
             Self::DailyTemperature => LayerSpec::scalar(
                 "Daily effective temperature",

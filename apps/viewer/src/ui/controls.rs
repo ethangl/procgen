@@ -3,10 +3,11 @@ use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_climate::{
-    ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, CRYOSPHERE_CLOSURE_TOLERANCE_RANGE,
+    ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, CLIMATE_COUPLING_ITERATION_LIMIT_RANGE,
+    CLIMATE_COUPLING_TOLERANCE_RANGE, CRYOSPHERE_CLOSURE_TOLERANCE_RANGE,
     CRYOSPHERE_FRACTION_RATE_RANGE, CRYOSPHERE_ITERATION_LIMIT_RANGE, CRYOSPHERE_MASS_RANGE,
-    CRYOSPHERE_RATE_RANGE, CRYOSPHERE_TEMPERATURE_RANGE, CryosphereConfig, DRAG_RATE_RANGE,
-    MAXIMUM_WIND_SPEED_RANGE, MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE,
+    CRYOSPHERE_RATE_RANGE, CRYOSPHERE_TEMPERATURE_RANGE, ClimateCouplingConfig, CryosphereConfig,
+    DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE, MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE,
     MOISTURE_STEP_COUNT_RANGE, MOISTURE_STEP_SECONDS_RANGE, MoistureTransportConfig,
     ORBITAL_PERIOD_DAYS_RANGE, OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE,
     RadiativeEquilibriumConfig, SeasonalThermalConfig, SolarForcingConfig,
@@ -103,23 +104,77 @@ pub(super) fn generation_controls(
         solar_forcing_controls(ui, &mut generation.solar_forcing)
     });
     section(ui, "Radiative equilibrium", |ui| {
-        radiative_equilibrium_controls(ui, &mut generation.radiative_equilibrium)
+        radiative_equilibrium_controls(ui, &mut generation.climate_coupling.radiative_equilibrium)
     });
     section(ui, "Seasonal thermal response", |ui| {
-        seasonal_thermal_controls(ui, &mut generation.seasonal_thermal)
+        seasonal_thermal_controls(ui, &mut generation.climate_coupling.seasonal_thermal)
     });
     section(ui, "Atmospheric circulation", |ui| {
-        atmospheric_circulation_controls(ui, &mut generation.atmospheric_circulation)
+        atmospheric_circulation_controls(
+            ui,
+            &mut generation.climate_coupling.atmospheric_circulation,
+        )
     });
     section(ui, "Moisture and precipitation", |ui| {
-        moisture_transport_controls(ui, &mut generation.moisture_transport)
+        moisture_transport_controls(ui, &mut generation.climate_coupling.moisture_transport)
     });
     section(ui, "Cryosphere", |ui| {
-        cryosphere_controls(ui, &mut generation.cryosphere)
+        cryosphere_controls(ui, &mut generation.climate_coupling.cryosphere)
+    });
+    section(ui, "Climate coupling", |ui| {
+        climate_coupling_controls(ui, &mut generation.climate_coupling)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn climate_coupling_controls(ui: &mut egui::Ui, config: &mut ClimateCouplingConfig) {
+    drag_value(
+        ui,
+        "Maximum iterations",
+        &mut config.maximum_iterations,
+        CLIMATE_COUPLING_ITERATION_LIMIT_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Under-relaxation",
+        &mut config.under_relaxation,
+        0.001..=1.0,
+    );
+    drag_value(
+        ui,
+        "Albedo RMS tolerance",
+        &mut config.albedo_tolerance,
+        0.0..=1.0,
+        0.001,
+    );
+    drag_value(
+        ui,
+        "Temperature RMS tolerance",
+        &mut config.temperature_tolerance_kelvin,
+        CLIMATE_COUPLING_TOLERANCE_RANGE,
+        0.1,
+    );
+    drag_value(
+        ui,
+        "Precipitation RMS tolerance",
+        &mut config.precipitation_tolerance_kg_per_m2_per_day,
+        CLIMATE_COUPLING_TOLERANCE_RANGE,
+        0.001,
+    );
+    drag_value(
+        ui,
+        "Cover RMS tolerance",
+        &mut config.cover_fraction_tolerance,
+        0.0..=1.0,
+        0.001,
+    );
+    slider(ui, "Land albedo", &mut config.albedo.land, 0.0..=1.0);
+    slider(ui, "Ocean albedo", &mut config.albedo.ocean, 0.0..=1.0);
+    slider(ui, "Snow albedo", &mut config.albedo.snow, 0.0..=1.0);
+    slider(ui, "Ice albedo", &mut config.albedo.ice, 0.0..=1.0);
 }
 
 fn cryosphere_controls(ui: &mut egui::Ui, config: &mut CryosphereConfig) {
@@ -359,7 +414,6 @@ fn seasonal_thermal_controls(ui: &mut egui::Ui, config: &mut SeasonalThermalConf
 }
 
 fn radiative_equilibrium_controls(ui: &mut egui::Ui, config: &mut RadiativeEquilibriumConfig) {
-    slider(ui, "Albedo", &mut config.albedo, 0.0..=1.0);
     slider(ui, "Emissivity", &mut config.emissivity, 0.01..=1.0);
 }
 

@@ -81,11 +81,44 @@ pub fn derive_radiative_equilibrium_temperature(
     forcing: &SolarForcing,
     config: RadiativeEquilibriumConfig,
 ) -> Result<RadiativeEquilibriumTemperature, RadiativeEquilibriumError> {
+    derive_radiative_equilibrium_temperature_impl(mesh, forcing, config, None)
+}
+
+/// Derives radiative equilibrium with an explicit albedo for every cell.
+/// The uniform albedo in `config` remains validated but is replaced by this
+/// field, allowing orchestration layers to couple surface state without
+/// changing the independently callable uniform-albedo stage.
+pub fn derive_radiative_equilibrium_temperature_with_albedo(
+    mesh: &SphereMesh,
+    forcing: &SolarForcing,
+    config: RadiativeEquilibriumConfig,
+    cell_albedo: &[f32],
+) -> Result<RadiativeEquilibriumTemperature, RadiativeEquilibriumError> {
+    if cell_albedo.len() != mesh.cell_count() {
+        return Err(RadiativeEquilibriumError::Albedo);
+    }
+    if cell_albedo
+        .iter()
+        .any(|&value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        return Err(RadiativeEquilibriumError::Albedo);
+    }
+    derive_radiative_equilibrium_temperature_impl(mesh, forcing, config, Some(cell_albedo))
+}
+
+fn derive_radiative_equilibrium_temperature_impl(
+    mesh: &SphereMesh,
+    forcing: &SolarForcing,
+    config: RadiativeEquilibriumConfig,
+    cell_albedo: Option<&[f32]>,
+) -> Result<RadiativeEquilibriumTemperature, RadiativeEquilibriumError> {
     let model = RadiativeEquilibriumModel::new(config)?;
     forcing.validate(mesh)?;
 
-    let daily_effective_temperature_kelvin = temperatures(&forcing.daily_mean_insolation, model);
-    let annual_effective_temperature_kelvin = temperatures(&forcing.annual_mean_insolation, model);
+    let daily_effective_temperature_kelvin =
+        temperatures(&forcing.daily_mean_insolation, model, cell_albedo);
+    let annual_effective_temperature_kelvin =
+        temperatures(&forcing.annual_mean_insolation, model, cell_albedo);
     let daily = AreaWeightedSummary::from_field(mesh, &daily_effective_temperature_kelvin);
     let annual = AreaWeightedSummary::from_field(mesh, &annual_effective_temperature_kelvin);
     if !daily.is_finite() || !annual.is_finite() {
@@ -135,15 +168,32 @@ impl RadiativeEquilibriumModel {
         (insolation * self.radiation_scale).sqrt().sqrt()
     }
 
+    pub fn with_albedo(self, albedo: f64) -> Self {
+        Self {
+            radiation_scale: (1.0 - albedo) / (self.emissivity * STEFAN_BOLTZMANN_CONSTANT),
+            emissivity: self.emissivity,
+        }
+    }
+
     pub fn emission_coefficient(self) -> f64 {
         self.emissivity * STEFAN_BOLTZMANN_CONSTANT
     }
 }
 
-fn temperatures(insolation: &[f32], model: RadiativeEquilibriumModel) -> Vec<f32> {
+fn temperatures(
+    insolation: &[f32],
+    model: RadiativeEquilibriumModel,
+    cell_albedo: Option<&[f32]>,
+) -> Vec<f32> {
     insolation
         .iter()
-        .map(|&value| model.temperature_kelvin(f64::from(value)) as f32)
+        .enumerate()
+        .map(|(cell, &value)| {
+            let model = cell_albedo
+                .map(|albedo| model.with_albedo(f64::from(albedo[cell])))
+                .unwrap_or(model);
+            model.temperature_kelvin(f64::from(value)) as f32
+        })
         .collect()
 }
 

@@ -329,6 +329,36 @@ pub fn derive_seasonal_thermal_response(
     inputs: SeasonalThermalInputs<'_>,
     config: SeasonalThermalConfig,
 ) -> Result<SeasonalThermalResponse, SeasonalThermalError> {
+    derive_seasonal_thermal_response_impl(mesh, inputs, config, None)
+}
+
+/// Solves the seasonal response with an explicit albedo for every cell.
+/// This is the coupling entry point; the original uniform-albedo API remains
+/// available for isolated stage use.
+pub fn derive_seasonal_thermal_response_with_albedo(
+    mesh: &SphereMesh,
+    inputs: SeasonalThermalInputs<'_>,
+    config: SeasonalThermalConfig,
+    cell_albedo: &[f32],
+) -> Result<SeasonalThermalResponse, SeasonalThermalError> {
+    if cell_albedo.len() != mesh.cell_count()
+        || cell_albedo
+            .iter()
+            .any(|&value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        return Err(SeasonalThermalError::Radiation(
+            RadiativeEquilibriumError::Albedo,
+        ));
+    }
+    derive_seasonal_thermal_response_impl(mesh, inputs, config, Some(cell_albedo))
+}
+
+fn derive_seasonal_thermal_response_impl(
+    mesh: &SphereMesh,
+    inputs: SeasonalThermalInputs<'_>,
+    config: SeasonalThermalConfig,
+    cell_albedo: Option<&[f32]>,
+) -> Result<SeasonalThermalResponse, SeasonalThermalError> {
     let SeasonalThermalInputs {
         planet,
         solar_forcing,
@@ -350,11 +380,15 @@ pub fn derive_seasonal_thermal_response(
     let mut endpoints = Vec::with_capacity(sample_count + 1);
     let mut samples = Vec::with_capacity(sample_count);
 
-    for ((&elevation, &center), &area) in final_elevation
+    for (cell, ((&elevation, &center), &area)) in final_elevation
         .iter()
         .zip(&mesh.cell_centers)
         .zip(&mesh.cell_areas)
+        .enumerate()
     {
+        let radiation = cell_albedo
+            .map(|albedo| radiation.with_albedo(f64::from(albedo[cell])))
+            .unwrap_or(radiation);
         let surface = Surface::from_elevation(elevation);
         let heat_capacity = config.heat_capacity(surface);
         let latitude_sine = f64::from(center.y / mesh.radius);

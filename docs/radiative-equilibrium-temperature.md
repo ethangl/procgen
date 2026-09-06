@@ -22,10 +22,13 @@ spherical-area-weighted means and extrema for both fields.
 
 `RadiativeEquilibriumConfig::EARTHLIKE` supplies a convenient albedo of 0.3 and
 emissivity of 1.0. Those values are a caller-selected preset, not hidden stage
-constants. The stage does not read elevation or crust and does not model an
-atmosphere, greenhouse effects, lapse rates, heat transport or capacity,
+constants. The independent `with_albedo` entry point accepts an explicit
+per-cell field for the bounded climate orchestrator while leaving the uniform
+entry point unchanged. The stage does not read elevation or crust and does not
+model an atmosphere, greenhouse effects, lapse rates, heat transport or capacity,
 land-ocean differences, wind, moisture, ice, feedbacks, iterative coupling,
 rasterization, or acceleration backends.
 
 The separate time-dependent consumer is documented in
-`docs/seasonal-thermal-response.md`.
+`docs/seasonal-thermal-response.md`; the orchestration boundary is documented
+in `docs/climate-coupling.md`.

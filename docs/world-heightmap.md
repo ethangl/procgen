@@ -153,13 +153,16 @@ Completed foundations:
   cycle, precipitation climatology, and final elevation/ocean mask to solve
   bounded periodic snow and sea-ice reservoirs. It derives selected-phase snow
   and sea ice plus equilibrium land-ice cover from perennial accumulation and
-  ablation potential, with no latitude assignment or coupled feedback. See
-  `docs/solar-forcing.md`,
-  `docs/radiative-equilibrium-temperature.md`, and
-  `docs/seasonal-thermal-response.md`, and
-  `docs/coarse-atmospheric-circulation.md`, and
-  `docs/moisture-transport.md`, and
-  `docs/cryosphere.md`.
+  ablation potential, with no latitude assignment or internal feedback. A
+  separate bounded orchestrator iterates the radiative, seasonal, circulation,
+  moisture, and cryosphere stages using only explicit per-cell land, ocean,
+  snow, and ice albedo feedback. It applies configurable under-relaxation and
+  area-weighted RMS tolerances, fails at a hard iteration limit, and rebuilds
+  all working state per call. See
+  `docs/solar-forcing.md`, `docs/radiative-equilibrium-temperature.md`,
+  `docs/seasonal-thermal-response.md`,
+  `docs/coarse-atmospheric-circulation.md`, `docs/moisture-transport.md`,
+  `docs/cryosphere.md`, and `docs/climate-coupling.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

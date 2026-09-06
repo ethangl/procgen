@@ -1,5 +1,9 @@
 # Seasonal thermal response
 
+The independent stage supports both its original uniform-albedo entry point and
+an explicit per-cell-albedo entry point used by bounded climate coupling. The
+surface energy equation and periodic solver are otherwise identical.
+
 The third climate slice adds deterministic seasonal thermal inertia to the
 phase-resolved solar forcing and radiative-equilibrium temperature stages. It
 solves one independent local surface energy balance per spherical cell:
