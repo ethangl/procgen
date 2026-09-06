@@ -65,8 +65,9 @@ Completed foundations:
 - `procgen-sphere`: deterministic Y-up Fibonacci sampling.
 - `procgen-sphere-mesh`: spherical Delaunay/Voronoi topology, GPU-friendly CSR
   cell-corner rings, and cell areas.
-- `procgen-tectonics`: deterministic major/minor plate partitioning, rigid plate
-  angular velocities, local spherical tangent motion, static convergent,
+- `procgen-tectonics`: deterministic major/minor plate partitioning with
+  configurable integer-cost growth roughness, rigid plate angular velocities,
+  local spherical tangent motion, static convergent,
   divergent, and transform boundary classification, and static per-plate crust
   classification with area-weighted ocean coverage. It repeatedly reclassifies
   current boundaries and applies deterministic, simultaneous ownership migration

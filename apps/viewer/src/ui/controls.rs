@@ -14,8 +14,8 @@ use procgen_planet::{
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
-    ContinentalRiftProfile, CrustClassificationConfig, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlatePartitionConfig, SEA_LEVEL, SeafloorAgeConfig,
+    ContinentalRiftProfile, CrustClassificationConfig, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig,
+    PlateKinematicsConfig, PlatePartitionConfig, SEA_LEVEL, SeafloorAgeConfig,
 };
 
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
@@ -194,6 +194,13 @@ fn plate_controls(ui: &mut egui::Ui, config: &mut PlatePartitionConfig) {
         "Major head start",
         &mut config.major_head_start_rounds,
         0..=64,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Growth roughness %",
+        &mut config.growth_roughness,
+        0..=MAX_GROWTH_ROUGHNESS,
         1.0,
     );
     drag_value(ui, "Plate seed", &mut config.seed, u64::MIN..=u64::MAX, 1.0);

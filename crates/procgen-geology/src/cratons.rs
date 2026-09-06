@@ -160,6 +160,7 @@ mod tests {
                 major_plate_count,
                 minor_plate_count,
                 major_head_start_rounds: 2,
+                growth_roughness: 0,
                 seed: 11,
             },
         )

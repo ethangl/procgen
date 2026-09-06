@@ -7,6 +7,7 @@ pub const CRUST_PLATE_ORDER: u64 = 3;
 pub const HOTSPOT_POSITION: u64 = 4;
 pub const OCEANIC_PEAK_PRESENCE: u64 = 5;
 pub const OCEANIC_PEAK_POSITION: u64 = 6;
+pub const PLATE_GROWTH_COST: u64 = 7;
 
 #[cfg(test)]
 mod tests {
@@ -22,6 +23,7 @@ mod tests {
             HOTSPOT_POSITION,
             OCEANIC_PEAK_PRESENCE,
             OCEANIC_PEAK_POSITION,
+            PLATE_GROWTH_COST,
         ];
         ids.sort_unstable();
         assert!(ids.windows(2).all(|pair| pair[0] != pair[1]));

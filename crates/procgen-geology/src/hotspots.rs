@@ -273,6 +273,7 @@ mod tests {
                 major_plate_count: 4,
                 minor_plate_count: 4,
                 major_head_start_rounds: 1,
+                growth_roughness: 0,
                 seed: 11,
             },
         )
