@@ -1,7 +1,7 @@
 use crate::{
     AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SECONDS_PER_DAY,
     SolarForcingConfig, SolarForcingError,
-    orbit::{OrbitalSampler, daily_mean_at, orbital_state},
+    orbit::{OrbitalSampler, daily_mean_at, orbital_state, selected_sample_index},
     radiative_equilibrium::RadiativeEquilibriumModel,
     validate_range,
 };
@@ -95,7 +95,8 @@ pub struct SeasonalThermalDiagnostics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeasonalThermalResponse {
     pub selected_temperature_kelvin: Vec<f32>,
-    /// Cell-major temperatures for each uniform annual interval.
+    /// Cell-major representative temperatures at each uniform interval midpoint.
+    /// Integrated cycles linearly interpolate their boundary states.
     pub annual_temperature_samples_kelvin: Vec<f32>,
     pub annual_sample_count: usize,
     pub annual_mean_temperature_kelvin: Vec<f32>,
@@ -356,6 +357,7 @@ pub fn derive_seasonal_thermal_response(
     let mut output = ResponseAccumulator::new(mesh.cell_count(), sample_count);
     let mut targets = Vec::with_capacity(sample_count);
     let mut endpoints = Vec::with_capacity(sample_count + 1);
+    let mut samples = Vec::with_capacity(sample_count);
 
     for ((&elevation, &center), &area) in final_elevation
         .iter()
@@ -384,9 +386,14 @@ pub fn derive_seasonal_thermal_response(
             )
         } else {
             let coefficient = step_seconds * radiation.emission_coefficient() / heat_capacity;
-            let cycle =
-                solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?;
-            (cycle, &endpoints[..sample_count])
+            let cycle = solve_periodic_cycle(
+                &targets,
+                selected_phase,
+                coefficient,
+                &mut endpoints,
+                &mut samples,
+            )?;
+            (cycle, samples.as_slice())
         };
         output.push(cycle, annual_samples, surface, area)?;
     }
@@ -428,10 +435,13 @@ fn solve_periodic_cycle(
     selected_phase: f64,
     coefficient: f64,
     endpoints: &mut Vec<f64>,
+    samples: &mut Vec<f64>,
 ) -> Result<CellCycle, SeasonalThermalError> {
     let minimum = targets.iter().copied().fold(f64::INFINITY, f64::min);
     let maximum = targets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if minimum == maximum {
+        samples.clear();
+        samples.extend_from_slice(targets);
         return Ok(CellCycle::from_orbit(targets, minimum, 0.0, 0));
     }
     let mut initial = targets.iter().sum::<f64>() / targets.len() as f64;
@@ -440,8 +450,14 @@ fn solve_periodic_cycle(
         let end = *endpoints.last().expect("an orbit always has endpoints");
         let residual = end - initial;
         if residual.abs() <= FIXED_POINT_TOLERANCE_KELVIN {
+            samples.clear();
+            samples.extend(
+                endpoints
+                    .windows(2)
+                    .map(|interval| (interval[0] + interval[1]) * 0.5),
+            );
             return Ok(CellCycle::from_orbit(
-                &endpoints[..targets.len()],
+                samples,
                 sample_cycle(endpoints, selected_phase),
                 residual.abs(),
                 iteration,
@@ -458,9 +474,9 @@ fn solve_periodic_cycle(
 
 fn sample_cycle(endpoints: &[f64], phase: f64) -> f64 {
     let sample_count = endpoints.len() - 1;
-    let position = phase * sample_count as f64;
+    let position = phase.rem_euclid(1.0) * sample_count as f64;
     // rem_euclid can round a tiny negative phase to exactly 1.0.
-    let lower = position.floor() as usize % sample_count;
+    let lower = selected_sample_index(phase, sample_count);
     let fraction = position - position.floor();
     endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction
 }
@@ -615,6 +631,34 @@ mod tests {
         {
             assert!((thermal - radiative).abs() <= 1.0e-4);
         }
+        let sampler = OrbitalSampler::new(Planet::EARTH, 96);
+        let radiation =
+            RadiativeEquilibriumModel::new(RadiativeEquilibriumConfig::EARTHLIKE).unwrap();
+        let latitude_sine = f64::from(mesh.cell_centers[0].y / mesh.radius);
+        let expected_midpoint = radiation.temperature_kelvin(
+            daily_mean_at(latitude_sine, sampler.midpoint_states()[0]).watts_per_square_meter,
+        );
+        assert!(
+            (f64::from(thermal.annual_temperature_samples_kelvin[0]) - expected_midpoint).abs()
+                <= 1.0e-4
+        );
+    }
+
+    #[test]
+    fn inertial_annual_samples_interpolate_interval_midpoints() {
+        let targets = [250.0, 280.0, 300.0, 265.0];
+        let mut endpoints = Vec::new();
+        let mut samples = Vec::new();
+        let cycle =
+            solve_periodic_cycle(&targets, 0.3, 1.0e-8, &mut endpoints, &mut samples).unwrap();
+
+        assert_eq!(samples.len(), targets.len());
+        for (sample, interval) in samples.iter().zip(endpoints.windows(2)) {
+            assert!((sample - (interval[0] + interval[1]) * 0.5).abs() <= f64::EPSILON);
+        }
+        assert!(
+            (cycle.mean - samples.iter().sum::<f64>() / samples.len() as f64).abs() <= f64::EPSILON
+        );
     }
 
     #[test]

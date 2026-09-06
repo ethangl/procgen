@@ -1,4 +1,7 @@
-use crate::{ANNUAL_SAMPLE_RANGE, AreaWeightedSummary, ORBITAL_PERIOD_DAYS_RANGE, validate_range};
+use crate::{
+    ANNUAL_SAMPLE_RANGE, AreaWeightedSummary, ORBITAL_PERIOD_DAYS_RANGE, Surface,
+    orbit::selected_sample_index, validate_range,
+};
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::is_land;
 use std::{fmt, ops::RangeInclusive};
@@ -158,45 +161,85 @@ impl fmt::Display for CryosphereError {
 impl std::error::Error for CryosphereError {}
 
 #[derive(Clone, Copy, Default)]
-struct CellState {
+struct LandSnapshot {
+    snowfall_rate: f64,
+    snow_melt_rate: f64,
+    land_ice_ablation_potential_rate: f64,
     snow: f64,
-    sea_ice: f64,
 }
 
 #[derive(Clone, Copy, Default)]
-struct CycleBudget {
+struct LandCycle {
+    final_snow: f64,
     snowfall: f64,
     snow_melt: f64,
     land_ice_accumulation: f64,
     land_ice_ablation_potential: f64,
+    selected: LandSnapshot,
+}
+
+#[derive(Clone, Copy, Default)]
+struct OceanSnapshot {
+    snowfall_rate: f64,
+    sea_ice: f64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct OceanCycle {
+    final_sea_ice: f64,
+    snowfall: f64,
     sea_ice_growth: f64,
     sea_ice_melt: f64,
-    selected_snowfall_rate: f64,
-    selected_melt_rate: f64,
-    selected_land_ice_ablation_potential_rate: f64,
-    selected_snow: f64,
-    selected_sea_ice: f64,
+    selected: OceanSnapshot,
 }
 
 #[derive(Clone, Copy)]
 struct CellResult {
-    land: bool,
-    snowfall_rate: f32,
-    melt_rate: f32,
-    snow_cover: f32,
-    land_ice_cover: f32,
-    sea_ice_cover: f32,
-    snowfall: f32,
-    snow_melt: f32,
-    land_ice_accumulation: f32,
-    land_ice_ablation: f32,
-    sea_ice_growth: f32,
-    sea_ice_melt: f32,
+    surface: Surface,
+    snowfall_rate: f64,
+    melt_rate: f64,
+    snow_cover: f64,
+    land_ice_cover: f64,
+    sea_ice_cover: f64,
+    snowfall: f64,
+    snow_melt: f64,
+    land_ice_accumulation: f64,
+    land_ice_ablation: f64,
+    sea_ice_growth: f64,
+    sea_ice_melt: f64,
     iterations_used: usize,
     snow_closure: f64,
     sea_ice_closure: f64,
     snow_balance_error: f64,
     sea_ice_balance_error: f64,
+}
+
+impl CellResult {
+    fn validate(self) -> Result<Self, CryosphereError> {
+        if [
+            self.snowfall_rate,
+            self.melt_rate,
+            self.snow_cover,
+            self.land_ice_cover,
+            self.sea_ice_cover,
+            self.snowfall,
+            self.snow_melt,
+            self.land_ice_accumulation,
+            self.land_ice_ablation,
+            self.sea_ice_growth,
+            self.sea_ice_melt,
+            self.snow_closure,
+            self.sea_ice_closure,
+        ]
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0 || *value > f64::from(f32::MAX))
+            || !self.snow_balance_error.is_finite()
+            || !self.sea_ice_balance_error.is_finite()
+        {
+            return Err(CryosphereError::NumericalRange);
+        }
+        Ok(self)
+    }
 }
 
 pub fn derive_cryosphere(
@@ -205,181 +248,179 @@ pub fn derive_cryosphere(
     config: CryosphereConfig,
 ) -> Result<Cryosphere, CryosphereError> {
     validate(mesh, inputs, config)?;
-    let selected_sample = ((inputs.selected_orbital_phase.rem_euclid(1.0)
-        * inputs.annual_sample_count as f64)
-        .floor() as usize)
-        % inputs.annual_sample_count;
+    let selected_sample =
+        selected_sample_index(inputs.selected_orbital_phase, inputs.annual_sample_count);
     let step_days = inputs.orbital_period_days / inputs.annual_sample_count as f64;
     let mut results = Vec::with_capacity(mesh.cell_count());
     for cell in 0..mesh.cell_count() {
         let temperatures = &inputs.annual_temperature_samples_kelvin
             [cell * inputs.annual_sample_count..(cell + 1) * inputs.annual_sample_count];
-        results.push(solve_cell(
-            temperatures,
-            f64::from(inputs.precipitation_kg_per_m2_per_day[cell]),
-            is_land(inputs.final_elevation[cell]),
-            selected_sample,
-            step_days,
-            config,
-        )?);
+        let precipitation = f64::from(inputs.precipitation_kg_per_m2_per_day[cell]);
+        let surface = if is_land(inputs.final_elevation[cell]) {
+            Surface::Land
+        } else {
+            Surface::Ocean
+        };
+        results.push(match surface {
+            Surface::Land => solve_land_cell(
+                temperatures,
+                precipitation,
+                selected_sample,
+                step_days,
+                config,
+            )?,
+            Surface::Ocean => solve_ocean_cell(
+                temperatures,
+                precipitation,
+                selected_sample,
+                step_days,
+                config,
+            )?,
+        });
     }
-    finish(mesh, &results)
+    Ok(finish(mesh, &results))
 }
 
-fn solve_cell(
+fn solve_land_cell(
     temperatures: &[f32],
     precipitation_rate: f64,
-    land: bool,
     selected_sample: usize,
     step_days: f64,
     config: CryosphereConfig,
 ) -> Result<CellResult, CryosphereError> {
-    let (mut state, iterations_used) = solve_periodic_state(
+    let (initial_snow, iterations_used) =
+        solve_periodic_reservoir(config.seasonal_snow_capacity_kg_per_m2, config, |initial| {
+            land_cycle(
+                initial,
+                temperatures,
+                precipitation_rate,
+                selected_sample,
+                step_days,
+                config,
+            )
+            .final_snow
+        })?;
+    let cycle = land_cycle(
+        initial_snow,
         temperatures,
         precipitation_rate,
-        land,
-        selected_sample,
-        step_days,
-        config,
-    )?;
-    let start = state;
-    let budget = simulate_cycle(
-        &mut state,
-        temperatures,
-        precipitation_rate,
-        land,
         selected_sample,
         step_days,
         config,
     );
-    let snow_closure = (state.snow - start.snow).abs();
-    let sea_ice_closure = (state.sea_ice - start.sea_ice).abs();
-    let land_ice_cover = if !land || budget.land_ice_accumulation == 0.0 {
+    let land_ice_cover = if cycle.land_ice_accumulation == 0.0 {
         0.0
-    } else if budget.land_ice_ablation_potential == 0.0 {
+    } else if cycle.land_ice_ablation_potential == 0.0 {
         1.0
     } else {
-        (budget.land_ice_accumulation / budget.land_ice_ablation_potential).min(1.0)
+        (cycle.land_ice_accumulation / cycle.land_ice_ablation_potential).min(1.0)
     };
-    let land_ice_ablation = budget.land_ice_ablation_potential * land_ice_cover;
-    let result = CellResult {
-        land,
-        snowfall_rate: budget.selected_snowfall_rate as f32,
-        melt_rate: (budget.selected_melt_rate
-            + budget.selected_land_ice_ablation_potential_rate * land_ice_cover)
-            as f32,
-        snow_cover: if land {
-            (budget.selected_snow / config.full_snow_cover_kg_per_m2).min(1.0) as f32
-        } else {
-            0.0
-        },
-        land_ice_cover: land_ice_cover as f32,
-        sea_ice_cover: if land {
-            0.0
-        } else {
-            budget.selected_sea_ice as f32
-        },
-        snowfall: budget.snowfall as f32,
-        snow_melt: budget.snow_melt as f32,
-        land_ice_accumulation: budget.land_ice_accumulation as f32,
-        land_ice_ablation: land_ice_ablation as f32,
-        sea_ice_growth: budget.sea_ice_growth as f32,
-        sea_ice_melt: budget.sea_ice_melt as f32,
+    let land_ice_ablation = cycle.land_ice_ablation_potential * land_ice_cover;
+    CellResult {
+        surface: Surface::Land,
+        snowfall_rate: cycle.selected.snowfall_rate,
+        melt_rate: cycle.selected.snow_melt_rate
+            + cycle.selected.land_ice_ablation_potential_rate * land_ice_cover,
+        snow_cover: (cycle.selected.snow / config.full_snow_cover_kg_per_m2).min(1.0),
+        land_ice_cover,
+        sea_ice_cover: 0.0,
+        snowfall: cycle.snowfall,
+        snow_melt: cycle.snow_melt,
+        land_ice_accumulation: cycle.land_ice_accumulation,
+        land_ice_ablation,
+        sea_ice_growth: 0.0,
+        sea_ice_melt: 0.0,
         iterations_used,
-        snow_closure,
-        sea_ice_closure,
-        snow_balance_error: if land {
-            budget.snowfall
-                - budget.snow_melt
-                - budget.land_ice_accumulation
-                - (state.snow - start.snow)
-        } else {
-            0.0
-        },
-        sea_ice_balance_error: budget.sea_ice_growth
-            - budget.sea_ice_melt
-            - (state.sea_ice - start.sea_ice),
-    };
-    if [
-        result.snowfall_rate,
-        result.melt_rate,
-        result.snow_cover,
-        result.land_ice_cover,
-        result.sea_ice_cover,
-        result.snowfall,
-        result.snow_melt,
-        result.land_ice_accumulation,
-        result.land_ice_ablation,
-        result.sea_ice_growth,
-        result.sea_ice_melt,
-    ]
-    .iter()
-    .any(|value| !value.is_finite() || *value < 0.0)
-    {
-        return Err(CryosphereError::NumericalRange);
+        snow_closure: (cycle.final_snow - initial_snow).abs(),
+        sea_ice_closure: 0.0,
+        snow_balance_error: cycle.snowfall
+            - cycle.snow_melt
+            - cycle.land_ice_accumulation
+            - (cycle.final_snow - initial_snow),
+        sea_ice_balance_error: 0.0,
     }
-    Ok(result)
+    .validate()
 }
 
-fn solve_periodic_state(
+fn solve_ocean_cell(
     temperatures: &[f32],
     precipitation_rate: f64,
-    land: bool,
     selected_sample: usize,
     step_days: f64,
     config: CryosphereConfig,
-) -> Result<(CellState, usize), CryosphereError> {
-    let value = |state: CellState| if land { state.snow } else { state.sea_ice };
-    let state = |value| {
-        if land {
-            CellState {
-                snow: value,
-                sea_ice: 0.0,
-            }
-        } else {
-            CellState {
-                snow: 0.0,
-                sea_ice: value,
-            }
-        }
-    };
-    let residual = |initial: f64| {
-        let mut final_state = state(initial);
-        simulate_cycle(
-            &mut final_state,
+) -> Result<CellResult, CryosphereError> {
+    let (initial_sea_ice, iterations_used) = solve_periodic_reservoir(1.0, config, |initial| {
+        ocean_cycle(
+            initial,
             temperatures,
             precipitation_rate,
-            land,
             selected_sample,
             step_days,
             config,
-        );
-        value(final_state) - initial
-    };
+        )
+        .final_sea_ice
+    })?;
+    let cycle = ocean_cycle(
+        initial_sea_ice,
+        temperatures,
+        precipitation_rate,
+        selected_sample,
+        step_days,
+        config,
+    );
+    CellResult {
+        surface: Surface::Ocean,
+        snowfall_rate: cycle.selected.snowfall_rate,
+        melt_rate: 0.0,
+        snow_cover: 0.0,
+        land_ice_cover: 0.0,
+        sea_ice_cover: cycle.selected.sea_ice,
+        snowfall: cycle.snowfall,
+        snow_melt: 0.0,
+        land_ice_accumulation: 0.0,
+        land_ice_ablation: 0.0,
+        sea_ice_growth: cycle.sea_ice_growth,
+        sea_ice_melt: cycle.sea_ice_melt,
+        iterations_used,
+        snow_closure: 0.0,
+        sea_ice_closure: (cycle.final_sea_ice - initial_sea_ice).abs(),
+        snow_balance_error: 0.0,
+        sea_ice_balance_error: cycle.sea_ice_growth
+            - cycle.sea_ice_melt
+            - (cycle.final_sea_ice - initial_sea_ice),
+    }
+    .validate()
+}
 
+/// Bisects an initial reservoir in `[0, capacity]` until one complete annual
+/// cycle returns to that initial value.
+fn solve_periodic_reservoir(
+    capacity: f64,
+    config: CryosphereConfig,
+    cycle: impl Fn(f64) -> f64,
+) -> Result<(f64, usize), CryosphereError> {
+    let residual = |initial| cycle(initial) - initial;
     let mut lower = 0.0;
-    let mut upper = if land {
-        config.seasonal_snow_capacity_kg_per_m2
-    } else {
-        1.0
-    };
+    let mut upper = capacity;
     let lower_residual = residual(lower);
     if lower_residual.abs() <= config.closure_tolerance {
-        return Ok((state(lower), 1));
+        return Ok((lower, 1));
     }
     let upper_residual = residual(upper);
     if upper_residual.abs() <= config.closure_tolerance {
-        return Ok((state(upper), 1));
+        return Ok((upper, 1));
     }
-    if lower_residual < 0.0 || upper_residual > 0.0 {
-        return Err(CryosphereError::PeriodicSteadyState);
-    }
+    debug_assert!(lower_residual >= 0.0, "an empty reservoir cannot lose mass");
+    debug_assert!(
+        upper_residual <= 0.0,
+        "a full bounded reservoir cannot gain mass"
+    );
 
     for iteration in 1..=config.maximum_iterations {
         let midpoint = (lower + upper) * 0.5;
         let midpoint_residual = residual(midpoint);
         if midpoint_residual.abs() <= config.closure_tolerance {
-            return Ok((state(midpoint), iteration));
+            return Ok((midpoint, iteration));
         }
         if midpoint_residual > 0.0 {
             lower = midpoint;
@@ -390,87 +431,104 @@ fn solve_periodic_state(
     Err(CryosphereError::PeriodicSteadyState)
 }
 
-fn simulate_cycle(
-    state: &mut CellState,
+fn land_cycle(
+    initial_snow: f64,
     temperatures: &[f32],
     precipitation_rate: f64,
-    land: bool,
     selected_sample: usize,
     step_days: f64,
     config: CryosphereConfig,
-) -> CycleBudget {
-    let mut budget = CycleBudget::default();
+) -> LandCycle {
+    let mut snow = initial_snow;
+    let mut cycle = LandCycle::default();
     for (sample, &temperature) in temperatures.iter().enumerate() {
         let temperature = f64::from(temperature);
-        let snowfall_rate = if temperature <= config.snowfall_temperature_kelvin {
-            precipitation_rate
+        let snowfall_rate = snowfall_rate(temperature, precipitation_rate, config);
+        let snowfall = snowfall_rate * step_days;
+        cycle.snowfall += snowfall;
+        snow += snowfall;
+
+        let warm_degree_days = (temperature - config.melt_temperature_kelvin).max(0.0) * step_days;
+        let snow_melt = snow.min(config.snow_melt_kg_per_m2_per_kelvin_day * warm_degree_days);
+        snow -= snow_melt;
+        cycle.snow_melt += snow_melt;
+        let snow_degree_days = if config.snow_melt_kg_per_m2_per_kelvin_day > 0.0 {
+            snow_melt / config.snow_melt_kg_per_m2_per_kelvin_day
         } else {
             0.0
         };
-        budget.snowfall += snowfall_rate * step_days;
-        let mut melt_rate = 0.0;
-        if land {
-            state.snow += snowfall_rate * step_days;
-            let snow_melt_potential = config.snow_melt_kg_per_m2_per_kelvin_day
-                * (temperature - config.melt_temperature_kelvin).max(0.0)
-                * step_days;
-            let snow_melt = state.snow.min(snow_melt_potential);
-            state.snow -= snow_melt;
-            budget.snow_melt += snow_melt;
-            melt_rate = snow_melt / step_days;
-            let unused_warmth_fraction = if snow_melt_potential > 0.0 {
-                (snow_melt_potential - snow_melt) / snow_melt_potential
-            } else {
-                0.0
-            };
-            let land_ice_ablation_potential = (temperature - config.melt_temperature_kelvin)
-                .max(0.0)
-                * config.land_ice_melt_kg_per_m2_per_kelvin_day
-                * step_days
-                * unused_warmth_fraction;
-            budget.land_ice_ablation_potential += land_ice_ablation_potential;
-            let accumulation = (state.snow - config.seasonal_snow_capacity_kg_per_m2).max(0.0);
-            state.snow -= accumulation;
-            budget.land_ice_accumulation += accumulation;
-        } else {
-            let growth = (config.melt_temperature_kelvin - temperature).max(0.0)
-                * config.sea_ice_growth_fraction_per_kelvin_day
-                * step_days;
-            let actual_growth = growth.min(1.0 - state.sea_ice);
-            state.sea_ice += actual_growth;
-            budget.sea_ice_growth += actual_growth;
-            let melt = (temperature - config.melt_temperature_kelvin).max(0.0)
-                * config.sea_ice_melt_fraction_per_kelvin_day
-                * step_days;
-            let actual_melt = melt.min(state.sea_ice);
-            state.sea_ice -= actual_melt;
-            budget.sea_ice_melt += actual_melt;
-        }
+        let land_ice_ablation_potential = (warm_degree_days - snow_degree_days).max(0.0)
+            * config.land_ice_melt_kg_per_m2_per_kelvin_day;
+        cycle.land_ice_ablation_potential += land_ice_ablation_potential;
+
+        let accumulation = (snow - config.seasonal_snow_capacity_kg_per_m2).max(0.0);
+        snow -= accumulation;
+        cycle.land_ice_accumulation += accumulation;
         if sample == selected_sample {
-            budget.selected_snowfall_rate = snowfall_rate;
-            budget.selected_melt_rate = melt_rate;
-            budget.selected_land_ice_ablation_potential_rate = if land {
-                let warm_degree_days = (temperature - config.melt_temperature_kelvin).max(0.0);
-                let snow_melt_potential =
-                    config.snow_melt_kg_per_m2_per_kelvin_day * warm_degree_days * step_days;
-                let unused_fraction = if snow_melt_potential > 0.0 {
-                    (snow_melt_potential - melt_rate * step_days) / snow_melt_potential
-                } else {
-                    0.0
-                };
-                warm_degree_days * config.land_ice_melt_kg_per_m2_per_kelvin_day * unused_fraction
-            } else {
-                0.0
+            cycle.selected = LandSnapshot {
+                snowfall_rate,
+                snow_melt_rate: snow_melt / step_days,
+                land_ice_ablation_potential_rate: land_ice_ablation_potential / step_days,
+                snow,
             };
-            budget.selected_snow = state.snow;
-            budget.selected_sea_ice = state.sea_ice;
         }
     }
-    budget
+    cycle.final_snow = snow;
+    cycle
 }
 
-fn finish(mesh: &SphereMesh, results: &[CellResult]) -> Result<Cryosphere, CryosphereError> {
-    let field = |select: fn(&CellResult) -> f32| results.iter().map(select).collect::<Vec<_>>();
+fn ocean_cycle(
+    initial_sea_ice: f64,
+    temperatures: &[f32],
+    precipitation_rate: f64,
+    selected_sample: usize,
+    step_days: f64,
+    config: CryosphereConfig,
+) -> OceanCycle {
+    let mut sea_ice = initial_sea_ice;
+    let mut cycle = OceanCycle::default();
+    for (sample, &temperature) in temperatures.iter().enumerate() {
+        let temperature = f64::from(temperature);
+        let snowfall_rate = snowfall_rate(temperature, precipitation_rate, config);
+        cycle.snowfall += snowfall_rate * step_days;
+        let growth = (config.melt_temperature_kelvin - temperature).max(0.0)
+            * config.sea_ice_growth_fraction_per_kelvin_day
+            * step_days;
+        let actual_growth = growth.min(1.0 - sea_ice);
+        sea_ice += actual_growth;
+        cycle.sea_ice_growth += actual_growth;
+        let melt = (temperature - config.melt_temperature_kelvin).max(0.0)
+            * config.sea_ice_melt_fraction_per_kelvin_day
+            * step_days;
+        let actual_melt = melt.min(sea_ice);
+        sea_ice -= actual_melt;
+        cycle.sea_ice_melt += actual_melt;
+        if sample == selected_sample {
+            cycle.selected = OceanSnapshot {
+                snowfall_rate,
+                sea_ice,
+            };
+        }
+    }
+    cycle.final_sea_ice = sea_ice;
+    cycle
+}
+
+fn snowfall_rate(temperature: f64, precipitation_rate: f64, config: CryosphereConfig) -> f64 {
+    if temperature <= config.snowfall_temperature_kelvin {
+        precipitation_rate
+    } else {
+        0.0
+    }
+}
+
+fn finish(mesh: &SphereMesh, results: &[CellResult]) -> Cryosphere {
+    let field = |select: fn(&CellResult) -> f64| {
+        results
+            .iter()
+            .map(|value| select(value) as f32)
+            .collect::<Vec<_>>()
+    };
     let snowfall_rate = field(|value| value.snowfall_rate);
     let melt_rate = field(|value| value.melt_rate);
     let snow_cover = field(|value| value.snow_cover);
@@ -484,8 +542,8 @@ fn finish(mesh: &SphereMesh, results: &[CellResult]) -> Result<Cryosphere, Cryos
         field(|value| value.land_ice_accumulation - value.land_ice_ablation);
     let annual_sea_ice_growth = field(|value| value.sea_ice_growth);
     let annual_sea_ice_melt = field(|value| value.sea_ice_melt);
-    let snow_balance_errors = field(|value| value.snow_balance_error as f32);
-    let sea_ice_balance_errors = field(|value| value.sea_ice_balance_error as f32);
+    let snow_balance_errors = field(|value| value.snow_balance_error);
+    let sea_ice_balance_errors = field(|value| value.sea_ice_balance_error);
     let summary = |values: &[f32]| AreaWeightedSummary::from_field(mesh, values);
     let diagnostics = CryosphereDiagnostics {
         selected_snowfall_kg_per_m2_per_day: summary(&snowfall_rate),
@@ -499,8 +557,14 @@ fn finish(mesh: &SphereMesh, results: &[CellResult]) -> Result<Cryosphere, Cryos
         annual_land_ice_ablation_kg_per_m2: summary(&annual_land_ice_ablation),
         annual_sea_ice_growth_fraction: summary(&annual_sea_ice_growth),
         annual_sea_ice_melt_fraction: summary(&annual_sea_ice_melt),
-        land_cell_count: results.iter().filter(|value| value.land).count(),
-        ocean_cell_count: results.iter().filter(|value| !value.land).count(),
+        land_cell_count: results
+            .iter()
+            .filter(|value| value.surface == Surface::Land)
+            .count(),
+        ocean_cell_count: results
+            .iter()
+            .filter(|value| value.surface == Surface::Ocean)
+            .count(),
         snow_covered_cell_count: snow_cover.iter().filter(|&&value| value > 0.0).count(),
         land_ice_cell_count: land_ice_cover.iter().filter(|&&value| value > 0.0).count(),
         sea_ice_cell_count: sea_ice_cover.iter().filter(|&&value| value > 0.0).count(),
@@ -521,14 +585,14 @@ fn finish(mesh: &SphereMesh, results: &[CellResult]) -> Result<Cryosphere, Cryos
         land_ice_mass_balance_kg_per_m2: mesh.area_weighted_mean(&annual_land_ice_balance),
         sea_ice_cover_balance_error: mesh.area_weighted_mean(&sea_ice_balance_errors),
     };
-    Ok(Cryosphere {
+    Cryosphere {
         cell_snowfall_kg_per_m2_per_day: snowfall_rate,
         cell_melt_kg_per_m2_per_day: melt_rate,
         cell_snow_cover_fraction: snow_cover,
         cell_land_ice_cover_fraction: land_ice_cover,
         cell_sea_ice_cover_fraction: sea_ice_cover,
         diagnostics,
-    })
+    }
 }
 
 fn validate(
@@ -617,11 +681,6 @@ fn validate(
         config.land_ice_melt_kg_per_m2_per_kelvin_day,
     ] {
         validate_range(rate, &CRYOSPHERE_RATE_RANGE, CryosphereError::MeltRate)?;
-    }
-    if config.snow_melt_kg_per_m2_per_kelvin_day == 0.0
-        && config.land_ice_melt_kg_per_m2_per_kelvin_day > 0.0
-    {
-        return Err(CryosphereError::MeltRate);
     }
     for rate in [
         config.sea_ice_growth_fraction_per_kelvin_day,
@@ -753,6 +812,26 @@ mod tests {
         );
         assert_eq!(result.diagnostics.snow_covered_cell_count, 0);
         assert_eq!(result.diagnostics.land_ice_cell_count, 0);
+    }
+
+    #[test]
+    fn land_ice_melt_does_not_require_a_nonzero_snow_melt_factor() {
+        let result = solve_land_cell(
+            &[250.0, 290.0, 250.0, 290.0],
+            1.0,
+            1,
+            90.0,
+            CryosphereConfig {
+                snow_melt_kg_per_m2_per_kelvin_day: 0.0,
+                land_ice_melt_kg_per_m2_per_kelvin_day: 1.0,
+                ..CryosphereConfig::EARTHLIKE
+            },
+        )
+        .unwrap();
+
+        assert!(result.land_ice_accumulation > 0.0);
+        assert!(result.land_ice_ablation > 0.0);
+        assert!(result.land_ice_cover > 0.0);
     }
 
     #[test]

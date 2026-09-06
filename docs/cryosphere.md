@@ -6,8 +6,11 @@ pipeline. Its only inputs are the sampled annual temperature cycle, the current
 precipitation climatology, final adjusted elevation, and the existing sea-level
 land predicate. Ice is never assigned from latitude.
 
-The seasonal thermal stage exposes the cell-major annual samples it already
-solves. The cryosphere advances one uniform interval per sample. The current
+The seasonal thermal stage exposes cell-major midpoint temperatures for its
+uniform annual intervals. The cryosphere advances one interval per sample. A
+shared orbital helper selects the interval containing the requested phase; the
+cryosphere reports the reservoir after that complete interval rather than
+interpolating between two reservoir states. The current
 precipitation rate is held constant through that cycle; temperature determines
 whether it falls as snow. On land, snowfall fills a bounded seasonal snow
 reservoir, positive degree days melt available snow, and persistent overflow is

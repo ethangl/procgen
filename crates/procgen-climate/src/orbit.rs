@@ -28,6 +28,12 @@ impl OrbitalSampler {
     }
 }
 
+/// Returns the uniform annual interval containing `phase`.
+pub(crate) fn selected_sample_index(phase: f64, sample_count: usize) -> usize {
+    debug_assert!(sample_count > 0);
+    ((phase.rem_euclid(1.0) * sample_count as f64).floor() as usize) % sample_count
+}
+
 pub(crate) fn daily_mean_at(latitude_sine: f64, state: OrbitalState) -> DailyMeanInsolation {
     let latitude_sine = latitude_sine.clamp(-1.0, 1.0);
     let latitude_cosine = (1.0 - latitude_sine * latitude_sine).sqrt();
@@ -102,4 +108,19 @@ fn solve_kepler(mean_anomaly: f64, eccentricity: f64) -> f64 {
         }
     }
     (lower + upper) * 0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_sample_interval_wraps_with_orbital_phase() {
+        assert_eq!(selected_sample_index(0.0, 4), 0);
+        assert_eq!(selected_sample_index(0.249, 4), 0);
+        assert_eq!(selected_sample_index(0.25, 4), 1);
+        assert_eq!(selected_sample_index(1.0, 4), 0);
+        assert_eq!(selected_sample_index(-0.01, 4), 3);
+        assert_eq!(selected_sample_index(-f64::MIN_POSITIVE, 4), 0);
+    }
 }
