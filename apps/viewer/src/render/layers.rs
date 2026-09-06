@@ -4,10 +4,10 @@ use super::assets::{
     volcanic_arc_asset, voronoi_asset, wind_asset,
 };
 use crate::model::GeneratedWorld;
-use bevy::prelude::{GizmoAsset, Vec3};
+use bevy::prelude::{Component, GizmoAsset, Vec3};
 use procgen_tectonics::SEA_LEVEL;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum DiagnosticLayer {
     Delaunay,
@@ -51,8 +51,8 @@ pub enum DiagnosticLayer {
     Motion,
 }
 
-pub(super) const DRAW_RADIUS_BASE: f32 = 1.0;
-pub(super) const DRAW_RADIUS_STEP: f32 = 0.004;
+const DRAW_RADIUS_BASE: f32 = 1.0;
+const PLATE_BORDER_RADIUS_OFFSET: f32 = 0.002;
 const FIELD_LINE_WIDTH: f32 = 3.5;
 const OVERLAY_LINE_WIDTH: f32 = 3.8;
 
@@ -226,12 +226,12 @@ impl LayerSpec {
         }
     }
 
-    fn build(self, world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+    fn build(self, world: &GeneratedWorld) -> GizmoAsset {
         match self.source {
             Source::Scalar { values, stops } => {
-                scalar_field_asset(&world.voronoi, values(world), stops, radius)
+                scalar_field_asset(&world.voronoi, values(world), stops, DRAW_RADIUS_BASE)
             }
-            Source::Custom(build) => build(world, radius),
+            Source::Custom(build) => build(world, DRAW_RADIUS_BASE),
         }
     }
 }
@@ -296,8 +296,8 @@ impl DiagnosticLayer {
         self.spec().line_width
     }
 
-    pub(super) fn build_asset(self, world: &GeneratedWorld, radius: f32) -> GizmoAsset {
-        self.spec().build(world, radius)
+    pub(super) fn build_asset(self, world: &GeneratedWorld) -> GizmoAsset {
+        self.spec().build(world)
     }
 
     pub(super) const fn depth_bucket(self) -> DepthBucket {
@@ -316,6 +316,10 @@ impl DiagnosticLayer {
         }
     }
 
+    pub(super) const fn depth_order(self) -> (DepthBucket, usize) {
+        (self.depth_bucket(), self.index())
+    }
+
     fn spec(self) -> LayerSpec {
         match self {
             Self::Delaunay => LayerSpec::custom("Delaunay", 1.1, |world, radius| {
@@ -325,8 +329,8 @@ impl DiagnosticLayer {
                 voronoi_asset(&world.voronoi, radius)
             }),
             Self::Plates => LayerSpec::custom("Tectonic plates", 2.4, |world, radius| {
-                // White borders remain legible when plates are the only visible layer.
-                let border_radius = radius + DRAW_RADIUS_STEP * 0.5;
+                // Plate borders are a local detail of this asset rather than a layer-level depth.
+                let border_radius = radius + PLATE_BORDER_RADIUS_OFFSET;
                 plate_asset(&world.voronoi, &world.plates, radius, border_radius)
             }),
             Self::Crust => LayerSpec::custom("Crust classes", FIELD_LINE_WIDTH, |world, radius| {

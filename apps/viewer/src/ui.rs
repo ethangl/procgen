@@ -39,9 +39,7 @@ fn viewer_ui(
                 }
 
                 ui.separator();
-                for (layer, visible) in layer_controls(ui, &layers) {
-                    layers.set_visible(layer, visible);
-                }
+                layer_controls(ui, layers.reborrow());
 
                 ui.separator();
                 summary::world_summary(ui, &world);
@@ -55,16 +53,14 @@ fn viewer_ui(
     Ok(())
 }
 
-fn layer_controls(ui: &mut egui::Ui, layers: &LayerSettings) -> Vec<(DiagnosticLayer, bool)> {
+fn layer_controls(ui: &mut egui::Ui, mut layers: Mut<LayerSettings>) {
     ui.label("Layers");
-    let mut changes = Vec::new();
     for &layer in DiagnosticLayer::ALL {
         let mut visible = layers.is_visible(layer);
         if ui.checkbox(&mut visible, layer.label()).changed() {
-            changes.push((layer, visible));
+            layers.set_visible(layer, visible);
         }
     }
-    changes
 }
 
 fn section(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {

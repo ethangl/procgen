@@ -5,7 +5,8 @@ pub use layers::DiagnosticLayer;
 
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
-use layers::{DRAW_RADIUS_BASE, DRAW_RADIUS_STEP};
+
+const DEPTH_SCALE_STEP: f32 = 0.004;
 
 #[derive(Resource)]
 pub struct LayerSettings {
@@ -21,17 +22,16 @@ impl LayerSettings {
         self.visible[layer.index()] = visible;
     }
 
-    fn draw_radius(&self, layer: DiagnosticLayer) -> f32 {
-        let layer_order = (layer.depth_bucket(), layer.index());
+    fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
+        let layer_order = layer.depth_order();
         let visible_layers_before = DiagnosticLayer::ALL
             .iter()
             .filter(|&&candidate| {
-                self.is_visible(candidate)
-                    && (candidate.depth_bucket(), candidate.index()) < layer_order
+                self.is_visible(candidate) && candidate.depth_order() < layer_order
             })
             .count();
 
-        DRAW_RADIUS_BASE + visible_layers_before as f32 * DRAW_RADIUS_STEP
+        1.0 + visible_layers_before as f32 * DEPTH_SCALE_STEP
     }
 }
 
@@ -45,9 +45,6 @@ impl Default for LayerSettings {
 
 #[derive(Resource)]
 struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
-
-#[derive(Component)]
-struct DiagnosticLayerEntity(DiagnosticLayer);
 
 pub struct DiagnosticRenderPlugin;
 
@@ -103,7 +100,7 @@ fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: Diagn
             },
             depth_bias: -0.0005,
         },
-        DiagnosticLayerEntity(layer),
+        layer,
         RenderLayers::layer(layer.render_layer()),
         Transform::IDENTITY,
     ));
@@ -134,19 +131,17 @@ fn rebuild_diagnostic_assets(
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
     for &layer in DiagnosticLayer::ALL {
-        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() =
-            layer.build_asset(&world, DRAW_RADIUS_BASE);
+        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build_asset(&world);
     }
 }
 
 fn sync_layer_render_state(
     settings: Res<LayerSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
-    mut layer_transforms: Query<(&DiagnosticLayerEntity, &mut Transform)>,
+    mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
     for (layer, mut transform) in &mut layer_transforms {
-        let scale = settings.draw_radius(layer.0) / DRAW_RADIUS_BASE;
-        transform.scale = Vec3::splat(scale);
+        transform.scale = Vec3::splat(settings.depth_scale(*layer));
     }
 
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
@@ -165,20 +160,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn draw_radii_only_count_visible_layers() {
+    fn depth_scales_only_count_visible_layers() {
         let mut settings = LayerSettings {
             visible: [false; DiagnosticLayer::COUNT],
         };
         settings.set_visible(DiagnosticLayer::Motion, true);
 
-        assert_eq!(
-            settings.draw_radius(DiagnosticLayer::Motion),
-            DRAW_RADIUS_BASE
-        );
+        assert_eq!(settings.depth_scale(DiagnosticLayer::Motion), 1.0);
     }
 
     #[test]
-    fn draw_radii_follow_semantic_bucket_order() {
+    fn depth_scales_follow_semantic_bucket_order() {
         let mut settings = LayerSettings {
             visible: [false; DiagnosticLayer::COUNT],
         };
@@ -187,16 +179,16 @@ mod tests {
         settings.set_visible(DiagnosticLayer::IsostaticElevation, true);
 
         assert_eq!(
-            settings.draw_radius(DiagnosticLayer::IsostaticElevation),
-            DRAW_RADIUS_BASE
+            settings.depth_scale(DiagnosticLayer::IsostaticElevation),
+            1.0
         );
         assert_eq!(
-            settings.draw_radius(DiagnosticLayer::Boundaries),
-            DRAW_RADIUS_BASE + DRAW_RADIUS_STEP
+            settings.depth_scale(DiagnosticLayer::Boundaries),
+            1.0 + DEPTH_SCALE_STEP
         );
         assert_eq!(
-            settings.draw_radius(DiagnosticLayer::Motion),
-            DRAW_RADIUS_BASE + 2.0 * DRAW_RADIUS_STEP
+            settings.depth_scale(DiagnosticLayer::Motion),
+            1.0 + 2.0 * DEPTH_SCALE_STEP
         );
     }
 }
