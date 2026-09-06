@@ -93,12 +93,6 @@ impl Planet {
     }
 }
 
-impl Default for Planet {
-    fn default() -> Self {
-        Self::EARTH
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

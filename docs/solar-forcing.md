@@ -5,8 +5,8 @@ the authoritative spherical mesh. `procgen-planet` owns the minimal stellar and
 orbital inputs used by the calculation and supplies an Earth preset. The
 `procgen-climate` stage contains no Earth-specific constants.
 
-Orbital phase is the fraction of elapsed orbital time since periapsis. The stage
-solves Kepler's equation, derives orbital distance and solar declination, then
+Orbital phase is elapsed orbital time in orbits since periapsis and wraps
+periodically. The stage solves Kepler's equation, derives orbital distance and solar declination, then
 computes daily-mean insolation for each cell from its Y-up latitude. Polar night
 is exactly zero and polar day uses a full-day sunset hour angle. Values are in
 watts per square meter and are clamped to the physically available stellar flux.

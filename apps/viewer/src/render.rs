@@ -256,12 +256,21 @@ impl DiagnosticLayer {
                 &ELEVATION_COLOR_STOPS,
                 radius,
             ),
-            Self::Insolation => normalized_scalar_field_asset(
-                &world.voronoi,
-                &world.solar_forcing.daily_mean_insolation,
-                &INSOLATION_COLOR_STOPS,
-                radius,
-            ),
+            Self::Insolation => {
+                let maximum = world
+                    .solar_forcing
+                    .diagnostics
+                    .daily_mean
+                    .maximum_watts_per_square_meter;
+                let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
+                let normalized = world
+                    .solar_forcing
+                    .daily_mean_insolation
+                    .iter()
+                    .map(|value| value * reciprocal)
+                    .collect::<Vec<_>>();
+                scalar_field_asset(&world.voronoi, &normalized, &INSOLATION_COLOR_STOPS, radius)
+            }
             Self::Hotspots => scalar_field_asset(
                 &world.voronoi,
                 &world.hotspots.cell_intensities,
@@ -608,21 +617,6 @@ fn scalar_field_asset(
         Some((
             radius,
             scalar_edge_color(edge.cells.map(|cell| values[cell]), stops),
-        ))
-    })
-}
-
-fn normalized_scalar_field_asset(
-    mesh: &SphereMesh,
-    values: &[f32],
-    stops: &[(f32, Vec3)],
-    radius: f32,
-) -> GizmoAsset {
-    let maximum = values.iter().copied().fold(0.0_f32, f32::max).max(1.0);
-    voronoi_edge_asset(mesh, |_, edge| {
-        Some((
-            radius,
-            scalar_edge_color(edge.cells.map(|cell| values[cell] / maximum), stops),
         ))
     })
 }

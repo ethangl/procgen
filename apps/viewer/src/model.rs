@@ -46,6 +46,7 @@ pub struct GenerationSettings {
     pub basins: SedimentaryBasinFieldConfig,
     pub geological_elevation: GeologicalElevationConfig,
     pub isostasy: IsostaticAdjustmentConfig,
+    /// Explicit preset selection; editable planet inputs are outside this slice.
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
 }

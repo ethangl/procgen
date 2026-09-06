@@ -109,7 +109,12 @@ fn drag_value<T: egui::emath::Numeric>(
     });
 }
 
-fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
+fn slider<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+) {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(egui::Slider::new(value, range));

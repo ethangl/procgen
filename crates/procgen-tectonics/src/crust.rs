@@ -61,8 +61,7 @@ impl CrustClassification {
             .filter(|(_, class)| **class == CrustClass::Oceanic)
             .map(|(&area, _)| area)
             .sum();
-        let total_area: f64 = areas.iter().sum();
-        (ocean_area / total_area) as f32
+        (ocean_area / mesh.total_area()) as f32
     }
 }
 
@@ -108,8 +107,7 @@ pub fn classify_crust(
     let plate_count = partition.plate_count;
     let plate_areas = plate_areas(mesh, partition);
 
-    let total_area: f64 = plate_areas.iter().sum();
-    let target_area = total_area * f64::from(config.target_ocean_fraction);
+    let target_area = mesh.total_area() * f64::from(config.target_ocean_fraction);
     let random = RandomStream::new(config.seed, CRUST_PLATE_ORDER);
     let mut plate_order: Vec<_> = (0..plate_count).collect();
     plate_order.sort_unstable_by_key(|&plate| (random.sample_u64(plate as u64, 0), plate));

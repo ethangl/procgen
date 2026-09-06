@@ -1,6 +1,7 @@
 use super::{field_summary_stats, format_field_range, millis, stat, stat_grid};
 use crate::model::GeneratedWorld;
 use bevy_egui::egui;
+use procgen_climate::InsolationSummary;
 use procgen_geology::ElevationEffectDiagnostics;
 use procgen_tectonics::{BoundaryClass, CrustClass};
 
@@ -53,44 +54,8 @@ fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 diagnostics.stellar_flux_watts_per_square_meter
             ),
         );
-        stat(
-            ui,
-            "Daily range",
-            format!(
-                "{:.1} - {:.1} W/m2",
-                diagnostics.daily_mean.minimum_watts_per_square_meter,
-                diagnostics.daily_mean.maximum_watts_per_square_meter
-            ),
-        );
-        stat(
-            ui,
-            "Daily global mean",
-            format!(
-                "{:.1} W/m2",
-                diagnostics
-                    .daily_mean
-                    .area_weighted_mean_watts_per_square_meter
-            ),
-        );
-        stat(
-            ui,
-            "Annual range",
-            format!(
-                "{:.1} - {:.1} W/m2",
-                diagnostics.annual_mean.minimum_watts_per_square_meter,
-                diagnostics.annual_mean.maximum_watts_per_square_meter
-            ),
-        );
-        stat(
-            ui,
-            "Annual global mean",
-            format!(
-                "{:.1} W/m2",
-                diagnostics
-                    .annual_mean
-                    .area_weighted_mean_watts_per_square_meter
-            ),
-        );
+        insolation_stats(ui, "Daily", &diagnostics.daily_mean);
+        insolation_stats(ui, "Annual", &diagnostics.annual_mean);
         stat(ui, "Polar-night cells", diagnostics.polar_night_cell_count);
         stat(ui, "Polar-day cells", diagnostics.polar_day_cell_count);
         stat(
@@ -99,6 +64,25 @@ fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             world.config.solar_forcing.annual_sample_count,
         );
     });
+}
+
+fn insolation_stats(ui: &mut egui::Ui, prefix: &str, summary: &InsolationSummary) {
+    stat(
+        ui,
+        &format!("{prefix} range"),
+        format!(
+            "{:.1} - {:.1} W/m2",
+            summary.minimum_watts_per_square_meter, summary.maximum_watts_per_square_meter
+        ),
+    );
+    stat(
+        ui,
+        &format!("{prefix} global mean"),
+        format!(
+            "{:.1} W/m2",
+            summary.area_weighted_mean_watts_per_square_meter
+        ),
+    );
 }
 
 fn active_world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
