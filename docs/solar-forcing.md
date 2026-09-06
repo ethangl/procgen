@@ -18,6 +18,7 @@ elapsed time rather than true anomaly. The supported sample count is 4 through
 declination, polar day and night counts, and spherical-area-weighted current and
 annual summaries.
 
-This stage reads only the mesh and planet model. It does not read elevation and
-does not model temperature, greenhouse effects, atmosphere, wind, moisture,
-ice, ocean transport, feedbacks, coupling, rasterization, or execution backends.
+This forcing stage reads only the mesh and planet model. It does not read
+elevation and does not itself model temperature or any atmospheric response.
+The independent static radiative-equilibrium consumer is documented in
+`docs/radiative-equilibrium-temperature.md`.
