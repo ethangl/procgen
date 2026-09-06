@@ -3,12 +3,15 @@ use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_climate::{
-    ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE,
-    MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MOISTURE_STEP_COUNT_RANGE,
-    MOISTURE_STEP_SECONDS_RANGE, MoistureTransportConfig, ORBITAL_PERIOD_DAYS_RANGE,
-    OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE, RadiativeEquilibriumConfig,
-    SeasonalThermalConfig, SolarForcingConfig, TEMPERATURE_SENSITIVITY_RANGE,
-    TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE, TRANSPORT_FRACTION_RANGE,
+    ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, CRYOSPHERE_CLOSURE_TOLERANCE_RANGE,
+    CRYOSPHERE_FRACTION_RATE_RANGE, CRYOSPHERE_ITERATION_LIMIT_RANGE, CRYOSPHERE_MASS_RANGE,
+    CRYOSPHERE_RATE_RANGE, CRYOSPHERE_TEMPERATURE_RANGE, CryosphereConfig, DRAG_RATE_RANGE,
+    MAXIMUM_WIND_SPEED_RANGE, MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE,
+    MOISTURE_STEP_COUNT_RANGE, MOISTURE_STEP_SECONDS_RANGE, MoistureTransportConfig,
+    ORBITAL_PERIOD_DAYS_RANGE, OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE,
+    RadiativeEquilibriumConfig, SeasonalThermalConfig, SolarForcingConfig,
+    TEMPERATURE_SENSITIVITY_RANGE, TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE,
+    TRANSPORT_FRACTION_RANGE,
 };
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
@@ -111,9 +114,85 @@ pub(super) fn generation_controls(
     section(ui, "Moisture and precipitation", |ui| {
         moisture_transport_controls(ui, &mut generation.moisture_transport)
     });
+    section(ui, "Cryosphere", |ui| {
+        cryosphere_controls(ui, &mut generation.cryosphere)
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn cryosphere_controls(ui: &mut egui::Ui, config: &mut CryosphereConfig) {
+    drag_value(
+        ui,
+        "Maximum refinements",
+        &mut config.maximum_iterations,
+        CRYOSPHERE_ITERATION_LIMIT_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Closure tolerance",
+        &mut config.closure_tolerance,
+        CRYOSPHERE_CLOSURE_TOLERANCE_RANGE,
+        1.0e-6,
+    );
+    drag_value(
+        ui,
+        "Snowfall temperature",
+        &mut config.snowfall_temperature_kelvin,
+        CRYOSPHERE_TEMPERATURE_RANGE,
+        0.1,
+    );
+    drag_value(
+        ui,
+        "Melt temperature",
+        &mut config.melt_temperature_kelvin,
+        CRYOSPHERE_TEMPERATURE_RANGE,
+        0.1,
+    );
+    drag_value(
+        ui,
+        "Full snow cover",
+        &mut config.full_snow_cover_kg_per_m2,
+        CRYOSPHERE_MASS_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Seasonal snow capacity",
+        &mut config.seasonal_snow_capacity_kg_per_m2,
+        CRYOSPHERE_MASS_RANGE,
+        5.0,
+    );
+    drag_value(
+        ui,
+        "Snow melt factor",
+        &mut config.snow_melt_kg_per_m2_per_kelvin_day,
+        CRYOSPHERE_RATE_RANGE,
+        0.1,
+    );
+    drag_value(
+        ui,
+        "Land-ice melt factor",
+        &mut config.land_ice_melt_kg_per_m2_per_kelvin_day,
+        CRYOSPHERE_RATE_RANGE,
+        0.1,
+    );
+    drag_value(
+        ui,
+        "Sea-ice growth factor",
+        &mut config.sea_ice_growth_fraction_per_kelvin_day,
+        CRYOSPHERE_FRACTION_RATE_RANGE,
+        0.001,
+    );
+    drag_value(
+        ui,
+        "Sea-ice melt factor",
+        &mut config.sea_ice_melt_fraction_per_kelvin_day,
+        CRYOSPHERE_FRACTION_RATE_RANGE,
+        0.001,
+    );
 }
 
 fn moisture_transport_controls(ui: &mut egui::Ui, config: &mut MoistureTransportConfig) {

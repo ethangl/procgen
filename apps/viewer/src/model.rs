@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use procgen_climate::{
-    AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationInputs,
-    MoistureTransport, MoistureTransportConfig, MoistureTransportInputs,
-    RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature, SeasonalThermalConfig,
-    SeasonalThermalInputs, SeasonalThermalResponse, SolarForcing, SolarForcingConfig,
-    derive_atmospheric_circulation, derive_moisture_transport,
-    derive_radiative_equilibrium_temperature, derive_seasonal_thermal_response,
-    derive_solar_forcing,
+    AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationInputs, Cryosphere,
+    CryosphereConfig, CryosphereInputs, MoistureTransport, MoistureTransportConfig,
+    MoistureTransportInputs, RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature,
+    SeasonalThermalConfig, SeasonalThermalInputs, SeasonalThermalResponse, SolarForcing,
+    SolarForcingConfig, derive_atmospheric_circulation, derive_cryosphere,
+    derive_moisture_transport, derive_radiative_equilibrium_temperature,
+    derive_seasonal_thermal_response, derive_solar_forcing,
 };
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
@@ -61,6 +61,7 @@ pub struct GenerationSettings {
     pub seasonal_thermal: SeasonalThermalConfig,
     pub atmospheric_circulation: AtmosphericCirculationConfig,
     pub moisture_transport: MoistureTransportConfig,
+    pub cryosphere: CryosphereConfig,
 }
 
 impl Default for GenerationSettings {
@@ -103,6 +104,7 @@ impl Default for GenerationSettings {
             seasonal_thermal: SeasonalThermalConfig::EARTHLIKE,
             atmospheric_circulation: AtmosphericCirculationConfig::EARTHLIKE,
             moisture_transport: MoistureTransportConfig::EARTHLIKE,
+            cryosphere: CryosphereConfig::EARTHLIKE,
         }
     }
 }
@@ -189,6 +191,7 @@ pub struct GeneratedWorld {
     pub seasonal_thermal: SeasonalThermalResponse,
     pub atmospheric_circulation: AtmosphericCirculation,
     pub moisture_transport: MoistureTransport,
+    pub cryosphere: Cryosphere,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -325,6 +328,22 @@ impl GeneratedWorld {
                 config.moisture_transport,
             )
         })?;
+        let cryosphere = timings.record("Cryosphere", || {
+            derive_cryosphere(
+                &voronoi,
+                CryosphereInputs {
+                    annual_temperature_samples_kelvin: &seasonal_thermal
+                        .annual_temperature_samples_kelvin,
+                    annual_sample_count: seasonal_thermal.annual_sample_count,
+                    selected_orbital_phase: config.solar_forcing.orbital_phase,
+                    orbital_period_days: config.seasonal_thermal.orbital_period_days,
+                    precipitation_kg_per_m2_per_day: &moisture_transport
+                        .cell_precipitation_kg_per_m2_per_day,
+                    final_elevation: &isostasy.cell_elevations,
+                },
+                config.cryosphere,
+            )
+        })?;
 
         Ok(Self {
             voronoi,
@@ -349,6 +368,7 @@ impl GeneratedWorld {
             seasonal_thermal,
             atmospheric_circulation,
             moisture_transport,
+            cryosphere,
             timings,
             config,
         })
@@ -518,6 +538,18 @@ mod tests {
                 .len(),
             world.voronoi.cell_count()
         );
+        assert_eq!(
+            world.cryosphere.cell_snow_cover_fraction.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.cryosphere.cell_land_ice_cover_fraction.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.cryosphere.cell_sea_ice_cover_fraction.len(),
+            world.voronoi.cell_count()
+        );
         assert!(
             world
                 .moisture_transport
@@ -637,6 +669,10 @@ mod tests {
                 step_seconds: 18_000.0,
                 ..MoistureTransportConfig::EARTHLIKE
             },
+            cryosphere: CryosphereConfig {
+                maximum_iterations: 128,
+                ..CryosphereConfig::EARTHLIKE
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -680,6 +716,7 @@ mod tests {
             world.config.moisture_transport,
             requested.moisture_transport
         );
+        assert_eq!(world.config.cryosphere, requested.cryosphere);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

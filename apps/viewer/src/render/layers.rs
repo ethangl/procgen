@@ -38,6 +38,9 @@ pub enum DiagnosticLayer {
     Wind,
     Humidity,
     Precipitation,
+    SnowCover,
+    LandIceCover,
+    SeaIceCover,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -132,6 +135,24 @@ const PRECIPITATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (1.0, Vec3::new(0.28, 0.68, 0.42)),
     (4.0, Vec3::new(0.08, 0.48, 0.9)),
     (12.0, Vec3::new(0.72, 0.82, 1.0)),
+];
+
+const SNOW_COVER_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (0.0, Vec3::new(0.04, 0.055, 0.075)),
+    (0.5, Vec3::new(0.58, 0.72, 0.82)),
+    (1.0, Vec3::new(0.98, 0.99, 1.0)),
+];
+
+const LAND_ICE_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (0.0, Vec3::new(0.035, 0.05, 0.075)),
+    (0.5, Vec3::new(0.35, 0.72, 0.9)),
+    (1.0, Vec3::new(0.82, 0.96, 1.0)),
+];
+
+const SEA_ICE_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (0.0, Vec3::new(0.015, 0.04, 0.12)),
+    (0.5, Vec3::new(0.25, 0.62, 0.82)),
+    (1.0, Vec3::new(0.78, 0.94, 0.98)),
 ];
 
 const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
@@ -230,6 +251,9 @@ impl DiagnosticLayer {
         Self::Wind,
         Self::Humidity,
         Self::Precipitation,
+        Self::SnowCover,
+        Self::LandIceCover,
+        Self::SeaIceCover,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -443,6 +467,24 @@ impl DiagnosticLayer {
                         .cell_precipitation_kg_per_m2_per_day
                 },
                 &PRECIPITATION_COLOR_STOPS,
+            ),
+            Self::SnowCover => LayerSpec::scalar(
+                "Snow cover (selected phase)",
+                FIELD_LINE_WIDTH,
+                |world| &world.cryosphere.cell_snow_cover_fraction,
+                &SNOW_COVER_COLOR_STOPS,
+            ),
+            Self::LandIceCover => LayerSpec::scalar(
+                "Land-ice cover",
+                FIELD_LINE_WIDTH,
+                |world| &world.cryosphere.cell_land_ice_cover_fraction,
+                &LAND_ICE_COLOR_STOPS,
+            ),
+            Self::SeaIceCover => LayerSpec::scalar(
+                "Sea-ice cover (selected phase)",
+                FIELD_LINE_WIDTH,
+                |world| &world.cryosphere.cell_sea_ice_cover_fraction,
+                &SEA_ICE_COLOR_STOPS,
             ),
             Self::Hotspots => LayerSpec::scalar(
                 "Mantle hotspots",

@@ -21,6 +21,7 @@ pub(crate) fn validate_range<T: PartialOrd, E>(
 }
 
 mod circulation;
+mod cryosphere;
 mod field;
 mod moisture;
 mod orbit;
@@ -33,6 +34,12 @@ pub use circulation::{
     AtmosphericCirculationError, AtmosphericCirculationInputs, CALM_WIND_SPEED_METERS_PER_SECOND,
     DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE, TERRAIN_STEERING_RANGE,
     derive_atmospheric_circulation,
+};
+pub use cryosphere::{
+    CRYOSPHERE_CLOSURE_TOLERANCE_RANGE, CRYOSPHERE_FRACTION_RATE_RANGE,
+    CRYOSPHERE_ITERATION_LIMIT_RANGE, CRYOSPHERE_MASS_RANGE, CRYOSPHERE_RATE_RANGE,
+    CRYOSPHERE_TEMPERATURE_RANGE, Cryosphere, CryosphereConfig, CryosphereDiagnostics,
+    CryosphereError, CryosphereInputs, derive_cryosphere,
 };
 pub use field::AreaWeightedSummary;
 pub use moisture::{

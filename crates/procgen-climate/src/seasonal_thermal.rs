@@ -95,6 +95,9 @@ pub struct SeasonalThermalDiagnostics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeasonalThermalResponse {
     pub selected_temperature_kelvin: Vec<f32>,
+    /// Cell-major temperatures for each uniform annual interval.
+    pub annual_temperature_samples_kelvin: Vec<f32>,
+    pub annual_sample_count: usize,
     pub annual_mean_temperature_kelvin: Vec<f32>,
     pub annual_minimum_temperature_kelvin: Vec<f32>,
     pub annual_maximum_temperature_kelvin: Vec<f32>,
@@ -230,6 +233,8 @@ impl SurfaceAggregate {
 
 struct ResponseAccumulator {
     selected: Vec<f32>,
+    annual_samples: Vec<f32>,
+    annual_sample_count: usize,
     means: Vec<f32>,
     minima: Vec<f32>,
     maxima: Vec<f32>,
@@ -241,9 +246,11 @@ struct ResponseAccumulator {
 }
 
 impl ResponseAccumulator {
-    fn new(cell_count: usize) -> Self {
+    fn new(cell_count: usize, annual_sample_count: usize) -> Self {
         Self {
             selected: Vec::with_capacity(cell_count),
+            annual_samples: Vec::with_capacity(cell_count * annual_sample_count),
+            annual_sample_count,
             means: Vec::with_capacity(cell_count),
             minima: Vec::with_capacity(cell_count),
             maxima: Vec::with_capacity(cell_count),
@@ -258,6 +265,7 @@ impl ResponseAccumulator {
     fn push(
         &mut self,
         cycle: CellCycle,
+        annual_samples: &[f64],
         surface: Surface,
         area: f32,
     ) -> Result<(), SeasonalThermalError> {
@@ -278,6 +286,8 @@ impl ResponseAccumulator {
 
         let selected = cycle.selected as f32;
         self.selected.push(selected);
+        self.annual_samples
+            .extend(annual_samples.iter().map(|&value| value as f32));
         self.means.push(cycle.mean as f32);
         self.minima.push(cycle.minimum as f32);
         self.maxima.push(cycle.maximum as f32);
@@ -307,6 +317,8 @@ impl ResponseAccumulator {
         };
         SeasonalThermalResponse {
             selected_temperature_kelvin: self.selected,
+            annual_temperature_samples_kelvin: self.annual_samples,
+            annual_sample_count: self.annual_sample_count,
             annual_mean_temperature_kelvin: self.means,
             annual_minimum_temperature_kelvin: self.minima,
             annual_maximum_temperature_kelvin: self.maxima,
@@ -341,7 +353,7 @@ pub fn derive_seasonal_thermal_response(
     let sampler = OrbitalSampler::new(planet, sample_count);
     let selected_phase = solar_forcing.orbital_phase.rem_euclid(1.0);
     let selected_state = orbital_state(planet, selected_phase);
-    let mut output = ResponseAccumulator::new(mesh.cell_count());
+    let mut output = ResponseAccumulator::new(mesh.cell_count(), sample_count);
     let mut targets = Vec::with_capacity(sample_count);
     let mut endpoints = Vec::with_capacity(sample_count + 1);
 
@@ -365,13 +377,18 @@ pub fn derive_seasonal_thermal_response(
         let selected_target = target(selected_state);
         // Zero capacity is the documented exact radiative response; positive
         // capacity samples the integrated periodic cycle.
-        let cycle = if heat_capacity == 0.0 {
-            CellCycle::from_orbit(&targets, selected_target, 0.0, 0)
+        let (cycle, annual_samples) = if heat_capacity == 0.0 {
+            (
+                CellCycle::from_orbit(&targets, selected_target, 0.0, 0),
+                targets.as_slice(),
+            )
         } else {
             let coefficient = step_seconds * radiation.emission_coefficient() / heat_capacity;
-            solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?
+            let cycle =
+                solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?;
+            (cycle, &endpoints[..sample_count])
         };
-        output.push(cycle, surface, area)?;
+        output.push(cycle, annual_samples, surface, area)?;
     }
     Ok(output.finish(mesh))
 }

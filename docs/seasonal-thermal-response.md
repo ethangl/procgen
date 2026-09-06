@@ -35,8 +35,9 @@ iteration count and the maximum one-orbit closure error. Failure to reach the
 documented `1e-7 K` closure tolerance is an error rather than a partially
 converged output.
 
-The output contains temperature at the selected orbital phase and per-cell
-annual mean, minimum, maximum, and peak-to-trough amplitude. Diagnostics report
+The output contains temperature at the selected orbital phase, the cell-major
+uniform annual samples already used by the solver, and per-cell annual mean,
+minimum, maximum, and peak-to-trough amplitude. Diagnostics report
 spherical-area-weighted summaries for all five fields, land and ocean cell
 counts, selected-phase area-weighted means for each available surface class,
 and periodic-convergence measurements.
