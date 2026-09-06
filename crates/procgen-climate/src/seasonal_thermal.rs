@@ -1,13 +1,12 @@
 use crate::{
     AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SECONDS_PER_DAY,
-    SolarForcingConfig, SolarForcingError,
+    SolarForcingConfig, SolarForcingError, Surface,
     orbit::{OrbitalSampler, daily_mean_at, orbital_state, selected_sample_index},
     radiative_equilibrium::RadiativeEquilibriumModel,
     validate_range,
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::is_land;
 use std::{fmt, ops::RangeInclusive};
 
 pub const THERMAL_CAPACITY_RANGE: RangeInclusive<f64> = 0.0..=1.0e12;
@@ -53,21 +52,6 @@ pub struct SeasonalThermalInputs<'a> {
     pub solar_forcing: SolarForcingConfig,
     pub radiative_equilibrium: RadiativeEquilibriumConfig,
     pub final_elevation: &'a [f32],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Surface {
-    Land,
-    Ocean,
-}
-
-impl fmt::Display for Surface {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Land => formatter.write_str("land"),
-            Self::Ocean => formatter.write_str("ocean"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,6 +168,13 @@ struct CellCycle {
     mean: f64,
     minimum: f64,
     maximum: f64,
+    closure_error: f64,
+    fixed_point_iterations: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PeriodicCycle {
+    selected: f64,
     closure_error: f64,
     fixed_point_iterations: usize,
 }
@@ -364,11 +355,7 @@ pub fn derive_seasonal_thermal_response(
         .zip(&mesh.cell_centers)
         .zip(&mesh.cell_areas)
     {
-        let surface = if is_land(elevation) {
-            Surface::Land
-        } else {
-            Surface::Ocean
-        };
+        let surface = Surface::from_elevation(elevation);
         let heat_capacity = config.heat_capacity(surface);
         let latitude_sine = f64::from(center.y / mesh.radius);
         let target = |state| {
@@ -386,13 +373,20 @@ pub fn derive_seasonal_thermal_response(
             )
         } else {
             let coefficient = step_seconds * radiation.emission_coefficient() / heat_capacity;
-            let cycle = solve_periodic_cycle(
-                &targets,
-                selected_phase,
-                coefficient,
-                &mut endpoints,
-                &mut samples,
-            )?;
+            let solution =
+                solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?;
+            samples.clear();
+            samples.extend(
+                endpoints
+                    .windows(2)
+                    .map(|interval| (interval[0] + interval[1]) * 0.5),
+            );
+            let cycle = CellCycle::from_orbit(
+                &samples,
+                solution.selected,
+                solution.closure_error,
+                solution.fixed_point_iterations,
+            );
             (cycle, samples.as_slice())
         };
         output.push(cycle, annual_samples, surface, area)?;
@@ -435,14 +429,17 @@ fn solve_periodic_cycle(
     selected_phase: f64,
     coefficient: f64,
     endpoints: &mut Vec<f64>,
-    samples: &mut Vec<f64>,
-) -> Result<CellCycle, SeasonalThermalError> {
+) -> Result<PeriodicCycle, SeasonalThermalError> {
     let minimum = targets.iter().copied().fold(f64::INFINITY, f64::min);
     let maximum = targets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if minimum == maximum {
-        samples.clear();
-        samples.extend_from_slice(targets);
-        return Ok(CellCycle::from_orbit(targets, minimum, 0.0, 0));
+        endpoints.clear();
+        endpoints.resize(targets.len() + 1, minimum);
+        return Ok(PeriodicCycle {
+            selected: minimum,
+            closure_error: 0.0,
+            fixed_point_iterations: 0,
+        });
     }
     let mut initial = targets.iter().sum::<f64>() / targets.len() as f64;
     for iteration in 1..=FIXED_POINT_ITERATION_LIMIT {
@@ -450,18 +447,11 @@ fn solve_periodic_cycle(
         let end = *endpoints.last().expect("an orbit always has endpoints");
         let residual = end - initial;
         if residual.abs() <= FIXED_POINT_TOLERANCE_KELVIN {
-            samples.clear();
-            samples.extend(
-                endpoints
-                    .windows(2)
-                    .map(|interval| (interval[0] + interval[1]) * 0.5),
-            );
-            return Ok(CellCycle::from_orbit(
-                samples,
-                sample_cycle(endpoints, selected_phase),
-                residual.abs(),
-                iteration,
-            ));
+            return Ok(PeriodicCycle {
+                selected: sample_cycle(endpoints, selected_phase),
+                closure_error: residual.abs(),
+                fixed_point_iterations: iteration,
+            });
         }
         let slope = derivative - 1.0;
         if !slope.is_finite() || slope.abs() < f64::EPSILON {
@@ -475,7 +465,6 @@ fn solve_periodic_cycle(
 fn sample_cycle(endpoints: &[f64], phase: f64) -> f64 {
     let sample_count = endpoints.len() - 1;
     let position = phase.rem_euclid(1.0) * sample_count as f64;
-    // rem_euclid can round a tiny negative phase to exactly 1.0.
     let lower = selected_sample_index(phase, sample_count);
     let fraction = position - position.floor();
     endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction
@@ -648,9 +637,17 @@ mod tests {
     fn inertial_annual_samples_interpolate_interval_midpoints() {
         let targets = [250.0, 280.0, 300.0, 265.0];
         let mut endpoints = Vec::new();
-        let mut samples = Vec::new();
-        let cycle =
-            solve_periodic_cycle(&targets, 0.3, 1.0e-8, &mut endpoints, &mut samples).unwrap();
+        let solution = solve_periodic_cycle(&targets, 0.3, 1.0e-8, &mut endpoints).unwrap();
+        let samples = endpoints
+            .windows(2)
+            .map(|interval| (interval[0] + interval[1]) * 0.5)
+            .collect::<Vec<_>>();
+        let cycle = CellCycle::from_orbit(
+            &samples,
+            solution.selected,
+            solution.closure_error,
+            solution.fixed_point_iterations,
+        );
 
         assert_eq!(samples.len(), targets.len());
         for (sample, interval) in samples.iter().zip(endpoints.windows(2)) {

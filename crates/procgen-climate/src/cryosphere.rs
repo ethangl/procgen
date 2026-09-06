@@ -3,7 +3,6 @@ use crate::{
     orbit::selected_sample_index, validate_range,
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::is_land;
 use std::{fmt, ops::RangeInclusive};
 
 pub const CRYOSPHERE_ITERATION_LIMIT_RANGE: RangeInclusive<usize> = 1..=4_096;
@@ -256,11 +255,7 @@ pub fn derive_cryosphere(
         let temperatures = &inputs.annual_temperature_samples_kelvin
             [cell * inputs.annual_sample_count..(cell + 1) * inputs.annual_sample_count];
         let precipitation = f64::from(inputs.precipitation_kg_per_m2_per_day[cell]);
-        let surface = if is_land(inputs.final_elevation[cell]) {
-            Surface::Land
-        } else {
-            Surface::Ocean
-        };
+        let surface = Surface::from_elevation(inputs.final_elevation[cell]);
         results.push(match surface {
             Surface::Land => solve_land_cell(
                 temperatures,
@@ -288,26 +283,21 @@ fn solve_land_cell(
     step_days: f64,
     config: CryosphereConfig,
 ) -> Result<CellResult, CryosphereError> {
+    let run_cycle = |initial| {
+        land_cycle(
+            initial,
+            temperatures,
+            precipitation_rate,
+            selected_sample,
+            step_days,
+            config,
+        )
+    };
     let (initial_snow, iterations_used) =
         solve_periodic_reservoir(config.seasonal_snow_capacity_kg_per_m2, config, |initial| {
-            land_cycle(
-                initial,
-                temperatures,
-                precipitation_rate,
-                selected_sample,
-                step_days,
-                config,
-            )
-            .final_snow
+            run_cycle(initial).final_snow
         })?;
-    let cycle = land_cycle(
-        initial_snow,
-        temperatures,
-        precipitation_rate,
-        selected_sample,
-        step_days,
-        config,
-    );
+    let cycle = run_cycle(initial_snow);
     let land_ice_cover = if cycle.land_ice_accumulation == 0.0 {
         0.0
     } else if cycle.land_ice_ablation_potential == 0.0 {
@@ -349,7 +339,7 @@ fn solve_ocean_cell(
     step_days: f64,
     config: CryosphereConfig,
 ) -> Result<CellResult, CryosphereError> {
-    let (initial_sea_ice, iterations_used) = solve_periodic_reservoir(1.0, config, |initial| {
+    let run_cycle = |initial| {
         ocean_cycle(
             initial,
             temperatures,
@@ -358,16 +348,10 @@ fn solve_ocean_cell(
             step_days,
             config,
         )
-        .final_sea_ice
-    })?;
-    let cycle = ocean_cycle(
-        initial_sea_ice,
-        temperatures,
-        precipitation_rate,
-        selected_sample,
-        step_days,
-        config,
-    );
+    };
+    let (initial_sea_ice, iterations_used) =
+        solve_periodic_reservoir(1.0, config, |initial| run_cycle(initial).final_sea_ice)?;
+    let cycle = run_cycle(initial_sea_ice);
     CellResult {
         surface: Surface::Ocean,
         snowfall_rate: cycle.selected.snowfall_rate,
@@ -404,11 +388,11 @@ fn solve_periodic_reservoir(
     let mut upper = capacity;
     let lower_residual = residual(lower);
     if lower_residual.abs() <= config.closure_tolerance {
-        return Ok((lower, 1));
+        return Ok((lower, 0));
     }
     let upper_residual = residual(upper);
     if upper_residual.abs() <= config.closure_tolerance {
-        return Ok((upper, 1));
+        return Ok((upper, 0));
     }
     debug_assert!(lower_residual >= 0.0, "an empty reservoir cannot lose mass");
     debug_assert!(
@@ -773,6 +757,7 @@ mod tests {
         assert_eq!(result.diagnostics.snow_covered_cell_count, 0);
         assert_eq!(result.diagnostics.land_ice_cell_count, 0);
         assert_eq!(result.diagnostics.sea_ice_cell_count, 0);
+        assert_eq!(result.diagnostics.maximum_iterations_used, 0);
     }
 
     #[test]

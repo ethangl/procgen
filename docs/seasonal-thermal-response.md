@@ -40,7 +40,9 @@ representative temperatures at each uniform interval midpoint, and per-cell
 annual mean, minimum, maximum, and peak-to-trough amplitude. Zero-capacity
 surfaces use the midpoint radiative target directly; positive-capacity surfaces
 linearly interpolate between the solved interval-boundary temperatures. Thus
-both branches expose the same sampling point. Diagnostics report
+both branches expose the same sampling point. Annual mean, minimum, and maximum
+now use these midpoint samples rather than the former interval-start states.
+Diagnostics report
 spherical-area-weighted summaries for all five fields, land and ocean cell
 counts, selected-phase area-weighted means for each available surface class,
 and periodic-convergence measurements.

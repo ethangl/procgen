@@ -41,7 +41,7 @@ pub use cryosphere::{
     CRYOSPHERE_TEMPERATURE_RANGE, Cryosphere, CryosphereConfig, CryosphereDiagnostics,
     CryosphereError, CryosphereInputs, derive_cryosphere,
 };
-pub use field::AreaWeightedSummary;
+pub use field::{AreaWeightedSummary, Surface};
 pub use moisture::{
     MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MOISTURE_STEP_COUNT_RANGE,
     MOISTURE_STEP_SECONDS_RANGE, MoistureTransport, MoistureTransportConfig,
@@ -56,7 +56,7 @@ pub use radiative_equilibrium::{
 };
 pub use seasonal_thermal::{
     ORBITAL_PERIOD_DAYS_RANGE, SeasonalThermalConfig, SeasonalThermalDiagnostics,
-    SeasonalThermalError, SeasonalThermalInputs, SeasonalThermalResponse, Surface,
+    SeasonalThermalError, SeasonalThermalInputs, SeasonalThermalResponse,
     SurfaceThermalDiagnostics, THERMAL_CAPACITY_RANGE, derive_seasonal_thermal_response,
 };
 pub use solar_forcing::{
