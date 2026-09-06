@@ -43,6 +43,8 @@ pub enum DiagnosticLayer {
 
 const DRAW_RADIUS_BASE: f32 = 1.0;
 const DRAW_RADIUS_STEP: f32 = 0.004;
+const FIELD_LINE_WIDTH: f32 = 3.5;
+const OVERLAY_LINE_WIDTH: f32 = 3.8;
 const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
     (-0.5, Vec3::new(0.08, 0.35, 0.95)),
     (0.0, Vec3::new(0.12, 0.12, 0.16)),
@@ -119,9 +121,11 @@ struct LayerSpec {
     source: Source,
 }
 
+type CellValues = for<'a> fn(&'a GeneratedWorld) -> &'a [f32];
+
 enum Source {
     Scalar {
-        values: for<'a> fn(&'a GeneratedWorld) -> &'a [f32],
+        values: CellValues,
         stops: &'static [(f32, Vec3)],
     },
     Custom(fn(&GeneratedWorld, f32) -> GizmoAsset),
@@ -130,24 +134,13 @@ enum Source {
 impl LayerSpec {
     fn scalar(
         label: &'static str,
-        values: for<'a> fn(&'a GeneratedWorld) -> &'a [f32],
+        line_width: f32,
+        values: CellValues,
         stops: &'static [(f32, Vec3)],
     ) -> Self {
         Self {
             label,
-            line_width: 3.5,
-            source: Source::Scalar { values, stops },
-        }
-    }
-
-    fn overlay(
-        label: &'static str,
-        values: for<'a> fn(&'a GeneratedWorld) -> &'a [f32],
-        stops: &'static [(f32, Vec3)],
-    ) -> Self {
-        Self {
-            label,
-            line_width: 3.8,
+            line_width,
             source: Source::Scalar { values, stops },
         }
     }
@@ -235,50 +228,61 @@ impl DiagnosticLayer {
                 let border_radius = DiagnosticLayer::Boundaries.radius() - DRAW_RADIUS_STEP * 0.5;
                 plate_asset(&world.voronoi, &world.plates, radius, border_radius)
             }),
-            Self::Crust => LayerSpec::custom("Crust classes", 3.5, |world, radius| {
+            Self::Crust => LayerSpec::custom("Crust classes", FIELD_LINE_WIDTH, |world, radius| {
                 crust_asset(&world.voronoi, &world.plates, &world.crust, radius)
             }),
             Self::Points => LayerSpec::custom("Cell centers", 1.8, |world, radius| {
                 point_asset(&world.voronoi, radius)
             }),
-            Self::SeafloorAge => LayerSpec::custom("Seafloor age", 3.5, |world, radius| {
-                seafloor_age_asset(&world.voronoi, &world.seafloor_age, radius)
-            }),
+            Self::SeafloorAge => {
+                LayerSpec::custom("Seafloor age", FIELD_LINE_WIDTH, |world, radius| {
+                    seafloor_age_asset(&world.voronoi, &world.seafloor_age, radius)
+                })
+            }
             Self::BaseElevation => LayerSpec::scalar(
                 "Base elevation",
+                FIELD_LINE_WIDTH,
                 |world| &world.base_elevation.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
             ),
             Self::Deformation => LayerSpec::scalar(
                 "Boundary deformation",
+                FIELD_LINE_WIDTH,
                 |world| &world.deformation.cell_deformation,
                 &DEFORMATION_COLOR_STOPS,
             ),
             Self::Elevation => LayerSpec::scalar(
                 "Tectonic elevation",
+                FIELD_LINE_WIDTH,
                 |world| &world.elevation.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
             ),
             Self::GeologicalElevation => LayerSpec::scalar(
                 "Geological elevation",
+                FIELD_LINE_WIDTH,
                 |world| &world.geological_elevation.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
             ),
             Self::IsostaticSupport => LayerSpec::scalar(
                 "Isostatic support",
+                FIELD_LINE_WIDTH,
                 |world| &world.isostasy.cell_support,
                 &ELEVATION_COLOR_STOPS,
             ),
             Self::IsostaticElevation => LayerSpec::scalar(
                 "Adjusted elevation",
+                FIELD_LINE_WIDTH,
                 |world| &world.isostasy.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
             ),
-            Self::Insolation => LayerSpec::custom("Daily-mean insolation", 3.5, |world, radius| {
-                insolation_asset(&world.voronoi, &world.solar_forcing, radius)
-            }),
+            Self::Insolation => LayerSpec::custom(
+                "Daily-mean insolation",
+                FIELD_LINE_WIDTH,
+                |world, radius| insolation_asset(&world.voronoi, &world.solar_forcing, radius),
+            ),
             Self::DailyTemperature => LayerSpec::scalar(
                 "Daily effective temperature",
+                FIELD_LINE_WIDTH,
                 |world| {
                     &world
                         .radiative_equilibrium
@@ -288,6 +292,7 @@ impl DiagnosticLayer {
             ),
             Self::AnnualTemperature => LayerSpec::scalar(
                 "Annual effective temperature",
+                FIELD_LINE_WIDTH,
                 |world| {
                     &world
                         .radiative_equilibrium
@@ -297,50 +302,61 @@ impl DiagnosticLayer {
             ),
             Self::SeasonalTemperature => LayerSpec::scalar(
                 "Seasonal temperature (selected phase)",
+                FIELD_LINE_WIDTH,
                 |world| &world.seasonal_thermal.selected_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalMeanTemperature => LayerSpec::scalar(
                 "Seasonal temperature (annual mean)",
+                FIELD_LINE_WIDTH,
                 |world| &world.seasonal_thermal.annual_mean_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalMinimumTemperature => LayerSpec::scalar(
                 "Seasonal temperature (annual minimum)",
+                FIELD_LINE_WIDTH,
                 |world| &world.seasonal_thermal.annual_minimum_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalMaximumTemperature => LayerSpec::scalar(
                 "Seasonal temperature (annual maximum)",
+                FIELD_LINE_WIDTH,
                 |world| &world.seasonal_thermal.annual_maximum_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalTemperatureAmplitude => LayerSpec::scalar(
                 "Seasonal temperature amplitude",
+                FIELD_LINE_WIDTH,
                 |world| &world.seasonal_thermal.annual_amplitude_kelvin,
                 &TEMPERATURE_AMPLITUDE_COLOR_STOPS,
             ),
-            Self::Hotspots => LayerSpec::overlay(
+            Self::Hotspots => LayerSpec::scalar(
                 "Mantle hotspots",
+                OVERLAY_LINE_WIDTH,
                 |world| &world.hotspots.cell_intensities,
                 &HOTSPOT_COLOR_STOPS,
             ),
-            Self::OceanicPeaks => {
-                LayerSpec::custom("Seamount / abyssal peaks", 3.8, |world, radius| {
-                    oceanic_peak_asset(&world.voronoi, &world.oceanic_peaks, radius)
+            Self::OceanicPeaks => LayerSpec::custom(
+                "Seamount / abyssal peaks",
+                OVERLAY_LINE_WIDTH,
+                |world, radius| oceanic_peak_asset(&world.voronoi, &world.oceanic_peaks, radius),
+            ),
+            Self::VolcanicArcs => {
+                LayerSpec::custom("Volcanic arcs", OVERLAY_LINE_WIDTH, |world, radius| {
+                    volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius)
                 })
             }
-            Self::VolcanicArcs => LayerSpec::custom("Volcanic arcs", 3.8, |world, radius| {
-                volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius)
-            }),
-            Self::Cratons => LayerSpec::overlay(
+            Self::Cratons => LayerSpec::scalar(
                 "Craton strength",
+                OVERLAY_LINE_WIDTH,
                 |world| &world.cratons.cell_strengths,
                 &CRATON_COLOR_STOPS,
             ),
-            Self::Basins => LayerSpec::custom("Sedimentary basins", 3.8, |world, radius| {
-                basin_asset(&world.voronoi, &world.basins.cell_basins, radius)
-            }),
+            Self::Basins => {
+                LayerSpec::custom("Sedimentary basins", OVERLAY_LINE_WIDTH, |world, radius| {
+                    basin_asset(&world.voronoi, &world.basins.cell_basins, radius)
+                })
+            }
             Self::Boundaries => LayerSpec::custom("Boundary classes", 4.0, |world, radius| {
                 boundary_asset(&world.voronoi, &world.boundaries, radius)
             }),
