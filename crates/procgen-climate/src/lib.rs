@@ -277,12 +277,12 @@ fn daylight_window(meridional: f64, diurnal: f64) -> DaylightWindow {
 fn daily_mean_at_latitude(latitude: SinCos, state: OrbitalState) -> DailyMeanInsolation {
     let meridional = latitude.sine * state.declination_trig.sine;
     let diurnal = latitude.cosine * state.declination_trig.cosine;
-    let daylight = daylight_window(meridional, diurnal);
+    let window = daylight_window(meridional, diurnal);
     let insolation = state.stellar_flux / PI
-        * (daylight.sunset_hour_angle * meridional + diurnal * daylight.sunset_hour_angle.sin());
+        * (window.sunset_hour_angle * meridional + diurnal * window.sunset_hour_angle.sin());
     DailyMeanInsolation {
         watts_per_square_meter: insolation.clamp(0.0, state.stellar_flux),
-        daylight: daylight.daylight,
+        daylight: window.daylight,
     }
 }
 
