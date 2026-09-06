@@ -2,7 +2,7 @@ mod controls;
 mod summary;
 
 use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
-use crate::render::{DiagnosticLayer, LayerSettings};
+use crate::render::{DiagnosticLayer, OverlayKind, OverlaySettings, SurfaceSelection};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -20,7 +20,8 @@ impl Plugin for ViewerUiPlugin {
 fn viewer_ui(
     mut contexts: EguiContexts,
     mut generation: ResMut<GenerationSettings>,
-    mut layers: ResMut<LayerSettings>,
+    mut surface: ResMut<SurfaceSelection>,
+    mut overlays: ResMut<OverlaySettings>,
     status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
     mut regenerate: MessageWriter<RegenerateWorld>,
@@ -39,7 +40,7 @@ fn viewer_ui(
                 }
 
                 ui.separator();
-                layer_controls(ui, layers.reborrow());
+                layer_controls(ui, surface.reborrow(), overlays.reborrow());
 
                 ui.separator();
                 summary::world_summary(ui, &world);
@@ -53,12 +54,38 @@ fn viewer_ui(
     Ok(())
 }
 
-fn layer_controls(ui: &mut egui::Ui, mut layers: Mut<LayerSettings>) {
-    ui.label("Layers");
+fn layer_controls(
+    ui: &mut egui::Ui,
+    mut surface: Mut<SurfaceSelection>,
+    mut overlays: Mut<OverlaySettings>,
+) {
+    ui.label("Surface fill");
+    let selected_surface = surface.selected();
+    if ui.radio(selected_surface.is_none(), "None").clicked() && selected_surface.is_some() {
+        surface.set(None);
+    }
     for &layer in DiagnosticLayer::ALL {
-        let mut visible = layers.is_visible(layer);
-        if ui.checkbox(&mut visible, layer.label()).changed() {
-            layers.set_visible(layer, visible);
+        if layer.is_fill()
+            && ui
+                .radio(selected_surface == Some(layer), layer.label())
+                .clicked()
+            && selected_surface != Some(layer)
+        {
+            surface.set(Some(layer));
+        }
+    }
+
+    for &kind in OverlayKind::ALL {
+        ui.add_space(4.0);
+        ui.label(kind.label());
+        for &layer in DiagnosticLayer::ALL {
+            if layer.overlay_kind() != Some(kind) {
+                continue;
+            }
+            let mut visible = overlays.is_visible(layer);
+            if ui.checkbox(&mut visible, layer.label()).changed() {
+                overlays.set_visible(layer, visible);
+            }
         }
     }
 }

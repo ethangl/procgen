@@ -60,16 +60,21 @@ Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
 
-The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
+The viewer selects one filled per-cell surface at a time and independently
+toggles edge, marker, and vector overlays. Surface choices include plate,
+crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
 adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, coupled
 surface-albedo, daily- and annual-temperature, atmospheric supporting scalars,
-wind speed and vectors,
-humidity, precipitation, snow cover, land-ice cover, sea-ice cover, motion, and
-final-boundary diagnostics and reports aggregate statistics plus stage timings.
+wind speed, humidity, precipitation, snow cover, land-ice cover, and sea-ice
+cover. Delaunay, Voronoi, and final-boundary diagnostics remain edge overlays;
+cell centers remain markers; wind and plate motion remain vectors. The viewer
+also reports aggregate statistics and stage timings.
+Filled fields use each cell's exact value across its flat Voronoi face rather
+than averaging neighboring values onto shared edges.
 Plate interiors use stable per-plate colors.
-Crust is blue for oceanic, amber for continental, and white where the classes
-meet. Seafloor age runs from cyan ridge cells to dark blue old crust, with
+Crust is blue for oceanic and amber for continental. Seafloor age runs from
+cyan ridge cells to dark blue old crust, with
 continental cells brown. Base, tectonic, and geological elevation use a
 deep-water-through-highland color ramp. Deformation runs from blue subsidence
 through dark zero to orange uplift. Motion arrows sample each plate's local
