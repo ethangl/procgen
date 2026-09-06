@@ -6,6 +6,8 @@ pub use layers::DiagnosticLayer;
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 
+const DEPTH_SCALE_STEP: f32 = 0.004;
+
 #[derive(Resource)]
 pub struct LayerSettings {
     visible: [bool; DiagnosticLayer::COUNT],
@@ -18,6 +20,18 @@ impl LayerSettings {
 
     pub fn set_visible(&mut self, layer: DiagnosticLayer, visible: bool) {
         self.visible[layer.index()] = visible;
+    }
+
+    fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
+        let layer_order = layer.depth_order();
+        let visible_layers_before = DiagnosticLayer::ALL
+            .iter()
+            .filter(|&&candidate| {
+                self.is_visible(candidate) && candidate.depth_order() < layer_order
+            })
+            .count();
+
+        1.0 + visible_layers_before as f32 * DEPTH_SCALE_STEP
     }
 }
 
@@ -42,7 +56,7 @@ impl Plugin for DiagnosticRenderPlugin {
                 Update,
                 (
                     rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
-                    sync_visible_layers.run_if(resource_changed::<LayerSettings>),
+                    sync_layer_render_state.run_if(resource_changed::<LayerSettings>),
                 ),
             );
     }
@@ -86,6 +100,7 @@ fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: Diagn
             },
             depth_bias: -0.0005,
         },
+        layer,
         RenderLayers::layer(layer.render_layer()),
     ));
 }
@@ -119,10 +134,15 @@ fn rebuild_diagnostic_assets(
     }
 }
 
-fn sync_visible_layers(
+fn sync_layer_render_state(
     settings: Res<LayerSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
+    mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
+    for (layer, mut transform) in &mut layer_transforms {
+        transform.scale = Vec3::splat(settings.depth_scale(*layer));
+    }
+
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
     let mut layers = vec![0];
     layers.extend(
@@ -132,4 +152,42 @@ fn sync_visible_layers(
             .map(|&layer| layer.render_layer()),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn depth_scales_only_count_visible_layers() {
+        let mut settings = LayerSettings {
+            visible: [false; DiagnosticLayer::COUNT],
+        };
+        settings.set_visible(DiagnosticLayer::Motion, true);
+
+        assert_eq!(settings.depth_scale(DiagnosticLayer::Motion), 1.0);
+    }
+
+    #[test]
+    fn depth_scales_follow_semantic_bucket_order() {
+        let mut settings = LayerSettings {
+            visible: [false; DiagnosticLayer::COUNT],
+        };
+        settings.set_visible(DiagnosticLayer::Motion, true);
+        settings.set_visible(DiagnosticLayer::Boundaries, true);
+        settings.set_visible(DiagnosticLayer::IsostaticElevation, true);
+
+        assert_eq!(
+            settings.depth_scale(DiagnosticLayer::IsostaticElevation),
+            1.0
+        );
+        assert_eq!(
+            settings.depth_scale(DiagnosticLayer::Boundaries),
+            1.0 + DEPTH_SCALE_STEP
+        );
+        assert_eq!(
+            settings.depth_scale(DiagnosticLayer::Motion),
+            1.0 + 2.0 * DEPTH_SCALE_STEP
+        );
+    }
 }
