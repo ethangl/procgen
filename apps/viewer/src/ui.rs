@@ -39,7 +39,9 @@ fn viewer_ui(
                 }
 
                 ui.separator();
-                layer_controls(ui, &mut layers);
+                for (layer, visible) in layer_controls(ui, &layers) {
+                    layers.set_visible(layer, visible);
+                }
 
                 ui.separator();
                 summary::world_summary(ui, &world);
@@ -53,15 +55,16 @@ fn viewer_ui(
     Ok(())
 }
 
-fn layer_controls(ui: &mut egui::Ui, layers: &mut LayerSettings) {
+fn layer_controls(ui: &mut egui::Ui, layers: &LayerSettings) -> Vec<(DiagnosticLayer, bool)> {
     ui.label("Layers");
+    let mut changes = Vec::new();
     for &layer in DiagnosticLayer::ALL {
-        // Only mutably access the resource when egui reports a real change.
         let mut visible = layers.is_visible(layer);
         if ui.checkbox(&mut visible, layer.label()).changed() {
-            layers.set_visible(layer, visible);
+            changes.push((layer, visible));
         }
     }
+    changes
 }
 
 fn section(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {

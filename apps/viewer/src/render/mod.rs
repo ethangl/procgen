@@ -5,6 +5,7 @@ pub use layers::DiagnosticLayer;
 
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
+use layers::{DRAW_RADIUS_BASE, DRAW_RADIUS_STEP};
 
 #[derive(Resource)]
 pub struct LayerSettings {
@@ -18,6 +19,19 @@ impl LayerSettings {
 
     pub fn set_visible(&mut self, layer: DiagnosticLayer, visible: bool) {
         self.visible[layer.index()] = visible;
+    }
+
+    fn draw_radius(&self, layer: DiagnosticLayer) -> f32 {
+        let layer_order = (layer.depth_bucket(), layer.index());
+        let visible_layers_before = DiagnosticLayer::ALL
+            .iter()
+            .filter(|&&candidate| {
+                self.is_visible(candidate)
+                    && (candidate.depth_bucket(), candidate.index()) < layer_order
+            })
+            .count();
+
+        DRAW_RADIUS_BASE + visible_layers_before as f32 * DRAW_RADIUS_STEP
     }
 }
 
@@ -41,7 +55,7 @@ impl Plugin for DiagnosticRenderPlugin {
             .add_systems(
                 Update,
                 (
-                    rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
+                    rebuild_diagnostic_assets.run_if(diagnostic_assets_need_rebuild),
                     sync_visible_layers.run_if(resource_changed::<LayerSettings>),
                 ),
             );
@@ -111,12 +125,21 @@ fn spawn_axes(commands: &mut Commands, assets: &mut Assets<GizmoAsset>) {
 
 fn rebuild_diagnostic_assets(
     world: Res<GeneratedWorld>,
+    settings: Res<LayerSettings>,
     assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
     for &layer in DiagnosticLayer::ALL {
-        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build_asset(&world);
+        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() =
+            layer.build_asset(&world, settings.draw_radius(layer));
     }
+}
+
+fn diagnostic_assets_need_rebuild(
+    world: Res<GeneratedWorld>,
+    settings: Res<LayerSettings>,
+) -> bool {
+    world.is_changed() || settings.is_changed()
 }
 
 fn sync_visible_layers(
@@ -132,4 +155,45 @@ fn sync_visible_layers(
             .map(|&layer| layer.render_layer()),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_radii_only_count_visible_layers() {
+        let mut settings = LayerSettings {
+            visible: [false; DiagnosticLayer::COUNT],
+        };
+        settings.set_visible(DiagnosticLayer::Motion, true);
+
+        assert_eq!(
+            settings.draw_radius(DiagnosticLayer::Motion),
+            DRAW_RADIUS_BASE
+        );
+    }
+
+    #[test]
+    fn draw_radii_follow_semantic_bucket_order() {
+        let mut settings = LayerSettings {
+            visible: [false; DiagnosticLayer::COUNT],
+        };
+        settings.set_visible(DiagnosticLayer::Motion, true);
+        settings.set_visible(DiagnosticLayer::Boundaries, true);
+        settings.set_visible(DiagnosticLayer::IsostaticElevation, true);
+
+        assert_eq!(
+            settings.draw_radius(DiagnosticLayer::IsostaticElevation),
+            DRAW_RADIUS_BASE
+        );
+        assert_eq!(
+            settings.draw_radius(DiagnosticLayer::Boundaries),
+            DRAW_RADIUS_BASE + DRAW_RADIUS_STEP
+        );
+        assert_eq!(
+            settings.draw_radius(DiagnosticLayer::Motion),
+            DRAW_RADIUS_BASE + 2.0 * DRAW_RADIUS_STEP
+        );
+    }
 }

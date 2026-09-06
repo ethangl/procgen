@@ -51,8 +51,8 @@ pub enum DiagnosticLayer {
     Motion,
 }
 
-const DRAW_RADIUS_BASE: f32 = 1.0;
-const DRAW_RADIUS_STEP: f32 = 0.004;
+pub(super) const DRAW_RADIUS_BASE: f32 = 1.0;
+pub(super) const DRAW_RADIUS_STEP: f32 = 0.004;
 const FIELD_LINE_WIDTH: f32 = 3.5;
 const OVERLAY_LINE_WIDTH: f32 = 3.8;
 
@@ -183,6 +183,13 @@ struct LayerSpec {
     source: Source,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum DepthBucket {
+    Surface,
+    Overlay,
+    Vector,
+}
+
 type CellValues = for<'a> fn(&'a GeneratedWorld) -> &'a [f32];
 
 enum Source {
@@ -281,10 +288,6 @@ impl DiagnosticLayer {
         self.index() + 1
     }
 
-    fn radius(self) -> f32 {
-        DRAW_RADIUS_BASE + self.index() as f32 * DRAW_RADIUS_STEP
-    }
-
     pub fn label(self) -> &'static str {
         self.spec().label
     }
@@ -293,8 +296,24 @@ impl DiagnosticLayer {
         self.spec().line_width
     }
 
-    pub(super) fn build_asset(self, world: &GeneratedWorld) -> GizmoAsset {
-        self.spec().build(world, self.radius())
+    pub(super) fn build_asset(self, world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+        self.spec().build(world, radius)
+    }
+
+    pub(super) const fn depth_bucket(self) -> DepthBucket {
+        match self {
+            Self::Wind | Self::Motion => DepthBucket::Vector,
+            Self::Delaunay
+            | Self::Voronoi
+            | Self::Points
+            | Self::Hotspots
+            | Self::OceanicPeaks
+            | Self::VolcanicArcs
+            | Self::Cratons
+            | Self::Basins
+            | Self::Boundaries => DepthBucket::Overlay,
+            _ => DepthBucket::Surface,
+        }
     }
 
     fn spec(self) -> LayerSpec {
@@ -306,8 +325,8 @@ impl DiagnosticLayer {
                 voronoi_asset(&world.voronoi, radius)
             }),
             Self::Plates => LayerSpec::custom("Tectonic plates", 2.4, |world, radius| {
-                // Borders sit just beneath the boundary-class layer so it can overlay them.
-                let border_radius = DiagnosticLayer::Boundaries.radius() - DRAW_RADIUS_STEP * 0.5;
+                // White borders remain legible when plates are the only visible layer.
+                let border_radius = radius + DRAW_RADIUS_STEP * 0.5;
                 plate_asset(&world.voronoi, &world.plates, radius, border_radius)
             }),
             Self::Crust => LayerSpec::custom("Crust classes", FIELD_LINE_WIDTH, |world, radius| {
