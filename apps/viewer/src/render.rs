@@ -12,11 +12,11 @@ use procgen_tectonics::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum DiagnosticLayer {
-    Points,
     Delaunay,
     Voronoi,
     Plates,
     Crust,
+    Points,
     SeafloorAge,
     BaseElevation,
     Deformation,
@@ -41,44 +41,10 @@ pub enum DiagnosticLayer {
     Motion,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DrawSurface {
-    Layer(DiagnosticLayer),
-    PlateBorders,
-}
-
-const DRAW_ORDER: &[DrawSurface] = &[
-    DrawSurface::Layer(DiagnosticLayer::Delaunay),
-    DrawSurface::Layer(DiagnosticLayer::Voronoi),
-    DrawSurface::Layer(DiagnosticLayer::Plates),
-    DrawSurface::Layer(DiagnosticLayer::Crust),
-    DrawSurface::Layer(DiagnosticLayer::Points),
-    DrawSurface::Layer(DiagnosticLayer::SeafloorAge),
-    DrawSurface::Layer(DiagnosticLayer::BaseElevation),
-    DrawSurface::Layer(DiagnosticLayer::Deformation),
-    DrawSurface::Layer(DiagnosticLayer::Elevation),
-    DrawSurface::Layer(DiagnosticLayer::GeologicalElevation),
-    DrawSurface::Layer(DiagnosticLayer::IsostaticSupport),
-    DrawSurface::Layer(DiagnosticLayer::IsostaticElevation),
-    DrawSurface::Layer(DiagnosticLayer::Insolation),
-    DrawSurface::Layer(DiagnosticLayer::DailyTemperature),
-    DrawSurface::Layer(DiagnosticLayer::AnnualTemperature),
-    DrawSurface::Layer(DiagnosticLayer::SeasonalTemperature),
-    DrawSurface::Layer(DiagnosticLayer::SeasonalMeanTemperature),
-    DrawSurface::Layer(DiagnosticLayer::SeasonalMinimumTemperature),
-    DrawSurface::Layer(DiagnosticLayer::SeasonalMaximumTemperature),
-    DrawSurface::Layer(DiagnosticLayer::SeasonalTemperatureAmplitude),
-    DrawSurface::Layer(DiagnosticLayer::Hotspots),
-    DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
-    DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
-    DrawSurface::Layer(DiagnosticLayer::Cratons),
-    DrawSurface::Layer(DiagnosticLayer::Basins),
-    DrawSurface::PlateBorders,
-    DrawSurface::Layer(DiagnosticLayer::Boundaries),
-    DrawSurface::Layer(DiagnosticLayer::Motion),
-];
 const DRAW_RADIUS_BASE: f32 = 1.0;
 const DRAW_RADIUS_STEP: f32 = 0.004;
+const FIELD_LINE_WIDTH: f32 = 3.5;
+const OVERLAY_LINE_WIDTH: f32 = 3.8;
 const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
     (-0.5, Vec3::new(0.08, 0.35, 0.95)),
     (0.0, Vec3::new(0.12, 0.12, 0.16)),
@@ -149,13 +115,65 @@ const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
     (1.0, Vec3::new(0.92, 0.86, 0.5)),
 ];
 
+struct LayerSpec {
+    label: &'static str,
+    line_width: f32,
+    source: Source,
+}
+
+type CellValues = for<'a> fn(&'a GeneratedWorld) -> &'a [f32];
+
+enum Source {
+    Scalar {
+        values: CellValues,
+        stops: &'static [(f32, Vec3)],
+    },
+    Custom(fn(&GeneratedWorld, f32) -> GizmoAsset),
+}
+
+impl LayerSpec {
+    fn scalar(
+        label: &'static str,
+        line_width: f32,
+        values: CellValues,
+        stops: &'static [(f32, Vec3)],
+    ) -> Self {
+        Self {
+            label,
+            line_width,
+            source: Source::Scalar { values, stops },
+        }
+    }
+
+    fn custom(
+        label: &'static str,
+        line_width: f32,
+        source: fn(&GeneratedWorld, f32) -> GizmoAsset,
+    ) -> Self {
+        Self {
+            label,
+            line_width,
+            source: Source::Custom(source),
+        }
+    }
+
+    fn build(self, world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+        match self.source {
+            Source::Scalar { values, stops } => {
+                scalar_field_asset(&world.voronoi, values(world), stops, radius)
+            }
+            Source::Custom(build) => build(world, radius),
+        }
+    }
+}
+
 impl DiagnosticLayer {
     pub const ALL: &[Self] = &[
-        Self::Points,
         Self::Delaunay,
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
+        Self::Points,
         Self::SeafloorAge,
         Self::BaseElevation,
         Self::Deformation,
@@ -189,191 +207,176 @@ impl DiagnosticLayer {
         self.index() + 1
     }
 
-    const fn line_width(self) -> f32 {
-        match self {
-            Self::Points => 1.8,
-            Self::Delaunay => 1.1,
-            Self::Voronoi => 1.5,
-            Self::Plates => 2.4,
-            Self::Crust
-            | Self::SeafloorAge
-            | Self::BaseElevation
-            | Self::Deformation
-            | Self::Elevation
-            | Self::GeologicalElevation
-            | Self::IsostaticSupport
-            | Self::IsostaticElevation
-            | Self::Insolation
-            | Self::DailyTemperature
-            | Self::AnnualTemperature
-            | Self::SeasonalTemperature
-            | Self::SeasonalMeanTemperature
-            | Self::SeasonalMinimumTemperature
-            | Self::SeasonalMaximumTemperature
-            | Self::SeasonalTemperatureAmplitude => 3.5,
-            Self::Hotspots
-            | Self::OceanicPeaks
-            | Self::VolcanicArcs
-            | Self::Cratons
-            | Self::Basins => 3.8,
-            Self::Boundaries => 4.0,
-            Self::Motion => 2.6,
-        }
-    }
-
     fn radius(self) -> f32 {
-        draw_radius(DrawSurface::Layer(self))
+        DRAW_RADIUS_BASE + self.index() as f32 * DRAW_RADIUS_STEP
     }
 
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Points => "Cell centers",
-            Self::Delaunay => "Delaunay",
-            Self::Voronoi => "Voronoi",
-            Self::Plates => "Tectonic plates",
-            Self::Crust => "Crust classes",
-            Self::SeafloorAge => "Seafloor age",
-            Self::BaseElevation => "Base elevation",
-            Self::Deformation => "Boundary deformation",
-            Self::Elevation => "Tectonic elevation",
-            Self::GeologicalElevation => "Geological elevation",
-            Self::IsostaticSupport => "Isostatic support",
-            Self::IsostaticElevation => "Adjusted elevation",
-            Self::Insolation => "Daily-mean insolation",
-            Self::DailyTemperature => "Daily effective temperature",
-            Self::AnnualTemperature => "Annual effective temperature",
-            Self::SeasonalTemperature => "Seasonal temperature (selected phase)",
-            Self::SeasonalMeanTemperature => "Seasonal temperature (annual mean)",
-            Self::SeasonalMinimumTemperature => "Seasonal temperature (annual minimum)",
-            Self::SeasonalMaximumTemperature => "Seasonal temperature (annual maximum)",
-            Self::SeasonalTemperatureAmplitude => "Seasonal temperature amplitude",
-            Self::Hotspots => "Mantle hotspots",
-            Self::OceanicPeaks => "Seamount / abyssal peaks",
-            Self::VolcanicArcs => "Volcanic arcs",
-            Self::Cratons => "Craton strength",
-            Self::Basins => "Sedimentary basins",
-            Self::Boundaries => "Boundary classes",
-            Self::Motion => "Plate motion",
-        }
+    pub fn label(self) -> &'static str {
+        self.spec().label
     }
 
-    fn build(self, world: &GeneratedWorld) -> GizmoAsset {
-        let radius = self.radius();
+    fn spec(self) -> LayerSpec {
         match self {
-            Self::Points => point_asset(&world.voronoi, radius),
-            Self::Delaunay => delaunay_asset(&world.voronoi, radius),
-            Self::Voronoi => voronoi_asset(&world.voronoi, radius),
-            Self::Plates => plate_asset(
-                &world.voronoi,
-                &world.plates,
-                radius,
-                draw_radius(DrawSurface::PlateBorders),
-            ),
-            Self::Crust => crust_asset(&world.voronoi, &world.plates, &world.crust, radius),
-            Self::SeafloorAge => seafloor_age_asset(&world.voronoi, &world.seafloor_age, radius),
-            Self::BaseElevation => scalar_field_asset(
-                &world.voronoi,
-                &world.base_elevation.cell_elevations,
+            Self::Delaunay => LayerSpec::custom("Delaunay", 1.1, |world, radius| {
+                delaunay_asset(&world.voronoi, radius)
+            }),
+            Self::Voronoi => LayerSpec::custom("Voronoi", 1.5, |world, radius| {
+                voronoi_asset(&world.voronoi, radius)
+            }),
+            Self::Plates => LayerSpec::custom("Tectonic plates", 2.4, |world, radius| {
+                // Borders sit just beneath the boundary-class layer so it can overlay them.
+                let border_radius = DiagnosticLayer::Boundaries.radius() - DRAW_RADIUS_STEP * 0.5;
+                plate_asset(&world.voronoi, &world.plates, radius, border_radius)
+            }),
+            Self::Crust => LayerSpec::custom("Crust classes", FIELD_LINE_WIDTH, |world, radius| {
+                crust_asset(&world.voronoi, &world.plates, &world.crust, radius)
+            }),
+            Self::Points => LayerSpec::custom("Cell centers", 1.8, |world, radius| {
+                point_asset(&world.voronoi, radius)
+            }),
+            Self::SeafloorAge => {
+                LayerSpec::custom("Seafloor age", FIELD_LINE_WIDTH, |world, radius| {
+                    seafloor_age_asset(&world.voronoi, &world.seafloor_age, radius)
+                })
+            }
+            Self::BaseElevation => LayerSpec::scalar(
+                "Base elevation",
+                FIELD_LINE_WIDTH,
+                |world| &world.base_elevation.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
-                radius,
             ),
-            Self::Deformation => scalar_field_asset(
-                &world.voronoi,
-                &world.deformation.cell_deformation,
+            Self::Deformation => LayerSpec::scalar(
+                "Boundary deformation",
+                FIELD_LINE_WIDTH,
+                |world| &world.deformation.cell_deformation,
                 &DEFORMATION_COLOR_STOPS,
-                radius,
             ),
-            Self::Elevation => scalar_field_asset(
-                &world.voronoi,
-                &world.elevation.cell_elevations,
+            Self::Elevation => LayerSpec::scalar(
+                "Tectonic elevation",
+                FIELD_LINE_WIDTH,
+                |world| &world.elevation.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
-                radius,
             ),
-            Self::GeologicalElevation => scalar_field_asset(
-                &world.voronoi,
-                &world.geological_elevation.cell_elevations,
+            Self::GeologicalElevation => LayerSpec::scalar(
+                "Geological elevation",
+                FIELD_LINE_WIDTH,
+                |world| &world.geological_elevation.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
-                radius,
             ),
-            Self::IsostaticSupport => scalar_field_asset(
-                &world.voronoi,
-                &world.isostasy.cell_support,
+            Self::IsostaticSupport => LayerSpec::scalar(
+                "Isostatic support",
+                FIELD_LINE_WIDTH,
+                |world| &world.isostasy.cell_support,
                 &ELEVATION_COLOR_STOPS,
-                radius,
             ),
-            Self::IsostaticElevation => scalar_field_asset(
-                &world.voronoi,
-                &world.isostasy.cell_elevations,
+            Self::IsostaticElevation => LayerSpec::scalar(
+                "Adjusted elevation",
+                FIELD_LINE_WIDTH,
+                |world| &world.isostasy.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
-                radius,
             ),
-            Self::Insolation => insolation_asset(&world.voronoi, &world.solar_forcing, radius),
-            Self::DailyTemperature => scalar_field_asset(
-                &world.voronoi,
-                &world
-                    .radiative_equilibrium
-                    .daily_effective_temperature_kelvin,
+            Self::Insolation => LayerSpec::custom(
+                "Daily-mean insolation",
+                FIELD_LINE_WIDTH,
+                |world, radius| insolation_asset(&world.voronoi, &world.solar_forcing, radius),
+            ),
+            Self::DailyTemperature => LayerSpec::scalar(
+                "Daily effective temperature",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .radiative_equilibrium
+                        .daily_effective_temperature_kelvin
+                },
                 &TEMPERATURE_COLOR_STOPS,
-                radius,
             ),
-            Self::AnnualTemperature => scalar_field_asset(
-                &world.voronoi,
-                &world
-                    .radiative_equilibrium
-                    .annual_effective_temperature_kelvin,
+            Self::AnnualTemperature => LayerSpec::scalar(
+                "Annual effective temperature",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .radiative_equilibrium
+                        .annual_effective_temperature_kelvin
+                },
                 &TEMPERATURE_COLOR_STOPS,
-                radius,
             ),
-            Self::SeasonalTemperature => scalar_field_asset(
-                &world.voronoi,
-                &world.seasonal_thermal.selected_temperature_kelvin,
+            Self::SeasonalTemperature => LayerSpec::scalar(
+                "Seasonal temperature (selected phase)",
+                FIELD_LINE_WIDTH,
+                |world| &world.seasonal_thermal.selected_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
-                radius,
             ),
-            Self::SeasonalMeanTemperature => scalar_field_asset(
-                &world.voronoi,
-                &world.seasonal_thermal.annual_mean_temperature_kelvin,
+            Self::SeasonalMeanTemperature => LayerSpec::scalar(
+                "Seasonal temperature (annual mean)",
+                FIELD_LINE_WIDTH,
+                |world| &world.seasonal_thermal.annual_mean_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
-                radius,
             ),
-            Self::SeasonalMinimumTemperature => scalar_field_asset(
-                &world.voronoi,
-                &world.seasonal_thermal.annual_minimum_temperature_kelvin,
+            Self::SeasonalMinimumTemperature => LayerSpec::scalar(
+                "Seasonal temperature (annual minimum)",
+                FIELD_LINE_WIDTH,
+                |world| &world.seasonal_thermal.annual_minimum_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
-                radius,
             ),
-            Self::SeasonalMaximumTemperature => scalar_field_asset(
-                &world.voronoi,
-                &world.seasonal_thermal.annual_maximum_temperature_kelvin,
+            Self::SeasonalMaximumTemperature => LayerSpec::scalar(
+                "Seasonal temperature (annual maximum)",
+                FIELD_LINE_WIDTH,
+                |world| &world.seasonal_thermal.annual_maximum_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
-                radius,
             ),
-            Self::SeasonalTemperatureAmplitude => scalar_field_asset(
-                &world.voronoi,
-                &world.seasonal_thermal.annual_amplitude_kelvin,
+            Self::SeasonalTemperatureAmplitude => LayerSpec::scalar(
+                "Seasonal temperature amplitude",
+                FIELD_LINE_WIDTH,
+                |world| &world.seasonal_thermal.annual_amplitude_kelvin,
                 &TEMPERATURE_AMPLITUDE_COLOR_STOPS,
-                radius,
             ),
-            Self::Hotspots => scalar_field_asset(
-                &world.voronoi,
-                &world.hotspots.cell_intensities,
+            Self::Hotspots => LayerSpec::scalar(
+                "Mantle hotspots",
+                OVERLAY_LINE_WIDTH,
+                |world| &world.hotspots.cell_intensities,
                 &HOTSPOT_COLOR_STOPS,
-                radius,
             ),
-            Self::OceanicPeaks => oceanic_peak_asset(&world.voronoi, &world.oceanic_peaks, radius),
-            Self::VolcanicArcs => volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius),
-            Self::Cratons => scalar_field_asset(
-                &world.voronoi,
-                &world.cratons.cell_strengths,
+            Self::OceanicPeaks => LayerSpec::custom(
+                "Seamount / abyssal peaks",
+                OVERLAY_LINE_WIDTH,
+                |world, radius| oceanic_peak_asset(&world.voronoi, &world.oceanic_peaks, radius),
+            ),
+            Self::VolcanicArcs => {
+                LayerSpec::custom("Volcanic arcs", OVERLAY_LINE_WIDTH, |world, radius| {
+                    volcanic_arc_asset(&world.voronoi, &world.volcanic_arcs, radius)
+                })
+            }
+            Self::Cratons => LayerSpec::scalar(
+                "Craton strength",
+                OVERLAY_LINE_WIDTH,
+                |world| &world.cratons.cell_strengths,
                 &CRATON_COLOR_STOPS,
-                radius,
             ),
-            Self::Basins => basin_asset(&world.voronoi, &world.basins.cell_basins, radius),
-            Self::Boundaries => boundary_asset(&world.voronoi, &world.boundaries, radius),
-            Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
+            Self::Basins => {
+                LayerSpec::custom("Sedimentary basins", OVERLAY_LINE_WIDTH, |world, radius| {
+                    basin_asset(&world.voronoi, &world.basins.cell_basins, radius)
+                })
+            }
+            Self::Boundaries => LayerSpec::custom("Boundary classes", 4.0, |world, radius| {
+                boundary_asset(&world.voronoi, &world.boundaries, radius)
+            }),
+            Self::Motion => LayerSpec::custom("Plate motion", 2.6, |world, radius| {
+                motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius)
+            }),
         }
     }
 }
+
+const _: () = {
+    let mut index = 0;
+    while index < DiagnosticLayer::ALL.len() {
+        assert!(
+            DiagnosticLayer::ALL[index] as usize == index,
+            "ALL must be in declaration order"
+        );
+        index += 1;
+    }
+};
 
 fn insolation_asset(mesh: &SphereMesh, forcing: &SolarForcing, radius: f32) -> GizmoAsset {
     let maximum = forcing.diagnostics.daily_mean.maximum;
@@ -458,14 +461,6 @@ fn seafloor_age_asset(mesh: &SphereMesh, age: &SeafloorAge, radius: f32) -> Gizm
     })
 }
 
-fn draw_radius(surface: DrawSurface) -> f32 {
-    let position = DRAW_ORDER
-        .iter()
-        .position(|&candidate| candidate == surface)
-        .expect("every draw surface must have a declared order");
-    DRAW_RADIUS_BASE + position as f32 * DRAW_RADIUS_STEP
-}
-
 #[derive(Resource)]
 pub struct LayerSettings {
     visible: [bool; DiagnosticLayer::COUNT],
@@ -536,11 +531,12 @@ fn setup_scene(
 }
 
 fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: DiagnosticLayer) {
+    let spec = layer.spec();
     commands.spawn((
         Gizmo {
             handle,
             line_config: GizmoLineConfig {
-                width: layer.line_width(),
+                width: spec.line_width,
                 perspective: false,
                 ..default()
             },
@@ -575,7 +571,8 @@ fn rebuild_diagnostic_assets(
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
     for &layer in DiagnosticLayer::ALL {
-        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build(&world);
+        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() =
+            layer.spec().build(&world, layer.radius());
     }
 }
 
@@ -792,32 +789,4 @@ fn to_bevy(point: SphereVec3) -> Vec3 {
 fn id_color(id: usize) -> Color {
     let hue = (id as f32 * 137.508) % 360.0;
     Color::hsla(hue, 0.62, 0.62, 0.95)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn draw_order_covers_each_surface_once_with_unique_radii() {
-        for &layer in DiagnosticLayer::ALL {
-            assert_eq!(
-                DRAW_ORDER
-                    .iter()
-                    .filter(|&&surface| surface == DrawSurface::Layer(layer))
-                    .count(),
-                1
-            );
-        }
-        assert_eq!(
-            DRAW_ORDER
-                .iter()
-                .filter(|&&surface| surface == DrawSurface::PlateBorders)
-                .count(),
-            1
-        );
-
-        let radii: Vec<_> = DRAW_ORDER.iter().copied().map(draw_radius).collect();
-        assert!(radii.windows(2).all(|pair| pair[0] < pair[1]));
-    }
 }
