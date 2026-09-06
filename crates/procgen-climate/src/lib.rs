@@ -37,6 +37,7 @@ pub struct InsolationSummary {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SolarForcingDiagnostics {
+    pub orbital_phase: f64,
     pub orbital_distance_meters: f64,
     pub stellar_flux_watts_per_square_meter: f64,
     pub solar_declination_radians: f64,
@@ -111,7 +112,7 @@ pub fn derive_solar_forcing(
     let latitudes = mesh
         .cell_centers
         .iter()
-        .map(|center| LatitudeTrig::from_sine(f64::from(center.y / mesh.radius)))
+        .map(|center| SinCos::from_sine(f64::from(center.y / mesh.radius)))
         .collect::<Vec<_>>();
     let daily = latitudes
         .iter()
@@ -146,6 +147,7 @@ pub fn derive_solar_forcing(
 
     Ok(SolarForcing {
         diagnostics: SolarForcingDiagnostics {
+            orbital_phase,
             orbital_distance_meters: phase_state.distance_meters,
             stellar_flux_watts_per_square_meter: phase_state.stellar_flux,
             solar_declination_radians: phase_state.declination,
@@ -174,7 +176,7 @@ struct OrbitalState {
     distance_meters: f64,
     stellar_flux: f64,
     declination: f64,
-    declination_trig: LatitudeTrig,
+    declination_trig: SinCos,
 }
 
 fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
@@ -193,7 +195,7 @@ fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
         distance_meters,
         stellar_flux,
         declination,
-        declination_trig: LatitudeTrig {
+        declination_trig: SinCos {
             sine: declination.sin(),
             cosine: declination.cos(),
         },
@@ -226,12 +228,12 @@ enum Daylight {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct LatitudeTrig {
+struct SinCos {
     sine: f64,
     cosine: f64,
 }
 
-impl LatitudeTrig {
+impl SinCos {
     fn from_sine(sine: f64) -> Self {
         let sine = sine.clamp(-1.0, 1.0);
         Self {
@@ -254,44 +256,25 @@ struct DaylightWindow {
 }
 
 fn daylight_window(meridional: f64, diurnal: f64) -> DaylightWindow {
-    if diurnal.abs() <= f64::EPSILON {
-        return if meridional > 0.0 {
-            DaylightWindow {
-                sunset_hour_angle: PI,
-                daylight: Daylight::PolarDay,
-            }
-        } else if meridional < 0.0 {
-            DaylightWindow {
-                sunset_hour_angle: 0.0,
-                daylight: Daylight::PolarNight,
-            }
-        } else {
-            DaylightWindow {
-                sunset_hour_angle: 0.0,
-                daylight: Daylight::Cycles,
-            }
-        };
-    }
+    // Cosine of the sunset hour angle: infinite when the sun never crosses
+    // the horizon, and NaN only at a pole on the equinox.
     let sunset_argument = -meridional / diurnal;
-    if sunset_argument >= 1.0 {
-        DaylightWindow {
-            sunset_hour_angle: 0.0,
-            daylight: Daylight::PolarNight,
-        }
+    let (sunset_hour_angle, daylight) = if sunset_argument >= 1.0 {
+        (0.0, Daylight::PolarNight)
     } else if sunset_argument <= -1.0 {
-        DaylightWindow {
-            sunset_hour_angle: PI,
-            daylight: Daylight::PolarDay,
-        }
+        (PI, Daylight::PolarDay)
+    } else if sunset_argument.is_nan() {
+        (0.0, Daylight::Cycles)
     } else {
-        DaylightWindow {
-            sunset_hour_angle: sunset_argument.acos(),
-            daylight: Daylight::Cycles,
-        }
+        (sunset_argument.acos(), Daylight::Cycles)
+    };
+    DaylightWindow {
+        sunset_hour_angle,
+        daylight,
     }
 }
 
-fn daily_mean_at_latitude(latitude: LatitudeTrig, state: OrbitalState) -> DailyMeanInsolation {
+fn daily_mean_at_latitude(latitude: SinCos, state: OrbitalState) -> DailyMeanInsolation {
     let meridional = latitude.sine * state.declination_trig.sine;
     let diurnal = latitude.cosine * state.declination_trig.cosine;
     let daylight = daylight_window(meridional, diurnal);
@@ -464,7 +447,7 @@ mod tests {
     fn exact_poles_are_finite_at_equinox_and_classified_at_solstice() {
         let equinox = orbital_state(circular_planet(0.0, 0.0), 0.0);
         assert_eq!(
-            daily_mean_at_latitude(LatitudeTrig::from_sine(1.0), equinox),
+            daily_mean_at_latitude(SinCos::from_sine(1.0), equinox),
             DailyMeanInsolation {
                 watts_per_square_meter: 0.0,
                 daylight: Daylight::Cycles,
@@ -473,11 +456,11 @@ mod tests {
 
         let solstice = orbital_state(circular_planet(23.5_f64.to_radians(), PI * 0.5), 0.0);
         assert_eq!(
-            daily_mean_at_latitude(LatitudeTrig::from_sine(1.0), solstice).daylight,
+            daily_mean_at_latitude(SinCos::from_sine(1.0), solstice).daylight,
             Daylight::PolarDay
         );
         assert_eq!(
-            daily_mean_at_latitude(LatitudeTrig::from_sine(-1.0), solstice),
+            daily_mean_at_latitude(SinCos::from_sine(-1.0), solstice),
             DailyMeanInsolation {
                 watts_per_square_meter: 0.0,
                 daylight: Daylight::PolarNight,

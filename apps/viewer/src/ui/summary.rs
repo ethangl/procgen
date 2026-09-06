@@ -31,7 +31,7 @@ fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         stat(
             ui,
             "Orbital phase",
-            format!("{:.3}", world.config.solar_forcing.orbital_phase),
+            format!("{:.3}", diagnostics.orbital_phase),
         );
         stat(
             ui,

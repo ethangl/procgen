@@ -1,5 +1,6 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
+use procgen_climate::SolarForcing;
 use procgen_core::Vec3 as SphereVec3;
 use procgen_geology::{OceanicPeakField, OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
@@ -256,21 +257,7 @@ impl DiagnosticLayer {
                 &ELEVATION_COLOR_STOPS,
                 radius,
             ),
-            Self::Insolation => {
-                let maximum = world
-                    .solar_forcing
-                    .diagnostics
-                    .daily_mean
-                    .maximum_watts_per_square_meter;
-                let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
-                let normalized = world
-                    .solar_forcing
-                    .daily_mean_insolation
-                    .iter()
-                    .map(|value| value * reciprocal)
-                    .collect::<Vec<_>>();
-                scalar_field_asset(&world.voronoi, &normalized, &INSOLATION_COLOR_STOPS, radius)
-            }
+            Self::Insolation => insolation_asset(&world.voronoi, &world.solar_forcing, radius),
             Self::Hotspots => scalar_field_asset(
                 &world.voronoi,
                 &world.hotspots.cell_intensities,
@@ -290,6 +277,20 @@ impl DiagnosticLayer {
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn insolation_asset(mesh: &SphereMesh, forcing: &SolarForcing, radius: f32) -> GizmoAsset {
+    let maximum = forcing
+        .diagnostics
+        .daily_mean
+        .maximum_watts_per_square_meter;
+    let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
+    let normalized = forcing
+        .daily_mean_insolation
+        .iter()
+        .map(|value| value * reciprocal)
+        .collect::<Vec<_>>();
+    scalar_field_asset(mesh, &normalized, &INSOLATION_COLOR_STOPS, radius)
 }
 
 fn oceanic_peak_asset(mesh: &SphereMesh, field: &OceanicPeakField, radius: f32) -> GizmoAsset {
