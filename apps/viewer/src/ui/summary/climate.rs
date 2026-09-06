@@ -10,6 +10,131 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     seasonal_thermal_summary(ui, world);
     atmospheric_circulation_summary(ui, world);
     moisture_transport_summary(ui, world);
+    cryosphere_summary(ui, world);
+}
+
+fn cryosphere_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.cryosphere.diagnostics;
+    let config = world.config.cryosphere;
+    stat_grid(ui, "Cryosphere", "cryosphere", |ui| {
+        stat(ui, "Maximum refinements", config.maximum_iterations);
+        stat(ui, "Refinements used", diagnostics.maximum_iterations_used);
+        area_weighted_stats(
+            ui,
+            "Selected snowfall",
+            "kg/m2/day",
+            &diagnostics.selected_snowfall_kg_per_m2_per_day,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Selected melt",
+            "kg/m2/day",
+            &diagnostics.selected_melt_kg_per_m2_per_day,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Snow cover",
+            "fraction",
+            &diagnostics.selected_snow_cover_fraction,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Land-ice cover",
+            "fraction",
+            &diagnostics.land_ice_cover_fraction,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Sea-ice cover",
+            "fraction",
+            &diagnostics.selected_sea_ice_cover_fraction,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Annual snowfall",
+            "kg/m2",
+            &diagnostics.annual_snowfall_kg_per_m2,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Annual snow melt",
+            "kg/m2",
+            &diagnostics.annual_snow_melt_kg_per_m2,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Land-ice accumulation",
+            "kg/m2",
+            &diagnostics.annual_land_ice_accumulation_kg_per_m2,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Land-ice ablation",
+            "kg/m2",
+            &diagnostics.annual_land_ice_ablation_kg_per_m2,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Sea-ice growth",
+            "fraction",
+            &diagnostics.annual_sea_ice_growth_fraction,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Sea-ice melt",
+            "fraction",
+            &diagnostics.annual_sea_ice_melt_fraction,
+            scientific_three,
+        );
+        stat(
+            ui,
+            "Snow-covered cells",
+            diagnostics.snow_covered_cell_count,
+        );
+        stat(ui, "Land-ice cells", diagnostics.land_ice_cell_count);
+        stat(ui, "Sea-ice cells", diagnostics.sea_ice_cell_count);
+        stat(
+            ui,
+            "Snow closure",
+            format!(
+                "{:.3e} kg/m2",
+                diagnostics.maximum_snow_closure_error_kg_per_m2
+            ),
+        );
+        stat(
+            ui,
+            "Sea-ice closure",
+            format!("{:.3e}", diagnostics.maximum_sea_ice_closure_error),
+        );
+        stat(
+            ui,
+            "Snow mass residual",
+            format!(
+                "{:.3e} kg/m2",
+                diagnostics.snow_mass_balance_error_kg_per_m2
+            ),
+        );
+        stat(
+            ui,
+            "Land-ice mass balance",
+            format!("{:.3e} kg/m2", diagnostics.land_ice_mass_balance_kg_per_m2),
+        );
+        stat(
+            ui,
+            "Sea-ice cover residual",
+            format!("{:.3e}", diagnostics.sea_ice_cover_balance_error),
+        );
+    });
 }
 
 fn moisture_transport_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {

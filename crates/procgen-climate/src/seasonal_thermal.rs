@@ -1,13 +1,12 @@
 use crate::{
     AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SECONDS_PER_DAY,
-    SolarForcingConfig, SolarForcingError,
-    orbit::{OrbitalSampler, daily_mean_at, orbital_state},
+    SolarForcingConfig, SolarForcingError, Surface,
+    orbit::{OrbitalSampler, daily_mean_at, orbital_state, selected_sample_index},
     radiative_equilibrium::RadiativeEquilibriumModel,
     validate_range,
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::is_land;
 use std::{fmt, ops::RangeInclusive};
 
 pub const THERMAL_CAPACITY_RANGE: RangeInclusive<f64> = 0.0..=1.0e12;
@@ -55,21 +54,6 @@ pub struct SeasonalThermalInputs<'a> {
     pub final_elevation: &'a [f32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Surface {
-    Land,
-    Ocean,
-}
-
-impl fmt::Display for Surface {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Land => formatter.write_str("land"),
-            Self::Ocean => formatter.write_str("ocean"),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceThermalDiagnostics {
     pub cell_count: usize,
@@ -95,6 +79,10 @@ pub struct SeasonalThermalDiagnostics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeasonalThermalResponse {
     pub selected_temperature_kelvin: Vec<f32>,
+    /// Cell-major representative temperatures at each uniform interval midpoint.
+    /// Integrated cycles linearly interpolate their boundary states.
+    pub annual_temperature_samples_kelvin: Vec<f32>,
+    pub annual_sample_count: usize,
     pub annual_mean_temperature_kelvin: Vec<f32>,
     pub annual_minimum_temperature_kelvin: Vec<f32>,
     pub annual_maximum_temperature_kelvin: Vec<f32>,
@@ -184,6 +172,13 @@ struct CellCycle {
     fixed_point_iterations: usize,
 }
 
+#[derive(Clone, Copy)]
+struct PeriodicCycle {
+    selected: f64,
+    closure_error: f64,
+    fixed_point_iterations: usize,
+}
+
 impl CellCycle {
     fn from_orbit(
         orbit: &[f64],
@@ -230,6 +225,8 @@ impl SurfaceAggregate {
 
 struct ResponseAccumulator {
     selected: Vec<f32>,
+    annual_samples: Vec<f32>,
+    annual_sample_count: usize,
     means: Vec<f32>,
     minima: Vec<f32>,
     maxima: Vec<f32>,
@@ -241,9 +238,11 @@ struct ResponseAccumulator {
 }
 
 impl ResponseAccumulator {
-    fn new(cell_count: usize) -> Self {
+    fn new(cell_count: usize, annual_sample_count: usize) -> Self {
         Self {
             selected: Vec::with_capacity(cell_count),
+            annual_samples: Vec::with_capacity(cell_count * annual_sample_count),
+            annual_sample_count,
             means: Vec::with_capacity(cell_count),
             minima: Vec::with_capacity(cell_count),
             maxima: Vec::with_capacity(cell_count),
@@ -258,6 +257,7 @@ impl ResponseAccumulator {
     fn push(
         &mut self,
         cycle: CellCycle,
+        annual_samples: &[f64],
         surface: Surface,
         area: f32,
     ) -> Result<(), SeasonalThermalError> {
@@ -278,6 +278,8 @@ impl ResponseAccumulator {
 
         let selected = cycle.selected as f32;
         self.selected.push(selected);
+        self.annual_samples
+            .extend(annual_samples.iter().map(|&value| value as f32));
         self.means.push(cycle.mean as f32);
         self.minima.push(cycle.minimum as f32);
         self.maxima.push(cycle.maximum as f32);
@@ -307,6 +309,8 @@ impl ResponseAccumulator {
         };
         SeasonalThermalResponse {
             selected_temperature_kelvin: self.selected,
+            annual_temperature_samples_kelvin: self.annual_samples,
+            annual_sample_count: self.annual_sample_count,
             annual_mean_temperature_kelvin: self.means,
             annual_minimum_temperature_kelvin: self.minima,
             annual_maximum_temperature_kelvin: self.maxima,
@@ -341,20 +345,17 @@ pub fn derive_seasonal_thermal_response(
     let sampler = OrbitalSampler::new(planet, sample_count);
     let selected_phase = solar_forcing.orbital_phase.rem_euclid(1.0);
     let selected_state = orbital_state(planet, selected_phase);
-    let mut output = ResponseAccumulator::new(mesh.cell_count());
+    let mut output = ResponseAccumulator::new(mesh.cell_count(), sample_count);
     let mut targets = Vec::with_capacity(sample_count);
     let mut endpoints = Vec::with_capacity(sample_count + 1);
+    let mut samples = Vec::with_capacity(sample_count);
 
     for ((&elevation, &center), &area) in final_elevation
         .iter()
         .zip(&mesh.cell_centers)
         .zip(&mesh.cell_areas)
     {
-        let surface = if is_land(elevation) {
-            Surface::Land
-        } else {
-            Surface::Ocean
-        };
+        let surface = Surface::from_elevation(elevation);
         let heat_capacity = config.heat_capacity(surface);
         let latitude_sine = f64::from(center.y / mesh.radius);
         let target = |state| {
@@ -365,13 +366,30 @@ pub fn derive_seasonal_thermal_response(
         let selected_target = target(selected_state);
         // Zero capacity is the documented exact radiative response; positive
         // capacity samples the integrated periodic cycle.
-        let cycle = if heat_capacity == 0.0 {
-            CellCycle::from_orbit(&targets, selected_target, 0.0, 0)
+        let (cycle, annual_samples) = if heat_capacity == 0.0 {
+            (
+                CellCycle::from_orbit(&targets, selected_target, 0.0, 0),
+                targets.as_slice(),
+            )
         } else {
             let coefficient = step_seconds * radiation.emission_coefficient() / heat_capacity;
-            solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?
+            let solution =
+                solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?;
+            samples.clear();
+            samples.extend(
+                endpoints
+                    .windows(2)
+                    .map(|interval| (interval[0] + interval[1]) * 0.5),
+            );
+            let cycle = CellCycle::from_orbit(
+                &samples,
+                solution.selected,
+                solution.closure_error,
+                solution.fixed_point_iterations,
+            );
+            (cycle, samples.as_slice())
         };
-        output.push(cycle, surface, area)?;
+        output.push(cycle, annual_samples, surface, area)?;
     }
     Ok(output.finish(mesh))
 }
@@ -411,11 +429,17 @@ fn solve_periodic_cycle(
     selected_phase: f64,
     coefficient: f64,
     endpoints: &mut Vec<f64>,
-) -> Result<CellCycle, SeasonalThermalError> {
+) -> Result<PeriodicCycle, SeasonalThermalError> {
     let minimum = targets.iter().copied().fold(f64::INFINITY, f64::min);
     let maximum = targets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if minimum == maximum {
-        return Ok(CellCycle::from_orbit(targets, minimum, 0.0, 0));
+        endpoints.clear();
+        endpoints.resize(targets.len() + 1, minimum);
+        return Ok(PeriodicCycle {
+            selected: minimum,
+            closure_error: 0.0,
+            fixed_point_iterations: 0,
+        });
     }
     let mut initial = targets.iter().sum::<f64>() / targets.len() as f64;
     for iteration in 1..=FIXED_POINT_ITERATION_LIMIT {
@@ -423,12 +447,11 @@ fn solve_periodic_cycle(
         let end = *endpoints.last().expect("an orbit always has endpoints");
         let residual = end - initial;
         if residual.abs() <= FIXED_POINT_TOLERANCE_KELVIN {
-            return Ok(CellCycle::from_orbit(
-                &endpoints[..targets.len()],
-                sample_cycle(endpoints, selected_phase),
-                residual.abs(),
-                iteration,
-            ));
+            return Ok(PeriodicCycle {
+                selected: sample_cycle(endpoints, selected_phase),
+                closure_error: residual.abs(),
+                fixed_point_iterations: iteration,
+            });
         }
         let slope = derivative - 1.0;
         if !slope.is_finite() || slope.abs() < f64::EPSILON {
@@ -441,9 +464,8 @@ fn solve_periodic_cycle(
 
 fn sample_cycle(endpoints: &[f64], phase: f64) -> f64 {
     let sample_count = endpoints.len() - 1;
-    let position = phase * sample_count as f64;
-    // rem_euclid can round a tiny negative phase to exactly 1.0.
-    let lower = position.floor() as usize % sample_count;
+    let position = phase.rem_euclid(1.0) * sample_count as f64;
+    let lower = selected_sample_index(phase, sample_count);
     let fraction = position - position.floor();
     endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction
 }
@@ -598,6 +620,42 @@ mod tests {
         {
             assert!((thermal - radiative).abs() <= 1.0e-4);
         }
+        let sampler = OrbitalSampler::new(Planet::EARTH, 96);
+        let radiation =
+            RadiativeEquilibriumModel::new(RadiativeEquilibriumConfig::EARTHLIKE).unwrap();
+        let latitude_sine = f64::from(mesh.cell_centers[0].y / mesh.radius);
+        let expected_midpoint = radiation.temperature_kelvin(
+            daily_mean_at(latitude_sine, sampler.midpoint_states()[0]).watts_per_square_meter,
+        );
+        assert!(
+            (f64::from(thermal.annual_temperature_samples_kelvin[0]) - expected_midpoint).abs()
+                <= 1.0e-4
+        );
+    }
+
+    #[test]
+    fn inertial_annual_samples_interpolate_interval_midpoints() {
+        let targets = [250.0, 280.0, 300.0, 265.0];
+        let mut endpoints = Vec::new();
+        let solution = solve_periodic_cycle(&targets, 0.3, 1.0e-8, &mut endpoints).unwrap();
+        let samples = endpoints
+            .windows(2)
+            .map(|interval| (interval[0] + interval[1]) * 0.5)
+            .collect::<Vec<_>>();
+        let cycle = CellCycle::from_orbit(
+            &samples,
+            solution.selected,
+            solution.closure_error,
+            solution.fixed_point_iterations,
+        );
+
+        assert_eq!(samples.len(), targets.len());
+        for (sample, interval) in samples.iter().zip(endpoints.windows(2)) {
+            assert!((sample - (interval[0] + interval[1]) * 0.5).abs() <= f64::EPSILON);
+        }
+        assert!(
+            (cycle.mean - samples.iter().sum::<f64>() / samples.len() as f64).abs() <= f64::EPSILON
+        );
     }
 
     #[test]

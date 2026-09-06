@@ -149,13 +149,17 @@ Completed foundations:
   it over mesh edges with the wind field, and removes capacity condensation,
   background rainfall, and bounded terrain-ascent orographic precipitation. It
   reports a spherical-area-weighted mass-balance residual and retains no state
-  between runs. It adds no surface or subsurface hydrology, ocean circulation,
-  cryosphere, or acceleration backend. See
+  between runs. A sixth pure stage consumes the sampled annual temperature
+  cycle, precipitation climatology, and final elevation/ocean mask to solve
+  bounded periodic snow and sea-ice reservoirs. It derives selected-phase snow
+  and sea ice plus equilibrium land-ice cover from perennial accumulation and
+  ablation potential, with no latitude assignment or coupled feedback. See
   `docs/solar-forcing.md`,
   `docs/radiative-equilibrium-temperature.md`, and
   `docs/seasonal-thermal-response.md`, and
   `docs/coarse-atmospheric-circulation.md`, and
-  `docs/moisture-transport.md`.
+  `docs/moisture-transport.md`, and
+  `docs/cryosphere.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

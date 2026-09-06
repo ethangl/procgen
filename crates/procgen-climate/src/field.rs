@@ -1,4 +1,31 @@
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::is_land;
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    Land,
+    Ocean,
+}
+
+impl Surface {
+    pub fn from_elevation(elevation: f32) -> Self {
+        if is_land(elevation) {
+            Self::Land
+        } else {
+            Self::Ocean
+        }
+    }
+}
+
+impl fmt::Display for Surface {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Land => formatter.write_str("land"),
+            Self::Ocean => formatter.write_str("ocean"),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AreaWeightedSummary {
@@ -24,6 +51,16 @@ impl AreaWeightedSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use procgen_tectonics::SEA_LEVEL;
+
+    #[test]
+    fn surface_uses_the_authoritative_elevation_boundary() {
+        assert_eq!(Surface::from_elevation(SEA_LEVEL), Surface::Ocean);
+        assert_eq!(
+            Surface::from_elevation(f32::from_bits(SEA_LEVEL.to_bits() + 1)),
+            Surface::Land
+        );
+    }
 
     #[test]
     fn finiteness_checks_every_aggregate() {

@@ -46,6 +46,11 @@ over mesh edges with those winds, and derives capacity condensation, background
 rainfall, and bounded terrain-ascent orographic precipitation. It reports final
 humidity, duration-mean precipitation components, and a water-budget residual
 without retaining state between regenerations.
+A sixth stage uses the sampled seasonal temperatures, precipitation, and final
+land/ocean mask to solve bounded periodic snow and sea-ice reservoirs and an
+equilibrium land-ice cover fraction. The bounded solve starts from fixed known
+bounds on every regeneration and contains no fixed latitude ice assignment or
+climate feedback.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
@@ -54,8 +59,9 @@ The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
 adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, daily- and
 annual-temperature, atmospheric supporting scalars, wind speed and vectors,
-humidity, precipitation, motion, and final-boundary diagnostics and reports aggregate
-statistics plus stage timings. Plate interiors use stable per-plate colors.
+humidity, precipitation, snow cover, land-ice cover, sea-ice cover, motion, and
+final-boundary diagnostics and reports aggregate statistics plus stage timings.
+Plate interiors use stable per-plate colors.
 Crust is blue for oceanic, amber for continental, and white where the classes
 meet. Seafloor age runs from cyan ridge cells to dark blue old crust, with
 continental cells brown. Base, tectonic, and geological elevation use a
@@ -86,6 +92,10 @@ fixed-step water-budget, capacity, evaporation, rainfall, orographic, terrain
 ascent, and transport parameters. The physical terrain scale lives with the
 planet controls. Aggregate diagnostics separate condensation
 and orographic precipitation and report mass-balance closure.
+Cryosphere controls expose temperature thresholds, snow capacities, degree-day
+melt factors, sea-ice growth and melt rates, and fixed-point solver bounds.
+Diagnostics report annual accumulation/ablation, covered-cell counts, periodic
+closure, and snow-mass and sea-ice-cover balance residuals.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.
