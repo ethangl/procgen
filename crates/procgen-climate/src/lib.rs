@@ -5,6 +5,7 @@
 //! atmospheric physics, or coupled feedbacks.
 
 mod field;
+mod orbit;
 mod radiative_equilibrium;
 mod seasonal_thermal;
 mod solar_forcing;
@@ -17,8 +18,8 @@ pub use radiative_equilibrium::{
 };
 pub use seasonal_thermal::{
     ORBITAL_PERIOD_DAYS_RANGE, SeasonalThermalConfig, SeasonalThermalDiagnostics,
-    SeasonalThermalError, SeasonalThermalInputs, SeasonalThermalResponse, THERMAL_CAPACITY_RANGE,
-    THERMAL_SAMPLE_RANGE, derive_seasonal_thermal_response,
+    SeasonalThermalError, SeasonalThermalInputs, SeasonalThermalResponse, Surface,
+    SurfaceThermalDiagnostics, THERMAL_CAPACITY_RANGE, derive_seasonal_thermal_response,
 };
 pub use solar_forcing::{
     ANNUAL_SAMPLE_RANGE, SolarForcing, SolarForcingConfig, SolarForcingDiagnostics,

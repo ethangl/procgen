@@ -59,8 +59,9 @@ yellow at the current field maximum; the controls expose orbital phase and the
 bounded annual sampling count. Temperature uses a fixed kelvin color scale from
 dark zero through cold blue, pale freezing-point temperatures, warm yellow, and
 hot red. Its controls expose the uniform albedo and emissivity.
-Seasonal thermal controls expose land and ocean heat capacity, orbital period,
-and bounded integration samples. Separate layers show the selected phase,
+Seasonal thermal controls expose land and ocean heat capacity and orbital
+period; the solar-forcing annual sample control is shared by both stages.
+Separate layers show the selected phase,
 annual mean, annual minimum, annual maximum, and peak-to-trough amplitude;
 summary diagnostics include surface-class aggregates and periodic closure.
 

@@ -4,7 +4,7 @@ use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_climate::{
     ANNUAL_SAMPLE_RANGE, ORBITAL_PERIOD_DAYS_RANGE, RadiativeEquilibriumConfig,
-    SeasonalThermalConfig, SolarForcingConfig, THERMAL_CAPACITY_RANGE, THERMAL_SAMPLE_RANGE,
+    SeasonalThermalConfig, SolarForcingConfig, THERMAL_CAPACITY_RANGE,
 };
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
@@ -119,13 +119,6 @@ fn seasonal_thermal_controls(ui: &mut egui::Ui, config: &mut SeasonalThermalConf
         "Orbital period days",
         &mut config.orbital_period_days,
         ORBITAL_PERIOD_DAYS_RANGE,
-        1.0,
-    );
-    drag_value(
-        ui,
-        "Thermal samples",
-        &mut config.sample_count,
-        THERMAL_SAMPLE_RANGE,
         1.0,
     );
 }

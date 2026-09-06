@@ -12,17 +12,19 @@ C dT/dt = epsilon sigma (T_eq(t)^4 - T(t)^4)
 cell's daily-mean insolation at orbital phase `t`. `epsilon` and `sigma` are the
 same explicit emissivity and Stefan-Boltzmann constant used by the radiative
 stage. `C` is an explicit effective surface heat capacity in J/m2/K. Final
-elevation at or above the supplied sea level selects the land capacity; lower
-elevation selects the ocean capacity. The stage does not inspect tectonic crust
-classes.
+elevation strictly above the supplied sea level selects the land capacity;
+elevation at or below sea level selects the ocean capacity. This is the shared
+tectonic elevation predicate used elsewhere in the pipeline. The stage does not
+inspect tectonic crust classes.
 
-The orbit is divided into a bounded 4 to 4096 uniform elapsed-time intervals.
-Forcing is sampled at interval midpoints. Longwave emission is integrated with
-an implicit step whose unique solution is bounded between the previous
-temperature and the current radiative target. This makes large time steps and
-small positive capacities stable without inventing temperature overshoot. A
-capacity of exactly zero bypasses integration and follows phase-resolved
-radiative equilibrium exactly.
+The orbit uses the solar-forcing stage's single bounded count of 4 to 4096
+uniform elapsed-time intervals; seasonal response has no second sampling
+setting that can disagree. Forcing is sampled at interval midpoints. Longwave
+emission is integrated with an implicit step whose unique solution is bounded
+between the previous temperature and the current radiative target. This makes
+large time steps and small positive capacities stable without inventing
+temperature overshoot. A capacity of exactly zero bypasses integration and
+follows phase-resolved radiative equilibrium exactly.
 
 Positive-capacity cells solve their initial temperature as a fixed point of one
 complete orbit. Consequently every generation starts directly on the periodic
@@ -43,7 +45,8 @@ and periodic-convergence measurements.
 - land heat capacity: `5e7 J/m2/K`
 - ocean heat capacity: `4e8 J/m2/K`
 - orbital period: `365.256363004 days`
-- integration samples: `96`
+
+The default solar-forcing config supplies the shared `96` orbital samples.
 
 Heat capacity may be exactly zero or is bounded to `[1, 1e12] J/m2/K`; orbital
 period is bounded to `[0.01, 1e6]` days. These are execution and numerical-safety

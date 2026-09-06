@@ -1,14 +1,15 @@
 use crate::{
-    AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError,
-    radiative_equilibrium::{effective_temperature_kelvin, validate_config as validate_radiation},
-    solar_forcing::{daily_mean_at_latitude_sine, orbital_state},
+    AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SolarForcingConfig,
+    SolarForcingError,
+    orbit::{OrbitalSampler, daily_mean_at},
+    radiative_equilibrium::RadiativeEquilibriumModel,
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::is_land;
 use std::{fmt, ops::RangeInclusive};
 
 const SECONDS_PER_DAY: f64 = 86_400.0;
-pub const THERMAL_SAMPLE_RANGE: RangeInclusive<usize> = 4..=4_096;
 pub const THERMAL_CAPACITY_RANGE: RangeInclusive<f64> = 0.0..=1.0e12;
 pub const ORBITAL_PERIOD_DAYS_RANGE: RangeInclusive<f64> = 0.01..=1.0e6;
 const MINIMUM_POSITIVE_THERMAL_CAPACITY: f64 = 1.0;
@@ -26,8 +27,6 @@ pub struct SeasonalThermalConfig {
     /// Orbital period in Earth days. Orbital geometry deliberately does not
     /// infer this from an unmodelled stellar or planetary mass.
     pub orbital_period_days: f64,
-    /// Uniform elapsed-time intervals used to integrate one orbit.
-    pub sample_count: usize,
 }
 
 impl SeasonalThermalConfig {
@@ -36,17 +35,53 @@ impl SeasonalThermalConfig {
         land_heat_capacity: 5.0e7,
         ocean_heat_capacity: 4.0e8,
         orbital_period_days: 365.256_363_004,
-        sample_count: 96,
     };
+
+    fn heat_capacity(self, surface: Surface) -> f64 {
+        match surface {
+            Surface::Land => self.land_heat_capacity,
+            Surface::Ocean => self.ocean_heat_capacity,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SeasonalThermalInputs<'a> {
     pub planet: Planet,
-    pub selected_orbital_phase: f64,
+    pub solar_forcing: SolarForcingConfig,
     pub radiative_equilibrium: RadiativeEquilibriumConfig,
     pub final_elevation: &'a [f32],
     pub sea_level: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    Land,
+    Ocean,
+}
+
+impl Surface {
+    const fn index(self) -> usize {
+        match self {
+            Self::Land => 0,
+            Self::Ocean => 1,
+        }
+    }
+}
+
+impl fmt::Display for Surface {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Land => formatter.write_str("land"),
+            Self::Ocean => formatter.write_str("ocean"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceThermalDiagnostics {
+    pub cell_count: usize,
+    pub selected_area_weighted_mean_kelvin: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,10 +91,8 @@ pub struct SeasonalThermalDiagnostics {
     pub annual_minimum: AreaWeightedSummary,
     pub annual_maximum: AreaWeightedSummary,
     pub annual_amplitude: AreaWeightedSummary,
-    pub land_cell_count: usize,
-    pub ocean_cell_count: usize,
-    pub selected_land_area_weighted_mean_kelvin: Option<f64>,
-    pub selected_ocean_area_weighted_mean_kelvin: Option<f64>,
+    pub land: SurfaceThermalDiagnostics,
+    pub ocean: SurfaceThermalDiagnostics,
     /// Largest absolute closure error after advancing the solved initial state
     /// through one complete orbit.
     pub maximum_periodic_closure_error_kelvin: f64,
@@ -81,14 +114,12 @@ pub struct SeasonalThermalResponse {
 pub enum SeasonalThermalError {
     Planet(PlanetValidationError),
     Radiation(RadiativeEquilibriumError),
+    SolarForcing(SolarForcingError),
     ElevationCells,
     Elevation,
     SeaLevel,
-    OrbitalPhase,
-    LandHeatCapacity,
-    OceanHeatCapacity,
+    HeatCapacity(Surface),
     OrbitalPeriod,
-    SampleCount,
     PeriodicSteadyState,
     NumericalRange,
 }
@@ -98,19 +129,13 @@ impl fmt::Display for SeasonalThermalError {
         match self {
             Self::Planet(error) => error.fmt(formatter),
             Self::Radiation(error) => error.fmt(formatter),
+            Self::SolarForcing(error) => error.fmt(formatter),
             Self::ElevationCells => formatter.write_str("elevation must match the mesh cells"),
             Self::Elevation => formatter.write_str("elevation must contain only finite values"),
             Self::SeaLevel => formatter.write_str("sea level must be finite"),
-            Self::OrbitalPhase => formatter.write_str("selected orbital phase must be finite"),
-            Self::LandHeatCapacity => write!(
+            Self::HeatCapacity(surface) => write!(
                 formatter,
-                "land heat capacity must be zero or between {} and {} J/m2/K",
-                MINIMUM_POSITIVE_THERMAL_CAPACITY,
-                THERMAL_CAPACITY_RANGE.end()
-            ),
-            Self::OceanHeatCapacity => write!(
-                formatter,
-                "ocean heat capacity must be zero or between {} and {} J/m2/K",
+                "{surface} heat capacity must be zero or between {} and {} J/m2/K",
                 MINIMUM_POSITIVE_THERMAL_CAPACITY,
                 THERMAL_CAPACITY_RANGE.end()
             ),
@@ -119,12 +144,6 @@ impl fmt::Display for SeasonalThermalError {
                 "orbital period must be finite and between {} and {} days",
                 ORBITAL_PERIOD_DAYS_RANGE.start(),
                 ORBITAL_PERIOD_DAYS_RANGE.end()
-            ),
-            Self::SampleCount => write!(
-                formatter,
-                "thermal sample count must be between {} and {}",
-                THERMAL_SAMPLE_RANGE.start(),
-                THERMAL_SAMPLE_RANGE.end()
             ),
             Self::PeriodicSteadyState => {
                 formatter.write_str("seasonal response did not reach a periodic steady state")
@@ -141,6 +160,7 @@ impl std::error::Error for SeasonalThermalError {
         match self {
             Self::Planet(error) => Some(error),
             Self::Radiation(error) => Some(error),
+            Self::SolarForcing(error) => Some(error),
             _ => None,
         }
     }
@@ -158,6 +178,149 @@ impl From<RadiativeEquilibriumError> for SeasonalThermalError {
     }
 }
 
+impl From<SolarForcingError> for SeasonalThermalError {
+    fn from(error: SolarForcingError) -> Self {
+        Self::SolarForcing(error)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CellCycle {
+    selected: f64,
+    mean: f64,
+    minimum: f64,
+    maximum: f64,
+    closure_error: f64,
+    fixed_point_iterations: usize,
+}
+
+impl CellCycle {
+    fn from_orbit(
+        orbit: &[f64],
+        selected: f64,
+        closure_error: f64,
+        fixed_point_iterations: usize,
+    ) -> Self {
+        Self {
+            selected,
+            mean: orbit.iter().sum::<f64>() / orbit.len() as f64,
+            minimum: orbit.iter().copied().fold(f64::INFINITY, f64::min),
+            maximum: orbit.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            closure_error,
+            fixed_point_iterations,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct SurfaceAggregate {
+    cell_count: usize,
+    selected_weighted_sum: f64,
+    area: f64,
+}
+
+impl SurfaceAggregate {
+    fn add(&mut self, selected: f32, area: f32) {
+        self.cell_count += 1;
+        self.selected_weighted_sum += f64::from(selected) * f64::from(area);
+        self.area += f64::from(area);
+    }
+
+    fn diagnostics(self) -> SurfaceThermalDiagnostics {
+        SurfaceThermalDiagnostics {
+            cell_count: self.cell_count,
+            selected_area_weighted_mean_kelvin: if self.area > 0.0 {
+                Some(self.selected_weighted_sum / self.area)
+            } else {
+                None
+            },
+        }
+    }
+}
+
+struct ResponseAccumulator {
+    selected: Vec<f32>,
+    means: Vec<f32>,
+    minima: Vec<f32>,
+    maxima: Vec<f32>,
+    amplitudes: Vec<f32>,
+    surfaces: [SurfaceAggregate; 2],
+    maximum_closure_error: f64,
+    maximum_fixed_point_iterations: usize,
+}
+
+impl ResponseAccumulator {
+    fn new(cell_count: usize) -> Self {
+        Self {
+            selected: Vec::with_capacity(cell_count),
+            means: Vec::with_capacity(cell_count),
+            minima: Vec::with_capacity(cell_count),
+            maxima: Vec::with_capacity(cell_count),
+            amplitudes: Vec::with_capacity(cell_count),
+            surfaces: Default::default(),
+            maximum_closure_error: 0.0,
+            maximum_fixed_point_iterations: 0,
+        }
+    }
+
+    fn push(
+        &mut self,
+        cycle: CellCycle,
+        surface: Surface,
+        area: f32,
+    ) -> Result<(), SeasonalThermalError> {
+        let amplitude = cycle.maximum - cycle.minimum;
+        let values = [
+            cycle.selected,
+            cycle.mean,
+            cycle.minimum,
+            cycle.maximum,
+            amplitude,
+        ];
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0 || *value > f64::from(f32::MAX))
+        {
+            return Err(SeasonalThermalError::NumericalRange);
+        }
+
+        let selected = cycle.selected as f32;
+        self.selected.push(selected);
+        self.means.push(cycle.mean as f32);
+        self.minima.push(cycle.minimum as f32);
+        self.maxima.push(cycle.maximum as f32);
+        self.amplitudes.push(amplitude as f32);
+        self.surfaces[surface.index()].add(selected, area);
+        self.maximum_closure_error = self.maximum_closure_error.max(cycle.closure_error);
+        self.maximum_fixed_point_iterations = self
+            .maximum_fixed_point_iterations
+            .max(cycle.fixed_point_iterations);
+        Ok(())
+    }
+
+    fn finish(self, mesh: &SphereMesh) -> SeasonalThermalResponse {
+        let diagnostics = SeasonalThermalDiagnostics {
+            selected_phase: AreaWeightedSummary::from_field(mesh, &self.selected),
+            annual_mean: AreaWeightedSummary::from_field(mesh, &self.means),
+            annual_minimum: AreaWeightedSummary::from_field(mesh, &self.minima),
+            annual_maximum: AreaWeightedSummary::from_field(mesh, &self.maxima),
+            annual_amplitude: AreaWeightedSummary::from_field(mesh, &self.amplitudes),
+            land: self.surfaces[Surface::Land.index()].diagnostics(),
+            ocean: self.surfaces[Surface::Ocean.index()].diagnostics(),
+            maximum_periodic_closure_error_kelvin: self.maximum_closure_error,
+            maximum_fixed_point_iterations: self.maximum_fixed_point_iterations,
+        };
+        SeasonalThermalResponse {
+            selected_temperature_kelvin: self.selected,
+            annual_mean_temperature_kelvin: self.means,
+            annual_minimum_temperature_kelvin: self.minima,
+            annual_maximum_temperature_kelvin: self.maxima,
+            annual_amplitude_kelvin: self.amplitudes,
+            diagnostics,
+        }
+    }
+}
+
 /// Solves the isolated surface energy balance `C dT/dt = epsilon sigma
 /// (T_eq^4 - T^4)` over a repeating orbit. Midpoint forcing and an implicit
 /// emission step keep every update bounded between its previous temperature
@@ -169,157 +332,63 @@ pub fn derive_seasonal_thermal_response(
 ) -> Result<SeasonalThermalResponse, SeasonalThermalError> {
     let SeasonalThermalInputs {
         planet,
-        selected_orbital_phase,
-        radiative_equilibrium: radiative_config,
+        solar_forcing,
+        radiative_equilibrium,
         final_elevation,
         sea_level,
     } = inputs;
     planet.validate()?;
-    validate_radiation(radiative_config)?;
-    validate_inputs(
-        mesh,
-        selected_orbital_phase,
-        final_elevation,
-        sea_level,
-        config,
-    )?;
+    solar_forcing.validate()?;
+    let radiation = RadiativeEquilibriumModel::new(radiative_equilibrium)?;
+    validate_inputs(mesh, final_elevation, sea_level, config)?;
 
-    let sample_count = config.sample_count;
+    let sample_count = solar_forcing.annual_sample_count;
     let step_seconds = config.orbital_period_days * SECONDS_PER_DAY / sample_count as f64;
-    let states = (0..sample_count)
-        .map(|sample| orbital_state(planet, (sample as f64 + 0.5) / sample_count as f64))
-        .collect::<Vec<_>>();
-    let selected_phase = selected_orbital_phase.rem_euclid(1.0);
-    let mut selected = Vec::with_capacity(mesh.cell_count());
-    let mut means = Vec::with_capacity(mesh.cell_count());
-    let mut minima = Vec::with_capacity(mesh.cell_count());
-    let mut maxima = Vec::with_capacity(mesh.cell_count());
-    let mut amplitudes = Vec::with_capacity(mesh.cell_count());
-    let mut land = vec![false; mesh.cell_count()];
-    let mut maximum_closure_error = 0.0_f64;
-    let mut maximum_iterations = 0;
+    let sampler = OrbitalSampler::new(planet, sample_count);
+    let selected_state = sampler.at_phase(solar_forcing.orbital_phase);
+    let selected_phase = solar_forcing.orbital_phase.rem_euclid(1.0);
+    let mut output = ResponseAccumulator::new(mesh.cell_count());
     let mut targets = Vec::with_capacity(sample_count);
     let mut endpoints = Vec::with_capacity(sample_count + 1);
 
-    for cell in 0..mesh.cell_count() {
-        land[cell] = final_elevation[cell] >= sea_level;
-        let heat_capacity = if land[cell] {
-            config.land_heat_capacity
+    for ((&elevation, &center), &area) in final_elevation
+        .iter()
+        .zip(&mesh.cell_centers)
+        .zip(&mesh.cell_areas)
+    {
+        let surface = if is_land(elevation, sea_level) {
+            Surface::Land
         } else {
-            config.ocean_heat_capacity
+            Surface::Ocean
         };
-        let latitude_sine = f64::from(mesh.cell_centers[cell].y / mesh.radius);
+        let heat_capacity = config.heat_capacity(surface);
+        let latitude_sine = f64::from(center.y / mesh.radius);
         let target = |state| {
-            // Match the public phase-resolved forcing field's f32 contract
-            // before applying the shared radiative-equilibrium law.
-            let insolation = daily_mean_at_latitude_sine(latitude_sine, state) as f32;
-            effective_temperature_kelvin(f64::from(insolation), radiative_config)
+            radiation.temperature_kelvin(daily_mean_at(latitude_sine, state).watts_per_square_meter)
         };
-
-        if heat_capacity == 0.0 {
-            let mut sum = 0.0;
-            let mut minimum = f64::INFINITY;
-            let mut maximum = f64::NEG_INFINITY;
-            for &state in &states {
-                let temperature = target(state);
-                sum += temperature;
-                minimum = minimum.min(temperature);
-                maximum = maximum.max(temperature);
-            }
-            push_outputs(
-                &mut selected,
-                &mut means,
-                &mut minima,
-                &mut maxima,
-                &mut amplitudes,
-                target(orbital_state(planet, selected_phase)),
-                sum / sample_count as f64,
-                minimum,
-                maximum,
-            )?;
-            continue;
-        }
-
         targets.clear();
-        targets.extend(states.iter().copied().map(target));
-        let (initial, iterations) = solve_periodic_initial(
+        targets.extend(sampler.midpoint_states().iter().copied().map(target));
+        let coefficient = (heat_capacity > 0.0).then_some(
+            step_seconds * radiation.emissivity * crate::STEFAN_BOLTZMANN_CONSTANT / heat_capacity,
+        );
+        let cycle = solve_cell_cycle(
             &targets,
-            heat_capacity,
-            step_seconds,
-            radiative_config.emissivity,
+            target(selected_state),
+            selected_phase,
+            coefficient,
+            &mut endpoints,
         )?;
-        maximum_iterations = maximum_iterations.max(iterations);
-        let mut temperature = initial;
-        endpoints.clear();
-        endpoints.push(temperature);
-        for &equilibrium in &targets {
-            temperature = implicit_energy_step(
-                temperature,
-                equilibrium,
-                heat_capacity,
-                step_seconds,
-                radiative_config.emissivity,
-            );
-            endpoints.push(temperature);
-        }
-        maximum_closure_error = maximum_closure_error.max((temperature - initial).abs());
-
-        let orbit = &endpoints[..sample_count];
-        let mean = orbit.iter().sum::<f64>() / sample_count as f64;
-        let minimum = orbit.iter().copied().fold(f64::INFINITY, f64::min);
-        let maximum = orbit.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let position = selected_phase * sample_count as f64;
-        let lower = position.floor() as usize % sample_count;
-        let fraction = position - position.floor();
-        let selected_temperature =
-            endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction;
-        push_outputs(
-            &mut selected,
-            &mut means,
-            &mut minima,
-            &mut maxima,
-            &mut amplitudes,
-            selected_temperature,
-            mean,
-            minimum,
-            maximum,
-        )?;
+        output.push(cycle, surface, area)?;
     }
-
-    let land_cell_count = land.iter().filter(|&&is_land| is_land).count();
-    let ocean_cell_count = land.len() - land_cell_count;
-    Ok(SeasonalThermalResponse {
-        diagnostics: SeasonalThermalDiagnostics {
-            selected_phase: AreaWeightedSummary::from_field(mesh, &selected),
-            annual_mean: AreaWeightedSummary::from_field(mesh, &means),
-            annual_minimum: AreaWeightedSummary::from_field(mesh, &minima),
-            annual_maximum: AreaWeightedSummary::from_field(mesh, &maxima),
-            annual_amplitude: AreaWeightedSummary::from_field(mesh, &amplitudes),
-            land_cell_count,
-            ocean_cell_count,
-            selected_land_area_weighted_mean_kelvin: class_mean(mesh, &selected, &land, true),
-            selected_ocean_area_weighted_mean_kelvin: class_mean(mesh, &selected, &land, false),
-            maximum_periodic_closure_error_kelvin: maximum_closure_error,
-            maximum_fixed_point_iterations: maximum_iterations,
-        },
-        selected_temperature_kelvin: selected,
-        annual_mean_temperature_kelvin: means,
-        annual_minimum_temperature_kelvin: minima,
-        annual_maximum_temperature_kelvin: maxima,
-        annual_amplitude_kelvin: amplitudes,
-    })
+    Ok(output.finish(mesh))
 }
 
 fn validate_inputs(
     mesh: &SphereMesh,
-    selected_phase: f64,
     elevations: &[f32],
     sea_level: f32,
     config: SeasonalThermalConfig,
 ) -> Result<(), SeasonalThermalError> {
-    if !selected_phase.is_finite() {
-        return Err(SeasonalThermalError::OrbitalPhase);
-    }
     if elevations.len() != mesh.cell_count() {
         return Err(SeasonalThermalError::ElevationCells);
     }
@@ -330,18 +399,15 @@ fn validate_inputs(
         return Err(SeasonalThermalError::SeaLevel);
     }
     if !valid_heat_capacity(config.land_heat_capacity) {
-        return Err(SeasonalThermalError::LandHeatCapacity);
+        return Err(SeasonalThermalError::HeatCapacity(Surface::Land));
     }
     if !valid_heat_capacity(config.ocean_heat_capacity) {
-        return Err(SeasonalThermalError::OceanHeatCapacity);
+        return Err(SeasonalThermalError::HeatCapacity(Surface::Ocean));
     }
     if !config.orbital_period_days.is_finite()
         || !ORBITAL_PERIOD_DAYS_RANGE.contains(&config.orbital_period_days)
     {
         return Err(SeasonalThermalError::OrbitalPeriod);
-    }
-    if !THERMAL_SAMPLE_RANGE.contains(&config.sample_count) {
-        return Err(SeasonalThermalError::SampleCount);
     }
     Ok(())
 }
@@ -352,24 +418,37 @@ fn valid_heat_capacity(value: f64) -> bool {
             && (MINIMUM_POSITIVE_THERMAL_CAPACITY..=*THERMAL_CAPACITY_RANGE.end()).contains(&value))
 }
 
-fn solve_periodic_initial(
+fn solve_cell_cycle(
     targets: &[f64],
-    capacity: f64,
-    step_seconds: f64,
-    emissivity: f64,
-) -> Result<(f64, usize), SeasonalThermalError> {
+    selected_target: f64,
+    selected_phase: f64,
+    coefficient: Option<f64>,
+    endpoints: &mut Vec<f64>,
+) -> Result<CellCycle, SeasonalThermalError> {
+    let Some(coefficient) = coefficient else {
+        return Ok(CellCycle::from_orbit(targets, selected_target, 0.0, 0));
+    };
     let minimum = targets.iter().copied().fold(f64::INFINITY, f64::min);
     let maximum = targets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if minimum == maximum {
-        return Ok((minimum, 0));
+        return Ok(CellCycle::from_orbit(targets, minimum, 0.0, 0));
     }
     let mut initial = targets.iter().sum::<f64>() / targets.len() as f64;
     for iteration in 1..=FIXED_POINT_ITERATION_LIMIT {
-        let (end, derivative) =
-            advance_orbit_with_derivative(initial, targets, capacity, step_seconds, emissivity);
+        let derivative = integrate_cycle(initial, targets, coefficient, endpoints);
+        let end = *endpoints.last().expect("an orbit always has endpoints");
         let residual = end - initial;
         if residual.abs() <= FIXED_POINT_TOLERANCE_KELVIN {
-            return Ok((initial, iteration));
+            let position = selected_phase * targets.len() as f64;
+            let lower = position.floor() as usize % targets.len();
+            let fraction = position - position.floor();
+            let selected = endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction;
+            return Ok(CellCycle::from_orbit(
+                &endpoints[..targets.len()],
+                selected,
+                residual.abs(),
+                iteration,
+            ));
         }
         let slope = derivative - 1.0;
         if !slope.is_finite() || slope.abs() < f64::EPSILON {
@@ -380,39 +459,25 @@ fn solve_periodic_initial(
     Err(SeasonalThermalError::PeriodicSteadyState)
 }
 
-fn advance_orbit_with_derivative(
+fn integrate_cycle(
     initial: f64,
     targets: &[f64],
-    capacity: f64,
-    step_seconds: f64,
-    emissivity: f64,
-) -> (f64, f64) {
-    let coefficient = step_seconds * emissivity * crate::STEFAN_BOLTZMANN_CONSTANT / capacity;
+    coefficient: f64,
+    endpoints: &mut Vec<f64>,
+) -> f64 {
     let mut temperature = initial;
     let mut derivative = 1.0;
+    endpoints.clear();
+    endpoints.push(temperature);
     for &equilibrium in targets {
-        temperature = implicit_energy_step_with_coefficient(temperature, equilibrium, coefficient);
+        temperature = implicit_energy_step(temperature, equilibrium, coefficient);
+        endpoints.push(temperature);
         derivative /= 1.0 + 4.0 * coefficient * temperature.powi(3);
     }
-    (temperature, derivative)
+    derivative
 }
 
-fn implicit_energy_step(
-    temperature: f64,
-    equilibrium: f64,
-    capacity: f64,
-    step_seconds: f64,
-    emissivity: f64,
-) -> f64 {
-    let coefficient = step_seconds * emissivity * crate::STEFAN_BOLTZMANN_CONSTANT / capacity;
-    implicit_energy_step_with_coefficient(temperature, equilibrium, coefficient)
-}
-
-fn implicit_energy_step_with_coefficient(
-    temperature: f64,
-    equilibrium: f64,
-    coefficient: f64,
-) -> f64 {
+fn implicit_energy_step(temperature: f64, equilibrium: f64, coefficient: f64) -> f64 {
     let rhs = temperature + coefficient * equilibrium.powi(4);
     let mut lower = temperature.min(equilibrium);
     let mut upper = temperature.max(equilibrium);
@@ -438,50 +503,6 @@ fn implicit_energy_step_with_coefficient(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_outputs(
-    selected: &mut Vec<f32>,
-    means: &mut Vec<f32>,
-    minima: &mut Vec<f32>,
-    maxima: &mut Vec<f32>,
-    amplitudes: &mut Vec<f32>,
-    selected_value: f64,
-    mean: f64,
-    minimum: f64,
-    maximum: f64,
-) -> Result<(), SeasonalThermalError> {
-    let values = [selected_value, mean, minimum, maximum, maximum - minimum];
-    if values
-        .iter()
-        .any(|value| !value.is_finite() || *value < 0.0 || *value > f64::from(f32::MAX))
-    {
-        return Err(SeasonalThermalError::NumericalRange);
-    }
-    selected.push(selected_value as f32);
-    means.push(mean as f32);
-    minima.push(minimum as f32);
-    maxima.push(maximum as f32);
-    amplitudes.push((maximum - minimum) as f32);
-    Ok(())
-}
-
-fn class_mean(mesh: &SphereMesh, values: &[f32], land: &[bool], class: bool) -> Option<f64> {
-    let mut weighted_sum = 0.0;
-    let mut area_sum = 0.0;
-    for (cell, &value) in values.iter().enumerate() {
-        if land[cell] == class {
-            let area = f64::from(mesh.cell_areas[cell]);
-            weighted_sum += f64::from(value) * area;
-            area_sum += area;
-        }
-    }
-    if area_sum > 0.0 {
-        Some(weighted_sum / area_sum)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,11 +524,24 @@ mod tests {
         phase: f64,
         config: SeasonalThermalConfig,
     ) -> SeasonalThermalResponse {
+        derive_with_samples(mesh, elevations, phase, 96, config)
+    }
+
+    fn derive_with_samples(
+        mesh: &SphereMesh,
+        elevations: &[f32],
+        phase: f64,
+        sample_count: usize,
+        config: SeasonalThermalConfig,
+    ) -> SeasonalThermalResponse {
         derive_seasonal_thermal_response(
             mesh,
             SeasonalThermalInputs {
                 planet: Planet::EARTH,
-                selected_orbital_phase: phase,
+                solar_forcing: SolarForcingConfig {
+                    orbital_phase: phase,
+                    annual_sample_count: sample_count,
+                },
                 radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
                 final_elevation: elevations,
                 sea_level: 0.5,
@@ -562,10 +596,13 @@ mod tests {
             RadiativeEquilibriumConfig::EARTHLIKE,
         )
         .unwrap();
-        assert_eq!(
-            thermal.selected_temperature_kelvin,
-            radiative.daily_effective_temperature_kelvin
-        );
+        for (&thermal, &radiative) in thermal
+            .selected_temperature_kelvin
+            .iter()
+            .zip(&radiative.daily_effective_temperature_kelvin)
+        {
+            assert!((thermal - radiative).abs() <= 1.0e-4);
+        }
     }
 
     #[test]
@@ -584,24 +621,22 @@ mod tests {
         let zero = SeasonalThermalConfig {
             land_heat_capacity: 0.0,
             ocean_heat_capacity: 0.0,
-            sample_count: 48,
             ..SeasonalThermalConfig::EARTHLIKE
         };
         let inertial = SeasonalThermalConfig {
             land_heat_capacity: 2.0e8,
             ocean_heat_capacity: 2.0e8,
-            sample_count: 48,
             ..SeasonalThermalConfig::EARTHLIKE
         };
         let zero_values = (0..48)
             .map(|sample| {
-                derive(&mesh, &elevations, sample as f64 / 48.0, zero).selected_temperature_kelvin
-                    [cell]
+                derive_with_samples(&mesh, &elevations, sample as f64 / 48.0, 48, zero)
+                    .selected_temperature_kelvin[cell]
             })
             .collect::<Vec<_>>();
         let inertial_values = (0..48)
             .map(|sample| {
-                derive(&mesh, &elevations, sample as f64 / 48.0, inertial)
+                derive_with_samples(&mesh, &elevations, sample as f64 / 48.0, 48, inertial)
                     .selected_temperature_kelvin[cell]
             })
             .collect::<Vec<_>>();
@@ -633,22 +668,23 @@ mod tests {
     fn final_elevation_selects_land_and_ocean_inertia() {
         let mesh = mesh(64);
         let mut elevations = vec![0.4; mesh.cell_count()];
-        elevations[0] = 0.5;
+        elevations[0] = 0.500_1;
         let mixed = derive(&mesh, &elevations, 0.25, SeasonalThermalConfig::EARTHLIKE);
         let all_land = derive(
             &mesh,
-            &vec![0.5; mesh.cell_count()],
+            &vec![0.500_1; mesh.cell_count()],
             0.25,
             SeasonalThermalConfig::EARTHLIKE,
         );
         let all_ocean = derive(
             &mesh,
-            &vec![0.4; mesh.cell_count()],
+            &vec![0.5; mesh.cell_count()],
             0.25,
             SeasonalThermalConfig::EARTHLIKE,
         );
-        assert_eq!(mixed.diagnostics.land_cell_count, 1);
-        assert_eq!(mixed.diagnostics.ocean_cell_count, mesh.cell_count() - 1);
+        assert_eq!(all_ocean.diagnostics.land.cell_count, 0);
+        assert_eq!(mixed.diagnostics.land.cell_count, 1);
+        assert_eq!(mixed.diagnostics.ocean.cell_count, mesh.cell_count() - 1);
         assert_eq!(
             mixed.selected_temperature_kelvin[0],
             all_land.selected_temperature_kelvin[0]
@@ -660,13 +696,15 @@ mod tests {
         assert!(
             mixed
                 .diagnostics
-                .selected_land_area_weighted_mean_kelvin
+                .land
+                .selected_area_weighted_mean_kelvin
                 .is_some()
         );
         assert!(
             mixed
                 .diagnostics
-                .selected_ocean_area_weighted_mean_kelvin
+                .ocean
+                .selected_area_weighted_mean_kelvin
                 .is_some()
         );
     }
@@ -680,7 +718,7 @@ mod tests {
                 &mesh,
                 SeasonalThermalInputs {
                     planet: Planet::EARTH,
-                    selected_orbital_phase: 0.0,
+                    solar_forcing: SolarForcingConfig::default(),
                     radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
                     final_elevation: &elevations,
                     sea_level: 0.5,
@@ -693,21 +731,21 @@ mod tests {
                 land_heat_capacity: -1.0,
                 ..SeasonalThermalConfig::EARTHLIKE
             }),
-            Err(SeasonalThermalError::LandHeatCapacity)
+            Err(SeasonalThermalError::HeatCapacity(Surface::Land))
         ));
         assert!(matches!(
             invalid(SeasonalThermalConfig {
                 land_heat_capacity: 0.5,
                 ..SeasonalThermalConfig::EARTHLIKE
             }),
-            Err(SeasonalThermalError::LandHeatCapacity)
+            Err(SeasonalThermalError::HeatCapacity(Surface::Land))
         ));
         assert!(matches!(
             invalid(SeasonalThermalConfig {
                 ocean_heat_capacity: f64::NAN,
                 ..SeasonalThermalConfig::EARTHLIKE
             }),
-            Err(SeasonalThermalError::OceanHeatCapacity)
+            Err(SeasonalThermalError::HeatCapacity(Surface::Ocean))
         ));
         assert!(matches!(
             invalid(SeasonalThermalConfig {
@@ -717,22 +755,34 @@ mod tests {
             Err(SeasonalThermalError::OrbitalPeriod)
         ));
         assert!(matches!(
-            invalid(SeasonalThermalConfig {
-                sample_count: 3,
-                ..SeasonalThermalConfig::EARTHLIKE
-            }),
-            Err(SeasonalThermalError::SampleCount)
+            derive_seasonal_thermal_response(
+                &mesh,
+                SeasonalThermalInputs {
+                    planet: Planet::EARTH,
+                    solar_forcing: SolarForcingConfig {
+                        orbital_phase: 0.0,
+                        annual_sample_count: 3,
+                    },
+                    radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
+                    final_elevation: &elevations,
+                    sea_level: 0.5,
+                },
+                SeasonalThermalConfig::EARTHLIKE,
+            ),
+            Err(SeasonalThermalError::SolarForcing(
+                SolarForcingError::AnnualSampleCount
+            ))
         ));
 
-        let extreme = derive(
+        let extreme = derive_with_samples(
             &mesh,
             &elevations,
             -10_000.25,
+            *crate::ANNUAL_SAMPLE_RANGE.start(),
             SeasonalThermalConfig {
                 land_heat_capacity: *THERMAL_CAPACITY_RANGE.end(),
                 ocean_heat_capacity: 0.0,
                 orbital_period_days: *ORBITAL_PERIOD_DAYS_RANGE.start(),
-                sample_count: *THERMAL_SAMPLE_RANGE.start(),
             },
         );
         assert!(
@@ -748,15 +798,15 @@ mod tests {
                 .all(|value| *value >= 0.0)
         );
 
-        let opposite_extreme = derive(
+        let opposite_extreme = derive_with_samples(
             &mesh,
             &elevations,
             0.75,
+            *crate::ANNUAL_SAMPLE_RANGE.start(),
             SeasonalThermalConfig {
                 land_heat_capacity: MINIMUM_POSITIVE_THERMAL_CAPACITY,
                 ocean_heat_capacity: *THERMAL_CAPACITY_RANGE.end(),
                 orbital_period_days: *ORBITAL_PERIOD_DAYS_RANGE.end(),
-                sample_count: *THERMAL_SAMPLE_RANGE.start(),
             },
         );
         assert!(

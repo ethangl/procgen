@@ -1,7 +1,10 @@
-use crate::AreaWeightedSummary;
+use crate::{
+    AreaWeightedSummary,
+    orbit::{Daylight, OrbitalSampler, daily_mean_at},
+};
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
-use std::{f64::consts::PI, fmt, ops::RangeInclusive};
+use std::{fmt, ops::RangeInclusive};
 
 pub const ANNUAL_SAMPLE_RANGE: RangeInclusive<usize> = 4..=4_096;
 
@@ -20,6 +23,18 @@ impl Default for SolarForcingConfig {
             orbital_phase: 0.0,
             annual_sample_count: 96,
         }
+    }
+}
+
+impl SolarForcingConfig {
+    pub(crate) fn validate(self) -> Result<(), SolarForcingError> {
+        if !self.orbital_phase.is_finite() {
+            return Err(SolarForcingError::OrbitalPhase);
+        }
+        if !ANNUAL_SAMPLE_RANGE.contains(&self.annual_sample_count) {
+            return Err(SolarForcingError::AnnualSampleCount);
+        }
+        Ok(())
     }
 }
 
@@ -116,22 +131,23 @@ pub fn derive_solar_forcing(
     config: SolarForcingConfig,
 ) -> Result<SolarForcing, SolarForcingError> {
     planet.validate()?;
-    validate_config(config)?;
-    let periapsis = orbital_state(planet, 0.0);
+    config.validate()?;
+    let sampler = OrbitalSampler::new(planet, config.annual_sample_count);
+    let periapsis = sampler.at_phase(0.0);
     if periapsis.stellar_flux > f64::from(f32::MAX) {
         return Err(SolarForcingError::NumericalRange);
     }
 
     let orbital_phase = config.orbital_phase.rem_euclid(1.0);
-    let phase_state = orbital_state(planet, orbital_phase);
+    let phase_state = sampler.at_phase(orbital_phase);
     let latitudes = mesh
         .cell_centers
         .iter()
-        .map(|center| SinCos::from_sine(f64::from(center.y / mesh.radius)))
+        .map(|center| f64::from(center.y / mesh.radius))
         .collect::<Vec<_>>();
     let daily = latitudes
         .iter()
-        .map(|&latitude| daily_mean_at_latitude(latitude, phase_state))
+        .map(|&latitude| daily_mean_at(latitude, phase_state))
         .collect::<Vec<_>>();
     let polar_night_cell_count = daily
         .iter()
@@ -147,11 +163,9 @@ pub fn derive_solar_forcing(
         .collect::<Vec<_>>();
 
     let mut annual_sums = vec![0.0_f64; mesh.cell_count()];
-    for sample in 0..config.annual_sample_count {
-        let phase = (sample as f64 + 0.5) / config.annual_sample_count as f64;
-        let state = orbital_state(planet, phase);
+    for &state in sampler.midpoint_states() {
         for (cell, &latitude) in latitudes.iter().enumerate() {
-            annual_sums[cell] += daily_mean_at_latitude(latitude, state).watts_per_square_meter;
+            annual_sums[cell] += daily_mean_at(latitude, state).watts_per_square_meter;
         }
     }
     let sample_reciprocal = 1.0 / config.annual_sample_count as f64;
@@ -176,141 +190,13 @@ pub fn derive_solar_forcing(
     })
 }
 
-fn validate_config(config: SolarForcingConfig) -> Result<(), SolarForcingError> {
-    if !config.orbital_phase.is_finite() {
-        return Err(SolarForcingError::OrbitalPhase);
-    }
-    if !ANNUAL_SAMPLE_RANGE.contains(&config.annual_sample_count) {
-        return Err(SolarForcingError::AnnualSampleCount);
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct OrbitalState {
-    distance_meters: f64,
-    stellar_flux: f64,
-    declination: f64,
-    declination_trig: SinCos,
-}
-
-pub(crate) fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
-    let orbit = planet.orbit;
-    let mean_anomaly = phase * 2.0 * PI;
-    let eccentric_anomaly = solve_kepler(mean_anomaly, orbit.eccentricity);
-    let true_anomaly = 2.0
-        * ((1.0 + orbit.eccentricity).sqrt() * (eccentric_anomaly * 0.5).sin())
-            .atan2((1.0 - orbit.eccentricity).sqrt() * (eccentric_anomaly * 0.5).cos());
-    let distance_meters =
-        orbit.semi_major_axis_meters * (1.0 - orbit.eccentricity * eccentric_anomaly.cos());
-    let stellar_longitude = true_anomaly + orbit.stellar_longitude_at_periapsis_radians;
-    let declination = (orbit.obliquity_radians.sin() * stellar_longitude.sin()).asin();
-    let stellar_flux = planet.star.luminosity_watts / (4.0 * PI * distance_meters.powi(2));
-    OrbitalState {
-        distance_meters,
-        stellar_flux,
-        declination,
-        declination_trig: SinCos {
-            sine: declination.sin(),
-            cosine: declination.cos(),
-        },
-    }
-}
-
-fn solve_kepler(mean_anomaly: f64, eccentricity: f64) -> f64 {
-    if mean_anomaly == 0.0 || eccentricity == 0.0 {
-        return mean_anomaly;
-    }
-    let mut lower = 0.0;
-    let mut upper = 2.0 * PI;
-    for _ in 0..64 {
-        let midpoint = (lower + upper) * 0.5;
-        let residual = midpoint - eccentricity * midpoint.sin() - mean_anomaly;
-        if residual > 0.0 {
-            upper = midpoint;
-        } else {
-            lower = midpoint;
-        }
-    }
-    (lower + upper) * 0.5
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Daylight {
-    PolarNight,
-    Cycles,
-    PolarDay,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SinCos {
-    sine: f64,
-    cosine: f64,
-}
-
-impl SinCos {
-    fn from_sine(sine: f64) -> Self {
-        let sine = sine.clamp(-1.0, 1.0);
-        Self {
-            sine,
-            cosine: (1.0 - sine * sine).sqrt(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct DailyMeanInsolation {
-    watts_per_square_meter: f64,
-    daylight: Daylight,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct DaylightWindow {
-    sunset_hour_angle: f64,
-    daylight: Daylight,
-}
-
-fn daylight_window(meridional: f64, diurnal: f64) -> DaylightWindow {
-    // Cosine of the sunset hour angle: infinite when the sun never crosses
-    // the horizon, and NaN only at a pole on the equinox.
-    let sunset_argument = -meridional / diurnal;
-    let (sunset_hour_angle, daylight) = if sunset_argument >= 1.0 {
-        (0.0, Daylight::PolarNight)
-    } else if sunset_argument <= -1.0 {
-        (PI, Daylight::PolarDay)
-    } else if sunset_argument.is_nan() {
-        (0.0, Daylight::Cycles)
-    } else {
-        (sunset_argument.acos(), Daylight::Cycles)
-    };
-    DaylightWindow {
-        sunset_hour_angle,
-        daylight,
-    }
-}
-
-fn daily_mean_at_latitude(latitude: SinCos, state: OrbitalState) -> DailyMeanInsolation {
-    let meridional = latitude.sine * state.declination_trig.sine;
-    let diurnal = latitude.cosine * state.declination_trig.cosine;
-    let window = daylight_window(meridional, diurnal);
-    let insolation = state.stellar_flux / PI
-        * (window.sunset_hour_angle * meridional + diurnal * window.sunset_hour_angle.sin());
-    DailyMeanInsolation {
-        watts_per_square_meter: insolation.clamp(0.0, state.stellar_flux),
-        daylight: window.daylight,
-    }
-}
-
-pub(crate) fn daily_mean_at_latitude_sine(latitude_sine: f64, state: OrbitalState) -> f64 {
-    daily_mean_at_latitude(SinCos::from_sine(latitude_sine), state).watts_per_square_meter
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use procgen_planet::{Orbit, Star};
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
+    use std::f64::consts::PI;
 
     fn mesh(count: usize) -> SphereMesh {
         let points = fibonacci_sphere(FibonacciConfig::new(count)).unwrap();
@@ -402,7 +288,9 @@ mod tests {
                     && *value >= 0.0
                     && f64::from(*value) <= first.diagnostics.stellar_flux_watts_per_square_meter)
         );
-        let periapsis_flux = orbital_state(Planet::EARTH, 0.0).stellar_flux;
+        let periapsis_flux = OrbitalSampler::new(Planet::EARTH, 4)
+            .at_phase(0.0)
+            .stellar_flux;
         assert!(
             first
                 .annual_mean_insolation
@@ -446,27 +334,17 @@ mod tests {
 
     #[test]
     fn exact_poles_are_finite_at_equinox_and_classified_at_solstice() {
-        let equinox = orbital_state(circular_planet(0.0, 0.0), 0.0);
-        assert_eq!(
-            daily_mean_at_latitude(SinCos::from_sine(1.0), equinox),
-            DailyMeanInsolation {
-                watts_per_square_meter: 0.0,
-                daylight: Daylight::Cycles,
-            }
-        );
+        let equinox = OrbitalSampler::new(circular_planet(0.0, 0.0), 4).at_phase(0.0);
+        let north_equinox = daily_mean_at(1.0, equinox);
+        assert_eq!(north_equinox.watts_per_square_meter, 0.0);
+        assert_eq!(north_equinox.daylight, Daylight::Cycles);
 
-        let solstice = orbital_state(circular_planet(23.5_f64.to_radians(), PI * 0.5), 0.0);
-        assert_eq!(
-            daily_mean_at_latitude(SinCos::from_sine(1.0), solstice).daylight,
-            Daylight::PolarDay
-        );
-        assert_eq!(
-            daily_mean_at_latitude(SinCos::from_sine(-1.0), solstice),
-            DailyMeanInsolation {
-                watts_per_square_meter: 0.0,
-                daylight: Daylight::PolarNight,
-            }
-        );
+        let solstice =
+            OrbitalSampler::new(circular_planet(23.5_f64.to_radians(), PI * 0.5), 4).at_phase(0.0);
+        assert_eq!(daily_mean_at(1.0, solstice).daylight, Daylight::PolarDay);
+        let south_solstice = daily_mean_at(-1.0, solstice);
+        assert_eq!(south_solstice.watts_per_square_meter, 0.0);
+        assert_eq!(south_solstice.daylight, Daylight::PolarNight);
     }
 
     #[test]
@@ -479,7 +357,7 @@ mod tests {
             },
             ..baseline
         };
-        let state = orbital_state(planet, 0.0);
+        let state = OrbitalSampler::new(planet, 4).at_phase(0.0);
         assert!((state.distance_meters - 1.0e-6).abs() < 1.0e-15);
         assert!(state.stellar_flux.is_finite());
     }

@@ -285,7 +285,7 @@ impl GeneratedWorld {
                 &voronoi,
                 SeasonalThermalInputs {
                     planet: config.planet,
-                    selected_orbital_phase: config.solar_forcing.orbital_phase,
+                    solar_forcing: config.solar_forcing,
                     radiative_equilibrium: config.radiative_equilibrium,
                     final_elevation: &isostasy.cell_elevations,
                     sea_level: procgen_tectonics::SEA_LEVEL,
@@ -544,7 +544,6 @@ mod tests {
                 land_heat_capacity: 4.0e7,
                 ocean_heat_capacity: 3.0e8,
                 orbital_period_days: 400.0,
-                sample_count: 48,
             },
         };
         app.insert_resource(current)
