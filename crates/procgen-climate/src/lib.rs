@@ -1,8 +1,10 @@
 //! Deterministic climate stages over the authoritative spherical mesh.
 //!
 //! Solar forcing, radiative-equilibrium temperature, local seasonal thermal
-//! response, coarse atmospheric circulation, and moisture transport are pure
-//! stages. They contain no coupled feedbacks or persistent generation state.
+//! response, coarse atmospheric circulation, moisture transport, and the
+//! cryosphere are pure stages. A separate bounded orchestrator couples only
+//! their explicit per-cell surface albedo feedback and retains no generation
+//! state between calls.
 
 use std::ops::RangeInclusive;
 
@@ -21,6 +23,7 @@ pub(crate) fn validate_range<T: PartialOrd, E>(
 }
 
 mod circulation;
+mod coupling;
 mod cryosphere;
 mod field;
 mod moisture;
@@ -34,6 +37,12 @@ pub use circulation::{
     AtmosphericCirculationError, AtmosphericCirculationInputs, CALM_WIND_SPEED_METERS_PER_SECOND,
     DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE, TERRAIN_STEERING_RANGE,
     derive_atmospheric_circulation,
+};
+pub use coupling::{
+    CLIMATE_COUPLING_FRACTION_TOLERANCE_RANGE, CLIMATE_COUPLING_ITERATION_LIMIT_RANGE,
+    CLIMATE_COUPLING_TOLERANCE_RANGE, ClimateAlbedoConfig, ClimateCoupling, ClimateCouplingConfig,
+    ClimateCouplingDiagnostics, ClimateCouplingError, ClimateCouplingInputs,
+    derive_coupled_climate,
 };
 pub use cryosphere::{
     CRYOSPHERE_CLOSURE_TOLERANCE_RANGE, CRYOSPHERE_FRACTION_RATE_RANGE,

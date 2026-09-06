@@ -28,7 +28,7 @@ An independent solar-forcing stage then derives top-of-atmosphere daily-mean
 insolation for the selected orbital phase and a bounded-sample annual mean from
 the spherical mesh. A second independent stage derives daily and annual
 effective radiative-equilibrium temperatures from those fields using explicit
-uniform albedo and emissivity. The viewer selects the Earth and Earthlike
+per-cell albedo and uniform emissivity. The viewer selects the Earth and Earthlike
 presets by default; neither stage consumes elevation or models atmospheric or
 surface dynamics.
 A third climate stage uses the final adjusted elevation and sea level to choose
@@ -50,15 +50,21 @@ A sixth stage uses the sampled seasonal temperatures, precipitation, and final
 land/ocean mask to solve bounded periodic snow and sea-ice reservoirs and an
 equilibrium land-ice cover fraction. The bounded solve starts from fixed known
 bounds on every regeneration and contains no fixed latitude ice assignment or
-climate feedback.
+internal climate feedback. A bounded orchestration stage reruns the five
+downstream climate components to a periodic fixed point using only explicit
+per-cell land, ocean, snow, and ice albedo feedback. Configurable RMS
+tolerances, under-relaxation, and a hard iteration limit bound the solve, and
+every regeneration starts from the same fully covered albedo field with no
+persistent climate state.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
 
 The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
-adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, daily- and
-annual-temperature, atmospheric supporting scalars, wind speed and vectors,
+adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, coupled
+surface-albedo, daily- and annual-temperature, atmospheric supporting scalars,
+wind speed and vectors,
 humidity, precipitation, snow cover, land-ice cover, sea-ice cover, motion, and
 final-boundary diagnostics and reports aggregate statistics plus stage timings.
 Plate interiors use stable per-plate colors.
@@ -75,7 +81,8 @@ Daily-mean insolation runs from dark polar night through blue and cyan to warm
 yellow at the current field maximum; the controls expose orbital phase and the
 bounded annual sampling count. Temperature uses a fixed kelvin color scale from
 dark zero through cold blue, pale freezing-point temperatures, warm yellow, and
-hot red. Its controls expose the uniform albedo and emissivity.
+hot red. Radiative controls expose emissivity; climate-coupling controls expose
+the four surface albedos.
 Seasonal thermal controls expose land and ocean heat capacity and orbital
 period; the solar-forcing annual sample control is shared by both stages.
 Separate layers show the selected phase,
@@ -96,6 +103,8 @@ Cryosphere controls expose temperature thresholds, snow capacities, degree-day
 melt factors, sea-ice growth and melt rates, and fixed-point solver bounds.
 Diagnostics report annual accumulation/ablation, covered-cell counts, periodic
 closure, and snow-mass and sea-ice-cover balance residuals.
+Coupling diagnostics report iteration count and RMS convergence residuals;
+the component panels own moisture and cryosphere conservation diagnostics.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.

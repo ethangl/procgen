@@ -48,6 +48,17 @@ impl AreaWeightedSummary {
     }
 }
 
+pub(crate) fn area_weighted_rms_difference(mesh: &SphereMesh, left: &[f32], right: &[f32]) -> f64 {
+    (left
+        .iter()
+        .zip(right)
+        .zip(&mesh.cell_areas)
+        .map(|((&left, &right), &area)| f64::from(left - right).powi(2) * f64::from(area))
+        .sum::<f64>()
+        / mesh.total_area())
+    .sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +92,20 @@ mod tests {
         ] {
             assert!(!summary.is_finite());
         }
+    }
+
+    #[test]
+    fn rms_difference_uses_spherical_cell_area() {
+        use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
+        use procgen_sphere_mesh::SphericalDelaunay;
+
+        let points = fibonacci_sphere(FibonacciConfig::new(32)).unwrap();
+        let delaunay = SphericalDelaunay::build(points).unwrap();
+        let mesh = SphereMesh::from_delaunay(&delaunay, 1.0).unwrap();
+        let zeros = vec![0.0; mesh.cell_count()];
+        let ones = vec![1.0; mesh.cell_count()];
+
+        assert_eq!(area_weighted_rms_difference(&mesh, &zeros, &zeros), 0.0);
+        assert!((area_weighted_rms_difference(&mesh, &zeros, &ones) - 1.0).abs() < 1.0e-7);
     }
 }

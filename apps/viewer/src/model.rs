@@ -1,12 +1,9 @@
 use bevy::prelude::*;
 use procgen_climate::{
-    AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationInputs, Cryosphere,
-    CryosphereConfig, CryosphereInputs, MoistureTransport, MoistureTransportConfig,
-    MoistureTransportInputs, RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature,
-    SeasonalThermalConfig, SeasonalThermalInputs, SeasonalThermalResponse, SolarForcing,
-    SolarForcingConfig, derive_atmospheric_circulation, derive_cryosphere,
-    derive_moisture_transport, derive_radiative_equilibrium_temperature,
-    derive_seasonal_thermal_response, derive_solar_forcing,
+    AtmosphericCirculation, ClimateCoupling, ClimateCouplingConfig, ClimateCouplingDiagnostics,
+    ClimateCouplingInputs, Cryosphere, MoistureTransport, RadiativeEquilibriumTemperature,
+    SeasonalThermalResponse, SolarForcing, SolarForcingConfig, derive_coupled_climate,
+    derive_solar_forcing,
 };
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
@@ -57,11 +54,7 @@ pub struct GenerationSettings {
     /// Earth-like defaults are explicit and caller-editable.
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
-    pub radiative_equilibrium: RadiativeEquilibriumConfig,
-    pub seasonal_thermal: SeasonalThermalConfig,
-    pub atmospheric_circulation: AtmosphericCirculationConfig,
-    pub moisture_transport: MoistureTransportConfig,
-    pub cryosphere: CryosphereConfig,
+    pub climate_coupling: ClimateCouplingConfig,
 }
 
 impl Default for GenerationSettings {
@@ -100,11 +93,7 @@ impl Default for GenerationSettings {
             isostasy: IsostaticAdjustmentConfig::default(),
             planet: Planet::EARTH,
             solar_forcing: SolarForcingConfig::default(),
-            radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
-            seasonal_thermal: SeasonalThermalConfig::EARTHLIKE,
-            atmospheric_circulation: AtmosphericCirculationConfig::EARTHLIKE,
-            moisture_transport: MoistureTransportConfig::EARTHLIKE,
-            cryosphere: CryosphereConfig::EARTHLIKE,
+            climate_coupling: ClimateCouplingConfig::EARTHLIKE,
         }
     }
 }
@@ -192,6 +181,8 @@ pub struct GeneratedWorld {
     pub atmospheric_circulation: AtmosphericCirculation,
     pub moisture_transport: MoistureTransport,
     pub cryosphere: Cryosphere,
+    pub cell_albedo: Vec<f32>,
+    pub climate_coupling_diagnostics: ClimateCouplingDiagnostics,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -285,65 +276,27 @@ impl GeneratedWorld {
         let solar_forcing = timings.record("Solar forcing", || {
             derive_solar_forcing(&voronoi, config.planet, config.solar_forcing)
         })?;
-        let radiative_equilibrium = timings.record("Radiative equilibrium", || {
-            derive_radiative_equilibrium_temperature(
+        let climate = timings.record("Coupled climate", || {
+            derive_coupled_climate(
                 &voronoi,
-                &solar_forcing,
-                config.radiative_equilibrium,
-            )
-        })?;
-        let seasonal_thermal = timings.record("Seasonal thermal response", || {
-            derive_seasonal_thermal_response(
-                &voronoi,
-                SeasonalThermalInputs {
+                ClimateCouplingInputs {
                     planet: config.planet,
-                    solar_forcing: config.solar_forcing,
-                    radiative_equilibrium: config.radiative_equilibrium,
+                    solar_forcing: &solar_forcing,
+                    solar_forcing_config: config.solar_forcing,
                     final_elevation: &isostasy.cell_elevations,
                 },
-                config.seasonal_thermal,
+                config.climate_coupling,
             )
         })?;
-        let atmospheric_circulation = timings.record("Atmospheric circulation", || {
-            derive_atmospheric_circulation(
-                &voronoi,
-                AtmosphericCirculationInputs {
-                    planet: config.planet,
-                    selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
-                    final_elevation: &isostasy.cell_elevations,
-                },
-                config.atmospheric_circulation,
-            )
-        })?;
-        let moisture_transport = timings.record("Moisture and precipitation", || {
-            derive_moisture_transport(
-                &voronoi,
-                MoistureTransportInputs {
-                    planet: config.planet,
-                    selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
-                    final_elevation: &isostasy.cell_elevations,
-                    cell_wind_meters_per_second: &atmospheric_circulation
-                        .cell_wind_meters_per_second,
-                },
-                config.moisture_transport,
-            )
-        })?;
-        let cryosphere = timings.record("Cryosphere", || {
-            derive_cryosphere(
-                &voronoi,
-                CryosphereInputs {
-                    annual_temperature_samples_kelvin: &seasonal_thermal
-                        .annual_temperature_samples_kelvin,
-                    annual_sample_count: seasonal_thermal.annual_sample_count,
-                    selected_orbital_phase: config.solar_forcing.orbital_phase,
-                    orbital_period_days: config.seasonal_thermal.orbital_period_days,
-                    precipitation_kg_per_m2_per_day: &moisture_transport
-                        .cell_precipitation_kg_per_m2_per_day,
-                    final_elevation: &isostasy.cell_elevations,
-                },
-                config.cryosphere,
-            )
-        })?;
+        let ClimateCoupling {
+            cell_albedo,
+            radiative_equilibrium,
+            seasonal_thermal,
+            atmospheric_circulation,
+            moisture_transport,
+            cryosphere,
+            diagnostics: climate_coupling_diagnostics,
+        } = climate;
 
         Ok(Self {
             voronoi,
@@ -369,6 +322,8 @@ impl GeneratedWorld {
             atmospheric_circulation,
             moisture_transport,
             cryosphere,
+            cell_albedo,
+            climate_coupling_diagnostics,
             timings,
             config,
         })
@@ -550,6 +505,11 @@ mod tests {
             world.cryosphere.cell_sea_ice_cover_fraction.len(),
             world.voronoi.cell_count()
         );
+        assert_eq!(world.cell_albedo.len(), world.voronoi.cell_count());
+        assert!(
+            world.climate_coupling_diagnostics.iterations
+                <= world.config.climate_coupling.maximum_iterations
+        );
         assert!(
             world
                 .moisture_transport
@@ -650,28 +610,9 @@ mod tests {
                 orbital_phase: 0.25,
                 annual_sample_count: 48,
             },
-            radiative_equilibrium: RadiativeEquilibriumConfig {
-                albedo: 0.25,
-                emissivity: 0.9,
-            },
-            seasonal_thermal: SeasonalThermalConfig {
-                land_heat_capacity: 4.0e7,
-                ocean_heat_capacity: 3.0e8,
-                orbital_period_days: 400.0,
-            },
-            atmospheric_circulation: AtmosphericCirculationConfig {
-                surface_drag_per_second: 2.0e-5,
-                terrain_steering: 0.4,
-                maximum_wind_speed_meters_per_second: 80.0,
-            },
-            moisture_transport: MoistureTransportConfig {
-                step_count: 80,
-                step_seconds: 18_000.0,
-                ..MoistureTransportConfig::EARTHLIKE
-            },
-            cryosphere: CryosphereConfig {
-                maximum_iterations: 128,
-                ..CryosphereConfig::EARTHLIKE
+            climate_coupling: ClimateCouplingConfig {
+                maximum_iterations: 32,
+                ..ClimateCouplingConfig::EARTHLIKE
             },
         };
         app.insert_resource(current)
@@ -703,20 +644,7 @@ mod tests {
         assert_eq!(world.config.isostasy, requested.isostasy);
         assert_eq!(world.config.planet, requested.planet);
         assert_eq!(world.config.solar_forcing, requested.solar_forcing);
-        assert_eq!(
-            world.config.radiative_equilibrium,
-            requested.radiative_equilibrium
-        );
-        assert_eq!(world.config.seasonal_thermal, requested.seasonal_thermal);
-        assert_eq!(
-            world.config.atmospheric_circulation,
-            requested.atmospheric_circulation
-        );
-        assert_eq!(
-            world.config.moisture_transport,
-            requested.moisture_transport
-        );
-        assert_eq!(world.config.cryosphere, requested.cryosphere);
+        assert_eq!(world.config.climate_coupling, requested.climate_coupling);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

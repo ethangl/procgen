@@ -1,8 +1,8 @@
 use crate::{
-    AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SECONDS_PER_DAY,
-    SolarForcingConfig, SolarForcingError, Surface,
+    AreaWeightedSummary, RadiativeEquilibriumError, SECONDS_PER_DAY, SolarForcingConfig,
+    SolarForcingError, Surface,
     orbit::{OrbitalSampler, daily_mean_at, orbital_state, selected_sample_index},
-    radiative_equilibrium::RadiativeEquilibriumModel,
+    radiative_equilibrium::{RadiativeEquilibriumModel, validate_albedo_field},
     validate_range,
 };
 use procgen_planet::{Planet, PlanetValidationError};
@@ -50,7 +50,7 @@ impl SeasonalThermalConfig {
 pub struct SeasonalThermalInputs<'a> {
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
-    pub radiative_equilibrium: RadiativeEquilibriumConfig,
+    pub emissivity: f64,
     pub final_elevation: &'a [f32],
 }
 
@@ -328,16 +328,18 @@ pub fn derive_seasonal_thermal_response(
     mesh: &SphereMesh,
     inputs: SeasonalThermalInputs<'_>,
     config: SeasonalThermalConfig,
+    cell_albedo: &[f32],
 ) -> Result<SeasonalThermalResponse, SeasonalThermalError> {
     let SeasonalThermalInputs {
         planet,
         solar_forcing,
-        radiative_equilibrium,
+        emissivity,
         final_elevation,
     } = inputs;
     planet.validate()?;
     solar_forcing.validate()?;
-    let radiation = RadiativeEquilibriumModel::new(radiative_equilibrium)?;
+    validate_albedo_field(mesh, cell_albedo)?;
+    let radiation = RadiativeEquilibriumModel::new(emissivity)?;
     validate_inputs(mesh, final_elevation, config)?;
 
     let sample_count = solar_forcing.annual_sample_count;
@@ -350,16 +352,20 @@ pub fn derive_seasonal_thermal_response(
     let mut endpoints = Vec::with_capacity(sample_count + 1);
     let mut samples = Vec::with_capacity(sample_count);
 
-    for ((&elevation, &center), &area) in final_elevation
+    for (((&elevation, &center), &area), &albedo) in final_elevation
         .iter()
         .zip(&mesh.cell_centers)
         .zip(&mesh.cell_areas)
+        .zip(cell_albedo)
     {
         let surface = Surface::from_elevation(elevation);
         let heat_capacity = config.heat_capacity(surface);
         let latitude_sine = f64::from(center.y / mesh.radius);
         let target = |state| {
-            radiation.temperature_kelvin(daily_mean_at(latitude_sine, state).watts_per_square_meter)
+            radiation.temperature_kelvin(
+                daily_mean_at(latitude_sine, state).watts_per_square_meter,
+                f64::from(albedo),
+            )
         };
         targets.clear();
         targets.extend(sampler.midpoint_states().iter().copied().map(target));
@@ -545,6 +551,7 @@ mod tests {
         sample_count: usize,
         config: SeasonalThermalConfig,
     ) -> SeasonalThermalResponse {
+        let albedo = vec![0.3; mesh.cell_count()];
         derive_seasonal_thermal_response(
             mesh,
             SeasonalThermalInputs {
@@ -553,10 +560,11 @@ mod tests {
                     orbital_phase: phase,
                     annual_sample_count: sample_count,
                 },
-                radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
+                emissivity: 1.0,
                 final_elevation: elevations,
             },
             config,
+            &albedo,
         )
         .unwrap()
     }
@@ -610,7 +618,8 @@ mod tests {
         let radiative = derive_radiative_equilibrium_temperature(
             &mesh,
             &forcing,
-            RadiativeEquilibriumConfig::EARTHLIKE,
+            crate::RadiativeEquilibriumConfig::EARTHLIKE,
+            &vec![0.3; mesh.cell_count()],
         )
         .unwrap();
         for (&thermal, &radiative) in thermal
@@ -621,11 +630,11 @@ mod tests {
             assert!((thermal - radiative).abs() <= 1.0e-4);
         }
         let sampler = OrbitalSampler::new(Planet::EARTH, 96);
-        let radiation =
-            RadiativeEquilibriumModel::new(RadiativeEquilibriumConfig::EARTHLIKE).unwrap();
+        let radiation = RadiativeEquilibriumModel::new(1.0).unwrap();
         let latitude_sine = f64::from(mesh.cell_centers[0].y / mesh.radius);
         let expected_midpoint = radiation.temperature_kelvin(
             daily_mean_at(latitude_sine, sampler.midpoint_states()[0]).watts_per_square_meter,
+            0.3,
         );
         assert!(
             (f64::from(thermal.annual_temperature_samples_kelvin[0]) - expected_midpoint).abs()
@@ -772,10 +781,11 @@ mod tests {
                 SeasonalThermalInputs {
                     planet: Planet::EARTH,
                     solar_forcing: SolarForcingConfig::default(),
-                    radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
+                    emissivity: 1.0,
                     final_elevation: &elevations,
                 },
                 config,
+                &vec![0.3; mesh.cell_count()],
             )
         };
         assert!(matches!(
@@ -815,10 +825,11 @@ mod tests {
                         orbital_phase: 0.0,
                         annual_sample_count: 3,
                     },
-                    radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
+                    emissivity: 1.0,
                     final_elevation: &elevations,
                 },
                 SeasonalThermalConfig::EARTHLIKE,
+                &vec![0.3; mesh.cell_count()],
             ),
             Err(SeasonalThermalError::SolarForcing(
                 SolarForcingError::AnnualSampleCount
