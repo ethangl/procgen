@@ -111,9 +111,10 @@ fn vertices_and_areas_cover_the_requested_sphere() {
     for vertex in &mesh.vertices {
         assert!((vertex.length() - radius).abs() < radius * 1.0e-5);
     }
-    let actual: f32 = mesh.cell_areas.iter().sum();
-    let expected = 4.0 * std::f32::consts::PI * radius * radius;
+    let actual = mesh.total_area();
+    let expected = f64::from(4.0 * std::f32::consts::PI * radius * radius);
     assert!((actual - expected).abs() < expected * 1.0e-4);
+    assert!((mesh.area_weighted_mean(&vec![3.5; mesh.cell_count()]) - 3.5).abs() < 1.0e-12);
 }
 
 #[test]

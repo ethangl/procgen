@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use procgen_climate::{SolarForcing, SolarForcingConfig, derive_solar_forcing};
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
     GeologicalElevationInputs, HotspotField, HotspotFieldConfig, IsostaticAdjustment,
@@ -8,6 +9,7 @@ use procgen_geology::{
     derive_oceanic_peak_field, derive_sedimentary_basin_field, derive_volcanic_arc_field,
     generate_hotspot_field,
 };
+use procgen_planet::Planet;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
@@ -44,6 +46,9 @@ pub struct GenerationSettings {
     pub basins: SedimentaryBasinFieldConfig,
     pub geological_elevation: GeologicalElevationConfig,
     pub isostasy: IsostaticAdjustmentConfig,
+    /// Explicit preset selection; editable planet inputs are outside this slice.
+    pub planet: Planet,
+    pub solar_forcing: SolarForcingConfig,
 }
 
 impl Default for GenerationSettings {
@@ -80,6 +85,8 @@ impl Default for GenerationSettings {
             basins: SedimentaryBasinFieldConfig::default(),
             geological_elevation: GeologicalElevationConfig::default(),
             isostasy: IsostaticAdjustmentConfig::default(),
+            planet: Planet::EARTH,
+            solar_forcing: SolarForcingConfig::default(),
         }
     }
 }
@@ -161,6 +168,7 @@ pub struct GeneratedWorld {
     pub basins: SedimentaryBasinField,
     pub geological_elevation: GeologicalElevation,
     pub isostasy: IsostaticAdjustment,
+    pub solar_forcing: SolarForcing,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -251,6 +259,9 @@ impl GeneratedWorld {
                 config.isostasy,
             )
         })?;
+        let solar_forcing = timings.record("Solar forcing", || {
+            derive_solar_forcing(&voronoi, config.planet, config.solar_forcing)
+        })?;
 
         Ok(Self {
             voronoi,
@@ -270,6 +281,7 @@ impl GeneratedWorld {
             basins,
             geological_elevation,
             isostasy,
+            solar_forcing,
             timings,
             config,
         })
@@ -372,6 +384,14 @@ mod tests {
             world.isostasy.cell_elevations.len(),
             world.voronoi.cell_count()
         );
+        assert_eq!(
+            world.solar_forcing.daily_mean_insolation.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.solar_forcing.annual_mean_insolation.len(),
+            world.voronoi.cell_count()
+        );
     }
 
     #[test]
@@ -452,6 +472,11 @@ mod tests {
                 maximum_boundary_distance: 6,
                 ..Default::default()
             },
+            planet: Planet::EARTH,
+            solar_forcing: SolarForcingConfig {
+                orbital_phase: 0.25,
+                annual_sample_count: 48,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -480,6 +505,8 @@ mod tests {
             requested.geological_elevation
         );
         assert_eq!(world.config.isostasy, requested.isostasy);
+        assert_eq!(world.config.planet, requested.planet);
+        assert_eq!(world.config.solar_forcing, requested.solar_forcing);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

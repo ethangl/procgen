@@ -2,6 +2,7 @@ use super::{drag_value, section, slider};
 use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
+use procgen_climate::{ANNUAL_SAMPLE_RANGE, SolarForcingConfig};
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
@@ -81,9 +82,23 @@ pub(super) fn generation_controls(
     section(ui, "Isostatic adjustment", |ui| {
         isostatic_controls(ui, &mut generation.isostasy)
     });
+    section(ui, "Solar forcing", |ui| {
+        solar_forcing_controls(ui, &mut generation.solar_forcing)
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn solar_forcing_controls(ui: &mut egui::Ui, config: &mut SolarForcingConfig) {
+    slider(ui, "Orbital phase", &mut config.orbital_phase, 0.0..=1.0);
+    drag_value(
+        ui,
+        "Annual samples",
+        &mut config.annual_sample_count,
+        ANNUAL_SAMPLE_RANGE,
+        1.0,
+    );
 }
 
 fn seafloor_age_controls(ui: &mut egui::Ui, config: &mut SeafloorAgeConfig) {

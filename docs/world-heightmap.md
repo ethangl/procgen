@@ -127,6 +127,12 @@ Completed foundations:
   geological-elevation effect controls and final layer, per-effect aggregate
   diagnostics, isostatic support and adjusted-elevation controls and layers,
   aggregate rise/sink diagnostics, and stage timings.
+- `procgen-planet`: minimal SI-unit stellar and orbital inputs, with Earth-like
+  values isolated in a preset.
+- `procgen-climate`: deterministic top-of-atmosphere daily-mean insolation for
+  a selected orbital phase plus a bounded-sample, elapsed-time-weighted annual
+  mean over spherical cells. It has no atmosphere, temperature, transport, or
+  climate feedbacks. See `docs/solar-forcing.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

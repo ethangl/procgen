@@ -24,14 +24,18 @@ Finally, deterministic isostatic support combines current-owner continental
 crust, final convergent and divergent boundary proximity, craton strength, and
 basin membership, then nudges a separate clamped elevation field toward that
 support. Oceanic cells and sedimentary-basin floors remain unchanged.
+An independent solar-forcing stage then derives top-of-atmosphere daily-mean
+insolation for the selected orbital phase and a bounded-sample annual mean from
+the spherical mesh. It uses the Earth preset by default and does not consume
+elevation or model atmospheric or surface response.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
 
 The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
-adjusted-elevation, hotspot, volcanic-arc,
-craton, basin, motion, and final-boundary diagnostics and reports aggregate
+adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, motion, and
+final-boundary diagnostics and reports aggregate
 statistics plus stage timings. Plate interiors use stable per-plate colors.
 Crust is blue for oceanic, amber for continental, and white where the classes
 meet. Seafloor age runs from cyan ridge cells to dark blue old crust, with
@@ -42,6 +46,9 @@ tangent velocity field. Static boundaries are red for convergent, blue for
 divergent, and yellow for transform. Volcanic arcs use an orange-to-yellow
 strength ramp with cross markers for peak candidates. Cratons use a
 dark-green-to-pale-gold strength ramp.
+Daily-mean insolation runs from dark polar night through blue and cyan to warm
+yellow at the current field maximum; the controls expose orbital phase and the
+bounded annual sampling count.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.

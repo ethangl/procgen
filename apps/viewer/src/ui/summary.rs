@@ -1,6 +1,7 @@
 use super::{field_summary_stats, format_field_range, millis, stat, stat_grid};
 use crate::model::GeneratedWorld;
 use bevy_egui::egui;
+use procgen_climate::InsolationSummary;
 use procgen_geology::ElevationEffectDiagnostics;
 use procgen_tectonics::{BoundaryClass, CrustClass};
 
@@ -20,7 +21,68 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     basin_summary(ui, world);
     geological_elevation_summary(ui, world);
     isostatic_summary(ui, world);
+    solar_forcing_summary(ui, world);
     timing_summary(ui, world);
+}
+
+fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.solar_forcing.diagnostics;
+    stat_grid(ui, "Solar forcing", "solar_forcing", |ui| {
+        stat(
+            ui,
+            "Orbital phase",
+            format!("{:.3}", diagnostics.orbital_phase),
+        );
+        stat(
+            ui,
+            "Orbital distance",
+            format!("{:.3} Gm", diagnostics.orbital_distance_meters / 1.0e9),
+        );
+        stat(
+            ui,
+            "Solar declination",
+            format!(
+                "{:.2} deg",
+                diagnostics.solar_declination_radians.to_degrees()
+            ),
+        );
+        stat(
+            ui,
+            "Stellar flux",
+            format!(
+                "{:.1} W/m2",
+                diagnostics.stellar_flux_watts_per_square_meter
+            ),
+        );
+        insolation_stats(ui, "Daily", &diagnostics.daily_mean);
+        insolation_stats(ui, "Annual", &diagnostics.annual_mean);
+        stat(ui, "Polar-night cells", diagnostics.polar_night_cell_count);
+        stat(ui, "Polar-day cells", diagnostics.polar_day_cell_count);
+        stat(
+            ui,
+            "Annual samples",
+            world.config.solar_forcing.annual_sample_count,
+        );
+    });
+}
+
+fn insolation_stats(ui: &mut egui::Ui, prefix: &str, summary: &InsolationSummary) {
+    stat(
+        ui,
+        &format!("{prefix} range"),
+        format!(
+            "{:.1} - {:.1} W/m2",
+            summary.minimum_watts_per_square_meter, summary.maximum_watts_per_square_meter
+        ),
+    );
+    stat(
+        ui,
+        &format!("{prefix} global mean"),
+        format!(
+            "{:.1} W/m2",
+            summary.area_weighted_mean_watts_per_square_meter
+        ),
+    );
 }
 
 fn active_world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {

@@ -133,6 +133,24 @@ impl SphereMesh {
         self.edges.len()
     }
 
+    pub fn total_area(&self) -> f64 {
+        self.cell_areas.iter().map(|&area| f64::from(area)).sum()
+    }
+
+    pub fn area_weighted_mean(&self, values: &[f32]) -> f64 {
+        assert_eq!(
+            values.len(),
+            self.cell_count(),
+            "values must match the mesh cell count"
+        );
+        values
+            .iter()
+            .zip(&self.cell_areas)
+            .map(|(&value, &area)| f64::from(value) * f64::from(area))
+            .sum::<f64>()
+            / self.total_area()
+    }
+
     pub fn cell_corners(&self, cell: usize) -> &[CellCorner] {
         &self.corners[self.cell_offsets[cell]..self.cell_offsets[cell + 1]]
     }
