@@ -1,7 +1,7 @@
 use crate::{
     AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SolarForcingConfig,
     SolarForcingError,
-    orbit::{OrbitalSampler, daily_mean_at},
+    orbit::{OrbitalSampler, daily_mean_at, orbital_state},
     radiative_equilibrium::RadiativeEquilibriumModel,
 };
 use procgen_planet::{Planet, PlanetValidationError};
@@ -15,6 +15,8 @@ pub const ORBITAL_PERIOD_DAYS_RANGE: RangeInclusive<f64> = 0.01..=1.0e6;
 const MINIMUM_POSITIVE_THERMAL_CAPACITY: f64 = 1.0;
 const FIXED_POINT_ITERATION_LIMIT: usize = 48;
 const FIXED_POINT_TOLERANCE_KELVIN: f64 = 1.0e-7;
+const ENERGY_STEP_ITERATION_LIMIT: usize = 48;
+const ENERGY_STEP_RELATIVE_TOLERANCE: f64 = 1.0e-12;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SeasonalThermalConfig {
@@ -51,22 +53,12 @@ pub struct SeasonalThermalInputs<'a> {
     pub solar_forcing: SolarForcingConfig,
     pub radiative_equilibrium: RadiativeEquilibriumConfig,
     pub final_elevation: &'a [f32],
-    pub sea_level: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
     Land,
     Ocean,
-}
-
-impl Surface {
-    const fn index(self) -> usize {
-        match self {
-            Self::Land => 0,
-            Self::Ocean => 1,
-        }
-    }
 }
 
 impl fmt::Display for Surface {
@@ -117,7 +109,6 @@ pub enum SeasonalThermalError {
     SolarForcing(SolarForcingError),
     ElevationCells,
     Elevation,
-    SeaLevel,
     HeatCapacity(Surface),
     OrbitalPeriod,
     PeriodicSteadyState,
@@ -132,7 +123,6 @@ impl fmt::Display for SeasonalThermalError {
             Self::SolarForcing(error) => error.fmt(formatter),
             Self::ElevationCells => formatter.write_str("elevation must match the mesh cells"),
             Self::Elevation => formatter.write_str("elevation must contain only finite values"),
-            Self::SeaLevel => formatter.write_str("sea level must be finite"),
             Self::HeatCapacity(surface) => write!(
                 formatter,
                 "{surface} heat capacity must be zero or between {} and {} J/m2/K",
@@ -244,7 +234,8 @@ struct ResponseAccumulator {
     minima: Vec<f32>,
     maxima: Vec<f32>,
     amplitudes: Vec<f32>,
-    surfaces: [SurfaceAggregate; 2],
+    land: SurfaceAggregate,
+    ocean: SurfaceAggregate,
     maximum_closure_error: f64,
     maximum_fixed_point_iterations: usize,
 }
@@ -257,7 +248,8 @@ impl ResponseAccumulator {
             minima: Vec::with_capacity(cell_count),
             maxima: Vec::with_capacity(cell_count),
             amplitudes: Vec::with_capacity(cell_count),
-            surfaces: Default::default(),
+            land: Default::default(),
+            ocean: Default::default(),
             maximum_closure_error: 0.0,
             maximum_fixed_point_iterations: 0,
         }
@@ -290,7 +282,10 @@ impl ResponseAccumulator {
         self.minima.push(cycle.minimum as f32);
         self.maxima.push(cycle.maximum as f32);
         self.amplitudes.push(amplitude as f32);
-        self.surfaces[surface.index()].add(selected, area);
+        match surface {
+            Surface::Land => self.land.add(selected, area),
+            Surface::Ocean => self.ocean.add(selected, area),
+        }
         self.maximum_closure_error = self.maximum_closure_error.max(cycle.closure_error);
         self.maximum_fixed_point_iterations = self
             .maximum_fixed_point_iterations
@@ -305,8 +300,8 @@ impl ResponseAccumulator {
             annual_minimum: AreaWeightedSummary::from_field(mesh, &self.minima),
             annual_maximum: AreaWeightedSummary::from_field(mesh, &self.maxima),
             annual_amplitude: AreaWeightedSummary::from_field(mesh, &self.amplitudes),
-            land: self.surfaces[Surface::Land.index()].diagnostics(),
-            ocean: self.surfaces[Surface::Ocean.index()].diagnostics(),
+            land: self.land.diagnostics(),
+            ocean: self.ocean.diagnostics(),
             maximum_periodic_closure_error_kelvin: self.maximum_closure_error,
             maximum_fixed_point_iterations: self.maximum_fixed_point_iterations,
         };
@@ -335,18 +330,17 @@ pub fn derive_seasonal_thermal_response(
         solar_forcing,
         radiative_equilibrium,
         final_elevation,
-        sea_level,
     } = inputs;
     planet.validate()?;
     solar_forcing.validate()?;
     let radiation = RadiativeEquilibriumModel::new(radiative_equilibrium)?;
-    validate_inputs(mesh, final_elevation, sea_level, config)?;
+    validate_inputs(mesh, final_elevation, config)?;
 
     let sample_count = solar_forcing.annual_sample_count;
     let step_seconds = config.orbital_period_days * SECONDS_PER_DAY / sample_count as f64;
     let sampler = OrbitalSampler::new(planet, sample_count);
-    let selected_state = sampler.at_phase(solar_forcing.orbital_phase);
     let selected_phase = solar_forcing.orbital_phase.rem_euclid(1.0);
+    let selected_state = orbital_state(planet, selected_phase);
     let mut output = ResponseAccumulator::new(mesh.cell_count());
     let mut targets = Vec::with_capacity(sample_count);
     let mut endpoints = Vec::with_capacity(sample_count + 1);
@@ -356,7 +350,7 @@ pub fn derive_seasonal_thermal_response(
         .zip(&mesh.cell_centers)
         .zip(&mesh.cell_areas)
     {
-        let surface = if is_land(elevation, sea_level) {
+        let surface = if is_land(elevation) {
             Surface::Land
         } else {
             Surface::Ocean
@@ -368,16 +362,15 @@ pub fn derive_seasonal_thermal_response(
         };
         targets.clear();
         targets.extend(sampler.midpoint_states().iter().copied().map(target));
-        let coefficient = (heat_capacity > 0.0).then_some(
-            step_seconds * radiation.emissivity * crate::STEFAN_BOLTZMANN_CONSTANT / heat_capacity,
-        );
-        let cycle = solve_cell_cycle(
-            &targets,
-            target(selected_state),
-            selected_phase,
-            coefficient,
-            &mut endpoints,
-        )?;
+        let selected_target = target(selected_state);
+        // Zero capacity is the documented exact radiative response; positive
+        // capacity samples the integrated periodic cycle.
+        let cycle = if heat_capacity == 0.0 {
+            CellCycle::from_orbit(&targets, selected_target, 0.0, 0)
+        } else {
+            let coefficient = step_seconds * radiation.emission_coefficient() / heat_capacity;
+            solve_periodic_cycle(&targets, selected_phase, coefficient, &mut endpoints)?
+        };
         output.push(cycle, surface, area)?;
     }
     Ok(output.finish(mesh))
@@ -386,7 +379,6 @@ pub fn derive_seasonal_thermal_response(
 fn validate_inputs(
     mesh: &SphereMesh,
     elevations: &[f32],
-    sea_level: f32,
     config: SeasonalThermalConfig,
 ) -> Result<(), SeasonalThermalError> {
     if elevations.len() != mesh.cell_count() {
@@ -394,9 +386,6 @@ fn validate_inputs(
     }
     if elevations.iter().any(|value| !value.is_finite()) {
         return Err(SeasonalThermalError::Elevation);
-    }
-    if !sea_level.is_finite() {
-        return Err(SeasonalThermalError::SeaLevel);
     }
     if !valid_heat_capacity(config.land_heat_capacity) {
         return Err(SeasonalThermalError::HeatCapacity(Surface::Land));
@@ -418,16 +407,12 @@ fn valid_heat_capacity(value: f64) -> bool {
             && (MINIMUM_POSITIVE_THERMAL_CAPACITY..=*THERMAL_CAPACITY_RANGE.end()).contains(&value))
 }
 
-fn solve_cell_cycle(
+fn solve_periodic_cycle(
     targets: &[f64],
-    selected_target: f64,
     selected_phase: f64,
-    coefficient: Option<f64>,
+    coefficient: f64,
     endpoints: &mut Vec<f64>,
 ) -> Result<CellCycle, SeasonalThermalError> {
-    let Some(coefficient) = coefficient else {
-        return Ok(CellCycle::from_orbit(targets, selected_target, 0.0, 0));
-    };
     let minimum = targets.iter().copied().fold(f64::INFINITY, f64::min);
     let maximum = targets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if minimum == maximum {
@@ -439,13 +424,9 @@ fn solve_cell_cycle(
         let end = *endpoints.last().expect("an orbit always has endpoints");
         let residual = end - initial;
         if residual.abs() <= FIXED_POINT_TOLERANCE_KELVIN {
-            let position = selected_phase * targets.len() as f64;
-            let lower = position.floor() as usize % targets.len();
-            let fraction = position - position.floor();
-            let selected = endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction;
             return Ok(CellCycle::from_orbit(
                 &endpoints[..targets.len()],
-                selected,
+                sample_cycle(endpoints, selected_phase),
                 residual.abs(),
                 iteration,
             ));
@@ -457,6 +438,15 @@ fn solve_cell_cycle(
         initial = (initial - residual / slope).clamp(minimum, maximum);
     }
     Err(SeasonalThermalError::PeriodicSteadyState)
+}
+
+fn sample_cycle(endpoints: &[f64], phase: f64) -> f64 {
+    let sample_count = endpoints.len() - 1;
+    let position = phase * sample_count as f64;
+    // rem_euclid can round a tiny negative phase to exactly 1.0.
+    let lower = position.floor() as usize % sample_count;
+    let fraction = position - position.floor();
+    endpoints[lower] + (endpoints[lower + 1] - endpoints[lower]) * fraction
 }
 
 fn integrate_cycle(
@@ -482,9 +472,9 @@ fn implicit_energy_step(temperature: f64, equilibrium: f64, coefficient: f64) ->
     let mut lower = temperature.min(equilibrium);
     let mut upper = temperature.max(equilibrium);
     let mut result = temperature;
-    for _ in 0..48 {
+    for _ in 0..ENERGY_STEP_ITERATION_LIMIT {
         let residual = result + coefficient * result.powi(4) - rhs;
-        if residual.abs() <= 1.0e-12 * rhs.abs().max(1.0) {
+        if residual.abs() <= ENERGY_STEP_RELATIVE_TOLERANCE * rhs.abs().max(1.0) {
             break;
         }
         if residual > 0.0 {
@@ -544,7 +534,6 @@ mod tests {
                 },
                 radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
                 final_elevation: elevations,
-                sea_level: 0.5,
             },
             config,
         )
@@ -569,6 +558,13 @@ mod tests {
         assert_eq!(first, next_orbit);
         assert!(first.diagnostics.maximum_periodic_closure_error_kelvin <= 1.0e-6);
         assert!(first.diagnostics.maximum_fixed_point_iterations > 0);
+    }
+
+    #[test]
+    fn cycle_sampling_guards_a_phase_rounded_to_one() {
+        let wrapped = (-f64::MIN_POSITIVE).rem_euclid(1.0);
+        assert_eq!(wrapped, 1.0);
+        assert_eq!(sample_cycle(&[10.0, 20.0, 10.0], wrapped), 10.0);
     }
 
     #[test]
@@ -721,7 +717,6 @@ mod tests {
                     solar_forcing: SolarForcingConfig::default(),
                     radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
                     final_elevation: &elevations,
-                    sea_level: 0.5,
                 },
                 config,
             )
@@ -765,7 +760,6 @@ mod tests {
                     },
                     radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
                     final_elevation: &elevations,
-                    sea_level: 0.5,
                 },
                 SeasonalThermalConfig::EARTHLIKE,
             ),

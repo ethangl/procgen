@@ -103,7 +103,7 @@ pub fn derive_radiative_equilibrium_temperature(
 #[derive(Clone, Copy)]
 pub(crate) struct RadiativeEquilibriumModel {
     radiation_scale: f64,
-    pub emissivity: f64,
+    emissivity: f64,
 }
 
 impl RadiativeEquilibriumModel {
@@ -127,6 +127,10 @@ impl RadiativeEquilibriumModel {
 
     pub fn temperature_kelvin(self, insolation: f64) -> f64 {
         (insolation * self.radiation_scale).sqrt().sqrt()
+    }
+
+    pub fn emission_coefficient(self) -> f64 {
+        self.emissivity * STEFAN_BOLTZMANN_CONSTANT
     }
 }
 

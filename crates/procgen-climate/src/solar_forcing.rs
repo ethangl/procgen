@@ -1,6 +1,6 @@
 use crate::{
     AreaWeightedSummary,
-    orbit::{Daylight, OrbitalSampler, daily_mean_at},
+    orbit::{Daylight, OrbitalSampler, daily_mean_at, orbital_state},
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -132,14 +132,14 @@ pub fn derive_solar_forcing(
 ) -> Result<SolarForcing, SolarForcingError> {
     planet.validate()?;
     config.validate()?;
-    let sampler = OrbitalSampler::new(planet, config.annual_sample_count);
-    let periapsis = sampler.at_phase(0.0);
+    let periapsis = orbital_state(planet, 0.0);
     if periapsis.stellar_flux > f64::from(f32::MAX) {
         return Err(SolarForcingError::NumericalRange);
     }
 
     let orbital_phase = config.orbital_phase.rem_euclid(1.0);
-    let phase_state = sampler.at_phase(orbital_phase);
+    let phase_state = orbital_state(planet, orbital_phase);
+    let sampler = OrbitalSampler::new(planet, config.annual_sample_count);
     let latitudes = mesh
         .cell_centers
         .iter()
@@ -288,9 +288,7 @@ mod tests {
                     && *value >= 0.0
                     && f64::from(*value) <= first.diagnostics.stellar_flux_watts_per_square_meter)
         );
-        let periapsis_flux = OrbitalSampler::new(Planet::EARTH, 4)
-            .at_phase(0.0)
-            .stellar_flux;
+        let periapsis_flux = orbital_state(Planet::EARTH, 0.0).stellar_flux;
         assert!(
             first
                 .annual_mean_insolation
@@ -334,13 +332,12 @@ mod tests {
 
     #[test]
     fn exact_poles_are_finite_at_equinox_and_classified_at_solstice() {
-        let equinox = OrbitalSampler::new(circular_planet(0.0, 0.0), 4).at_phase(0.0);
+        let equinox = orbital_state(circular_planet(0.0, 0.0), 0.0);
         let north_equinox = daily_mean_at(1.0, equinox);
         assert_eq!(north_equinox.watts_per_square_meter, 0.0);
         assert_eq!(north_equinox.daylight, Daylight::Cycles);
 
-        let solstice =
-            OrbitalSampler::new(circular_planet(23.5_f64.to_radians(), PI * 0.5), 4).at_phase(0.0);
+        let solstice = orbital_state(circular_planet(23.5_f64.to_radians(), PI * 0.5), 0.0);
         assert_eq!(daily_mean_at(1.0, solstice).daylight, Daylight::PolarDay);
         let south_solstice = daily_mean_at(-1.0, solstice);
         assert_eq!(south_solstice.watts_per_square_meter, 0.0);
@@ -357,7 +354,7 @@ mod tests {
             },
             ..baseline
         };
-        let state = OrbitalSampler::new(planet, 4).at_phase(0.0);
+        let state = orbital_state(planet, 0.0);
         assert!((state.distance_meters - 1.0e-6).abs() < 1.0e-15);
         assert!(state.stellar_flux.is_finite());
     }

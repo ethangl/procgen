@@ -6,8 +6,8 @@ use std::fmt;
 pub const SEA_LEVEL: f32 = 0.5;
 
 /// Uses the pipeline-wide strict boundary: sea level itself is ocean.
-pub const fn is_land(elevation: f32, sea_level: f32) -> bool {
-    elevation > sea_level
+pub const fn is_land(elevation: f32) -> bool {
+    elevation > SEA_LEVEL
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,7 +40,7 @@ impl CoarseElevation {
     }
 
     pub fn is_land(&self, cell: usize) -> bool {
-        is_land(self.cell_elevations[cell], SEA_LEVEL)
+        is_land(self.cell_elevations[cell])
     }
 }
 
@@ -179,7 +179,7 @@ mod tests {
         };
         assert_eq!(elevation.validate(&mesh), Ok(()));
         assert!(!elevation.is_land(0));
-        assert!(!is_land(SEA_LEVEL, SEA_LEVEL));
+        assert!(!is_land(SEA_LEVEL));
 
         elevation.cell_elevations[0] = SEA_LEVEL + 0.01;
         assert!(elevation.is_land(0));

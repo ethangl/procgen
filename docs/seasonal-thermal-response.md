@@ -12,10 +12,11 @@ C dT/dt = epsilon sigma (T_eq(t)^4 - T(t)^4)
 cell's daily-mean insolation at orbital phase `t`. `epsilon` and `sigma` are the
 same explicit emissivity and Stefan-Boltzmann constant used by the radiative
 stage. `C` is an explicit effective surface heat capacity in J/m2/K. Final
-elevation strictly above the supplied sea level selects the land capacity;
-elevation at or below sea level selects the ocean capacity. This is the shared
-tectonic elevation predicate used elsewhere in the pipeline. The stage does not
-inspect tectonic crust classes.
+elevation strictly above the pipeline's `SEA_LEVEL` selects the land capacity;
+elevation at or below it selects the ocean capacity. This is the shared tectonic
+elevation predicate used elsewhere in the pipeline. Sea level is not
+configurable in the current pipeline. The stage does not inspect tectonic crust
+classes.
 
 The orbit uses the solar-forcing stage's single bounded count of 4 to 4096
 uniform elapsed-time intervals; seasonal response has no second sampling

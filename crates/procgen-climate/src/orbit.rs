@@ -11,22 +11,16 @@ pub(crate) struct OrbitalState {
 }
 
 pub(crate) struct OrbitalSampler {
-    planet: Planet,
     midpoint_states: Vec<OrbitalState>,
 }
 
 impl OrbitalSampler {
     pub fn new(planet: Planet, sample_count: usize) -> Self {
         Self {
-            planet,
             midpoint_states: (0..sample_count)
                 .map(|sample| orbital_state(planet, (sample as f64 + 0.5) / sample_count as f64))
                 .collect(),
         }
-    }
-
-    pub fn at_phase(&self, phase: f64) -> OrbitalState {
-        orbital_state(self.planet, phase.rem_euclid(1.0))
     }
 
     pub fn midpoint_states(&self) -> &[OrbitalState] {
@@ -72,7 +66,7 @@ pub(crate) enum Daylight {
     PolarDay,
 }
 
-fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
+pub(crate) fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
     let orbit = planet.orbit;
     let mean_anomaly = phase * 2.0 * PI;
     let eccentric_anomaly = solve_kepler(mean_anomaly, orbit.eccentricity);
