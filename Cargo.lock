@@ -3138,6 +3138,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "procgen-climate"
+version = "0.1.0"
+dependencies = [
+ "procgen-planet",
+ "procgen-sphere",
+ "procgen-sphere-mesh",
+]
+
+[[package]]
 name = "procgen-core"
 version = "0.1.0"
 
@@ -3150,6 +3159,10 @@ dependencies = [
  "procgen-sphere-mesh",
  "procgen-tectonics",
 ]
+
+[[package]]
+name = "procgen-planet"
+version = "0.1.0"
 
 [[package]]
 name = "procgen-sphere"
@@ -3183,8 +3196,10 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "procgen-climate",
  "procgen-core",
  "procgen-geology",
+ "procgen-planet",
  "procgen-sphere",
  "procgen-sphere-mesh",
  "procgen-tectonics",

@@ -23,6 +23,7 @@ pub enum DiagnosticLayer {
     GeologicalElevation,
     IsostaticSupport,
     IsostaticElevation,
+    Insolation,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -51,6 +52,7 @@ const DRAW_ORDER: &[DrawSurface] = &[
     DrawSurface::Layer(DiagnosticLayer::GeologicalElevation),
     DrawSurface::Layer(DiagnosticLayer::IsostaticSupport),
     DrawSurface::Layer(DiagnosticLayer::IsostaticElevation),
+    DrawSurface::Layer(DiagnosticLayer::Insolation),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
@@ -79,6 +81,13 @@ const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (SEA_LEVEL, Vec3::new(0.16, 0.55, 0.18)),
     (0.75, Vec3::new(0.55, 0.38, 0.16)),
     (1.0, Vec3::new(0.96, 0.96, 0.94)),
+];
+const INSOLATION_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.015, 0.02, 0.08)),
+    (0.2, Vec3::new(0.08, 0.18, 0.5)),
+    (0.45, Vec3::new(0.12, 0.65, 0.82)),
+    (0.7, Vec3::new(1.0, 0.72, 0.12)),
+    (1.0, Vec3::new(1.0, 0.98, 0.78)),
 ];
 const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.06, 0.12)),
@@ -124,6 +133,7 @@ impl DiagnosticLayer {
         Self::GeologicalElevation,
         Self::IsostaticSupport,
         Self::IsostaticElevation,
+        Self::Insolation,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -155,7 +165,8 @@ impl DiagnosticLayer {
             | Self::Elevation
             | Self::GeologicalElevation
             | Self::IsostaticSupport
-            | Self::IsostaticElevation => 3.5,
+            | Self::IsostaticElevation
+            | Self::Insolation => 3.5,
             Self::Hotspots
             | Self::OceanicPeaks
             | Self::VolcanicArcs
@@ -184,6 +195,7 @@ impl DiagnosticLayer {
             Self::GeologicalElevation => "Geological elevation",
             Self::IsostaticSupport => "Isostatic support",
             Self::IsostaticElevation => "Adjusted elevation",
+            Self::Insolation => "Daily-mean insolation",
             Self::Hotspots => "Mantle hotspots",
             Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
@@ -242,6 +254,12 @@ impl DiagnosticLayer {
                 &world.voronoi,
                 &world.isostasy.cell_elevations,
                 &ELEVATION_COLOR_STOPS,
+                radius,
+            ),
+            Self::Insolation => normalized_scalar_field_asset(
+                &world.voronoi,
+                &world.solar_forcing.daily_mean_insolation,
+                &INSOLATION_COLOR_STOPS,
                 radius,
             ),
             Self::Hotspots => scalar_field_asset(
@@ -590,6 +608,21 @@ fn scalar_field_asset(
         Some((
             radius,
             scalar_edge_color(edge.cells.map(|cell| values[cell]), stops),
+        ))
+    })
+}
+
+fn normalized_scalar_field_asset(
+    mesh: &SphereMesh,
+    values: &[f32],
+    stops: &[(f32, Vec3)],
+    radius: f32,
+) -> GizmoAsset {
+    let maximum = values.iter().copied().fold(0.0_f32, f32::max).max(1.0);
+    voronoi_edge_asset(mesh, |_, edge| {
+        Some((
+            radius,
+            scalar_edge_color(edge.cells.map(|cell| values[cell] / maximum), stops),
         ))
     })
 }
