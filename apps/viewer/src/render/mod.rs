@@ -1,80 +1,79 @@
 mod assets;
 mod layers;
+mod palette;
 mod surfaces;
 
-pub use layers::{DiagnosticLayer, LayerKind};
+pub use layers::{DiagnosticLayer, OverlayKind};
 
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
+use std::collections::BTreeSet;
 use surfaces::empty_surface_mesh;
 
 const DEPTH_SCALE_STEP: f32 = 0.004;
 
-#[derive(Resource)]
-pub struct LayerSettings {
-    visible: [bool; DiagnosticLayer::COUNT],
+#[derive(Resource, Default)]
+pub struct OverlaySettings {
+    visible: BTreeSet<DiagnosticLayer>,
 }
 
-impl LayerSettings {
+impl OverlaySettings {
     pub fn is_visible(&self, layer: DiagnosticLayer) -> bool {
-        self.visible[layer.index()]
+        self.visible.contains(&layer)
     }
 
     pub fn set_visible(&mut self, layer: DiagnosticLayer, visible: bool) {
-        if visible && layer.kind() == LayerKind::Fill {
-            for &candidate in DiagnosticLayer::ALL {
-                if candidate.kind() == LayerKind::Fill {
-                    self.visible[candidate.index()] = false;
-                }
-            }
-        }
-        self.visible[layer.index()] = visible;
-    }
-
-    pub fn surface_layer(&self) -> Option<DiagnosticLayer> {
-        DiagnosticLayer::ALL
-            .iter()
-            .copied()
-            .find(|&layer| layer.kind() == LayerKind::Fill && self.is_visible(layer))
-    }
-
-    pub fn set_surface_layer(&mut self, selected: Option<DiagnosticLayer>) {
-        for &layer in DiagnosticLayer::ALL {
-            if layer.kind() == LayerKind::Fill {
-                self.visible[layer.index()] = selected == Some(layer);
-            }
+        assert!(
+            layer.overlay_kind().is_some(),
+            "only overlays can be toggled"
+        );
+        if visible {
+            self.visible.insert(layer);
+        } else {
+            self.visible.remove(&layer);
         }
     }
 
-    fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
-        let layer_order = layer.depth_order();
-        let visible_layers_before = DiagnosticLayer::ALL
-            .iter()
-            .filter(|&&candidate| {
-                self.is_visible(candidate) && candidate.depth_order() < layer_order
-            })
-            .count();
+    fn depth_scale(&self, surface: &SurfaceSelection, layer: DiagnosticLayer) -> f32 {
+        if layer.is_fill() {
+            return 1.0;
+        }
+        let layer_order = (layer.overlay_kind().unwrap(), layer.index());
+        let visible_layers_before = usize::from(surface.selected().is_some())
+            + self
+                .visible
+                .iter()
+                .filter(|&&candidate| {
+                    (candidate.overlay_kind().unwrap(), candidate.index()) < layer_order
+                })
+                .count();
 
         1.0 + visible_layers_before as f32 * DEPTH_SCALE_STEP
     }
 }
 
-impl Default for LayerSettings {
+#[derive(Resource)]
+pub struct SurfaceSelection(Option<DiagnosticLayer>);
+
+impl SurfaceSelection {
+    pub fn selected(&self) -> Option<DiagnosticLayer> {
+        self.0
+    }
+
+    pub fn set(&mut self, selected: Option<DiagnosticLayer>) {
+        assert!(selected.is_none_or(DiagnosticLayer::is_fill));
+        self.0 = selected;
+    }
+}
+
+impl Default for SurfaceSelection {
     fn default() -> Self {
-        let mut visible = [false; DiagnosticLayer::COUNT];
-        visible[DiagnosticLayer::IsostaticElevation.index()] = true;
-        Self { visible }
+        Self(Some(DiagnosticLayer::IsostaticElevation))
     }
 }
 
 #[derive(Resource)]
-struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
-
-#[derive(Resource)]
-struct SurfaceAsset(Handle<Mesh>);
-
-#[derive(Resource, Default)]
-struct RenderedSurface(Option<DiagnosticLayer>);
+struct DiagnosticAssets(Vec<(DiagnosticLayer, Handle<GizmoAsset>)>);
 
 #[derive(Component)]
 struct SurfaceLayer;
@@ -83,15 +82,20 @@ pub struct DiagnosticRenderPlugin;
 
 impl Plugin for DiagnosticRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LayerSettings>()
-            .init_resource::<RenderedSurface>()
+        app.init_resource::<SurfaceSelection>()
+            .init_resource::<OverlaySettings>()
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
                 (
                     rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
-                    rebuild_surface.run_if(surface_may_need_rebuild),
-                    sync_layer_render_state.run_if(resource_changed::<LayerSettings>),
+                    rebuild_surface.run_if(
+                        resource_changed::<GeneratedWorld>.or(resource_changed::<SurfaceSelection>),
+                    ),
+                    sync_layer_render_state.run_if(
+                        resource_changed::<SurfaceSelection>
+                            .or(resource_changed::<OverlaySettings>),
+                    ),
                 ),
             );
     }
@@ -125,25 +129,31 @@ fn setup_scene(
         SurfaceLayer,
         Visibility::Hidden,
     ));
-    commands.insert_resource(SurfaceAsset(surface));
-
-    let diagnostic_assets = std::array::from_fn(|index| {
-        let layer = DiagnosticLayer::ALL[index];
-        let handle = gizmo_assets.add(GizmoAsset::new());
-        spawn_layer(&mut commands, handle.clone(), layer);
-        handle
-    });
+    let diagnostic_assets = DiagnosticLayer::ALL
+        .iter()
+        .filter_map(|&layer| {
+            let line_width = layer.gizmo_line_width()?;
+            let handle = gizmo_assets.add(GizmoAsset::new());
+            spawn_layer(&mut commands, handle.clone(), layer, line_width);
+            Some((layer, handle))
+        })
+        .collect();
     spawn_axes(&mut commands, &mut gizmo_assets);
 
     commands.insert_resource(DiagnosticAssets(diagnostic_assets));
 }
 
-fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: DiagnosticLayer) {
+fn spawn_layer(
+    commands: &mut Commands,
+    handle: Handle<GizmoAsset>,
+    layer: DiagnosticLayer,
+    line_width: f32,
+) {
     commands.spawn((
         Gizmo {
             handle,
             line_config: GizmoLineConfig {
-                width: layer.line_width(),
+                width: line_width,
                 perspective: false,
                 ..default()
             },
@@ -178,55 +188,52 @@ fn rebuild_diagnostic_assets(
     assets: Res<DiagnosticAssets>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    for &layer in DiagnosticLayer::ALL {
-        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build_asset(&world);
+    for (layer, handle) in &assets.0 {
+        *gizmo_assets.get_mut(handle).unwrap() = layer
+            .build_gizmo(&world)
+            .expect("diagnostic assets only contains gizmo layers");
     }
 }
 
 fn rebuild_surface(
     world: Res<GeneratedWorld>,
-    settings: Res<LayerSettings>,
-    surface: Res<SurfaceAsset>,
-    mut rendered: ResMut<RenderedSurface>,
+    selection: Res<SurfaceSelection>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut visibility: Single<&mut Visibility, With<SurfaceLayer>>,
+    surface: Single<(&Mesh3d, &mut Visibility), With<SurfaceLayer>>,
 ) {
-    let selected = settings.surface_layer();
-    if !world.is_changed() && rendered.0 == selected {
-        return;
-    }
-
-    rendered.0 = selected;
-    if let Some(layer) = selected {
-        *meshes.get_mut(&surface.0).unwrap() = layer
-            .build_surface(&world)
-            .expect("fill layers must build a surface mesh");
-        **visibility = Visibility::Inherited;
+    let (surface_mesh, mut visibility) = surface.into_inner();
+    if let Some(layer) = selection.selected() {
+        *meshes.get_mut(&surface_mesh.0).unwrap() = layer.build_surface(&world);
+        *visibility = Visibility::Inherited;
     } else {
-        **visibility = Visibility::Hidden;
+        *visibility = Visibility::Hidden;
     }
-}
-
-fn surface_may_need_rebuild(world: Res<GeneratedWorld>, settings: Res<LayerSettings>) -> bool {
-    world.is_changed() || settings.is_changed()
 }
 
 fn sync_layer_render_state(
-    settings: Res<LayerSettings>,
+    surface: Res<SurfaceSelection>,
+    overlays: Res<OverlaySettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
     for (layer, mut transform) in &mut layer_transforms {
-        transform.scale = Vec3::splat(settings.depth_scale(*layer));
+        transform.scale = Vec3::splat(overlays.depth_scale(&surface, *layer));
     }
 
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
     let mut layers = vec![0];
     layers.extend(
-        DiagnosticLayer::ALL
+        surface
+            .selected()
+            .filter(|layer| layer.gizmo_line_width().is_some())
+            .map(DiagnosticLayer::render_layer),
+    );
+    layers.extend(
+        overlays
+            .visible
             .iter()
-            .filter(|&&layer| settings.is_visible(layer))
-            .map(|&layer| layer.render_layer()),
+            .copied()
+            .map(DiagnosticLayer::render_layer),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
 }
@@ -237,47 +244,31 @@ mod tests {
 
     #[test]
     fn depth_scales_only_count_visible_layers() {
-        let mut settings = LayerSettings {
-            visible: [false; DiagnosticLayer::COUNT],
-        };
-        settings.set_visible(DiagnosticLayer::Motion, true);
+        let surface = SurfaceSelection(None);
+        let mut overlays = OverlaySettings::default();
+        overlays.set_visible(DiagnosticLayer::Motion, true);
 
-        assert_eq!(settings.depth_scale(DiagnosticLayer::Motion), 1.0);
+        assert_eq!(overlays.depth_scale(&surface, DiagnosticLayer::Motion), 1.0);
     }
 
     #[test]
-    fn depth_scales_follow_semantic_bucket_order() {
-        let mut settings = LayerSettings {
-            visible: [false; DiagnosticLayer::COUNT],
-        };
-        settings.set_visible(DiagnosticLayer::Motion, true);
-        settings.set_visible(DiagnosticLayer::Boundaries, true);
-        settings.set_visible(DiagnosticLayer::IsostaticElevation, true);
+    fn depth_scales_follow_overlay_kind_order() {
+        let surface = SurfaceSelection::default();
+        let mut overlays = OverlaySettings::default();
+        overlays.set_visible(DiagnosticLayer::Motion, true);
+        overlays.set_visible(DiagnosticLayer::Boundaries, true);
 
         assert_eq!(
-            settings.depth_scale(DiagnosticLayer::IsostaticElevation),
+            overlays.depth_scale(&surface, DiagnosticLayer::IsostaticElevation),
             1.0
         );
         assert_eq!(
-            settings.depth_scale(DiagnosticLayer::Boundaries),
+            overlays.depth_scale(&surface, DiagnosticLayer::Boundaries),
             1.0 + DEPTH_SCALE_STEP
         );
         assert_eq!(
-            settings.depth_scale(DiagnosticLayer::Motion),
+            overlays.depth_scale(&surface, DiagnosticLayer::Motion),
             1.0 + 2.0 * DEPTH_SCALE_STEP
         );
-    }
-
-    #[test]
-    fn selecting_a_fill_replaces_the_previous_fill() {
-        let mut settings = LayerSettings::default();
-
-        settings.set_visible(DiagnosticLayer::CoupledAlbedo, true);
-
-        assert_eq!(
-            settings.surface_layer(),
-            Some(DiagnosticLayer::CoupledAlbedo)
-        );
-        assert!(!settings.is_visible(DiagnosticLayer::IsostaticElevation));
     }
 }

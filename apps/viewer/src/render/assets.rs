@@ -1,7 +1,7 @@
+use super::palette::{id_color, opaque_color, piecewise_lerp, to_bevy};
 use crate::model::GeneratedWorld;
 use bevy::prelude::*;
 use procgen_climate::CALM_WIND_SPEED_METERS_PER_SECOND;
-use procgen_core::Vec3 as SphereVec3;
 use procgen_geology::{OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{BoundaryClass, BoundaryClassification, PlateKinematics, PlatePartition};
@@ -81,10 +81,6 @@ fn cell_marker_size(mesh: &SphereMesh) -> f32 {
         .clamp(MINIMUM_CELL_MARKER_SIZE, MAXIMUM_CELL_MARKER_SIZE)
 }
 
-fn opaque_color(color: Vec3) -> Color {
-    Color::srgba(color.x, color.y, color.z, 1.0)
-}
-
 pub(super) fn delaunay_asset(mesh: &SphereMesh, radius: f32) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let color = Color::srgba(0.35, 0.5, 0.72, 0.9);
@@ -130,19 +126,6 @@ pub(super) fn boundary_asset(
         };
         Some((radius, color))
     })
-}
-
-pub(super) fn piecewise_lerp(value: f32, stops: &[(f32, Vec3)]) -> Vec3 {
-    let value = value.clamp(stops[0].0, stops[stops.len() - 1].0);
-    for pair in stops.windows(2) {
-        let (low_value, low) = pair[0];
-        let (high_value, high) = pair[1];
-        if value < high_value {
-            let t = (value - low_value) / (high_value - low_value);
-            return low.lerp(high, t);
-        }
-    }
-    stops[stops.len() - 1].1
 }
 
 pub(super) fn motion_asset(
@@ -224,13 +207,4 @@ fn add_surface_edge(asset: &mut GizmoAsset, start: Vec3, end: Vec3, radius: f32,
         asset.line(previous, current, color);
         previous = current;
     }
-}
-
-fn to_bevy(point: SphereVec3) -> Vec3 {
-    Vec3::new(point.x, point.y, point.z)
-}
-
-pub(super) fn id_color(id: usize) -> Color {
-    let hue = (id as f32 * 137.508) % 360.0;
-    Color::hsla(hue, 0.62, 0.62, 0.95)
 }

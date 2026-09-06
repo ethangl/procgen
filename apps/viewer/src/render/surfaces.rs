@@ -1,4 +1,7 @@
-use super::assets::{id_color, piecewise_lerp};
+use super::palette::{
+    INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, id_color, opaque_color, piecewise_lerp,
+    to_bevy,
+};
 use crate::model::GeneratedWorld;
 use bevy::{
     asset::RenderAssetUsages,
@@ -8,6 +11,8 @@ use bevy::{
 };
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::CrustClass;
+
+const SURFACE_RADIUS: f32 = 1.0;
 
 pub(super) fn empty_surface_mesh() -> Mesh {
     Mesh::new(
@@ -20,18 +25,16 @@ pub(super) fn scalar_surface_mesh(
     world: &GeneratedWorld,
     values: &[f32],
     stops: &[(f32, Vec3)],
-    radius: f32,
 ) -> Mesh {
     cell_surface_mesh(
         &world.voronoi,
         values
             .iter()
             .map(|&value| opaque_color(piecewise_lerp(value, stops))),
-        radius,
     )
 }
 
-pub(super) fn plate_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
+pub(super) fn plate_surface_mesh(world: &GeneratedWorld) -> Mesh {
     cell_surface_mesh(
         &world.voronoi,
         world
@@ -39,11 +42,10 @@ pub(super) fn plate_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
             .cell_plates
             .iter()
             .map(|&plate| id_color(plate)),
-        radius,
     )
 }
 
-pub(super) fn crust_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
+pub(super) fn crust_surface_mesh(world: &GeneratedWorld) -> Mesh {
     cell_surface_mesh(
         &world.voronoi,
         (0..world.voronoi.cell_count()).map(|cell| {
@@ -52,37 +54,24 @@ pub(super) fn crust_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
                 CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
             }
         }),
-        radius,
     )
 }
 
-pub(super) fn seafloor_age_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
-    const STOPS: [(f32, Vec3); 3] = [
-        (0.0, Vec3::new(0.35, 0.95, 1.0)),
-        (0.5, Vec3::new(0.08, 0.4, 0.8)),
-        (1.0, Vec3::new(0.015, 0.05, 0.2)),
-    ];
-
+pub(super) fn seafloor_age_surface_mesh(world: &GeneratedWorld) -> Mesh {
     let maximum_age = world.seafloor_age.diagnostics.summary.maximum.max(1.0);
     cell_surface_mesh(
         &world.voronoi,
         world.seafloor_age.cell_ages.iter().map(|age| match age {
-            Some(age) => opaque_color(piecewise_lerp(*age as f32 / maximum_age, &STOPS)),
+            Some(age) => opaque_color(piecewise_lerp(
+                *age as f32 / maximum_age,
+                SEAFLOOR_AGE_COLOR_STOPS,
+            )),
             None => Color::srgb(0.18, 0.16, 0.14),
         }),
-        radius,
     )
 }
 
-pub(super) fn insolation_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
-    const STOPS: [(f32, Vec3); 5] = [
-        (0.0, Vec3::new(0.015, 0.02, 0.08)),
-        (0.2, Vec3::new(0.08, 0.18, 0.5)),
-        (0.45, Vec3::new(0.12, 0.65, 0.82)),
-        (0.7, Vec3::new(1.0, 0.72, 0.12)),
-        (1.0, Vec3::new(1.0, 0.98, 0.78)),
-    ];
-
+pub(super) fn insolation_surface_mesh(world: &GeneratedWorld) -> Mesh {
     let maximum = world.solar_forcing.diagnostics.daily_mean.maximum;
     let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
     let values = world
@@ -92,12 +81,11 @@ pub(super) fn insolation_surface_mesh(world: &GeneratedWorld, radius: f32) -> Me
         .map(|value| value * reciprocal);
     cell_surface_mesh(
         &world.voronoi,
-        values.map(|value| opaque_color(piecewise_lerp(value, &STOPS))),
-        radius,
+        values.map(|value| opaque_color(piecewise_lerp(value, INSOLATION_COLOR_STOPS))),
     )
 }
 
-pub(super) fn basin_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
+pub(super) fn basin_surface_mesh(world: &GeneratedWorld) -> Mesh {
     cell_surface_mesh(
         &world.voronoi,
         world
@@ -105,15 +93,10 @@ pub(super) fn basin_surface_mesh(world: &GeneratedWorld, radius: f32) -> Mesh {
             .cell_basins
             .iter()
             .map(|basin| basin.map_or(Color::srgb(0.045, 0.065, 0.075), id_color)),
-        radius,
     )
 }
 
-fn cell_surface_mesh(
-    sphere: &SphereMesh,
-    colors: impl IntoIterator<Item = Color>,
-    radius: f32,
-) -> Mesh {
+fn cell_surface_mesh(sphere: &SphereMesh, colors: impl IntoIterator<Item = Color>) -> Mesh {
     let colors = colors.into_iter().collect::<Vec<_>>();
     assert_eq!(colors.len(), sphere.cell_count());
 
@@ -124,7 +107,7 @@ fn cell_surface_mesh(
     let mut indices = Vec::with_capacity(sphere.corners.len() * 3);
 
     for (cell, color) in colors.into_iter().enumerate() {
-        let center = to_bevy(sphere.cell_centers[cell]).normalize() * radius;
+        let center = to_bevy(sphere.cell_centers[cell]).normalize() * SURFACE_RADIUS;
         let corners = sphere.cell_corners(cell);
         let base = u32::try_from(positions.len()).expect("surface mesh exceeds u32 indices");
         let linear_color = LinearRgba::from(color).to_f32_array();
@@ -133,7 +116,7 @@ fn cell_surface_mesh(
         normals.push(center.normalize().to_array());
         vertex_colors.push(linear_color);
         for corner in corners {
-            let position = to_bevy(sphere.vertices[corner.vertex]).normalize() * radius;
+            let position = to_bevy(sphere.vertices[corner.vertex]).normalize() * SURFACE_RADIUS;
             positions.push(position.to_array());
             normals.push(position.normalize().to_array());
             vertex_colors.push(linear_color);
@@ -159,14 +142,6 @@ fn cell_surface_mesh(
         .with_inserted_indices(Indices::U32(indices))
 }
 
-fn opaque_color(color: Vec3) -> Color {
-    Color::srgb(color.x, color.y, color.z)
-}
-
-fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
-    Vec3::new(point.x, point.y, point.z)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,7 +164,7 @@ mod tests {
             1.0,
         )
         .unwrap();
-        let mesh = cell_surface_mesh(&sphere, [Color::WHITE; 4], 1.0);
+        let mesh = cell_surface_mesh(&sphere, [Color::WHITE; 4]);
 
         assert_eq!(
             mesh.count_vertices(),
