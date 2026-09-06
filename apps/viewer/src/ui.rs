@@ -2,7 +2,7 @@ mod controls;
 mod summary;
 
 use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
-use crate::render::{DiagnosticLayer, LayerSettings};
+use crate::render::{DiagnosticLayer, LayerKind, LayerSettings};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -54,11 +54,37 @@ fn viewer_ui(
 }
 
 fn layer_controls(ui: &mut egui::Ui, mut layers: Mut<LayerSettings>) {
-    ui.label("Layers");
+    ui.label("Surface fill");
+    let selected_surface = layers.surface_layer();
+    if ui.radio(selected_surface.is_none(), "None").clicked() && selected_surface.is_some() {
+        layers.set_surface_layer(None);
+    }
     for &layer in DiagnosticLayer::ALL {
-        let mut visible = layers.is_visible(layer);
-        if ui.checkbox(&mut visible, layer.label()).changed() {
-            layers.set_visible(layer, visible);
+        if layer.kind() == LayerKind::Fill
+            && ui
+                .radio(selected_surface == Some(layer), layer.label())
+                .clicked()
+            && selected_surface != Some(layer)
+        {
+            layers.set_surface_layer(Some(layer));
+        }
+    }
+
+    for (kind, heading) in [
+        (LayerKind::Edges, "Edges"),
+        (LayerKind::Markers, "Markers"),
+        (LayerKind::Vectors, "Vectors"),
+    ] {
+        ui.add_space(4.0);
+        ui.label(heading);
+        for &layer in DiagnosticLayer::ALL {
+            if layer.kind() != kind {
+                continue;
+            }
+            let mut visible = layers.is_visible(layer);
+            if ui.checkbox(&mut visible, layer.label()).changed() {
+                layers.set_visible(layer, visible);
+            }
         }
     }
 }

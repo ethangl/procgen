@@ -1,10 +1,12 @@
 mod assets;
 mod layers;
+mod surfaces;
 
-pub use layers::DiagnosticLayer;
+pub use layers::{DiagnosticLayer, LayerKind};
 
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
+use surfaces::empty_surface_mesh;
 
 const DEPTH_SCALE_STEP: f32 = 0.004;
 
@@ -19,7 +21,29 @@ impl LayerSettings {
     }
 
     pub fn set_visible(&mut self, layer: DiagnosticLayer, visible: bool) {
+        if visible && layer.kind() == LayerKind::Fill {
+            for &candidate in DiagnosticLayer::ALL {
+                if candidate.kind() == LayerKind::Fill {
+                    self.visible[candidate.index()] = false;
+                }
+            }
+        }
         self.visible[layer.index()] = visible;
+    }
+
+    pub fn surface_layer(&self) -> Option<DiagnosticLayer> {
+        DiagnosticLayer::ALL
+            .iter()
+            .copied()
+            .find(|&layer| layer.kind() == LayerKind::Fill && self.is_visible(layer))
+    }
+
+    pub fn set_surface_layer(&mut self, selected: Option<DiagnosticLayer>) {
+        for &layer in DiagnosticLayer::ALL {
+            if layer.kind() == LayerKind::Fill {
+                self.visible[layer.index()] = selected == Some(layer);
+            }
+        }
     }
 
     fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
@@ -46,16 +70,27 @@ impl Default for LayerSettings {
 #[derive(Resource)]
 struct DiagnosticAssets([Handle<GizmoAsset>; DiagnosticLayer::COUNT]);
 
+#[derive(Resource)]
+struct SurfaceAsset(Handle<Mesh>);
+
+#[derive(Resource, Default)]
+struct RenderedSurface(Option<DiagnosticLayer>);
+
+#[derive(Component)]
+struct SurfaceLayer;
+
 pub struct DiagnosticRenderPlugin;
 
 impl Plugin for DiagnosticRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LayerSettings>()
+            .init_resource::<RenderedSurface>()
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
                 (
                     rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
+                    rebuild_surface.run_if(surface_may_need_rebuild),
                     sync_layer_render_state.run_if(resource_changed::<LayerSettings>),
                 ),
             );
@@ -77,6 +112,20 @@ fn setup_scene(
             ..default()
         })),
     ));
+
+    let surface = meshes.add(empty_surface_mesh());
+    commands.spawn((
+        Mesh3d(surface.clone()),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            unlit: true,
+            ..default()
+        })),
+        SurfaceLayer,
+        Visibility::Hidden,
+    ));
+    commands.insert_resource(SurfaceAsset(surface));
 
     let diagnostic_assets = std::array::from_fn(|index| {
         let layer = DiagnosticLayer::ALL[index];
@@ -134,6 +183,34 @@ fn rebuild_diagnostic_assets(
     }
 }
 
+fn rebuild_surface(
+    world: Res<GeneratedWorld>,
+    settings: Res<LayerSettings>,
+    surface: Res<SurfaceAsset>,
+    mut rendered: ResMut<RenderedSurface>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut visibility: Single<&mut Visibility, With<SurfaceLayer>>,
+) {
+    let selected = settings.surface_layer();
+    if !world.is_changed() && rendered.0 == selected {
+        return;
+    }
+
+    rendered.0 = selected;
+    if let Some(layer) = selected {
+        *meshes.get_mut(&surface.0).unwrap() = layer
+            .build_surface(&world)
+            .expect("fill layers must build a surface mesh");
+        **visibility = Visibility::Inherited;
+    } else {
+        **visibility = Visibility::Hidden;
+    }
+}
+
+fn surface_may_need_rebuild(world: Res<GeneratedWorld>, settings: Res<LayerSettings>) -> bool {
+    world.is_changed() || settings.is_changed()
+}
+
 fn sync_layer_render_state(
     settings: Res<LayerSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
@@ -189,5 +266,18 @@ mod tests {
             settings.depth_scale(DiagnosticLayer::Motion),
             1.0 + 2.0 * DEPTH_SCALE_STEP
         );
+    }
+
+    #[test]
+    fn selecting_a_fill_replaces_the_previous_fill() {
+        let mut settings = LayerSettings::default();
+
+        settings.set_visible(DiagnosticLayer::CoupledAlbedo, true);
+
+        assert_eq!(
+            settings.surface_layer(),
+            Some(DiagnosticLayer::CoupledAlbedo)
+        );
+        assert!(!settings.is_visible(DiagnosticLayer::IsostaticElevation));
     }
 }

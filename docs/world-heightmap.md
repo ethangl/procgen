@@ -116,8 +116,9 @@ Completed foundations:
   elevation. It produces a separate clamped elevation field, keeps oceanic cells
   unchanged, preserves basin floors, and reports aggregate rise and sink without
   mutating its inputs.
-- `procgen-viewer`: diagnostic GPU viewer with retained topology, tectonic
-  plate, crust, motion, and boundary layers, orbit controls, deterministic
+- `procgen-viewer`: diagnostic GPU viewer with one retained filled Voronoi-cell
+  field plus independently toggleable edge, marker, and vector overlays, orbit
+  controls, deterministic
   regeneration, evolution, deformation, bathymetry, and tectonic-elevation
   controls, signed deformation, seafloor-age, base-elevation,
   tectonic-elevation, and geological-elevation layers, hotspot and volcanic-arc
