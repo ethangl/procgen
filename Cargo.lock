@@ -3144,6 +3144,7 @@ dependencies = [
  "procgen-planet",
  "procgen-sphere",
  "procgen-sphere-mesh",
+ "procgen-tectonics",
 ]
 
 [[package]]

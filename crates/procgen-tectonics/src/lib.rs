@@ -40,7 +40,7 @@ pub use deformation::{
 };
 pub use elevation::{
     CoarseElevation, CoarseElevationConfig, CoarseElevationError, SEA_LEVEL,
-    compose_coarse_elevation,
+    compose_coarse_elevation, is_land,
 };
 pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,

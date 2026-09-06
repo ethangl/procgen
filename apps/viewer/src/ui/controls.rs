@@ -2,7 +2,10 @@ use super::{drag_value, section, slider};
 use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
-use procgen_climate::{ANNUAL_SAMPLE_RANGE, RadiativeEquilibriumConfig, SolarForcingConfig};
+use procgen_climate::{
+    ANNUAL_SAMPLE_RANGE, ORBITAL_PERIOD_DAYS_RANGE, RadiativeEquilibriumConfig,
+    SeasonalThermalConfig, SolarForcingConfig, THERMAL_CAPACITY_RANGE,
+};
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
@@ -88,9 +91,36 @@ pub(super) fn generation_controls(
     section(ui, "Radiative equilibrium", |ui| {
         radiative_equilibrium_controls(ui, &mut generation.radiative_equilibrium)
     });
+    section(ui, "Seasonal thermal response", |ui| {
+        seasonal_thermal_controls(ui, &mut generation.seasonal_thermal)
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn seasonal_thermal_controls(ui: &mut egui::Ui, config: &mut SeasonalThermalConfig) {
+    drag_value(
+        ui,
+        "Land heat capacity",
+        &mut config.land_heat_capacity,
+        THERMAL_CAPACITY_RANGE,
+        1.0e6,
+    );
+    drag_value(
+        ui,
+        "Ocean heat capacity",
+        &mut config.ocean_heat_capacity,
+        THERMAL_CAPACITY_RANGE,
+        1.0e6,
+    );
+    drag_value(
+        ui,
+        "Orbital period days",
+        &mut config.orbital_period_days,
+        ORBITAL_PERIOD_DAYS_RANGE,
+        1.0,
+    );
 }
 
 fn radiative_equilibrium_controls(ui: &mut egui::Ui, config: &mut RadiativeEquilibriumConfig) {

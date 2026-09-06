@@ -134,9 +134,14 @@ Completed foundations:
   mean over spherical cells. A separate stage converts those daily and annual
   fields to effective radiative-equilibrium temperatures using explicit uniform
   albedo, emissivity, and Stefan-Boltzmann radiation. Earthlike values exist only
-  as a caller-selected preset. Neither stage models atmosphere, heat transport
-  or capacity, or climate feedbacks. See `docs/solar-forcing.md` and
-  `docs/radiative-equilibrium-temperature.md`.
+  as a caller-selected preset. A third stage solves an isolated local seasonal
+  surface-energy balance over a periodic orbit using explicit land and ocean
+  heat capacities selected from final elevation and sea level. It reports the
+  selected phase plus annual mean, extrema, amplitude, and convergence
+  diagnostics. These stages model no atmosphere, lateral heat transport, or
+  coupled climate feedbacks. See `docs/solar-forcing.md`,
+  `docs/radiative-equilibrium-temperature.md`, and
+  `docs/seasonal-thermal-response.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

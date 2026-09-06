@@ -81,17 +81,11 @@ pub fn derive_radiative_equilibrium_temperature(
     forcing: &SolarForcing,
     config: RadiativeEquilibriumConfig,
 ) -> Result<RadiativeEquilibriumTemperature, RadiativeEquilibriumError> {
-    validate_config(config)?;
+    let model = RadiativeEquilibriumModel::new(config)?;
     forcing.validate(mesh)?;
-    let radiation_scale = (1.0 - config.albedo) / (config.emissivity * STEFAN_BOLTZMANN_CONSTANT);
-    if !radiation_scale.is_finite() {
-        return Err(RadiativeEquilibriumError::NumericalRange);
-    }
 
-    let daily_effective_temperature_kelvin =
-        temperatures(&forcing.daily_mean_insolation, radiation_scale);
-    let annual_effective_temperature_kelvin =
-        temperatures(&forcing.annual_mean_insolation, radiation_scale);
+    let daily_effective_temperature_kelvin = temperatures(&forcing.daily_mean_insolation, model);
+    let annual_effective_temperature_kelvin = temperatures(&forcing.annual_mean_insolation, model);
     let daily = AreaWeightedSummary::from_field(mesh, &daily_effective_temperature_kelvin);
     let annual = AreaWeightedSummary::from_field(mesh, &annual_effective_temperature_kelvin);
     let maximum_kelvin = daily.maximum.max(annual.maximum);
@@ -106,20 +100,44 @@ pub fn derive_radiative_equilibrium_temperature(
     })
 }
 
-fn validate_config(config: RadiativeEquilibriumConfig) -> Result<(), RadiativeEquilibriumError> {
-    if !config.albedo.is_finite() || !(0.0..=1.0).contains(&config.albedo) {
-        return Err(RadiativeEquilibriumError::Albedo);
-    }
-    if !(config.emissivity.is_finite() && 0.0 < config.emissivity && config.emissivity <= 1.0) {
-        return Err(RadiativeEquilibriumError::Emissivity);
-    }
-    Ok(())
+#[derive(Clone, Copy)]
+pub(crate) struct RadiativeEquilibriumModel {
+    radiation_scale: f64,
+    emissivity: f64,
 }
 
-fn temperatures(insolation: &[f32], radiation_scale: f64) -> Vec<f32> {
+impl RadiativeEquilibriumModel {
+    pub fn new(config: RadiativeEquilibriumConfig) -> Result<Self, RadiativeEquilibriumError> {
+        if !config.albedo.is_finite() || !(0.0..=1.0).contains(&config.albedo) {
+            return Err(RadiativeEquilibriumError::Albedo);
+        }
+        if !(config.emissivity.is_finite() && 0.0 < config.emissivity && config.emissivity <= 1.0) {
+            return Err(RadiativeEquilibriumError::Emissivity);
+        }
+        let radiation_scale =
+            (1.0 - config.albedo) / (config.emissivity * STEFAN_BOLTZMANN_CONSTANT);
+        if !radiation_scale.is_finite() {
+            return Err(RadiativeEquilibriumError::NumericalRange);
+        }
+        Ok(Self {
+            radiation_scale,
+            emissivity: config.emissivity,
+        })
+    }
+
+    pub fn temperature_kelvin(self, insolation: f64) -> f64 {
+        (insolation * self.radiation_scale).sqrt().sqrt()
+    }
+
+    pub fn emission_coefficient(self) -> f64 {
+        self.emissivity * STEFAN_BOLTZMANN_CONSTANT
+    }
+}
+
+fn temperatures(insolation: &[f32], model: RadiativeEquilibriumModel) -> Vec<f32> {
     insolation
         .iter()
-        .map(|&value| (f64::from(value) * radiation_scale).sqrt().sqrt() as f32)
+        .map(|&value| model.temperature_kelvin(f64::from(value)) as f32)
         .collect()
 }
 

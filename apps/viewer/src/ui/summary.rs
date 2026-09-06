@@ -23,7 +23,71 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     isostatic_summary(ui, world);
     solar_forcing_summary(ui, world);
     radiative_equilibrium_summary(ui, world);
+    seasonal_thermal_summary(ui, world);
     timing_summary(ui, world);
+}
+
+fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.seasonal_thermal.diagnostics;
+    let config = world.config.seasonal_thermal;
+    stat_grid(ui, "Seasonal thermal response", "seasonal_thermal", |ui| {
+        stat(
+            ui,
+            "Land heat capacity",
+            format!("{:.3e} J/m2/K", config.land_heat_capacity),
+        );
+        stat(
+            ui,
+            "Ocean heat capacity",
+            format!("{:.3e} J/m2/K", config.ocean_heat_capacity),
+        );
+        stat(
+            ui,
+            "Orbital period",
+            format!("{:.3} days", config.orbital_period_days),
+        );
+        stat(
+            ui,
+            "Orbital samples",
+            world.config.solar_forcing.annual_sample_count,
+        );
+        area_weighted_stats(ui, "Selected phase", "K", &diagnostics.selected_phase);
+        area_weighted_stats(ui, "Annual mean", "K", &diagnostics.annual_mean);
+        area_weighted_stats(ui, "Annual minimum", "K", &diagnostics.annual_minimum);
+        area_weighted_stats(ui, "Annual maximum", "K", &diagnostics.annual_maximum);
+        area_weighted_stats(ui, "Annual amplitude", "K", &diagnostics.annual_amplitude);
+        stat(ui, "Land cells", diagnostics.land.cell_count);
+        stat(ui, "Ocean cells", diagnostics.ocean.cell_count);
+        stat(
+            ui,
+            "Selected land mean",
+            optional_temperature(diagnostics.land.selected_area_weighted_mean_kelvin),
+        );
+        stat(
+            ui,
+            "Selected ocean mean",
+            optional_temperature(diagnostics.ocean.selected_area_weighted_mean_kelvin),
+        );
+        stat(
+            ui,
+            "Periodic closure",
+            format!(
+                "{:.3e} K",
+                diagnostics.maximum_periodic_closure_error_kelvin
+            ),
+        );
+        stat(
+            ui,
+            "Fixed-point iterations",
+            diagnostics.maximum_fixed_point_iterations,
+        );
+    });
+}
+
+fn optional_temperature(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.1} K"))
+        .unwrap_or_else(|| "n/a".to_owned())
 }
 
 fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {

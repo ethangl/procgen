@@ -31,6 +31,11 @@ effective radiative-equilibrium temperatures from those fields using explicit
 uniform albedo and emissivity. The viewer selects the Earth and Earthlike
 presets by default; neither stage consumes elevation or models atmospheric or
 surface dynamics.
+A third climate stage uses the final adjusted elevation and sea level to choose
+explicit land or ocean surface heat capacity, then solves each cell's isolated
+energy balance onto a periodic seasonal cycle. It produces selected-phase,
+annual-mean, minimum, maximum, and amplitude temperatures without lateral heat
+transport or persistent state.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
@@ -54,6 +59,11 @@ yellow at the current field maximum; the controls expose orbital phase and the
 bounded annual sampling count. Temperature uses a fixed kelvin color scale from
 dark zero through cold blue, pale freezing-point temperatures, warm yellow, and
 hot red. Its controls expose the uniform albedo and emissivity.
+Seasonal thermal controls expose land and ocean heat capacity and orbital
+period; the solar-forcing annual sample control is shared by both stages.
+Separate layers show the selected phase,
+annual mean, annual minimum, annual maximum, and peak-to-trough amplitude;
+summary diagnostics include surface-class aggregates and periodic closure.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.
