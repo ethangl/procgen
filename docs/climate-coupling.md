@@ -16,10 +16,10 @@ albedo, selected-temperature, precipitation, and cover changes all meet their
 configured tolerances. A hard iteration limit returns an error. Every call
 reconstructs its working fields and retains no state between generation runs.
 
-The result contains the ordinary output of every component plus the converged
-albedo field. Diagnostics report iteration count, the four convergence
-residuals, radiative-equilibrium closure (subject to stored `f32` rounding), and
-the existing moisture, snow, land-ice, and sea-ice conservation residuals.
+The result contains the ordinary output and diagnostics of every component plus
+the converged albedo field. Coupling diagnostics report only iteration count and
+the four convergence residuals; moisture and cryosphere remain the sole owners
+of their conservation diagnostics.
 
 This slice adds no cloud, greenhouse, ocean-heat-transport, carbon, vegetation,
 glacier-flow, erosion, rasterization, or acceleration model.

@@ -39,9 +39,10 @@ pub use circulation::{
     derive_atmospheric_circulation,
 };
 pub use coupling::{
-    CLIMATE_COUPLING_ITERATION_LIMIT_RANGE, CLIMATE_COUPLING_TOLERANCE_RANGE, ClimateAlbedoConfig,
-    ClimateCoupling, ClimateCouplingConfig, ClimateCouplingDiagnostics, ClimateCouplingError,
-    ClimateCouplingInputs, derive_coupled_climate,
+    CLIMATE_COUPLING_FRACTION_TOLERANCE_RANGE, CLIMATE_COUPLING_ITERATION_LIMIT_RANGE,
+    CLIMATE_COUPLING_TOLERANCE_RANGE, ClimateAlbedoConfig, ClimateCoupling, ClimateCouplingConfig,
+    ClimateCouplingDiagnostics, ClimateCouplingError, ClimateCouplingInputs,
+    derive_coupled_climate,
 };
 pub use cryosphere::{
     CRYOSPHERE_CLOSURE_TOLERANCE_RANGE, CRYOSPHERE_FRACTION_RATE_RANGE,
@@ -60,13 +61,12 @@ pub use moisture::{
 pub use radiative_equilibrium::{
     RadiativeEquilibriumConfig, RadiativeEquilibriumDiagnostics, RadiativeEquilibriumError,
     RadiativeEquilibriumTemperature, STEFAN_BOLTZMANN_CONSTANT,
-    derive_radiative_equilibrium_temperature, derive_radiative_equilibrium_temperature_with_albedo,
+    derive_radiative_equilibrium_temperature,
 };
 pub use seasonal_thermal::{
     ORBITAL_PERIOD_DAYS_RANGE, SeasonalThermalConfig, SeasonalThermalDiagnostics,
     SeasonalThermalError, SeasonalThermalInputs, SeasonalThermalResponse,
     SurfaceThermalDiagnostics, THERMAL_CAPACITY_RANGE, derive_seasonal_thermal_response,
-    derive_seasonal_thermal_response_with_albedo,
 };
 pub use solar_forcing::{
     ANNUAL_SAMPLE_RANGE, SolarForcing, SolarForcingConfig, SolarForcingDiagnostics,

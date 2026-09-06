@@ -3,11 +3,10 @@ use crate::{
     AtmosphericCirculationInputs, Cryosphere, CryosphereConfig, CryosphereError, CryosphereInputs,
     MoistureTransport, MoistureTransportConfig, MoistureTransportError, MoistureTransportInputs,
     RadiativeEquilibriumConfig, RadiativeEquilibriumError, RadiativeEquilibriumTemperature,
-    STEFAN_BOLTZMANN_CONSTANT, SeasonalThermalConfig, SeasonalThermalError, SeasonalThermalInputs,
-    SeasonalThermalResponse, SolarForcing, Surface, derive_atmospheric_circulation,
-    derive_cryosphere, derive_moisture_transport,
-    derive_radiative_equilibrium_temperature_with_albedo,
-    derive_seasonal_thermal_response_with_albedo, validate_range,
+    SeasonalThermalConfig, SeasonalThermalError, SeasonalThermalInputs, SeasonalThermalResponse,
+    SolarForcing, SolarForcingConfig, Surface, derive_atmospheric_circulation, derive_cryosphere,
+    derive_moisture_transport, derive_radiative_equilibrium_temperature,
+    derive_seasonal_thermal_response, field::area_weighted_rms_difference, validate_range,
 };
 use procgen_planet::Planet;
 use procgen_sphere_mesh::SphereMesh;
@@ -15,6 +14,7 @@ use std::{fmt, ops::RangeInclusive};
 
 pub const CLIMATE_COUPLING_ITERATION_LIMIT_RANGE: RangeInclusive<usize> = 1..=256;
 pub const CLIMATE_COUPLING_TOLERANCE_RANGE: RangeInclusive<f64> = 0.0..=10_000.0;
+pub const CLIMATE_COUPLING_FRACTION_TOLERANCE_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClimateAlbedoConfig {
@@ -71,7 +71,7 @@ impl ClimateCouplingConfig {
 pub struct ClimateCouplingInputs<'a> {
     pub planet: Planet,
     pub solar_forcing: &'a SolarForcing,
-    pub solar_forcing_config: crate::SolarForcingConfig,
+    pub solar_forcing_config: SolarForcingConfig,
     pub final_elevation: &'a [f32],
 }
 
@@ -82,11 +82,6 @@ pub struct ClimateCouplingDiagnostics {
     pub temperature_change_rms_kelvin: f64,
     pub precipitation_change_rms_kg_per_m2_per_day: f64,
     pub cover_fraction_change_rms: f64,
-    pub maximum_radiative_balance_error_watts_per_square_meter: f64,
-    pub moisture_mass_balance_error_kg_per_m2: f64,
-    pub snow_mass_balance_error_kg_per_m2: f64,
-    pub land_ice_mass_balance_kg_per_m2: f64,
-    pub sea_ice_cover_balance_error: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,8 +101,6 @@ pub enum ClimateCouplingError {
     UnderRelaxation,
     Tolerance,
     Albedo,
-    ElevationCells,
-    Elevation,
     RadiativeEquilibrium(RadiativeEquilibriumError),
     SeasonalThermal(SeasonalThermalError),
     AtmosphericCirculation(AtmosphericCirculationError),
@@ -129,8 +122,6 @@ impl fmt::Display for ClimateCouplingError {
             }
             Error::Albedo => formatter
                 .write_str("land, ocean, snow, and ice albedos must be finite and in [0, 1]"),
-            Error::ElevationCells => formatter.write_str("elevation must match the mesh cells"),
-            Error::Elevation => formatter.write_str("elevation must contain only finite values"),
             Error::RadiativeEquilibrium(error) => error.fmt(formatter),
             Error::SeasonalThermal(error) => error.fmt(formatter),
             Error::AtmosphericCirculation(error) => error.fmt(formatter),
@@ -160,13 +151,90 @@ coupling_error_from!(AtmosphericCirculationError, AtmosphericCirculation);
 coupling_error_from!(MoistureTransportError, MoistureTransport);
 coupling_error_from!(CryosphereError, Cryosphere);
 
-#[derive(Clone)]
-struct PreviousFields {
-    temperature: Vec<f32>,
-    precipitation: Vec<f32>,
-    snow: Vec<f32>,
-    land_ice: Vec<f32>,
-    sea_ice: Vec<f32>,
+struct StageOutputs {
+    radiative_equilibrium: RadiativeEquilibriumTemperature,
+    seasonal_thermal: SeasonalThermalResponse,
+    atmospheric_circulation: AtmosphericCirculation,
+    moisture_transport: MoistureTransport,
+    cryosphere: Cryosphere,
+}
+
+#[derive(Clone, Copy)]
+struct Residuals {
+    albedo: f64,
+    temperature: f64,
+    precipitation: f64,
+    cover: f64,
+}
+
+impl Residuals {
+    /// No prior stage output exists on the first pass, so only the diagnosed
+    /// albedo mismatch can prevent immediate convergence.
+    fn first_pass(albedo: f64) -> Self {
+        Self {
+            albedo,
+            temperature: 0.0,
+            precipitation: 0.0,
+            cover: 0.0,
+        }
+    }
+
+    fn between(
+        mesh: &SphereMesh,
+        albedo: f64,
+        previous: &StageOutputs,
+        current: &StageOutputs,
+    ) -> Self {
+        Self {
+            albedo,
+            temperature: area_weighted_rms_difference(
+                mesh,
+                &previous.seasonal_thermal.selected_temperature_kelvin,
+                &current.seasonal_thermal.selected_temperature_kelvin,
+            ),
+            precipitation: area_weighted_rms_difference(
+                mesh,
+                &previous
+                    .moisture_transport
+                    .cell_precipitation_kg_per_m2_per_day,
+                &current
+                    .moisture_transport
+                    .cell_precipitation_kg_per_m2_per_day,
+            ),
+            cover: area_weighted_rms_difference(
+                mesh,
+                &previous.cryosphere.cell_snow_cover_fraction,
+                &current.cryosphere.cell_snow_cover_fraction,
+            )
+            .max(area_weighted_rms_difference(
+                mesh,
+                &previous.cryosphere.cell_land_ice_cover_fraction,
+                &current.cryosphere.cell_land_ice_cover_fraction,
+            ))
+            .max(area_weighted_rms_difference(
+                mesh,
+                &previous.cryosphere.cell_sea_ice_cover_fraction,
+                &current.cryosphere.cell_sea_ice_cover_fraction,
+            )),
+        }
+    }
+
+    fn within(self, config: ClimateCouplingConfig) -> bool {
+        self.albedo <= config.albedo_tolerance
+            && self.temperature <= config.temperature_tolerance_kelvin
+            && self.precipitation <= config.precipitation_tolerance_kg_per_m2_per_day
+            && self.cover <= config.cover_fraction_tolerance
+    }
+
+    fn diagnostics(self, iterations: usize) -> ClimateCouplingDiagnostics {
+        ClimateCouplingDiagnostics {
+            iterations,
+            albedo_residual_rms: self.albedo,
+            temperature_change_rms_kelvin: self.temperature,
+            precipitation_change_rms_kg_per_m2_per_day: self.precipitation,
+            cover_fraction_change_rms: self.cover,
+        }
+    }
 }
 
 /// Iterates only the explicit surface-albedo feedback around the five existing
@@ -178,7 +246,7 @@ pub fn derive_coupled_climate(
     inputs: ClimateCouplingInputs<'_>,
     config: ClimateCouplingConfig,
 ) -> Result<ClimateCoupling, ClimateCouplingError> {
-    validate(mesh, inputs, config)?;
+    validate(config)?;
     let mut albedo = inputs
         .final_elevation
         .iter()
@@ -187,169 +255,127 @@ pub fn derive_coupled_climate(
             Surface::Ocean => config.albedo.ice as f32,
         })
         .collect::<Vec<_>>();
-    let mut previous: Option<PreviousFields> = None;
+    let mut previous: Option<StageOutputs> = None;
 
     for iteration in 1..=config.maximum_iterations {
-        let radiative_equilibrium = derive_radiative_equilibrium_temperature_with_albedo(
-            mesh,
-            inputs.solar_forcing,
-            config.radiative_equilibrium,
-            &albedo,
-        )?;
-        let seasonal_thermal = derive_seasonal_thermal_response_with_albedo(
-            mesh,
-            SeasonalThermalInputs {
-                planet: inputs.planet,
-                solar_forcing: inputs.solar_forcing_config,
-                radiative_equilibrium: config.radiative_equilibrium,
-                final_elevation: inputs.final_elevation,
-            },
-            config.seasonal_thermal,
-            &albedo,
-        )?;
-        let atmospheric_circulation = derive_atmospheric_circulation(
-            mesh,
-            AtmosphericCirculationInputs {
-                planet: inputs.planet,
-                selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
-                final_elevation: inputs.final_elevation,
-            },
-            config.atmospheric_circulation,
-        )?;
-        let moisture_transport = derive_moisture_transport(
-            mesh,
-            MoistureTransportInputs {
-                planet: inputs.planet,
-                selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
-                final_elevation: inputs.final_elevation,
-                cell_wind_meters_per_second: &atmospheric_circulation.cell_wind_meters_per_second,
-            },
-            config.moisture_transport,
-        )?;
-        let cryosphere = derive_cryosphere(
-            mesh,
-            CryosphereInputs {
-                annual_temperature_samples_kelvin: &seasonal_thermal
-                    .annual_temperature_samples_kelvin,
-                annual_sample_count: seasonal_thermal.annual_sample_count,
-                selected_orbital_phase: inputs.solar_forcing_config.orbital_phase,
-                orbital_period_days: config.seasonal_thermal.orbital_period_days,
-                precipitation_kg_per_m2_per_day: &moisture_transport
-                    .cell_precipitation_kg_per_m2_per_day,
-                final_elevation: inputs.final_elevation,
-            },
-            config.cryosphere,
-        )?;
-
-        let target_albedo = compose_albedo(inputs.final_elevation, &cryosphere, config.albedo);
-        let albedo_residual = rms_difference(mesh, &albedo, &target_albedo);
-        let (temperature_change, precipitation_change, cover_change) = previous
+        let current = run_stages(mesh, inputs, config, &albedo)?;
+        let target_albedo =
+            compose_albedo(inputs.final_elevation, &current.cryosphere, config.albedo);
+        let albedo_residual = area_weighted_rms_difference(mesh, &albedo, &target_albedo);
+        let residuals = previous
             .as_ref()
-            .map(|previous| {
-                (
-                    rms_difference(
-                        mesh,
-                        &previous.temperature,
-                        &seasonal_thermal.selected_temperature_kelvin,
-                    ),
-                    rms_difference(
-                        mesh,
-                        &previous.precipitation,
-                        &moisture_transport.cell_precipitation_kg_per_m2_per_day,
-                    ),
-                    rms_difference(mesh, &previous.snow, &cryosphere.cell_snow_cover_fraction)
-                        .max(rms_difference(
-                            mesh,
-                            &previous.land_ice,
-                            &cryosphere.cell_land_ice_cover_fraction,
-                        ))
-                        .max(rms_difference(
-                            mesh,
-                            &previous.sea_ice,
-                            &cryosphere.cell_sea_ice_cover_fraction,
-                        )),
-                )
-            })
-            .unwrap_or((0.0, 0.0, 0.0));
+            .map(|previous| Residuals::between(mesh, albedo_residual, previous, &current))
+            .unwrap_or_else(|| Residuals::first_pass(albedo_residual));
 
-        if albedo_residual <= config.albedo_tolerance
-            && temperature_change <= config.temperature_tolerance_kelvin
-            && precipitation_change <= config.precipitation_tolerance_kg_per_m2_per_day
-            && cover_change <= config.cover_fraction_tolerance
-        {
-            let diagnostics = ClimateCouplingDiagnostics {
-                iterations: iteration,
-                albedo_residual_rms: albedo_residual,
-                temperature_change_rms_kelvin: temperature_change,
-                precipitation_change_rms_kg_per_m2_per_day: precipitation_change,
-                cover_fraction_change_rms: cover_change,
-                maximum_radiative_balance_error_watts_per_square_meter: radiative_balance_error(
-                    inputs.solar_forcing,
-                    &albedo,
-                    &radiative_equilibrium,
-                    config.radiative_equilibrium.emissivity,
-                ),
-                moisture_mass_balance_error_kg_per_m2: moisture_transport
-                    .diagnostics
-                    .mass_balance_error_kg_per_m2,
-                snow_mass_balance_error_kg_per_m2: cryosphere
-                    .diagnostics
-                    .snow_mass_balance_error_kg_per_m2,
-                land_ice_mass_balance_kg_per_m2: cryosphere
-                    .diagnostics
-                    .land_ice_mass_balance_kg_per_m2,
-                sea_ice_cover_balance_error: cryosphere.diagnostics.sea_ice_cover_balance_error,
-            };
+        if residuals.within(config) {
             return Ok(ClimateCoupling {
                 cell_albedo: albedo,
-                radiative_equilibrium,
-                seasonal_thermal,
-                atmospheric_circulation,
-                moisture_transport,
-                cryosphere,
-                diagnostics,
+                radiative_equilibrium: current.radiative_equilibrium,
+                seasonal_thermal: current.seasonal_thermal,
+                atmospheric_circulation: current.atmospheric_circulation,
+                moisture_transport: current.moisture_transport,
+                cryosphere: current.cryosphere,
+                diagnostics: residuals.diagnostics(iteration),
             });
         }
 
-        previous = Some(PreviousFields {
-            temperature: seasonal_thermal.selected_temperature_kelvin,
-            precipitation: moisture_transport.cell_precipitation_kg_per_m2_per_day,
-            snow: cryosphere.cell_snow_cover_fraction,
-            land_ice: cryosphere.cell_land_ice_cover_fraction,
-            sea_ice: cryosphere.cell_sea_ice_cover_fraction,
-        });
         for (value, target) in albedo.iter_mut().zip(target_albedo) {
             *value += (target - *value) * config.under_relaxation as f32;
         }
+        previous = Some(current);
     }
     Err(ClimateCouplingError::IterationLimit)
 }
 
-fn validate(
+fn run_stages(
     mesh: &SphereMesh,
     inputs: ClimateCouplingInputs<'_>,
     config: ClimateCouplingConfig,
-) -> Result<(), ClimateCouplingError> {
+    albedo: &[f32],
+) -> Result<StageOutputs, ClimateCouplingError> {
+    let radiative_equilibrium = derive_radiative_equilibrium_temperature(
+        mesh,
+        inputs.solar_forcing,
+        config.radiative_equilibrium,
+        albedo,
+    )?;
+    let seasonal_thermal = derive_seasonal_thermal_response(
+        mesh,
+        SeasonalThermalInputs {
+            planet: inputs.planet,
+            solar_forcing: inputs.solar_forcing_config,
+            emissivity: config.radiative_equilibrium.emissivity,
+            final_elevation: inputs.final_elevation,
+        },
+        config.seasonal_thermal,
+        albedo,
+    )?;
+    let atmospheric_circulation = derive_atmospheric_circulation(
+        mesh,
+        AtmosphericCirculationInputs {
+            planet: inputs.planet,
+            selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
+            final_elevation: inputs.final_elevation,
+        },
+        config.atmospheric_circulation,
+    )?;
+    let moisture_transport = derive_moisture_transport(
+        mesh,
+        MoistureTransportInputs {
+            planet: inputs.planet,
+            selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
+            final_elevation: inputs.final_elevation,
+            cell_wind_meters_per_second: &atmospheric_circulation.cell_wind_meters_per_second,
+        },
+        config.moisture_transport,
+    )?;
+    let cryosphere = derive_cryosphere(
+        mesh,
+        CryosphereInputs {
+            annual_temperature_samples_kelvin: &seasonal_thermal.annual_temperature_samples_kelvin,
+            annual_sample_count: seasonal_thermal.annual_sample_count,
+            selected_orbital_phase: inputs.solar_forcing_config.orbital_phase,
+            orbital_period_days: config.seasonal_thermal.orbital_period_days,
+            precipitation_kg_per_m2_per_day: &moisture_transport
+                .cell_precipitation_kg_per_m2_per_day,
+            final_elevation: inputs.final_elevation,
+        },
+        config.cryosphere,
+    )?;
+    Ok(StageOutputs {
+        radiative_equilibrium,
+        seasonal_thermal,
+        atmospheric_circulation,
+        moisture_transport,
+        cryosphere,
+    })
+}
+
+fn validate(config: ClimateCouplingConfig) -> Result<(), ClimateCouplingError> {
     validate_range(
         config.maximum_iterations,
         &CLIMATE_COUPLING_ITERATION_LIMIT_RANGE,
         ClimateCouplingError::IterationLimitConfig,
     )?;
-    if !config.under_relaxation.is_finite()
-        || !(0.0..=1.0).contains(&config.under_relaxation)
-        || config.under_relaxation == 0.0
-    {
-        return Err(ClimateCouplingError::UnderRelaxation);
-    }
+    validate_range(
+        config.under_relaxation,
+        &(f64::MIN_POSITIVE..=1.0),
+        ClimateCouplingError::UnderRelaxation,
+    )?;
     for tolerance in [
-        config.albedo_tolerance,
         config.temperature_tolerance_kelvin,
         config.precipitation_tolerance_kg_per_m2_per_day,
-        config.cover_fraction_tolerance,
     ] {
         validate_range(
             tolerance,
             &CLIMATE_COUPLING_TOLERANCE_RANGE,
+            ClimateCouplingError::Tolerance,
+        )?;
+    }
+    for tolerance in [config.albedo_tolerance, config.cover_fraction_tolerance] {
+        validate_range(
+            tolerance,
+            &CLIMATE_COUPLING_FRACTION_TOLERANCE_RANGE,
             ClimateCouplingError::Tolerance,
         )?;
     }
@@ -360,16 +386,6 @@ fn validate(
         config.albedo.ice,
     ] {
         validate_range(albedo, &(0.0..=1.0), ClimateCouplingError::Albedo)?;
-    }
-    if inputs.final_elevation.len() != mesh.cell_count() {
-        return Err(ClimateCouplingError::ElevationCells);
-    }
-    if inputs
-        .final_elevation
-        .iter()
-        .any(|value| !value.is_finite())
-    {
-        return Err(ClimateCouplingError::Elevation);
     }
     Ok(())
 }
@@ -408,41 +424,6 @@ fn compose_albedo(
 
 fn blend(base: f64, cover: f64, fraction: f64) -> f64 {
     base + (cover - base) * fraction
-}
-
-fn rms_difference(mesh: &SphereMesh, left: &[f32], right: &[f32]) -> f64 {
-    let total_area = mesh
-        .cell_areas
-        .iter()
-        .map(|&area| f64::from(area))
-        .sum::<f64>();
-    (left
-        .iter()
-        .zip(right)
-        .zip(&mesh.cell_areas)
-        .map(|((&left, &right), &area)| f64::from(left - right).powi(2) * f64::from(area))
-        .sum::<f64>()
-        / total_area)
-        .sqrt()
-}
-
-fn radiative_balance_error(
-    forcing: &SolarForcing,
-    albedo: &[f32],
-    temperature: &RadiativeEquilibriumTemperature,
-    emissivity: f64,
-) -> f64 {
-    forcing
-        .annual_mean_insolation
-        .iter()
-        .zip(albedo)
-        .zip(&temperature.annual_effective_temperature_kelvin)
-        .map(|((&forcing, &albedo), &temperature)| {
-            let absorbed = f64::from(forcing) * (1.0 - f64::from(albedo));
-            let emitted = emissivity * STEFAN_BOLTZMANN_CONSTANT * f64::from(temperature).powi(4);
-            (absorbed - emitted).abs()
-        })
-        .fold(0.0, f64::max)
 }
 
 #[cfg(test)]
@@ -617,23 +598,6 @@ mod tests {
                 <= config.precipitation_tolerance_kg_per_m2_per_day
         );
         assert!(result.diagnostics.cover_fraction_change_rms <= config.cover_fraction_tolerance);
-        assert!(
-            result
-                .diagnostics
-                .maximum_radiative_balance_error_watts_per_square_meter
-                < 1.0,
-            "{}",
-            result
-                .diagnostics
-                .maximum_radiative_balance_error_watts_per_square_meter
-        );
-        assert!(
-            result
-                .diagnostics
-                .moisture_mass_balance_error_kg_per_m2
-                .abs()
-                <= 1.0e-10
-        );
     }
 
     #[test]

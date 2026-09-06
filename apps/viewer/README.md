@@ -28,7 +28,7 @@ An independent solar-forcing stage then derives top-of-atmosphere daily-mean
 insolation for the selected orbital phase and a bounded-sample annual mean from
 the spherical mesh. A second independent stage derives daily and annual
 effective radiative-equilibrium temperatures from those fields using explicit
-uniform albedo and emissivity. The viewer selects the Earth and Earthlike
+per-cell albedo and uniform emissivity. The viewer selects the Earth and Earthlike
 presets by default; neither stage consumes elevation or models atmospheric or
 surface dynamics.
 A third climate stage uses the final adjusted elevation and sea level to choose
@@ -103,8 +103,8 @@ Cryosphere controls expose temperature thresholds, snow capacities, degree-day
 melt factors, sea-ice growth and melt rates, and fixed-point solver bounds.
 Diagnostics report annual accumulation/ablation, covered-cell counts, periodic
 closure, and snow-mass and sea-ice-cover balance residuals.
-Coupling diagnostics report iteration count, RMS convergence residuals,
-radiative closure, and the moisture and cryosphere conservation residuals.
+Coupling diagnostics report iteration count and RMS convergence residuals;
+the component panels own moisture and cryosphere conservation diagnostics.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.

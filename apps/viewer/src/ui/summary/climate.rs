@@ -48,40 +48,6 @@ fn climate_coupling_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Cover RMS change",
             format!("{:.3e}", diagnostics.cover_fraction_change_rms),
         );
-        stat(
-            ui,
-            "Radiative residual",
-            format!(
-                "{:.3e} W/m2",
-                diagnostics.maximum_radiative_balance_error_watts_per_square_meter
-            ),
-        );
-        stat(
-            ui,
-            "Moisture residual",
-            format!(
-                "{:.3e} kg/m2",
-                diagnostics.moisture_mass_balance_error_kg_per_m2
-            ),
-        );
-        stat(
-            ui,
-            "Snow residual",
-            format!(
-                "{:.3e} kg/m2",
-                diagnostics.snow_mass_balance_error_kg_per_m2
-            ),
-        );
-        stat(
-            ui,
-            "Land-ice residual",
-            format!("{:.3e} kg/m2", diagnostics.land_ice_mass_balance_kg_per_m2),
-        );
-        stat(
-            ui,
-            "Sea-ice residual",
-            format!("{:.3e}", diagnostics.sea_ice_cover_balance_error),
-        );
     });
 }
 

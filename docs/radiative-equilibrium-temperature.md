@@ -1,8 +1,8 @@
 # Radiative-equilibrium temperature
 
 The second climate slice is a deterministic, static radiative-equilibrium
-response to `SolarForcing`. Each cell uses the same explicit albedo `a` and
-longwave emissivity `epsilon` and balances absorbed radiation against
+response to `SolarForcing`. Each cell uses its explicit input albedo `a` and a
+configured longwave emissivity `epsilon`, balancing absorbed radiation against
 Stefan-Boltzmann emission:
 
 ```text
@@ -20,11 +20,9 @@ annual-mean forcing. It is deliberately not an average of daily temperatures:
 there is no heat capacity or time integration in this stage. Diagnostics report
 spherical-area-weighted means and extrema for both fields.
 
-`RadiativeEquilibriumConfig::EARTHLIKE` supplies a convenient albedo of 0.3 and
-emissivity of 1.0. Those values are a caller-selected preset, not hidden stage
-constants. The independent `with_albedo` entry point accepts an explicit
-per-cell field for the bounded climate orchestrator while leaving the uniform
-entry point unchanged. The stage does not read elevation or crust and does not
+`RadiativeEquilibriumConfig::EARTHLIKE` supplies a convenient emissivity of 1.0.
+Albedo is always a required per-cell input; callers that want a uniform value
+construct a uniform field. The stage does not read elevation or crust and does not
 model an atmosphere, greenhouse effects, lapse rates, heat transport or capacity,
 land-ocean differences, wind, moisture, ice, feedbacks, iterative coupling,
 rasterization, or acceleration backends.

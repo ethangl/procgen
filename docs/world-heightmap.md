@@ -133,7 +133,7 @@ Completed foundations:
 - `procgen-climate`: deterministic top-of-atmosphere daily-mean insolation for
   a selected orbital phase plus a bounded-sample, elapsed-time-weighted annual
   mean over spherical cells. A separate stage converts those daily and annual
-  fields to effective radiative-equilibrium temperatures using explicit uniform
+  fields to effective radiative-equilibrium temperatures using explicit per-cell
   albedo, emissivity, and Stefan-Boltzmann radiation. Earthlike values exist only
   as a caller-selected preset. A third stage solves an isolated local seasonal
   surface-energy balance over a periodic orbit using explicit land and ocean
