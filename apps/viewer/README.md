@@ -69,8 +69,9 @@ period; the solar-forcing annual sample control is shared by both stages.
 Separate layers show the selected phase,
 annual mean, annual minimum, annual maximum, and peak-to-trough amplitude;
 summary diagnostics include surface-class aggregates and periodic closure.
-Atmospheric controls expose only the radius, rotation, gas constant, drag,
-terrain-steering fraction, and speed cap consumed by the circulation solver.
+Planet controls expose radius, rotation, and atmospheric gas constant separately
+from the atmospheric-circulation controls for drag, terrain steering, and the
+speed cap.
 Supporting layers show temperature-gradient magnitude, pressure-gradient
 acceleration, signed Coriolis parameter, and applied terrain steering.
 

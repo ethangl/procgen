@@ -13,8 +13,9 @@ mod solar_forcing;
 
 pub use circulation::{
     AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationDiagnostics,
-    AtmosphericCirculationError, AtmosphericCirculationInputs, DRAG_RATE_RANGE,
-    MAXIMUM_WIND_SPEED_RANGE, TERRAIN_STEERING_RANGE, derive_atmospheric_circulation,
+    AtmosphericCirculationError, AtmosphericCirculationInputs, CALM_WIND_SPEED_METERS_PER_SECOND,
+    DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE, TERRAIN_STEERING_RANGE,
+    derive_atmospheric_circulation,
 };
 pub use field::AreaWeightedSummary;
 pub use radiative_equilibrium::{

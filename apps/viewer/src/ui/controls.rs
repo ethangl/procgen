@@ -11,6 +11,10 @@ use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
+use procgen_planet::{
+    ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE, PLANET_RADIUS_METERS_RANGE, Planet,
+    SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE,
+};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
@@ -86,6 +90,9 @@ pub(super) fn generation_controls(
     section(ui, "Isostatic adjustment", |ui| {
         isostatic_controls(ui, &mut generation.isostasy)
     });
+    section(ui, "Planet", |ui| {
+        planet_controls(ui, &mut generation.planet)
+    });
     section(ui, "Solar forcing", |ui| {
         solar_forcing_controls(ui, &mut generation.solar_forcing)
     });
@@ -96,45 +103,14 @@ pub(super) fn generation_controls(
         seasonal_thermal_controls(ui, &mut generation.seasonal_thermal)
     });
     section(ui, "Atmospheric circulation", |ui| {
-        atmospheric_circulation_controls(
-            ui,
-            &mut generation.planet,
-            &mut generation.atmospheric_circulation,
-        )
+        atmospheric_circulation_controls(ui, &mut generation.atmospheric_circulation)
     });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
 }
 
-fn atmospheric_circulation_controls(
-    ui: &mut egui::Ui,
-    planet: &mut procgen_planet::Planet,
-    config: &mut AtmosphericCirculationConfig,
-) {
-    drag_value(
-        ui,
-        "Planet radius meters",
-        &mut planet.radius_meters,
-        1.0..=1.0e9,
-        10_000.0,
-    );
-    drag_value(
-        ui,
-        "Rotation period seconds",
-        &mut planet.rotation.sidereal_period_seconds,
-        0.0..=1.0e9,
-        1_000.0,
-    );
-    drag_value(
-        ui,
-        "Atmospheric gas constant",
-        &mut planet
-            .atmosphere
-            .specific_gas_constant_joules_per_kilogram_kelvin,
-        1.0..=1.0e5,
-        1.0,
-    );
+fn atmospheric_circulation_controls(ui: &mut egui::Ui, config: &mut AtmosphericCirculationConfig) {
     drag_value(
         ui,
         "Surface drag per second",
@@ -153,6 +129,30 @@ fn atmospheric_circulation_controls(
         "Maximum wind speed",
         &mut config.maximum_wind_speed_meters_per_second,
         MAXIMUM_WIND_SPEED_RANGE,
+        1.0,
+    );
+}
+
+fn planet_controls(ui: &mut egui::Ui, planet: &mut Planet) {
+    drag_value(
+        ui,
+        "Planet radius meters",
+        &mut planet.radius_meters,
+        PLANET_RADIUS_METERS_RANGE,
+        10_000.0,
+    );
+    drag_value(
+        ui,
+        "Rotation period seconds",
+        &mut planet.sidereal_rotation_period_seconds,
+        SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE,
+        1_000.0,
+    );
+    drag_value(
+        ui,
+        "Atmospheric gas constant",
+        &mut planet.atmospheric_specific_gas_constant_joules_per_kilogram_kelvin,
+        ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE,
         1.0,
     );
 }

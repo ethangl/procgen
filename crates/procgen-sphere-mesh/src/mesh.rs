@@ -151,6 +151,21 @@ impl SphereMesh {
             / self.total_area()
     }
 
+    /// Fits a tangent gradient for a scalar cell field using each cell's
+    /// immediate neighbors. The result is expressed in field units per radian
+    /// and is independent of mesh radius. The local basis follows the model's
+    /// Y-up convention, with a deterministic X-axis fallback at exact poles.
+    pub fn cell_gradients(&self, values: &[f32]) -> Vec<Vec3> {
+        assert_eq!(
+            values.len(),
+            self.cell_count(),
+            "values must match the mesh cell count"
+        );
+        (0..self.cell_count())
+            .map(|cell| cell_gradient(self, values, cell))
+            .collect()
+    }
+
     pub fn cell_corners(&self, cell: usize) -> &[CellCorner] {
         &self.corners[self.cell_offsets[cell]..self.cell_offsets[cell + 1]]
     }
@@ -182,6 +197,47 @@ impl SphereMesh {
             + self.vertices[corners[next_corner_index].vertex] * weights[2];
         position.normalized() * self.radius
     }
+}
+
+fn cell_gradient(mesh: &SphereMesh, values: &[f32], cell: usize) -> Vec3 {
+    let normal = mesh.cell_centers[cell].normalized();
+    let (east, north) = local_tangent_basis(normal);
+    let mut xx = 0.0_f64;
+    let mut xy = 0.0_f64;
+    let mut yy = 0.0_f64;
+    let mut bx = 0.0_f64;
+    let mut by = 0.0_f64;
+    for corner in mesh.cell_corners(cell) {
+        let neighbor = mesh.cell_centers[corner.neighbor].normalized();
+        let cosine = f64::from(normal.dot(neighbor)).clamp(-1.0, 1.0);
+        let angle = cosine.acos();
+        let tangent = (neighbor - normal * normal.dot(neighbor)).normalized();
+        let x = f64::from(tangent.dot(east)) * angle;
+        let y = f64::from(tangent.dot(north)) * angle;
+        let delta = f64::from(values[corner.neighbor] - values[cell]);
+        xx += x * x;
+        xy += x * y;
+        yy += y * y;
+        bx += x * delta;
+        by += y * delta;
+    }
+    let determinant = xx * yy - xy * xy;
+    if determinant.abs() <= 1.0e-18 {
+        return Vec3::ZERO;
+    }
+    let eastward = (yy * bx - xy * by) / determinant;
+    let northward = (xx * by - xy * bx) / determinant;
+    east * eastward as f32 + north * northward as f32
+}
+
+fn local_tangent_basis(normal: Vec3) -> (Vec3, Vec3) {
+    let axis = Vec3::new(0.0, 1.0, 0.0);
+    let mut east = axis.cross(normal);
+    if east.length_squared() <= 1.0e-12 {
+        east = Vec3::new(1.0, 0.0, 0.0);
+    }
+    east = east.normalized();
+    (east, normal.cross(east).normalized())
 }
 
 /// Collects connected components of eligible cells in ascending root-cell
@@ -310,6 +366,22 @@ mod tests {
             multi_source_distances(&mesh, &[0, 0], |_, _| true),
             single_source
         );
+    }
+
+    #[test]
+    fn cell_gradients_are_tangent_and_constant_fields_are_zero() {
+        let mesh = tetrahedron();
+        assert_eq!(mesh.cell_gradients(&[4.0; 4]), vec![Vec3::ZERO; 4]);
+
+        let values = mesh
+            .cell_centers
+            .iter()
+            .map(|center| center.x + 2.0 * center.y)
+            .collect::<Vec<_>>();
+        for (cell, gradient) in mesh.cell_gradients(&values).iter().enumerate() {
+            assert!(gradient.length() > 0.0);
+            assert!(gradient.dot(mesh.cell_centers[cell].normalized()).abs() <= 1.0e-6);
+        }
     }
 
     #[test]

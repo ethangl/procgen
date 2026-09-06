@@ -1,6 +1,6 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
-use procgen_climate::SolarForcing;
+use procgen_climate::{CALM_WIND_SPEED_METERS_PER_SECOND, SolarForcing};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_geology::{OceanicPeakField, OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
@@ -51,6 +51,7 @@ const DRAW_RADIUS_BASE: f32 = 1.0;
 const DRAW_RADIUS_STEP: f32 = 0.004;
 const FIELD_LINE_WIDTH: f32 = 3.5;
 const OVERLAY_LINE_WIDTH: f32 = 3.8;
+const MAXIMUM_VECTOR_COUNT: usize = 256;
 const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
     (-0.5, Vec3::new(0.08, 0.35, 0.95)),
     (0.0, Vec3::new(0.12, 0.12, 0.16)),
@@ -827,7 +828,7 @@ fn motion_asset(
     radius: f32,
 ) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
-    let stride = (mesh.cell_count() / 256).max(1);
+    let stride = (mesh.cell_count() / MAXIMUM_VECTOR_COUNT).max(1);
     for cell in (0..mesh.cell_count()).step_by(stride) {
         let plate = plates.cell_plates[cell];
         let position = mesh.cell_centers[cell];
@@ -844,16 +845,16 @@ fn wind_asset(world: &GeneratedWorld, radius: f32) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let mesh = &world.voronoi;
     let circulation = &world.atmospheric_circulation;
-    let stride = (mesh.cell_count() / 256).max(1);
+    let stride = (mesh.cell_count() / MAXIMUM_VECTOR_COUNT).max(1);
     let maximum_speed = circulation
         .diagnostics
         .wind_speed_meters_per_second
         .maximum
-        .max(1.0e-6);
+        .max(CALM_WIND_SPEED_METERS_PER_SECOND);
     for cell in (0..mesh.cell_count()).step_by(stride) {
         let wind = circulation.cell_wind_meters_per_second[cell];
         let speed = circulation.cell_wind_speed_meters_per_second[cell];
-        if speed <= 1.0e-6 {
+        if speed <= CALM_WIND_SPEED_METERS_PER_SECOND {
             continue;
         }
         let start = to_bevy(mesh.cell_centers[cell].normalized()) * radius;

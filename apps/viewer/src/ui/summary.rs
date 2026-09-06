@@ -21,11 +21,36 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     basin_summary(ui, world);
     geological_elevation_summary(ui, world);
     isostatic_summary(ui, world);
+    planet_summary(ui, world);
     solar_forcing_summary(ui, world);
     radiative_equilibrium_summary(ui, world);
     seasonal_thermal_summary(ui, world);
     atmospheric_circulation_summary(ui, world);
     timing_summary(ui, world);
+}
+
+fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let planet = world.config.planet;
+    stat_grid(ui, "Planet", "planet", |ui| {
+        stat(
+            ui,
+            "Radius",
+            format!("{:.1} km", planet.radius_meters / 1_000.0),
+        );
+        stat(
+            ui,
+            "Rotation period",
+            format!("{:.1} s", planet.sidereal_rotation_period_seconds),
+        );
+        stat(
+            ui,
+            "Atmospheric gas constant",
+            format!(
+                "{:.2} J/kg/K",
+                planet.atmospheric_specific_gas_constant_joules_per_kilogram_kelvin
+            ),
+        );
+    });
 }
 
 fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
@@ -36,31 +61,6 @@ fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         "Atmospheric circulation",
         "atmospheric_circulation",
         |ui| {
-            stat(
-                ui,
-                "Planet radius",
-                format!("{:.1} km", world.config.planet.radius_meters / 1_000.0),
-            );
-            stat(
-                ui,
-                "Rotation period",
-                format!(
-                    "{:.1} s",
-                    world.config.planet.rotation.sidereal_period_seconds
-                ),
-            );
-            stat(
-                ui,
-                "Atmospheric gas constant",
-                format!(
-                    "{:.2} J/kg/K",
-                    world
-                        .config
-                        .planet
-                        .atmosphere
-                        .specific_gas_constant_joules_per_kilogram_kelvin
-                ),
-            );
             stat(
                 ui,
                 "Surface drag",
@@ -76,35 +76,40 @@ fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 "Maximum wind",
                 format!("{:.1} m/s", config.maximum_wind_speed_meters_per_second),
             );
-            circulation_field_stats(
+            area_weighted_stats(
                 ui,
                 "Wind speed",
                 "m/s",
                 &diagnostics.wind_speed_meters_per_second,
+                scientific_three,
             );
-            circulation_field_stats(
+            area_weighted_stats(
                 ui,
                 "Temperature gradient",
                 "K/rad",
                 &diagnostics.temperature_gradient_kelvin_per_radian,
+                scientific_three,
             );
-            circulation_field_stats(
+            area_weighted_stats(
                 ui,
                 "Pressure acceleration",
                 "m/s2",
                 &diagnostics.pressure_gradient_acceleration_meters_per_second_squared,
+                scientific_three,
             );
-            circulation_field_stats(
+            area_weighted_stats(
                 ui,
                 "Coriolis",
                 "s^-1",
                 &diagnostics.coriolis_parameter_per_second,
+                scientific_three,
             );
-            circulation_field_stats(
+            area_weighted_stats(
                 ui,
                 "Terrain steering applied",
                 "fraction",
                 &diagnostics.terrain_steering_fraction,
+                scientific_three,
             );
             stat(ui, "Calm cells", diagnostics.calm_cell_count);
             stat(
@@ -126,24 +131,6 @@ fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 ),
             );
         },
-    );
-}
-
-fn circulation_field_stats(
-    ui: &mut egui::Ui,
-    label: &str,
-    unit: &str,
-    summary: &AreaWeightedSummary,
-) {
-    stat(
-        ui,
-        &format!("{label} range"),
-        format!("{:.3e} - {:.3e} {unit}", summary.minimum, summary.maximum),
-    );
-    stat(
-        ui,
-        &format!("{label} global mean"),
-        format!("{:.3e} {unit}", summary.area_weighted_mean),
     );
 }
 
@@ -171,11 +158,35 @@ fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Orbital samples",
             world.config.solar_forcing.annual_sample_count,
         );
-        area_weighted_stats(ui, "Selected phase", "K", &diagnostics.selected_phase);
-        area_weighted_stats(ui, "Annual mean", "K", &diagnostics.annual_mean);
-        area_weighted_stats(ui, "Annual minimum", "K", &diagnostics.annual_minimum);
-        area_weighted_stats(ui, "Annual maximum", "K", &diagnostics.annual_maximum);
-        area_weighted_stats(ui, "Annual amplitude", "K", &diagnostics.annual_amplitude);
+        area_weighted_stats(
+            ui,
+            "Selected phase",
+            "K",
+            &diagnostics.selected_phase,
+            fixed_one,
+        );
+        area_weighted_stats(ui, "Annual mean", "K", &diagnostics.annual_mean, fixed_one);
+        area_weighted_stats(
+            ui,
+            "Annual minimum",
+            "K",
+            &diagnostics.annual_minimum,
+            fixed_one,
+        );
+        area_weighted_stats(
+            ui,
+            "Annual maximum",
+            "K",
+            &diagnostics.annual_maximum,
+            fixed_one,
+        );
+        area_weighted_stats(
+            ui,
+            "Annual amplitude",
+            "K",
+            &diagnostics.annual_amplitude,
+            fixed_one,
+        );
         stat(ui, "Land cells", diagnostics.land.cell_count);
         stat(ui, "Ocean cells", diagnostics.ocean.cell_count);
         stat(
@@ -223,22 +234,40 @@ fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Emissivity",
             format!("{:.3}", world.config.radiative_equilibrium.emissivity),
         );
-        area_weighted_stats(ui, "Daily", "K", &diagnostics.daily);
-        area_weighted_stats(ui, "Annual", "K", &diagnostics.annual);
+        area_weighted_stats(ui, "Daily", "K", &diagnostics.daily, fixed_one);
+        area_weighted_stats(ui, "Annual", "K", &diagnostics.annual, fixed_one);
     });
 }
 
-fn area_weighted_stats(ui: &mut egui::Ui, prefix: &str, unit: &str, summary: &AreaWeightedSummary) {
+fn area_weighted_stats(
+    ui: &mut egui::Ui,
+    prefix: &str,
+    unit: &str,
+    summary: &AreaWeightedSummary,
+    format_value: fn(f64) -> String,
+) {
     stat(
         ui,
         &format!("{prefix} range"),
-        format!("{:.1} - {:.1} {unit}", summary.minimum, summary.maximum),
+        format!(
+            "{} - {} {unit}",
+            format_value(f64::from(summary.minimum)),
+            format_value(f64::from(summary.maximum))
+        ),
     );
     stat(
         ui,
         &format!("{prefix} global mean"),
-        format!("{:.1} {unit}", summary.area_weighted_mean),
+        format!("{} {unit}", format_value(summary.area_weighted_mean)),
     );
+}
+
+fn fixed_one(value: f64) -> String {
+    format!("{value:.1}")
+}
+
+fn scientific_three(value: f64) -> String {
+    format!("{value:.3e}")
 }
 
 fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
@@ -270,8 +299,8 @@ fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 diagnostics.stellar_flux_watts_per_square_meter
             ),
         );
-        area_weighted_stats(ui, "Daily", "W/m2", &diagnostics.daily_mean);
-        area_weighted_stats(ui, "Annual", "W/m2", &diagnostics.annual_mean);
+        area_weighted_stats(ui, "Daily", "W/m2", &diagnostics.daily_mean, fixed_one);
+        area_weighted_stats(ui, "Annual", "W/m2", &diagnostics.annual_mean, fixed_one);
         stat(ui, "Polar-night cells", diagnostics.polar_night_cell_count);
         stat(ui, "Polar-day cells", diagnostics.polar_day_cell_count);
         stat(

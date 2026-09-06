@@ -46,9 +46,9 @@ They are caller-selected preset values, not solver constants:
 
 Outputs include tangent wind vectors and scalar wind speed, temperature-gradient
 magnitude, pressure-gradient acceleration, signed Coriolis parameter, and the
-fractional speed reduction from terrain steering. Aggregate diagnostics report
-spherical-area-weighted summaries plus calm, terrain-steered, and speed-capped
-cell counts and maximum tangency error.
+applied fraction of the upslope component from terrain steering. Aggregate
+diagnostics report spherical-area-weighted summaries plus calm,
+terrain-steered, and speed-capped cell counts and maximum tangency error.
 
 This is coarse diagnostic circulation, not full atmospheric dynamics. It adds
 no moisture, precipitation, ocean currents, ice, coupled climate feedback,

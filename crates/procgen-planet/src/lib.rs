@@ -4,7 +4,15 @@
 //! Units are explicit SI units. Presets own real-world parameter choices;
 //! downstream algorithms consume only the supplied values.
 
-use std::fmt;
+use std::{fmt, ops::RangeInclusive};
+
+/// Supported physical and viewer range for planet radius.
+pub const PLANET_RADIUS_METERS_RANGE: RangeInclusive<f64> = 1.0..=1.0e9;
+/// Supported physical and viewer range for sidereal rotation period. Zero is
+/// the explicit non-rotating case.
+pub const SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE: RangeInclusive<f64> = 0.0..=1.0e9;
+/// Supported physical and viewer range for an atmosphere's specific gas constant.
+pub const ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE: RangeInclusive<f64> = 1.0..=1.0e5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Star {
@@ -22,25 +30,15 @@ pub struct Orbit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rotation {
-    /// Sidereal rotation period in seconds. A positive value rotates about the
-    /// model's Y axis; zero represents a non-rotating body.
-    pub sidereal_period_seconds: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Atmosphere {
-    /// Specific gas constant of the bulk atmosphere in J kg^-1 K^-1.
-    pub specific_gas_constant_joules_per_kilogram_kelvin: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Planet {
     pub star: Star,
     pub orbit: Orbit,
     pub radius_meters: f64,
-    pub rotation: Rotation,
-    pub atmosphere: Atmosphere,
+    /// Sidereal rotation period in seconds. A positive value rotates about the
+    /// model's Y axis; zero represents a non-rotating body.
+    pub sidereal_rotation_period_seconds: f64,
+    /// Specific gas constant of the bulk atmosphere in J kg^-1 K^-1.
+    pub atmospheric_specific_gas_constant_joules_per_kilogram_kelvin: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,10 +61,10 @@ impl fmt::Display for PlanetValidationError {
             Self::Eccentricity => "orbital eccentricity must be finite and in [0, 1)",
             Self::Obliquity => "obliquity must be finite and in [0, pi / 2]",
             Self::PeriapsisLongitude => "stellar longitude at periapsis must be finite",
-            Self::Radius => "planet radius must be finite and positive",
-            Self::RotationPeriod => "sidereal rotation period must be finite and nonnegative",
+            Self::Radius => "planet radius is outside the supported range",
+            Self::RotationPeriod => "sidereal rotation period is outside the supported range",
             Self::AtmosphericGasConstant => {
-                "atmospheric specific gas constant must be finite and positive"
+                "atmospheric specific gas constant is outside the supported range"
             }
         };
         formatter.write_str(message)
@@ -89,12 +87,8 @@ impl Planet {
             stellar_longitude_at_periapsis_radians: 282.937_681_93_f64.to_radians(),
         },
         radius_meters: 6_371_000.0,
-        rotation: Rotation {
-            sidereal_period_seconds: 86_164.090_5,
-        },
-        atmosphere: Atmosphere {
-            specific_gas_constant_joules_per_kilogram_kelvin: 287.05,
-        },
+        sidereal_rotation_period_seconds: 86_164.090_5,
+        atmospheric_specific_gas_constant_joules_per_kilogram_kelvin: 287.05,
     };
 
     pub fn validate(self) -> Result<(), PlanetValidationError> {
@@ -121,18 +115,21 @@ impl Planet {
         {
             return Err(PlanetValidationError::PeriapsisLongitude);
         }
-        if !self.radius_meters.is_finite() || self.radius_meters <= 0.0 {
+        if !self.radius_meters.is_finite()
+            || !PLANET_RADIUS_METERS_RANGE.contains(&self.radius_meters)
+        {
             return Err(PlanetValidationError::Radius);
         }
-        if !self.rotation.sidereal_period_seconds.is_finite()
-            || self.rotation.sidereal_period_seconds < 0.0
+        if !self.sidereal_rotation_period_seconds.is_finite()
+            || !SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE
+                .contains(&self.sidereal_rotation_period_seconds)
         {
             return Err(PlanetValidationError::RotationPeriod);
         }
-        let gas_constant = self
-            .atmosphere
-            .specific_gas_constant_joules_per_kilogram_kelvin;
-        if !gas_constant.is_finite() || gas_constant <= 0.0 {
+        let gas_constant = self.atmospheric_specific_gas_constant_joules_per_kilogram_kelvin;
+        if !gas_constant.is_finite()
+            || !ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE.contains(&gas_constant)
+        {
             return Err(PlanetValidationError::AtmosphericGasConstant);
         }
         Ok(())
@@ -159,7 +156,7 @@ mod tests {
         assert_eq!(planet.validate(), Err(PlanetValidationError::Luminosity));
 
         planet = Planet::EARTH;
-        planet.rotation.sidereal_period_seconds = -1.0;
+        planet.sidereal_rotation_period_seconds = -1.0;
         assert_eq!(
             planet.validate(),
             Err(PlanetValidationError::RotationPeriod)

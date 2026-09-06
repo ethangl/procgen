@@ -300,9 +300,7 @@ impl GeneratedWorld {
             derive_atmospheric_circulation(
                 &voronoi,
                 AtmosphericCirculationInputs {
-                    radius_meters: config.planet.radius_meters,
-                    rotation: config.planet.rotation,
-                    atmosphere: config.planet.atmosphere,
+                    planet: config.planet,
                     selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
                     final_elevation: &isostasy.cell_elevations,
                 },
