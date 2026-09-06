@@ -88,8 +88,7 @@ pub fn derive_radiative_equilibrium_temperature(
     let annual_effective_temperature_kelvin = temperatures(&forcing.annual_mean_insolation, model);
     let daily = AreaWeightedSummary::from_field(mesh, &daily_effective_temperature_kelvin);
     let annual = AreaWeightedSummary::from_field(mesh, &annual_effective_temperature_kelvin);
-    let maximum_kelvin = daily.maximum.max(annual.maximum);
-    if !maximum_kelvin.is_finite() {
+    if !daily.is_finite() || !annual.is_finite() {
         return Err(RadiativeEquilibriumError::NumericalRange);
     }
 

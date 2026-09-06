@@ -46,7 +46,7 @@ They are caller-selected preset values, not solver constants:
 
 Outputs include tangent wind vectors and scalar wind speed, temperature-gradient
 magnitude, pressure-gradient acceleration, signed Coriolis parameter, and the
-applied fraction of the upslope component from terrain steering. Aggregate
+measured fractional speed reduction from terrain steering. Aggregate
 diagnostics report spherical-area-weighted summaries plus calm,
 terrain-steered, and speed-capped cell counts and maximum tangency error.
 

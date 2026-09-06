@@ -6,12 +6,12 @@
 
 use std::{fmt, ops::RangeInclusive};
 
-/// Supported physical and viewer range for planet radius.
+/// Supported physical range for planet radius.
 pub const PLANET_RADIUS_METERS_RANGE: RangeInclusive<f64> = 1.0..=1.0e9;
-/// Supported physical and viewer range for sidereal rotation period. Zero is
+/// Supported physical range for sidereal rotation period. Zero is
 /// the explicit non-rotating case.
 pub const SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE: RangeInclusive<f64> = 0.0..=1.0e9;
-/// Supported physical and viewer range for an atmosphere's specific gas constant.
+/// Supported physical range for an atmosphere's specific gas constant.
 pub const ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE: RangeInclusive<f64> = 1.0..=1.0e5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

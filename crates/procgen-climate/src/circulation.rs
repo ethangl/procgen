@@ -119,7 +119,7 @@ impl From<PlanetValidationError> for AtmosphericCirculationError {
 }
 
 #[derive(Clone, Copy)]
-struct CellPhysics {
+struct AtmosphericCirculationModel {
     pressure_acceleration_scale: f32,
     rotation_rate: f64,
     surface_drag_per_second: f64,
@@ -140,100 +140,140 @@ struct CellCirculation {
     tangency_error: f32,
 }
 
-impl CellCirculation {
-    fn is_finite(self) -> bool {
-        self.wind.x.is_finite()
-            && self.wind.y.is_finite()
-            && self.wind.z.is_finite()
-            && self.speed.is_finite()
-            && self.temperature_gradient.is_finite()
-            && self.pressure_acceleration.is_finite()
-            && self.coriolis.is_finite()
-            && self.terrain_steering_fraction.is_finite()
-            && self.tangency_error.is_finite()
-    }
-}
-
-struct CirculationAccumulator {
-    winds: Vec<Vec3>,
-    speeds: Vec<f32>,
-    temperature_gradients: Vec<f32>,
-    pressure_accelerations: Vec<f32>,
-    coriolis_parameters: Vec<f32>,
-    terrain_steering_fractions: Vec<f32>,
-    terrain_steered_cell_count: usize,
-    speed_capped_cell_count: usize,
-    maximum_tangency_error: f32,
-}
-
-impl CirculationAccumulator {
-    fn new(cell_count: usize) -> Self {
+impl AtmosphericCirculationModel {
+    fn new(planet: Planet, config: AtmosphericCirculationConfig) -> Self {
+        let rotation_period = planet.sidereal_rotation_period_seconds;
+        let rotation_rate = if rotation_period == 0.0 {
+            0.0
+        } else {
+            TAU / rotation_period
+        };
         Self {
-            winds: Vec::with_capacity(cell_count),
-            speeds: Vec::with_capacity(cell_count),
-            temperature_gradients: Vec::with_capacity(cell_count),
-            pressure_accelerations: Vec::with_capacity(cell_count),
-            coriolis_parameters: Vec::with_capacity(cell_count),
-            terrain_steering_fractions: Vec::with_capacity(cell_count),
-            terrain_steered_cell_count: 0,
-            speed_capped_cell_count: 0,
-            maximum_tangency_error: 0.0,
+            pressure_acceleration_scale: (planet
+                .atmospheric_specific_gas_constant_joules_per_kilogram_kelvin
+                / planet.radius_meters) as f32,
+            rotation_rate,
+            surface_drag_per_second: config.surface_drag_per_second,
+            terrain_steering: config.terrain_steering as f32,
+            maximum_wind_speed_meters_per_second: config.maximum_wind_speed_meters_per_second
+                as f32,
         }
     }
 
-    fn push(&mut self, cell: CellCirculation) -> Result<(), AtmosphericCirculationError> {
-        if !cell.is_finite() {
-            return Err(AtmosphericCirculationError::NumericalRange);
-        }
-        self.winds.push(cell.wind);
-        self.speeds.push(cell.speed);
-        self.temperature_gradients.push(cell.temperature_gradient);
-        self.pressure_accelerations.push(cell.pressure_acceleration);
-        self.coriolis_parameters.push(cell.coriolis);
-        self.terrain_steering_fractions
-            .push(cell.terrain_steering_fraction);
-        self.terrain_steered_cell_count += usize::from(cell.terrain_steered);
-        self.speed_capped_cell_count += usize::from(cell.speed_capped);
-        self.maximum_tangency_error = self.maximum_tangency_error.max(cell.tangency_error);
-        Ok(())
-    }
+    fn solve_cell(
+        self,
+        normal: Vec3,
+        temperature_gradient: Vec3,
+        elevation_gradient: Vec3,
+    ) -> CellCirculation {
+        let temperature_gradient_magnitude = temperature_gradient.length();
+        let acceleration = temperature_gradient * self.pressure_acceleration_scale;
+        let coriolis = 2.0 * self.rotation_rate * f64::from(normal.y);
+        let drag = self.surface_drag_per_second;
+        let denominator = drag * drag + coriolis * coriolis;
+        let mut wind = acceleration * (drag / denominator) as f32
+            - normal.cross(acceleration) * (coriolis / denominator) as f32;
 
-    fn finish(self, mesh: &SphereMesh) -> AtmosphericCirculation {
+        let before_steering = wind.length();
+        let uphill = elevation_gradient.normalized();
+        let removed_speed = wind.dot(uphill).max(0.0) * self.terrain_steering;
+        wind = wind - uphill * removed_speed;
+        let after_steering = wind.length();
+        let terrain_steering_fraction = if before_steering > 0.0 {
+            ((before_steering - after_steering) / before_steering).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        wind = wind - normal * wind.dot(normal);
+        let uncapped_speed = wind.length();
+        let speed_capped = uncapped_speed > self.maximum_wind_speed_meters_per_second;
+        if speed_capped {
+            wind = wind * (self.maximum_wind_speed_meters_per_second / uncapped_speed);
+        }
+
+        CellCirculation {
+            wind,
+            speed: wind.length(),
+            temperature_gradient: temperature_gradient_magnitude,
+            pressure_acceleration: acceleration.length(),
+            coriolis: coriolis as f32,
+            terrain_steering_fraction,
+            terrain_steered: terrain_steering_fraction > 0.0,
+            speed_capped,
+            tangency_error: wind.dot(normal).abs(),
+        }
+    }
+}
+
+impl AtmosphericCirculation {
+    fn from_cells(
+        mesh: &SphereMesh,
+        cells: &[CellCirculation],
+    ) -> Result<Self, AtmosphericCirculationError> {
+        let winds = cells.iter().map(|cell| cell.wind).collect::<Vec<_>>();
+        let speeds = cells.iter().map(|cell| cell.speed).collect::<Vec<_>>();
+        let temperature_gradients = cells
+            .iter()
+            .map(|cell| cell.temperature_gradient)
+            .collect::<Vec<_>>();
+        let pressure_accelerations = cells
+            .iter()
+            .map(|cell| cell.pressure_acceleration)
+            .collect::<Vec<_>>();
+        let coriolis_parameters = cells.iter().map(|cell| cell.coriolis).collect::<Vec<_>>();
+        let terrain_steering_fractions = cells
+            .iter()
+            .map(|cell| cell.terrain_steering_fraction)
+            .collect::<Vec<_>>();
         let diagnostics = AtmosphericCirculationDiagnostics {
-            wind_speed_meters_per_second: AreaWeightedSummary::from_field(mesh, &self.speeds),
+            wind_speed_meters_per_second: AreaWeightedSummary::from_field(mesh, &speeds),
             temperature_gradient_kelvin_per_radian: AreaWeightedSummary::from_field(
                 mesh,
-                &self.temperature_gradients,
+                &temperature_gradients,
             ),
             pressure_gradient_acceleration_meters_per_second_squared:
-                AreaWeightedSummary::from_field(mesh, &self.pressure_accelerations),
+                AreaWeightedSummary::from_field(mesh, &pressure_accelerations),
             coriolis_parameter_per_second: AreaWeightedSummary::from_field(
                 mesh,
-                &self.coriolis_parameters,
+                &coriolis_parameters,
             ),
             terrain_steering_fraction: AreaWeightedSummary::from_field(
                 mesh,
-                &self.terrain_steering_fractions,
+                &terrain_steering_fractions,
             ),
-            calm_cell_count: self
-                .speeds
+            calm_cell_count: cells
                 .iter()
-                .filter(|&&speed| speed <= CALM_WIND_SPEED_METERS_PER_SECOND)
+                .filter(|cell| cell.speed <= CALM_WIND_SPEED_METERS_PER_SECOND)
                 .count(),
-            terrain_steered_cell_count: self.terrain_steered_cell_count,
-            speed_capped_cell_count: self.speed_capped_cell_count,
-            maximum_tangency_error_meters_per_second: self.maximum_tangency_error,
+            terrain_steered_cell_count: cells.iter().filter(|cell| cell.terrain_steered).count(),
+            speed_capped_cell_count: cells.iter().filter(|cell| cell.speed_capped).count(),
+            maximum_tangency_error_meters_per_second: cells
+                .iter()
+                .map(|cell| cell.tangency_error)
+                .fold(0.0, f32::max),
         };
-        AtmosphericCirculation {
-            cell_wind_meters_per_second: self.winds,
-            cell_wind_speed_meters_per_second: self.speeds,
-            cell_temperature_gradient_kelvin_per_radian: self.temperature_gradients,
-            cell_pressure_gradient_acceleration_meters_per_second_squared: self
-                .pressure_accelerations,
-            cell_coriolis_parameter_per_second: self.coriolis_parameters,
-            cell_terrain_steering_fraction: self.terrain_steering_fractions,
-            diagnostics,
+        if ![
+            diagnostics.wind_speed_meters_per_second,
+            diagnostics.temperature_gradient_kelvin_per_radian,
+            diagnostics.pressure_gradient_acceleration_meters_per_second_squared,
+            diagnostics.coriolis_parameter_per_second,
+            diagnostics.terrain_steering_fraction,
+        ]
+        .iter()
+        .all(|summary| summary.is_finite())
+        {
+            return Err(AtmosphericCirculationError::NumericalRange);
         }
+        Ok(Self {
+            cell_wind_meters_per_second: winds,
+            cell_wind_speed_meters_per_second: speeds,
+            cell_temperature_gradient_kelvin_per_radian: temperature_gradients,
+            cell_pressure_gradient_acceleration_meters_per_second_squared: pressure_accelerations,
+            cell_coriolis_parameter_per_second: coriolis_parameters,
+            cell_terrain_steering_fraction: terrain_steering_fractions,
+            diagnostics,
+        })
     }
 }
 
@@ -244,86 +284,19 @@ pub fn derive_atmospheric_circulation(
 ) -> Result<AtmosphericCirculation, AtmosphericCirculationError> {
     validate(mesh, inputs, config)?;
 
-    let rotation_period = inputs.planet.sidereal_rotation_period_seconds;
-    let rotation_rate = if rotation_period == 0.0 {
-        0.0
-    } else {
-        TAU / rotation_period
-    };
-    let physics = CellPhysics {
-        pressure_acceleration_scale: (inputs
-            .planet
-            .atmospheric_specific_gas_constant_joules_per_kilogram_kelvin
-            / inputs.planet.radius_meters) as f32,
-        rotation_rate,
-        surface_drag_per_second: config.surface_drag_per_second,
-        terrain_steering: config.terrain_steering as f32,
-        maximum_wind_speed_meters_per_second: config.maximum_wind_speed_meters_per_second as f32,
-    };
+    let model = AtmosphericCirculationModel::new(inputs.planet, config);
     let temperature_gradients = mesh.cell_gradients(inputs.selected_temperature_kelvin);
     let elevation_gradients = mesh.cell_gradients(inputs.final_elevation);
-    let mut accumulator = CirculationAccumulator::new(mesh.cell_count());
-
-    for cell in 0..mesh.cell_count() {
-        accumulator.push(solve_cell(
-            mesh.cell_centers[cell].normalized(),
-            temperature_gradients[cell],
-            elevation_gradients[cell],
-            physics,
-        ))?;
-    }
-    Ok(accumulator.finish(mesh))
-}
-
-fn solve_cell(
-    normal: Vec3,
-    temperature_gradient: Vec3,
-    elevation_gradient: Vec3,
-    physics: CellPhysics,
-) -> CellCirculation {
-    let temperature_gradient_magnitude = temperature_gradient.length();
-    let acceleration = temperature_gradient * physics.pressure_acceleration_scale;
-    let coriolis = 2.0 * physics.rotation_rate * f64::from(normal.y);
-    let drag = physics.surface_drag_per_second;
-    let denominator = drag * drag + coriolis * coriolis;
-    let mut wind = acceleration * (drag / denominator) as f32
-        - normal.cross(acceleration) * (coriolis / denominator) as f32;
-
-    let uphill = elevation_gradient.normalized();
-    let upslope = wind.dot(uphill).max(0.0);
-    let removed_speed = upslope * physics.terrain_steering;
-    wind = wind - uphill * removed_speed;
-    let terrain_steered = removed_speed > 0.0;
-    let terrain_steering_fraction = if terrain_steered {
-        physics.terrain_steering
-    } else {
-        0.0
-    };
-
-    let steered_speed = wind.length();
-    let balance_speed_capped = steered_speed > physics.maximum_wind_speed_meters_per_second;
-    if balance_speed_capped {
-        wind = wind * (physics.maximum_wind_speed_meters_per_second / steered_speed);
-    }
-    wind = wind - normal * wind.dot(normal);
-    let projected_speed = wind.length();
-    let projection_speed_capped = projected_speed > physics.maximum_wind_speed_meters_per_second;
-    if projection_speed_capped {
-        wind = wind * (physics.maximum_wind_speed_meters_per_second / projected_speed);
-    }
-    let speed = projected_speed.min(physics.maximum_wind_speed_meters_per_second);
-
-    CellCirculation {
-        wind,
-        speed,
-        temperature_gradient: temperature_gradient_magnitude,
-        pressure_acceleration: acceleration.length(),
-        coriolis: coriolis as f32,
-        terrain_steering_fraction,
-        terrain_steered,
-        speed_capped: balance_speed_capped || projection_speed_capped,
-        tangency_error: wind.dot(normal).abs(),
-    }
+    let cells = (0..mesh.cell_count())
+        .map(|cell| {
+            model.solve_cell(
+                mesh.cell_centers[cell].normalized(),
+                temperature_gradients[cell],
+                elevation_gradients[cell],
+            )
+        })
+        .collect::<Vec<_>>();
+    AtmosphericCirculation::from_cells(mesh, &cells)
 }
 
 fn validate(
@@ -425,7 +398,7 @@ mod tests {
                 u64::from(wind.z.to_bits()),
             ]
         }));
-        assert_eq!(hash, 6_107_040_015_668_640_167);
+        assert_eq!(hash, 1_805_051_586_563_245_776);
     }
 
     #[test]
@@ -621,6 +594,37 @@ mod tests {
                 .iter()
                 .all(|speed| *speed <= 1.0e-3)
         );
+    }
+
+    #[test]
+    fn terrain_diagnostic_reports_measured_speed_reduction() {
+        let mesh = mesh(512);
+        let temperature = mesh
+            .cell_centers
+            .iter()
+            .map(|point| 280.0 + 30.0 * point.x)
+            .collect::<Vec<_>>();
+        let elevation = mesh
+            .cell_centers
+            .iter()
+            .map(|point| point.x + point.y)
+            .collect::<Vec<_>>();
+        let mut input = inputs(&temperature, &elevation);
+        input.planet.sidereal_rotation_period_seconds = 0.0;
+        let steering = 0.65;
+        let result = derive_atmospheric_circulation(
+            &mesh,
+            input,
+            AtmosphericCirculationConfig {
+                terrain_steering: steering,
+                ..config()
+            },
+        )
+        .unwrap();
+
+        assert!(result.cell_terrain_steering_fraction.iter().any(|&value| {
+            value > 0.0 && value < steering as f32 && (value - steering as f32).abs() > 1.0e-3
+        }));
     }
 
     #[test]
