@@ -76,12 +76,11 @@ fn setup_scene(
 }
 
 fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: DiagnosticLayer) {
-    let spec = layer.spec();
     commands.spawn((
         Gizmo {
             handle,
             line_config: GizmoLineConfig {
-                width: spec.line_width,
+                width: layer.line_width(),
                 perspective: false,
                 ..default()
             },
@@ -116,8 +115,7 @@ fn rebuild_diagnostic_assets(
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
     for &layer in DiagnosticLayer::ALL {
-        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() =
-            layer.spec().build(&world, layer.radius());
+        *gizmo_assets.get_mut(&assets.0[layer.index()]).unwrap() = layer.build_asset(&world);
     }
 }
 

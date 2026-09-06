@@ -3,7 +3,17 @@ use crate::model::GeneratedWorld;
 use bevy_egui::egui;
 use procgen_tectonics::{BoundaryClass, CrustClass};
 
-pub(super) fn crust_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    crust_summary(ui, world);
+    evolution_summary(ui, world);
+    boundary_summary(ui, world);
+    seafloor_age_summary(ui, world);
+    deformation_summary(ui, world);
+    base_elevation_summary(ui, world);
+    elevation_summary(ui, world);
+}
+
+fn crust_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Static crust", "crust", |ui| {
         stat(
             ui,
@@ -31,7 +41,7 @@ pub(super) fn crust_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-pub(super) fn evolution_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn evolution_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Plate evolution", "evolution", |ui| {
         stat(ui, "Active steps", world.evolution.active_step_count);
         stat(ui, "Proposals", world.evolution.proposal_count);
@@ -49,7 +59,7 @@ pub(super) fn evolution_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-pub(super) fn boundary_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn boundary_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Static boundaries", "boundaries", |ui| {
         stat(
             ui,
@@ -69,7 +79,7 @@ pub(super) fn boundary_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-pub(super) fn seafloor_age_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn seafloor_age_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Seafloor age", "seafloor_age", |ui| {
         field_summary_stats(ui, &world.seafloor_age.diagnostics.summary);
         stat(
@@ -100,7 +110,7 @@ pub(super) fn seafloor_age_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-pub(super) fn deformation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn deformation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Boundary deformation", "deformation", |ui| {
         field_summary_stats(ui, &world.deformation.diagnostics.summary);
         stat(
@@ -126,7 +136,7 @@ pub(super) fn deformation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-pub(super) fn base_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn base_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Base elevation", "base_elevation", |ui| {
         field_summary_stats(ui, &world.base_elevation.diagnostics.summary);
         stat(
@@ -147,7 +157,7 @@ pub(super) fn base_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) 
     });
 }
 
-pub(super) fn elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     stat_grid(ui, "Tectonic elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
     });

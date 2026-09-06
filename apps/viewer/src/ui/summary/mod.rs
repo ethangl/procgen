@@ -2,31 +2,16 @@ mod climate;
 mod geology;
 mod tectonics;
 
-use super::{field_summary_stats, format_field_range, millis, stat, stat_grid};
+use super::section;
 use crate::model::GeneratedWorld;
 use bevy_egui::egui;
+use procgen_tectonics::FieldSummary;
 
 pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     active_world_summary(ui, world);
-    tectonics::crust_summary(ui, world);
-    tectonics::evolution_summary(ui, world);
-    tectonics::boundary_summary(ui, world);
-    tectonics::seafloor_age_summary(ui, world);
-    tectonics::deformation_summary(ui, world);
-    tectonics::base_elevation_summary(ui, world);
-    tectonics::elevation_summary(ui, world);
-    geology::hotspot_summary(ui, world);
-    geology::volcanic_arc_summary(ui, world);
-    geology::oceanic_peak_summary(ui, world);
-    geology::craton_summary(ui, world);
-    geology::basin_summary(ui, world);
-    geology::geological_elevation_summary(ui, world);
-    geology::isostatic_summary(ui, world);
-    climate::planet_summary(ui, world);
-    climate::solar_forcing_summary(ui, world);
-    climate::radiative_equilibrium_summary(ui, world);
-    climate::seasonal_thermal_summary(ui, world);
-    climate::atmospheric_circulation_summary(ui, world);
+    tectonics::summary(ui, world);
+    geology::summary(ui, world);
+    climate::summary(ui, world);
     timing_summary(ui, world);
 }
 
@@ -57,4 +42,29 @@ fn timing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         }
         stat(ui, "Total", millis(world.timings.total()));
     });
+}
+
+fn stat_grid(ui: &mut egui::Ui, title: &str, id: &str, content: impl FnOnce(&mut egui::Ui)) {
+    section(ui, title, |ui| {
+        egui::Grid::new(id).num_columns(2).show(ui, content);
+    });
+}
+
+fn stat(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
+    ui.label(label);
+    ui.monospace(value.to_string());
+    ui.end_row();
+}
+
+fn field_summary_stats(ui: &mut egui::Ui, summary: &FieldSummary) {
+    stat(ui, "Range", format_field_range(summary));
+    stat(ui, "Mean", format!("{:.3}", summary.mean));
+}
+
+fn format_field_range(summary: &FieldSummary) -> String {
+    format!("{:.3} - {:.3}", summary.minimum, summary.maximum)
+}
+
+fn millis(duration: std::time::Duration) -> String {
+    format!("{:.2} ms", duration.as_secs_f64() * 1_000.0)
 }

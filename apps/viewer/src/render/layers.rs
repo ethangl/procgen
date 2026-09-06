@@ -1,6 +1,11 @@
-use super::assets::*;
+use super::assets::{
+    basin_asset, boundary_asset, crust_asset, delaunay_asset, insolation_asset, motion_asset,
+    oceanic_peak_asset, plate_asset, point_asset, scalar_field_asset, seafloor_age_asset,
+    volcanic_arc_asset, voronoi_asset, wind_asset,
+};
 use crate::model::GeneratedWorld;
 use bevy::prelude::{GizmoAsset, Vec3};
+use procgen_tectonics::SEA_LEVEL;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
@@ -45,9 +50,89 @@ const DRAW_RADIUS_STEP: f32 = 0.004;
 const FIELD_LINE_WIDTH: f32 = 3.5;
 const OVERLAY_LINE_WIDTH: f32 = 3.8;
 
-pub(super) struct LayerSpec {
+const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (-0.5, Vec3::new(0.08, 0.35, 0.95)),
+    (0.0, Vec3::new(0.12, 0.12, 0.16)),
+    (0.5, Vec3::new(1.0, 0.38, 0.08)),
+];
+
+const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.02, 0.08, 0.3)),
+    (SEA_LEVEL, Vec3::new(0.08, 0.65, 0.85)),
+    // Duplicate sea-level stop deliberately separates water from land.
+    (SEA_LEVEL, Vec3::new(0.16, 0.55, 0.18)),
+    (0.75, Vec3::new(0.55, 0.38, 0.16)),
+    (1.0, Vec3::new(0.96, 0.96, 0.94)),
+];
+
+const TEMPERATURE_COLOR_STOPS: [(f32, Vec3); 6] = [
+    (0.0, Vec3::new(0.015, 0.02, 0.08)),
+    (180.0, Vec3::new(0.08, 0.16, 0.46)),
+    (240.0, Vec3::new(0.12, 0.62, 0.86)),
+    (273.15, Vec3::new(0.82, 0.95, 0.92)),
+    (320.0, Vec3::new(1.0, 0.68, 0.12)),
+    (400.0, Vec3::new(0.86, 0.08, 0.035)),
+];
+
+const TEMPERATURE_AMPLITUDE_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.09)),
+    (10.0, Vec3::new(0.08, 0.32, 0.62)),
+    (30.0, Vec3::new(0.12, 0.72, 0.72)),
+    (75.0, Vec3::new(1.0, 0.68, 0.1)),
+    (150.0, Vec3::new(0.9, 0.08, 0.035)),
+];
+
+const TEMPERATURE_GRADIENT_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.09)),
+    (25.0, Vec3::new(0.08, 0.4, 0.72)),
+    (75.0, Vec3::new(0.2, 0.82, 0.65)),
+    (200.0, Vec3::new(1.0, 0.42, 0.08)),
+];
+
+const PRESSURE_ACCELERATION_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.09)),
+    (0.001, Vec3::new(0.12, 0.35, 0.8)),
+    (0.004, Vec3::new(0.25, 0.82, 0.65)),
+    (0.012, Vec3::new(1.0, 0.35, 0.08)),
+];
+
+const CORIOLIS_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (-0.000_16, Vec3::new(0.15, 0.4, 1.0)),
+    (0.0, Vec3::new(0.94, 0.94, 0.94)),
+    (0.000_16, Vec3::new(1.0, 0.3, 0.15)),
+];
+
+const FRACTION_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (0.0, Vec3::new(0.03, 0.05, 0.1)),
+    (0.5, Vec3::new(0.16, 0.68, 0.7)),
+    (1.0, Vec3::new(1.0, 0.75, 0.15)),
+];
+
+const WIND_SPEED_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.03, 0.05, 0.1)),
+    (10.0, Vec3::new(0.08, 0.38, 0.72)),
+    (30.0, Vec3::new(0.12, 0.75, 0.72)),
+    (60.0, Vec3::new(1.0, 0.72, 0.12)),
+    (100.0, Vec3::new(0.9, 0.1, 0.04)),
+];
+
+const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.08, 0.06, 0.12)),
+    (0.25, Vec3::new(0.55, 0.08, 0.3)),
+    (0.65, Vec3::new(1.0, 0.25, 0.05)),
+    (1.0, Vec3::new(1.0, 0.95, 0.25)),
+];
+
+const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.06, 0.08, 0.07)),
+    (0.25, Vec3::new(0.18, 0.34, 0.22)),
+    (0.65, Vec3::new(0.55, 0.68, 0.32)),
+    (1.0, Vec3::new(0.92, 0.86, 0.5)),
+];
+
+struct LayerSpec {
     label: &'static str,
-    pub(super) line_width: f32,
+    line_width: f32,
     source: Source,
 }
 
@@ -87,7 +172,7 @@ impl LayerSpec {
         }
     }
 
-    pub(super) fn build(self, world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+    fn build(self, world: &GeneratedWorld, radius: f32) -> GizmoAsset {
         match self.source {
             Source::Scalar { values, stops } => {
                 scalar_field_asset(&world.voronoi, values(world), stops, radius)
@@ -143,7 +228,7 @@ impl DiagnosticLayer {
         self.index() + 1
     }
 
-    pub(super) fn radius(self) -> f32 {
+    fn radius(self) -> f32 {
         DRAW_RADIUS_BASE + self.index() as f32 * DRAW_RADIUS_STEP
     }
 
@@ -151,7 +236,15 @@ impl DiagnosticLayer {
         self.spec().label
     }
 
-    pub(super) fn spec(self) -> LayerSpec {
+    pub(super) fn line_width(self) -> f32 {
+        self.spec().line_width
+    }
+
+    pub(super) fn build_asset(self, world: &GeneratedWorld) -> GizmoAsset {
+        self.spec().build(world, self.radius())
+    }
+
+    fn spec(self) -> LayerSpec {
         match self {
             Self::Delaunay => LayerSpec::custom("Delaunay", 1.1, |world, radius| {
                 delaunay_asset(&world.voronoi, radius)
@@ -313,7 +406,7 @@ impl DiagnosticLayer {
                 &WIND_SPEED_COLOR_STOPS,
             ),
             Self::Wind => LayerSpec::custom("Wind vectors", 2.6, |world, radius| {
-                wind_asset(world, radius)
+                wind_asset(world, radius, &WIND_SPEED_COLOR_STOPS)
             }),
             Self::Hotspots => LayerSpec::scalar(
                 "Mantle hotspots",

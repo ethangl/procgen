@@ -3,7 +3,15 @@ use crate::model::GeneratedWorld;
 use bevy_egui::egui;
 use procgen_climate::AreaWeightedSummary;
 
-pub(super) fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    planet_summary(ui, world);
+    solar_forcing_summary(ui, world);
+    radiative_equilibrium_summary(ui, world);
+    seasonal_thermal_summary(ui, world);
+    atmospheric_circulation_summary(ui, world);
+}
+
+fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     let planet = world.config.planet;
     stat_grid(ui, "Planet", "planet", |ui| {
         stat(
@@ -27,88 +35,65 @@ pub(super) fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-pub(super) fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    let diagnostics = &world.atmospheric_circulation.diagnostics;
-    let config = world.config.atmospheric_circulation;
-    stat_grid(
-        ui,
-        "Atmospheric circulation",
-        "atmospheric_circulation",
-        |ui| {
-            stat(
-                ui,
-                "Surface drag",
-                format!("{:.3e} s^-1", config.surface_drag_per_second),
-            );
-            stat(
-                ui,
-                "Terrain steering",
-                format!("{:.2}", config.terrain_steering),
-            );
-            stat(
-                ui,
-                "Maximum wind",
-                format!("{:.1} m/s", config.maximum_wind_speed_meters_per_second),
-            );
-            area_weighted_stats(
-                ui,
-                "Wind speed",
-                "m/s",
-                &diagnostics.wind_speed_meters_per_second,
-                scientific_three,
-            );
-            area_weighted_stats(
-                ui,
-                "Temperature gradient",
-                "K/rad",
-                &diagnostics.temperature_gradient_kelvin_per_radian,
-                scientific_three,
-            );
-            area_weighted_stats(
-                ui,
-                "Pressure acceleration",
-                "m/s2",
-                &diagnostics.pressure_gradient_acceleration_meters_per_second_squared,
-                scientific_three,
-            );
-            area_weighted_stats(
-                ui,
-                "Coriolis",
-                "s^-1",
-                &diagnostics.coriolis_parameter_per_second,
-                scientific_three,
-            );
-            area_weighted_stats(
-                ui,
-                "Terrain steering applied",
-                "fraction",
-                &diagnostics.terrain_steering_fraction,
-                scientific_three,
-            );
-            stat(ui, "Calm cells", diagnostics.calm_cell_count);
-            stat(
-                ui,
-                "Terrain-steered cells",
-                diagnostics.terrain_steered_cell_count,
-            );
-            stat(
-                ui,
-                "Speed-capped cells",
-                diagnostics.speed_capped_cell_count,
-            );
-            stat(
-                ui,
-                "Maximum tangency error",
-                format!(
-                    "{:.3e} m/s",
-                    diagnostics.maximum_tangency_error_meters_per_second
-                ),
-            );
-        },
-    );
+fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.solar_forcing.diagnostics;
+    stat_grid(ui, "Solar forcing", "solar_forcing", |ui| {
+        stat(
+            ui,
+            "Orbital phase",
+            format!("{:.3}", diagnostics.orbital_phase),
+        );
+        stat(
+            ui,
+            "Orbital distance",
+            format!("{:.3} Gm", diagnostics.orbital_distance_meters / 1.0e9),
+        );
+        stat(
+            ui,
+            "Solar declination",
+            format!(
+                "{:.2} deg",
+                diagnostics.solar_declination_radians.to_degrees()
+            ),
+        );
+        stat(
+            ui,
+            "Stellar flux",
+            format!(
+                "{:.1} W/m2",
+                diagnostics.stellar_flux_watts_per_square_meter
+            ),
+        );
+        area_weighted_stats(ui, "Daily", "W/m2", &diagnostics.daily_mean, fixed_one);
+        area_weighted_stats(ui, "Annual", "W/m2", &diagnostics.annual_mean, fixed_one);
+        stat(ui, "Polar-night cells", diagnostics.polar_night_cell_count);
+        stat(ui, "Polar-day cells", diagnostics.polar_day_cell_count);
+        stat(
+            ui,
+            "Annual samples",
+            world.config.solar_forcing.annual_sample_count,
+        );
+    });
+}
+fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.radiative_equilibrium.diagnostics;
+    stat_grid(ui, "Radiative equilibrium", "radiative_equilibrium", |ui| {
+        stat(
+            ui,
+            "Albedo",
+            format!("{:.3}", world.config.radiative_equilibrium.albedo),
+        );
+        stat(
+            ui,
+            "Emissivity",
+            format!("{:.3}", world.config.radiative_equilibrium.emissivity),
+        );
+        area_weighted_stats(ui, "Daily", "K", &diagnostics.daily, fixed_one);
+        area_weighted_stats(ui, "Annual", "K", &diagnostics.annual, fixed_one);
+    });
 }
 
-pub(super) fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     let diagnostics = &world.seasonal_thermal.diagnostics;
     let config = world.config.seasonal_thermal;
     stat_grid(ui, "Seasonal thermal response", "seasonal_thermal", |ui| {
@@ -195,22 +180,85 @@ fn optional_temperature(value: Option<f64>) -> String {
         .unwrap_or_else(|| "n/a".to_owned())
 }
 
-pub(super) fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    let diagnostics = &world.radiative_equilibrium.diagnostics;
-    stat_grid(ui, "Radiative equilibrium", "radiative_equilibrium", |ui| {
-        stat(
-            ui,
-            "Albedo",
-            format!("{:.3}", world.config.radiative_equilibrium.albedo),
-        );
-        stat(
-            ui,
-            "Emissivity",
-            format!("{:.3}", world.config.radiative_equilibrium.emissivity),
-        );
-        area_weighted_stats(ui, "Daily", "K", &diagnostics.daily, fixed_one);
-        area_weighted_stats(ui, "Annual", "K", &diagnostics.annual, fixed_one);
-    });
+fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.atmospheric_circulation.diagnostics;
+    let config = world.config.atmospheric_circulation;
+    stat_grid(
+        ui,
+        "Atmospheric circulation",
+        "atmospheric_circulation",
+        |ui| {
+            stat(
+                ui,
+                "Surface drag",
+                format!("{:.3e} s^-1", config.surface_drag_per_second),
+            );
+            stat(
+                ui,
+                "Terrain steering",
+                format!("{:.2}", config.terrain_steering),
+            );
+            stat(
+                ui,
+                "Maximum wind",
+                format!("{:.1} m/s", config.maximum_wind_speed_meters_per_second),
+            );
+            area_weighted_stats(
+                ui,
+                "Wind speed",
+                "m/s",
+                &diagnostics.wind_speed_meters_per_second,
+                scientific_three,
+            );
+            area_weighted_stats(
+                ui,
+                "Temperature gradient",
+                "K/rad",
+                &diagnostics.temperature_gradient_kelvin_per_radian,
+                scientific_three,
+            );
+            area_weighted_stats(
+                ui,
+                "Pressure acceleration",
+                "m/s2",
+                &diagnostics.pressure_gradient_acceleration_meters_per_second_squared,
+                scientific_three,
+            );
+            area_weighted_stats(
+                ui,
+                "Coriolis",
+                "s^-1",
+                &diagnostics.coriolis_parameter_per_second,
+                scientific_three,
+            );
+            area_weighted_stats(
+                ui,
+                "Terrain steering applied",
+                "fraction",
+                &diagnostics.terrain_steering_fraction,
+                scientific_three,
+            );
+            stat(ui, "Calm cells", diagnostics.calm_cell_count);
+            stat(
+                ui,
+                "Terrain-steered cells",
+                diagnostics.terrain_steered_cell_count,
+            );
+            stat(
+                ui,
+                "Speed-capped cells",
+                diagnostics.speed_capped_cell_count,
+            );
+            stat(
+                ui,
+                "Maximum tangency error",
+                format!(
+                    "{:.3e} m/s",
+                    diagnostics.maximum_tangency_error_meters_per_second
+                ),
+            );
+        },
+    );
 }
 
 fn area_weighted_stats(
@@ -242,45 +290,4 @@ fn fixed_one(value: f64) -> String {
 
 fn scientific_three(value: f64) -> String {
     format!("{value:.3e}")
-}
-
-pub(super) fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    let diagnostics = &world.solar_forcing.diagnostics;
-    stat_grid(ui, "Solar forcing", "solar_forcing", |ui| {
-        stat(
-            ui,
-            "Orbital phase",
-            format!("{:.3}", diagnostics.orbital_phase),
-        );
-        stat(
-            ui,
-            "Orbital distance",
-            format!("{:.3} Gm", diagnostics.orbital_distance_meters / 1.0e9),
-        );
-        stat(
-            ui,
-            "Solar declination",
-            format!(
-                "{:.2} deg",
-                diagnostics.solar_declination_radians.to_degrees()
-            ),
-        );
-        stat(
-            ui,
-            "Stellar flux",
-            format!(
-                "{:.1} W/m2",
-                diagnostics.stellar_flux_watts_per_square_meter
-            ),
-        );
-        area_weighted_stats(ui, "Daily", "W/m2", &diagnostics.daily_mean, fixed_one);
-        area_weighted_stats(ui, "Annual", "W/m2", &diagnostics.annual_mean, fixed_one);
-        stat(ui, "Polar-night cells", diagnostics.polar_night_cell_count);
-        stat(ui, "Polar-day cells", diagnostics.polar_day_cell_count);
-        stat(
-            ui,
-            "Annual samples",
-            world.config.solar_forcing.annual_sample_count,
-        );
-    });
 }

@@ -6,107 +6,38 @@ use procgen_geology::{OceanicPeakField, OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlateKinematics,
-    PlatePartition, SEA_LEVEL, SeafloorAge,
+    PlatePartition, SeafloorAge,
 };
 
-pub(super) const MAXIMUM_VECTOR_COUNT: usize = 256;
-pub(super) const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
-    (-0.5, Vec3::new(0.08, 0.35, 0.95)),
-    (0.0, Vec3::new(0.12, 0.12, 0.16)),
-    (0.5, Vec3::new(1.0, 0.38, 0.08)),
-];
-pub(super) const SEAFLOOR_AGE_COLOR_STOPS: [(f32, Vec3); 3] = [
+const MAXIMUM_VECTOR_COUNT: usize = 256;
+const SEAFLOOR_AGE_COLOR_STOPS: [(f32, Vec3); 3] = [
     (0.0, Vec3::new(0.35, 0.95, 1.0)),
     (0.5, Vec3::new(0.08, 0.4, 0.8)),
     (1.0, Vec3::new(0.015, 0.05, 0.2)),
 ];
-pub(super) const ELEVATION_COLOR_STOPS: [(f32, Vec3); 5] = [
-    (0.0, Vec3::new(0.02, 0.08, 0.3)),
-    (SEA_LEVEL, Vec3::new(0.08, 0.65, 0.85)),
-    // Duplicate sea-level stop deliberately separates water from land.
-    (SEA_LEVEL, Vec3::new(0.16, 0.55, 0.18)),
-    (0.75, Vec3::new(0.55, 0.38, 0.16)),
-    (1.0, Vec3::new(0.96, 0.96, 0.94)),
-];
-pub(super) const INSOLATION_COLOR_STOPS: [(f32, Vec3); 5] = [
+const INSOLATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.0, Vec3::new(0.015, 0.02, 0.08)),
     (0.2, Vec3::new(0.08, 0.18, 0.5)),
     (0.45, Vec3::new(0.12, 0.65, 0.82)),
     (0.7, Vec3::new(1.0, 0.72, 0.12)),
     (1.0, Vec3::new(1.0, 0.98, 0.78)),
 ];
-pub(super) const TEMPERATURE_COLOR_STOPS: [(f32, Vec3); 6] = [
-    (0.0, Vec3::new(0.015, 0.02, 0.08)),
-    (180.0, Vec3::new(0.08, 0.16, 0.46)),
-    (240.0, Vec3::new(0.12, 0.62, 0.86)),
-    (273.15, Vec3::new(0.82, 0.95, 0.92)),
-    (320.0, Vec3::new(1.0, 0.68, 0.12)),
-    (400.0, Vec3::new(0.86, 0.08, 0.035)),
-];
-pub(super) const TEMPERATURE_AMPLITUDE_COLOR_STOPS: [(f32, Vec3); 5] = [
-    (0.0, Vec3::new(0.02, 0.035, 0.09)),
-    (10.0, Vec3::new(0.08, 0.32, 0.62)),
-    (30.0, Vec3::new(0.12, 0.72, 0.72)),
-    (75.0, Vec3::new(1.0, 0.68, 0.1)),
-    (150.0, Vec3::new(0.9, 0.08, 0.035)),
-];
-pub(super) const TEMPERATURE_GRADIENT_COLOR_STOPS: [(f32, Vec3); 4] = [
-    (0.0, Vec3::new(0.02, 0.035, 0.09)),
-    (25.0, Vec3::new(0.08, 0.4, 0.72)),
-    (75.0, Vec3::new(0.2, 0.82, 0.65)),
-    (200.0, Vec3::new(1.0, 0.42, 0.08)),
-];
-pub(super) const PRESSURE_ACCELERATION_COLOR_STOPS: [(f32, Vec3); 4] = [
-    (0.0, Vec3::new(0.02, 0.035, 0.09)),
-    (0.001, Vec3::new(0.12, 0.35, 0.8)),
-    (0.004, Vec3::new(0.25, 0.82, 0.65)),
-    (0.012, Vec3::new(1.0, 0.35, 0.08)),
-];
-pub(super) const CORIOLIS_COLOR_STOPS: [(f32, Vec3); 3] = [
-    (-0.000_16, Vec3::new(0.15, 0.4, 1.0)),
-    (0.0, Vec3::new(0.94, 0.94, 0.94)),
-    (0.000_16, Vec3::new(1.0, 0.3, 0.15)),
-];
-pub(super) const FRACTION_COLOR_STOPS: [(f32, Vec3); 3] = [
-    (0.0, Vec3::new(0.03, 0.05, 0.1)),
-    (0.5, Vec3::new(0.16, 0.68, 0.7)),
-    (1.0, Vec3::new(1.0, 0.75, 0.15)),
-];
-pub(super) const WIND_SPEED_COLOR_STOPS: [(f32, Vec3); 5] = [
-    (0.0, Vec3::new(0.03, 0.05, 0.1)),
-    (10.0, Vec3::new(0.08, 0.38, 0.72)),
-    (30.0, Vec3::new(0.12, 0.75, 0.72)),
-    (60.0, Vec3::new(1.0, 0.72, 0.12)),
-    (100.0, Vec3::new(0.9, 0.1, 0.04)),
-];
-pub(super) const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
-    (0.0, Vec3::new(0.08, 0.06, 0.12)),
-    (0.25, Vec3::new(0.55, 0.08, 0.3)),
-    (0.65, Vec3::new(1.0, 0.25, 0.05)),
-    (1.0, Vec3::new(1.0, 0.95, 0.25)),
-];
-pub(super) const OCEANIC_PEAK_COLOR_STOPS: [(f32, Vec3); 4] = [
+const OCEANIC_PEAK_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.02, 0.06, 0.12)),
     (0.25, Vec3::new(0.05, 0.35, 0.52)),
     (0.65, Vec3::new(0.18, 0.78, 0.72)),
     (1.0, Vec3::new(0.95, 0.9, 0.42)),
 ];
-pub(super) const SEAMOUNT_PEAK_COLOR: Vec3 = Vec3::new(1.0, 0.42, 0.08);
-pub(super) const ABYSSAL_HILL_PEAK_COLOR: Vec3 = Vec3::new(0.55, 0.92, 1.0);
-pub(super) const CELL_MARKER_SCALE: f32 = 0.32;
-pub(super) const MINIMUM_CELL_MARKER_SIZE: f32 = 0.003;
-pub(super) const MAXIMUM_CELL_MARKER_SIZE: f32 = 0.012;
-pub(super) const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
+const SEAMOUNT_PEAK_COLOR: Vec3 = Vec3::new(1.0, 0.42, 0.08);
+const ABYSSAL_HILL_PEAK_COLOR: Vec3 = Vec3::new(0.55, 0.92, 1.0);
+const CELL_MARKER_SCALE: f32 = 0.32;
+const MINIMUM_CELL_MARKER_SIZE: f32 = 0.003;
+const MAXIMUM_CELL_MARKER_SIZE: f32 = 0.012;
+const VOLCANIC_ARC_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.055, 0.04)),
     (0.25, Vec3::new(0.55, 0.12, 0.02)),
     (0.65, Vec3::new(1.0, 0.42, 0.03)),
     (1.0, Vec3::new(1.0, 0.95, 0.28)),
-];
-pub(super) const CRATON_COLOR_STOPS: [(f32, Vec3); 4] = [
-    (0.0, Vec3::new(0.06, 0.08, 0.07)),
-    (0.25, Vec3::new(0.18, 0.34, 0.22)),
-    (0.65, Vec3::new(0.55, 0.68, 0.32)),
-    (1.0, Vec3::new(0.92, 0.86, 0.5)),
 ];
 
 pub(super) fn insolation_asset(
@@ -367,7 +298,11 @@ pub(super) fn motion_asset(
     asset
 }
 
-pub(super) fn wind_asset(world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+pub(super) fn wind_asset(
+    world: &GeneratedWorld,
+    radius: f32,
+    color_stops: &[(f32, Vec3)],
+) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
     let mesh = &world.voronoi;
     let circulation = &world.atmospheric_circulation;
@@ -386,7 +321,7 @@ pub(super) fn wind_asset(world: &GeneratedWorld, radius: f32) -> GizmoAsset {
         let start = to_bevy(mesh.cell_centers[cell].normalized()) * radius;
         let direction = to_bevy(wind) / speed;
         let length = 0.025 + 0.075 * (speed / maximum_speed);
-        let color = opaque_color(piecewise_lerp(speed, &WIND_SPEED_COLOR_STOPS));
+        let color = opaque_color(piecewise_lerp(speed, color_stops));
         asset.arrow(start, start + direction * length, color);
     }
     asset
