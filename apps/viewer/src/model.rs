@@ -63,13 +63,13 @@ impl Default for GenerationSettings {
             fibonacci: FibonacciConfig {
                 jitter: 0.5,
                 seed: 7,
-                ..FibonacciConfig::new(32_768)
+                ..FibonacciConfig::new(65_536)
             },
             plates: PlatePartitionConfig {
-                major_plate_count: 11,
+                major_plate_count: 6,
                 minor_plate_count: 111,
-                major_head_start_rounds: 5,
-                growth_roughness: 35,
+                major_head_start_rounds: 6,
+                growth_roughness: 99,
                 seed: 7,
             },
             crust: CrustClassificationConfig {
@@ -78,7 +78,7 @@ impl Default for GenerationSettings {
             },
             kinematics: PlateKinematicsConfig::new(7),
             evolution: PlateEvolutionConfig {
-                step_count: 11,
+                step_count: 9,
                 ..Default::default()
             },
             seafloor_age: SeafloorAgeConfig::default(),
@@ -358,12 +358,21 @@ mod tests {
     use procgen_tectonics::{CrustClass, PlateMigrationConfig};
 
     #[test]
+    fn default_generation_profile_generates() {
+        GeneratedWorld::generate(GenerationSettings::default()).unwrap();
+    }
+
+    #[test]
     fn generates_consistent_viewer_counts() {
         let world = GeneratedWorld::generate(GenerationSettings {
             fibonacci: FibonacciConfig::new(128),
             plates: PlatePartitionConfig::new(4, 4),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(9),
+            evolution: PlateEvolutionConfig {
+                step_count: 11,
+                ..Default::default()
+            },
             ..GenerationSettings::default()
         })
         .unwrap();
@@ -536,6 +545,10 @@ mod tests {
             plates: PlatePartitionConfig::new(2, 2),
             crust: CrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(3),
+            evolution: PlateEvolutionConfig {
+                step_count: 11,
+                ..Default::default()
+            },
             ..GenerationSettings::default()
         })
         .unwrap();
