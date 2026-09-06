@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use procgen_climate::{
+    AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationInputs,
     RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature, SeasonalThermalConfig,
     SeasonalThermalInputs, SeasonalThermalResponse, SolarForcing, SolarForcingConfig,
-    derive_radiative_equilibrium_temperature, derive_seasonal_thermal_response,
-    derive_solar_forcing,
+    derive_atmospheric_circulation, derive_radiative_equilibrium_temperature,
+    derive_seasonal_thermal_response, derive_solar_forcing,
 };
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
@@ -51,11 +52,12 @@ pub struct GenerationSettings {
     pub basins: SedimentaryBasinFieldConfig,
     pub geological_elevation: GeologicalElevationConfig,
     pub isostasy: IsostaticAdjustmentConfig,
-    /// Explicit preset selection; editable planet inputs are outside this slice.
+    /// Earth-like defaults are explicit and caller-editable.
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
     pub radiative_equilibrium: RadiativeEquilibriumConfig,
     pub seasonal_thermal: SeasonalThermalConfig,
+    pub atmospheric_circulation: AtmosphericCirculationConfig,
 }
 
 impl Default for GenerationSettings {
@@ -96,6 +98,7 @@ impl Default for GenerationSettings {
             solar_forcing: SolarForcingConfig::default(),
             radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
             seasonal_thermal: SeasonalThermalConfig::EARTHLIKE,
+            atmospheric_circulation: AtmosphericCirculationConfig::EARTHLIKE,
         }
     }
 }
@@ -180,6 +183,7 @@ pub struct GeneratedWorld {
     pub solar_forcing: SolarForcing,
     pub radiative_equilibrium: RadiativeEquilibriumTemperature,
     pub seasonal_thermal: SeasonalThermalResponse,
+    pub atmospheric_circulation: AtmosphericCirculation,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -292,6 +296,19 @@ impl GeneratedWorld {
                 config.seasonal_thermal,
             )
         })?;
+        let atmospheric_circulation = timings.record("Atmospheric circulation", || {
+            derive_atmospheric_circulation(
+                &voronoi,
+                AtmosphericCirculationInputs {
+                    radius_meters: config.planet.radius_meters,
+                    rotation: config.planet.rotation,
+                    atmosphere: config.planet.atmosphere,
+                    selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
+                    final_elevation: &isostasy.cell_elevations,
+                },
+                config.atmospheric_circulation,
+            )
+        })?;
 
         Ok(Self {
             voronoi,
@@ -314,6 +331,7 @@ impl GeneratedWorld {
             solar_forcing,
             radiative_equilibrium,
             seasonal_thermal,
+            atmospheric_circulation,
             timings,
             config,
         })
@@ -445,6 +463,35 @@ mod tests {
         );
         assert_eq!(
             world
+                .atmospheric_circulation
+                .cell_wind_meters_per_second
+                .len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world
+                .atmospheric_circulation
+                .cell_temperature_gradient_kelvin_per_radian
+                .len(),
+            world.voronoi.cell_count()
+        );
+        assert!(
+            world
+                .atmospheric_circulation
+                .diagnostics
+                .wind_speed_meters_per_second
+                .maximum
+                > 0.0
+        );
+        assert!(
+            world
+                .atmospheric_circulation
+                .diagnostics
+                .speed_capped_cell_count
+                < world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world
                 .radiative_equilibrium
                 .annual_effective_temperature_kelvin
                 .len(),
@@ -544,6 +591,11 @@ mod tests {
                 ocean_heat_capacity: 3.0e8,
                 orbital_period_days: 400.0,
             },
+            atmospheric_circulation: AtmosphericCirculationConfig {
+                surface_drag_per_second: 2.0e-5,
+                terrain_steering: 0.4,
+                maximum_wind_speed_meters_per_second: 80.0,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -579,6 +631,10 @@ mod tests {
             requested.radiative_equilibrium
         );
         assert_eq!(world.config.seasonal_thermal, requested.seasonal_thermal);
+        assert_eq!(
+            world.config.atmospheric_circulation,
+            requested.atmospheric_circulation
+        );
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

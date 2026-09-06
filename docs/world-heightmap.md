@@ -138,10 +138,15 @@ Completed foundations:
   surface-energy balance over a periodic orbit using explicit land and ocean
   heat capacities selected from final elevation and sea level. It reports the
   selected phase plus annual mean, extrema, amplitude, and convergence
-  diagnostics. These stages model no atmosphere, lateral heat transport, or
-  coupled climate feedbacks. See `docs/solar-forcing.md`,
+  diagnostics. A fourth independent stage derives coarse finite tangent winds
+  from selected seasonal-temperature gradients, explicit planetary rotation
+  and atmospheric gas properties, linear surface drag, and bounded terrain
+  steering. It contains no hard-coded latitude bands. These stages model no
+  moisture, precipitation, ocean currents, or coupled climate feedbacks. See
+  `docs/solar-forcing.md`,
   `docs/radiative-equilibrium-temperature.md`, and
-  `docs/seasonal-thermal-response.md`.
+  `docs/seasonal-thermal-response.md`, and
+  `docs/coarse-atmospheric-circulation.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

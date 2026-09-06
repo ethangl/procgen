@@ -3,8 +3,9 @@ use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_climate::{
-    ANNUAL_SAMPLE_RANGE, ORBITAL_PERIOD_DAYS_RANGE, RadiativeEquilibriumConfig,
-    SeasonalThermalConfig, SolarForcingConfig, THERMAL_CAPACITY_RANGE,
+    ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE,
+    ORBITAL_PERIOD_DAYS_RANGE, RadiativeEquilibriumConfig, SeasonalThermalConfig,
+    SolarForcingConfig, TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE,
 };
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
@@ -94,9 +95,66 @@ pub(super) fn generation_controls(
     section(ui, "Seasonal thermal response", |ui| {
         seasonal_thermal_controls(ui, &mut generation.seasonal_thermal)
     });
+    section(ui, "Atmospheric circulation", |ui| {
+        atmospheric_circulation_controls(
+            ui,
+            &mut generation.planet,
+            &mut generation.atmospheric_circulation,
+        )
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn atmospheric_circulation_controls(
+    ui: &mut egui::Ui,
+    planet: &mut procgen_planet::Planet,
+    config: &mut AtmosphericCirculationConfig,
+) {
+    drag_value(
+        ui,
+        "Planet radius meters",
+        &mut planet.radius_meters,
+        1.0..=1.0e9,
+        10_000.0,
+    );
+    drag_value(
+        ui,
+        "Rotation period seconds",
+        &mut planet.rotation.sidereal_period_seconds,
+        0.0..=1.0e9,
+        1_000.0,
+    );
+    drag_value(
+        ui,
+        "Atmospheric gas constant",
+        &mut planet
+            .atmosphere
+            .specific_gas_constant_joules_per_kilogram_kelvin,
+        1.0..=1.0e5,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Surface drag per second",
+        &mut config.surface_drag_per_second,
+        DRAG_RATE_RANGE,
+        1.0e-6,
+    );
+    slider(
+        ui,
+        "Terrain steering",
+        &mut config.terrain_steering,
+        TERRAIN_STEERING_RANGE,
+    );
+    drag_value(
+        ui,
+        "Maximum wind speed",
+        &mut config.maximum_wind_speed_meters_per_second,
+        MAXIMUM_WIND_SPEED_RANGE,
+        1.0,
+    );
 }
 
 fn seasonal_thermal_controls(ui: &mut egui::Ui, config: &mut SeasonalThermalConfig) {

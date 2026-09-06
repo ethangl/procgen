@@ -24,7 +24,127 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     solar_forcing_summary(ui, world);
     radiative_equilibrium_summary(ui, world);
     seasonal_thermal_summary(ui, world);
+    atmospheric_circulation_summary(ui, world);
     timing_summary(ui, world);
+}
+
+fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.atmospheric_circulation.diagnostics;
+    let config = world.config.atmospheric_circulation;
+    stat_grid(
+        ui,
+        "Atmospheric circulation",
+        "atmospheric_circulation",
+        |ui| {
+            stat(
+                ui,
+                "Planet radius",
+                format!("{:.1} km", world.config.planet.radius_meters / 1_000.0),
+            );
+            stat(
+                ui,
+                "Rotation period",
+                format!(
+                    "{:.1} s",
+                    world.config.planet.rotation.sidereal_period_seconds
+                ),
+            );
+            stat(
+                ui,
+                "Atmospheric gas constant",
+                format!(
+                    "{:.2} J/kg/K",
+                    world
+                        .config
+                        .planet
+                        .atmosphere
+                        .specific_gas_constant_joules_per_kilogram_kelvin
+                ),
+            );
+            stat(
+                ui,
+                "Surface drag",
+                format!("{:.3e} s^-1", config.surface_drag_per_second),
+            );
+            stat(
+                ui,
+                "Terrain steering",
+                format!("{:.2}", config.terrain_steering),
+            );
+            stat(
+                ui,
+                "Maximum wind",
+                format!("{:.1} m/s", config.maximum_wind_speed_meters_per_second),
+            );
+            circulation_field_stats(
+                ui,
+                "Wind speed",
+                "m/s",
+                &diagnostics.wind_speed_meters_per_second,
+            );
+            circulation_field_stats(
+                ui,
+                "Temperature gradient",
+                "K/rad",
+                &diagnostics.temperature_gradient_kelvin_per_radian,
+            );
+            circulation_field_stats(
+                ui,
+                "Pressure acceleration",
+                "m/s2",
+                &diagnostics.pressure_gradient_acceleration_meters_per_second_squared,
+            );
+            circulation_field_stats(
+                ui,
+                "Coriolis",
+                "s^-1",
+                &diagnostics.coriolis_parameter_per_second,
+            );
+            circulation_field_stats(
+                ui,
+                "Terrain steering applied",
+                "fraction",
+                &diagnostics.terrain_steering_fraction,
+            );
+            stat(ui, "Calm cells", diagnostics.calm_cell_count);
+            stat(
+                ui,
+                "Terrain-steered cells",
+                diagnostics.terrain_steered_cell_count,
+            );
+            stat(
+                ui,
+                "Speed-capped cells",
+                diagnostics.speed_capped_cell_count,
+            );
+            stat(
+                ui,
+                "Maximum tangency error",
+                format!(
+                    "{:.3e} m/s",
+                    diagnostics.maximum_tangency_error_meters_per_second
+                ),
+            );
+        },
+    );
+}
+
+fn circulation_field_stats(
+    ui: &mut egui::Ui,
+    label: &str,
+    unit: &str,
+    summary: &AreaWeightedSummary,
+) {
+    stat(
+        ui,
+        &format!("{label} range"),
+        format!("{:.3e} - {:.3e} {unit}", summary.minimum, summary.maximum),
+    );
+    stat(
+        ui,
+        &format!("{label} global mean"),
+        format!("{:.3e} {unit}", summary.area_weighted_mean),
+    );
 }
 
 fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {

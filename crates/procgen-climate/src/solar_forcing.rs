@@ -215,6 +215,7 @@ mod tests {
                 obliquity_radians: obliquity,
                 stellar_longitude_at_periapsis_radians: stellar_longitude,
             },
+            ..Planet::EARTH
         }
     }
 

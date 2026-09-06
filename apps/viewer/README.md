@@ -36,6 +36,10 @@ explicit land or ocean surface heat capacity, then solves each cell's isolated
 energy balance onto a periodic seasonal cycle. It produces selected-phase,
 annual-mean, minimum, maximum, and amplitude temperatures without lateral heat
 transport or persistent state.
+A fourth climate stage fits local temperature gradients on the spherical mesh,
+then derives finite tangent surface winds from explicit planetary radius,
+rotation, atmospheric gas constant, linear drag, and bounded terrain steering.
+It contains no prescribed latitude bands, moisture, or coupled feedback.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
@@ -43,7 +47,8 @@ by bathymetry so their profile is not counted twice.
 The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
 adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, daily- and
-annual-temperature, motion, and final-boundary diagnostics and reports aggregate
+annual-temperature, atmospheric supporting scalars, wind speed and vectors,
+motion, and final-boundary diagnostics and reports aggregate
 statistics plus stage timings. Plate interiors use stable per-plate colors.
 Crust is blue for oceanic, amber for continental, and white where the classes
 meet. Seafloor age runs from cyan ridge cells to dark blue old crust, with
@@ -64,6 +69,10 @@ period; the solar-forcing annual sample control is shared by both stages.
 Separate layers show the selected phase,
 annual mean, annual minimum, annual maximum, and peak-to-trough amplitude;
 summary diagnostics include surface-class aggregates and periodic closure.
+Atmospheric controls expose only the radius, rotation, gas constant, drag,
+terrain-steering fraction, and speed cap consumed by the circulation solver.
+Supporting layers show temperature-gradient magnitude, pressure-gradient
+acceleration, signed Coriolis parameter, and applied terrain steering.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.
