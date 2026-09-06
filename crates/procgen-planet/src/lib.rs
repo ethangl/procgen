@@ -13,6 +13,8 @@ pub const PLANET_RADIUS_METERS_RANGE: RangeInclusive<f64> = 1.0..=1.0e9;
 pub const SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE: RangeInclusive<f64> = 0.0..=1.0e9;
 /// Supported physical range for an atmosphere's specific gas constant.
 pub const ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE: RangeInclusive<f64> = 1.0..=1.0e5;
+/// Supported physical height represented by normalized land elevation.
+pub const MAXIMUM_LAND_ELEVATION_METERS_RANGE: RangeInclusive<f64> = 0.0..=100_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Star {
@@ -39,6 +41,8 @@ pub struct Planet {
     pub sidereal_rotation_period_seconds: f64,
     /// Specific gas constant of the bulk atmosphere in J kg^-1 K^-1.
     pub atmospheric_specific_gas_constant_joules_per_kilogram_kelvin: f64,
+    /// Physical height represented by normalized elevation 1.0 above sea level.
+    pub maximum_land_elevation_meters: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +55,7 @@ pub enum PlanetValidationError {
     Radius,
     RotationPeriod,
     AtmosphericGasConstant,
+    MaximumLandElevation,
 }
 
 impl fmt::Display for PlanetValidationError {
@@ -66,6 +71,7 @@ impl fmt::Display for PlanetValidationError {
             Self::AtmosphericGasConstant => {
                 "atmospheric specific gas constant is outside the supported range"
             }
+            Self::MaximumLandElevation => "maximum land elevation is outside the supported range",
         };
         formatter.write_str(message)
     }
@@ -89,6 +95,7 @@ impl Planet {
         radius_meters: 6_371_000.0,
         sidereal_rotation_period_seconds: 86_164.090_5,
         atmospheric_specific_gas_constant_joules_per_kilogram_kelvin: 287.05,
+        maximum_land_elevation_meters: 10_000.0,
     };
 
     pub fn validate(self) -> Result<(), PlanetValidationError> {
@@ -132,6 +139,9 @@ impl Planet {
         {
             return Err(PlanetValidationError::AtmosphericGasConstant);
         }
+        if !MAXIMUM_LAND_ELEVATION_METERS_RANGE.contains(&self.maximum_land_elevation_meters) {
+            return Err(PlanetValidationError::MaximumLandElevation);
+        }
         Ok(())
     }
 }
@@ -160,6 +170,13 @@ mod tests {
         assert_eq!(
             planet.validate(),
             Err(PlanetValidationError::RotationPeriod)
+        );
+
+        planet = Planet::EARTH;
+        planet.maximum_land_elevation_meters = f64::NAN;
+        assert_eq!(
+            planet.validate(),
+            Err(PlanetValidationError::MaximumLandElevation)
         );
     }
 }

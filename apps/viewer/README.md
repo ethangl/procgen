@@ -39,7 +39,13 @@ transport or persistent state.
 A fourth climate stage fits local temperature gradients on the spherical mesh,
 then derives finite tangent surface winds from explicit planetary radius,
 rotation, atmospheric gas constant, linear drag, and bounded terrain steering.
-It contains no prescribed latitude bands, moisture, or coupled feedback.
+It contains no prescribed latitude bands or coupled feedback. A fifth stage
+starts from an empty atmospheric column, evaporates water from exposed ocean
+cells according to temperature-dependent capacity, transports it conservatively
+over mesh edges with those winds, and derives capacity condensation, background
+rainfall, and bounded terrain-ascent orographic precipitation. It reports final
+humidity, duration-mean precipitation components, and a water-budget residual
+without retaining state between regenerations.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
@@ -48,7 +54,7 @@ The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
 adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, daily- and
 annual-temperature, atmospheric supporting scalars, wind speed and vectors,
-motion, and final-boundary diagnostics and reports aggregate
+humidity, precipitation, motion, and final-boundary diagnostics and reports aggregate
 statistics plus stage timings. Plate interiors use stable per-plate colors.
 Crust is blue for oceanic, amber for continental, and white where the classes
 meet. Seafloor age runs from cyan ridge cells to dark blue old crust, with
@@ -74,6 +80,12 @@ from the atmospheric-circulation controls for drag, terrain steering, and the
 speed cap.
 Supporting layers show temperature-gradient magnitude, pressure-gradient
 acceleration, signed Coriolis parameter, and applied terrain steering.
+Humidity and precipitation layers show atmospheric column water in `kg/m2` and
+the total duration-mean precipitation rate in `kg/m2/day`; controls expose the
+fixed-step water-budget, capacity, evaporation, rainfall, orographic, terrain
+ascent, and transport parameters. The physical terrain scale lives with the
+planet controls. Aggregate diagnostics separate condensation
+and orographic precipitation and report mass-balance closure.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.

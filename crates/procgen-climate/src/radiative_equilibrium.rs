@@ -1,4 +1,4 @@
-use crate::{AreaWeightedSummary, SolarForcing, SolarForcingError};
+use crate::{AreaWeightedSummary, SolarForcing, SolarForcingError, validate_range};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
@@ -107,10 +107,17 @@ pub(crate) struct RadiativeEquilibriumModel {
 
 impl RadiativeEquilibriumModel {
     pub fn new(config: RadiativeEquilibriumConfig) -> Result<Self, RadiativeEquilibriumError> {
-        if !config.albedo.is_finite() || !(0.0..=1.0).contains(&config.albedo) {
-            return Err(RadiativeEquilibriumError::Albedo);
-        }
-        if !(config.emissivity.is_finite() && 0.0 < config.emissivity && config.emissivity <= 1.0) {
+        validate_range(
+            config.albedo,
+            &(0.0..=1.0),
+            RadiativeEquilibriumError::Albedo,
+        )?;
+        validate_range(
+            config.emissivity,
+            &(0.0..=1.0),
+            RadiativeEquilibriumError::Emissivity,
+        )?;
+        if config.emissivity == 0.0 {
             return Err(RadiativeEquilibriumError::Emissivity);
         }
         let radiation_scale =

@@ -36,6 +36,8 @@ pub enum DiagnosticLayer {
     TerrainSteering,
     WindSpeed,
     Wind,
+    Humidity,
+    Precipitation,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -114,6 +116,22 @@ const WIND_SPEED_COLOR_STOPS: [(f32, Vec3); 5] = [
     (30.0, Vec3::new(0.12, 0.75, 0.72)),
     (60.0, Vec3::new(1.0, 0.72, 0.12)),
     (100.0, Vec3::new(0.9, 0.1, 0.04)),
+];
+
+const HUMIDITY_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.08, 0.045, 0.025)),
+    (2.0, Vec3::new(0.55, 0.28, 0.08)),
+    (10.0, Vec3::new(0.18, 0.58, 0.62)),
+    (30.0, Vec3::new(0.12, 0.35, 0.85)),
+    (75.0, Vec3::new(0.72, 0.88, 1.0)),
+];
+
+const PRECIPITATION_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.12, 0.06, 0.025)),
+    (0.25, Vec3::new(0.75, 0.38, 0.08)),
+    (1.0, Vec3::new(0.28, 0.68, 0.42)),
+    (4.0, Vec3::new(0.08, 0.48, 0.9)),
+    (12.0, Vec3::new(0.72, 0.82, 1.0)),
 ];
 
 const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
@@ -210,6 +228,8 @@ impl DiagnosticLayer {
         Self::TerrainSteering,
         Self::WindSpeed,
         Self::Wind,
+        Self::Humidity,
+        Self::Precipitation,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -408,6 +428,22 @@ impl DiagnosticLayer {
             Self::Wind => LayerSpec::custom("Wind vectors", 2.6, |world, radius| {
                 wind_asset(world, radius, &WIND_SPEED_COLOR_STOPS)
             }),
+            Self::Humidity => LayerSpec::scalar(
+                "Atmospheric humidity",
+                FIELD_LINE_WIDTH,
+                |world| &world.moisture_transport.cell_humidity_kg_per_m2,
+                &HUMIDITY_COLOR_STOPS,
+            ),
+            Self::Precipitation => LayerSpec::scalar(
+                "Precipitation",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .moisture_transport
+                        .cell_precipitation_kg_per_m2_per_day
+                },
+                &PRECIPITATION_COLOR_STOPS,
+            ),
             Self::Hotspots => LayerSpec::scalar(
                 "Mantle hotspots",
                 OVERLAY_LINE_WIDTH,

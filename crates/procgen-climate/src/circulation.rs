@@ -1,4 +1,4 @@
-use crate::AreaWeightedSummary;
+use crate::{AreaWeightedSummary, validate_range};
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -326,21 +326,21 @@ fn validate(
     {
         return Err(AtmosphericCirculationError::Elevation);
     }
-    if !config.surface_drag_per_second.is_finite()
-        || !DRAG_RATE_RANGE.contains(&config.surface_drag_per_second)
-    {
-        return Err(AtmosphericCirculationError::SurfaceDrag);
-    }
-    if !config.terrain_steering.is_finite()
-        || !TERRAIN_STEERING_RANGE.contains(&config.terrain_steering)
-    {
-        return Err(AtmosphericCirculationError::TerrainSteering);
-    }
-    if !config.maximum_wind_speed_meters_per_second.is_finite()
-        || !MAXIMUM_WIND_SPEED_RANGE.contains(&config.maximum_wind_speed_meters_per_second)
-    {
-        return Err(AtmosphericCirculationError::MaximumWindSpeed);
-    }
+    validate_range(
+        config.surface_drag_per_second,
+        &DRAG_RATE_RANGE,
+        AtmosphericCirculationError::SurfaceDrag,
+    )?;
+    validate_range(
+        config.terrain_steering,
+        &TERRAIN_STEERING_RANGE,
+        AtmosphericCirculationError::TerrainSteering,
+    )?;
+    validate_range(
+        config.maximum_wind_speed_meters_per_second,
+        &MAXIMUM_WIND_SPEED_RANGE,
+        AtmosphericCirculationError::MaximumWindSpeed,
+    )?;
     Ok(())
 }
 

@@ -1,10 +1,12 @@
 use bevy::prelude::*;
 use procgen_climate::{
     AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationInputs,
+    MoistureTransport, MoistureTransportConfig, MoistureTransportInputs,
     RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature, SeasonalThermalConfig,
     SeasonalThermalInputs, SeasonalThermalResponse, SolarForcing, SolarForcingConfig,
-    derive_atmospheric_circulation, derive_radiative_equilibrium_temperature,
-    derive_seasonal_thermal_response, derive_solar_forcing,
+    derive_atmospheric_circulation, derive_moisture_transport,
+    derive_radiative_equilibrium_temperature, derive_seasonal_thermal_response,
+    derive_solar_forcing,
 };
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
@@ -58,6 +60,7 @@ pub struct GenerationSettings {
     pub radiative_equilibrium: RadiativeEquilibriumConfig,
     pub seasonal_thermal: SeasonalThermalConfig,
     pub atmospheric_circulation: AtmosphericCirculationConfig,
+    pub moisture_transport: MoistureTransportConfig,
 }
 
 impl Default for GenerationSettings {
@@ -99,6 +102,7 @@ impl Default for GenerationSettings {
             radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
             seasonal_thermal: SeasonalThermalConfig::EARTHLIKE,
             atmospheric_circulation: AtmosphericCirculationConfig::EARTHLIKE,
+            moisture_transport: MoistureTransportConfig::EARTHLIKE,
         }
     }
 }
@@ -184,6 +188,7 @@ pub struct GeneratedWorld {
     pub radiative_equilibrium: RadiativeEquilibriumTemperature,
     pub seasonal_thermal: SeasonalThermalResponse,
     pub atmospheric_circulation: AtmosphericCirculation,
+    pub moisture_transport: MoistureTransport,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -307,6 +312,19 @@ impl GeneratedWorld {
                 config.atmospheric_circulation,
             )
         })?;
+        let moisture_transport = timings.record("Moisture and precipitation", || {
+            derive_moisture_transport(
+                &voronoi,
+                MoistureTransportInputs {
+                    planet: config.planet,
+                    selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
+                    final_elevation: &isostasy.cell_elevations,
+                    cell_wind_meters_per_second: &atmospheric_circulation
+                        .cell_wind_meters_per_second,
+                },
+                config.moisture_transport,
+            )
+        })?;
 
         Ok(Self {
             voronoi,
@@ -330,6 +348,7 @@ impl GeneratedWorld {
             radiative_equilibrium,
             seasonal_thermal,
             atmospheric_circulation,
+            moisture_transport,
             timings,
             config,
         })
@@ -489,6 +508,25 @@ mod tests {
                 < world.voronoi.cell_count()
         );
         assert_eq!(
+            world.moisture_transport.cell_humidity_kg_per_m2.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world
+                .moisture_transport
+                .cell_precipitation_kg_per_m2_per_day
+                .len(),
+            world.voronoi.cell_count()
+        );
+        assert!(
+            world
+                .moisture_transport
+                .diagnostics
+                .mass_balance_error_kg_per_m2
+                .abs()
+                <= 1.0e-10
+        );
+        assert_eq!(
             world
                 .radiative_equilibrium
                 .annual_effective_temperature_kelvin
@@ -594,6 +632,11 @@ mod tests {
                 terrain_steering: 0.4,
                 maximum_wind_speed_meters_per_second: 80.0,
             },
+            moisture_transport: MoistureTransportConfig {
+                step_count: 80,
+                step_seconds: 18_000.0,
+                ..MoistureTransportConfig::EARTHLIKE
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -632,6 +675,10 @@ mod tests {
         assert_eq!(
             world.config.atmospheric_circulation,
             requested.atmospheric_circulation
+        );
+        assert_eq!(
+            world.config.moisture_transport,
+            requested.moisture_transport
         );
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
