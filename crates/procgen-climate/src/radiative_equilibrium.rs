@@ -106,7 +106,9 @@ pub fn derive_radiative_equilibrium_temperature(
     })
 }
 
-fn validate_config(config: RadiativeEquilibriumConfig) -> Result<(), RadiativeEquilibriumError> {
+pub(crate) fn validate_config(
+    config: RadiativeEquilibriumConfig,
+) -> Result<(), RadiativeEquilibriumError> {
     if !config.albedo.is_finite() || !(0.0..=1.0).contains(&config.albedo) {
         return Err(RadiativeEquilibriumError::Albedo);
     }
@@ -114,6 +116,14 @@ fn validate_config(config: RadiativeEquilibriumConfig) -> Result<(), RadiativeEq
         return Err(RadiativeEquilibriumError::Emissivity);
     }
     Ok(())
+}
+
+pub(crate) fn effective_temperature_kelvin(
+    insolation: f64,
+    config: RadiativeEquilibriumConfig,
+) -> f64 {
+    let radiation_scale = (1.0 - config.albedo) / (config.emissivity * STEFAN_BOLTZMANN_CONSTANT);
+    (insolation * radiation_scale).sqrt().sqrt()
 }
 
 fn temperatures(insolation: &[f32], radiation_scale: f64) -> Vec<f32> {

@@ -27,6 +27,11 @@ pub enum DiagnosticLayer {
     Insolation,
     DailyTemperature,
     AnnualTemperature,
+    SeasonalTemperature,
+    SeasonalMeanTemperature,
+    SeasonalMinimumTemperature,
+    SeasonalMaximumTemperature,
+    SeasonalTemperatureAmplitude,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -58,6 +63,11 @@ const DRAW_ORDER: &[DrawSurface] = &[
     DrawSurface::Layer(DiagnosticLayer::Insolation),
     DrawSurface::Layer(DiagnosticLayer::DailyTemperature),
     DrawSurface::Layer(DiagnosticLayer::AnnualTemperature),
+    DrawSurface::Layer(DiagnosticLayer::SeasonalTemperature),
+    DrawSurface::Layer(DiagnosticLayer::SeasonalMeanTemperature),
+    DrawSurface::Layer(DiagnosticLayer::SeasonalMinimumTemperature),
+    DrawSurface::Layer(DiagnosticLayer::SeasonalMaximumTemperature),
+    DrawSurface::Layer(DiagnosticLayer::SeasonalTemperatureAmplitude),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
@@ -101,6 +111,13 @@ const TEMPERATURE_COLOR_STOPS: [(f32, Vec3); 6] = [
     (273.15, Vec3::new(0.82, 0.95, 0.92)),
     (320.0, Vec3::new(1.0, 0.68, 0.12)),
     (400.0, Vec3::new(0.86, 0.08, 0.035)),
+];
+const TEMPERATURE_AMPLITUDE_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.09)),
+    (10.0, Vec3::new(0.08, 0.32, 0.62)),
+    (30.0, Vec3::new(0.12, 0.72, 0.72)),
+    (75.0, Vec3::new(1.0, 0.68, 0.1)),
+    (150.0, Vec3::new(0.9, 0.08, 0.035)),
 ];
 const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.06, 0.12)),
@@ -149,6 +166,11 @@ impl DiagnosticLayer {
         Self::Insolation,
         Self::DailyTemperature,
         Self::AnnualTemperature,
+        Self::SeasonalTemperature,
+        Self::SeasonalMeanTemperature,
+        Self::SeasonalMinimumTemperature,
+        Self::SeasonalMaximumTemperature,
+        Self::SeasonalTemperatureAmplitude,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -183,7 +205,12 @@ impl DiagnosticLayer {
             | Self::IsostaticElevation
             | Self::Insolation
             | Self::DailyTemperature
-            | Self::AnnualTemperature => 3.5,
+            | Self::AnnualTemperature
+            | Self::SeasonalTemperature
+            | Self::SeasonalMeanTemperature
+            | Self::SeasonalMinimumTemperature
+            | Self::SeasonalMaximumTemperature
+            | Self::SeasonalTemperatureAmplitude => 3.5,
             Self::Hotspots
             | Self::OceanicPeaks
             | Self::VolcanicArcs
@@ -215,6 +242,11 @@ impl DiagnosticLayer {
             Self::Insolation => "Daily-mean insolation",
             Self::DailyTemperature => "Daily effective temperature",
             Self::AnnualTemperature => "Annual effective temperature",
+            Self::SeasonalTemperature => "Seasonal temperature (selected phase)",
+            Self::SeasonalMeanTemperature => "Seasonal temperature (annual mean)",
+            Self::SeasonalMinimumTemperature => "Seasonal temperature (annual minimum)",
+            Self::SeasonalMaximumTemperature => "Seasonal temperature (annual maximum)",
+            Self::SeasonalTemperatureAmplitude => "Seasonal temperature amplitude",
             Self::Hotspots => "Mantle hotspots",
             Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
@@ -290,6 +322,36 @@ impl DiagnosticLayer {
                     .radiative_equilibrium
                     .annual_effective_temperature_kelvin,
                 &TEMPERATURE_COLOR_STOPS,
+                radius,
+            ),
+            Self::SeasonalTemperature => scalar_field_asset(
+                &world.voronoi,
+                &world.seasonal_thermal.selected_temperature_kelvin,
+                &TEMPERATURE_COLOR_STOPS,
+                radius,
+            ),
+            Self::SeasonalMeanTemperature => scalar_field_asset(
+                &world.voronoi,
+                &world.seasonal_thermal.annual_mean_temperature_kelvin,
+                &TEMPERATURE_COLOR_STOPS,
+                radius,
+            ),
+            Self::SeasonalMinimumTemperature => scalar_field_asset(
+                &world.voronoi,
+                &world.seasonal_thermal.annual_minimum_temperature_kelvin,
+                &TEMPERATURE_COLOR_STOPS,
+                radius,
+            ),
+            Self::SeasonalMaximumTemperature => scalar_field_asset(
+                &world.voronoi,
+                &world.seasonal_thermal.annual_maximum_temperature_kelvin,
+                &TEMPERATURE_COLOR_STOPS,
+                radius,
+            ),
+            Self::SeasonalTemperatureAmplitude => scalar_field_asset(
+                &world.voronoi,
+                &world.seasonal_thermal.annual_amplitude_kelvin,
+                &TEMPERATURE_AMPLITUDE_COLOR_STOPS,
                 radius,
             ),
             Self::Hotspots => scalar_field_asset(

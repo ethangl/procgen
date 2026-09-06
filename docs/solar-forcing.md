@@ -22,3 +22,5 @@ This forcing stage reads only the mesh and planet model. It does not read
 elevation and does not itself model temperature or any atmospheric response.
 The independent static radiative-equilibrium consumer is documented in
 `docs/radiative-equilibrium-temperature.md`.
+The local time-dependent consumer is documented in
+`docs/seasonal-thermal-response.md`.

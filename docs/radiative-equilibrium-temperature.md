@@ -26,3 +26,6 @@ constants. The stage does not read elevation or crust and does not model an
 atmosphere, greenhouse effects, lapse rates, heat transport or capacity,
 land-ocean differences, wind, moisture, ice, feedbacks, iterative coupling,
 rasterization, or acceleration backends.
+
+The separate time-dependent consumer is documented in
+`docs/seasonal-thermal-response.md`.

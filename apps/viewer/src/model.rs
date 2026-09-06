@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use procgen_climate::{
-    RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature, SolarForcing, SolarForcingConfig,
-    derive_radiative_equilibrium_temperature, derive_solar_forcing,
+    RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature, SeasonalThermalConfig,
+    SeasonalThermalInputs, SeasonalThermalResponse, SolarForcing, SolarForcingConfig,
+    derive_radiative_equilibrium_temperature, derive_seasonal_thermal_response,
+    derive_solar_forcing,
 };
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
@@ -53,6 +55,7 @@ pub struct GenerationSettings {
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
     pub radiative_equilibrium: RadiativeEquilibriumConfig,
+    pub seasonal_thermal: SeasonalThermalConfig,
 }
 
 impl Default for GenerationSettings {
@@ -92,6 +95,7 @@ impl Default for GenerationSettings {
             planet: Planet::EARTH,
             solar_forcing: SolarForcingConfig::default(),
             radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
+            seasonal_thermal: SeasonalThermalConfig::EARTHLIKE,
         }
     }
 }
@@ -175,6 +179,7 @@ pub struct GeneratedWorld {
     pub isostasy: IsostaticAdjustment,
     pub solar_forcing: SolarForcing,
     pub radiative_equilibrium: RadiativeEquilibriumTemperature,
+    pub seasonal_thermal: SeasonalThermalResponse,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -275,6 +280,19 @@ impl GeneratedWorld {
                 config.radiative_equilibrium,
             )
         })?;
+        let seasonal_thermal = timings.record("Seasonal thermal response", || {
+            derive_seasonal_thermal_response(
+                &voronoi,
+                SeasonalThermalInputs {
+                    planet: config.planet,
+                    selected_orbital_phase: config.solar_forcing.orbital_phase,
+                    radiative_equilibrium: config.radiative_equilibrium,
+                    final_elevation: &isostasy.cell_elevations,
+                    sea_level: procgen_tectonics::SEA_LEVEL,
+                },
+                config.seasonal_thermal,
+            )
+        })?;
 
         Ok(Self {
             voronoi,
@@ -296,6 +314,7 @@ impl GeneratedWorld {
             isostasy,
             solar_forcing,
             radiative_equilibrium,
+            seasonal_thermal,
             timings,
             config,
         })
@@ -414,6 +433,18 @@ mod tests {
             world.voronoi.cell_count()
         );
         assert_eq!(
+            world.seasonal_thermal.selected_temperature_kelvin.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.seasonal_thermal.annual_mean_temperature_kelvin.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.seasonal_thermal.annual_amplitude_kelvin.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
             world
                 .radiative_equilibrium
                 .annual_effective_temperature_kelvin
@@ -509,6 +540,12 @@ mod tests {
                 albedo: 0.25,
                 emissivity: 0.9,
             },
+            seasonal_thermal: SeasonalThermalConfig {
+                land_heat_capacity: 4.0e7,
+                ocean_heat_capacity: 3.0e8,
+                orbital_period_days: 400.0,
+                sample_count: 48,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -543,6 +580,7 @@ mod tests {
             world.config.radiative_equilibrium,
             requested.radiative_equilibrium
         );
+        assert_eq!(world.config.seasonal_thermal, requested.seasonal_thermal);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }

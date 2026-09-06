@@ -187,14 +187,14 @@ fn validate_config(config: SolarForcingConfig) -> Result<(), SolarForcingError> 
 }
 
 #[derive(Clone, Copy)]
-struct OrbitalState {
+pub(crate) struct OrbitalState {
     distance_meters: f64,
     stellar_flux: f64,
     declination: f64,
     declination_trig: SinCos,
 }
 
-fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
+pub(crate) fn orbital_state(planet: Planet, phase: f64) -> OrbitalState {
     let orbit = planet.orbit;
     let mean_anomaly = phase * 2.0 * PI;
     let eccentric_anomaly = solve_kepler(mean_anomaly, orbit.eccentricity);
@@ -299,6 +299,10 @@ fn daily_mean_at_latitude(latitude: SinCos, state: OrbitalState) -> DailyMeanIns
         watts_per_square_meter: insolation.clamp(0.0, state.stellar_flux),
         daylight: window.daylight,
     }
+}
+
+pub(crate) fn daily_mean_at_latitude_sine(latitude_sine: f64, state: OrbitalState) -> f64 {
+    daily_mean_at_latitude(SinCos::from_sine(latitude_sine), state).watts_per_square_meter
 }
 
 #[cfg(test)]
