@@ -2,7 +2,7 @@ use super::{drag_value, section, slider};
 use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
-use procgen_climate::{ANNUAL_SAMPLE_RANGE, SolarForcingConfig};
+use procgen_climate::{ANNUAL_SAMPLE_RANGE, RadiativeEquilibriumConfig, SolarForcingConfig};
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
@@ -85,9 +85,17 @@ pub(super) fn generation_controls(
     section(ui, "Solar forcing", |ui| {
         solar_forcing_controls(ui, &mut generation.solar_forcing)
     });
+    section(ui, "Radiative equilibrium", |ui| {
+        radiative_equilibrium_controls(ui, &mut generation.radiative_equilibrium)
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn radiative_equilibrium_controls(ui: &mut egui::Ui, config: &mut RadiativeEquilibriumConfig) {
+    slider(ui, "Albedo", &mut config.albedo, 0.0..=1.0);
+    slider(ui, "Emissivity", &mut config.emissivity, 0.01..=1.0);
 }
 
 fn solar_forcing_controls(ui: &mut egui::Ui, config: &mut SolarForcingConfig) {

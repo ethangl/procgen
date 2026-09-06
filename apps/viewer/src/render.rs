@@ -25,6 +25,8 @@ pub enum DiagnosticLayer {
     IsostaticSupport,
     IsostaticElevation,
     Insolation,
+    DailyTemperature,
+    AnnualTemperature,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -54,6 +56,8 @@ const DRAW_ORDER: &[DrawSurface] = &[
     DrawSurface::Layer(DiagnosticLayer::IsostaticSupport),
     DrawSurface::Layer(DiagnosticLayer::IsostaticElevation),
     DrawSurface::Layer(DiagnosticLayer::Insolation),
+    DrawSurface::Layer(DiagnosticLayer::DailyTemperature),
+    DrawSurface::Layer(DiagnosticLayer::AnnualTemperature),
     DrawSurface::Layer(DiagnosticLayer::Hotspots),
     DrawSurface::Layer(DiagnosticLayer::OceanicPeaks),
     DrawSurface::Layer(DiagnosticLayer::VolcanicArcs),
@@ -89,6 +93,14 @@ const INSOLATION_COLOR_STOPS: [(f32, Vec3); 5] = [
     (0.45, Vec3::new(0.12, 0.65, 0.82)),
     (0.7, Vec3::new(1.0, 0.72, 0.12)),
     (1.0, Vec3::new(1.0, 0.98, 0.78)),
+];
+const TEMPERATURE_COLOR_STOPS: [(f32, Vec3); 6] = [
+    (0.0, Vec3::new(0.015, 0.02, 0.08)),
+    (180.0, Vec3::new(0.08, 0.16, 0.46)),
+    (240.0, Vec3::new(0.12, 0.62, 0.86)),
+    (273.15, Vec3::new(0.82, 0.95, 0.92)),
+    (320.0, Vec3::new(1.0, 0.68, 0.12)),
+    (400.0, Vec3::new(0.86, 0.08, 0.035)),
 ];
 const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.06, 0.12)),
@@ -135,6 +147,8 @@ impl DiagnosticLayer {
         Self::IsostaticSupport,
         Self::IsostaticElevation,
         Self::Insolation,
+        Self::DailyTemperature,
+        Self::AnnualTemperature,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -167,7 +181,9 @@ impl DiagnosticLayer {
             | Self::GeologicalElevation
             | Self::IsostaticSupport
             | Self::IsostaticElevation
-            | Self::Insolation => 3.5,
+            | Self::Insolation
+            | Self::DailyTemperature
+            | Self::AnnualTemperature => 3.5,
             Self::Hotspots
             | Self::OceanicPeaks
             | Self::VolcanicArcs
@@ -197,6 +213,8 @@ impl DiagnosticLayer {
             Self::IsostaticSupport => "Isostatic support",
             Self::IsostaticElevation => "Adjusted elevation",
             Self::Insolation => "Daily-mean insolation",
+            Self::DailyTemperature => "Daily effective temperature",
+            Self::AnnualTemperature => "Annual effective temperature",
             Self::Hotspots => "Mantle hotspots",
             Self::OceanicPeaks => "Seamount / abyssal peaks",
             Self::VolcanicArcs => "Volcanic arcs",
@@ -258,6 +276,20 @@ impl DiagnosticLayer {
                 radius,
             ),
             Self::Insolation => insolation_asset(&world.voronoi, &world.solar_forcing, radius),
+            Self::DailyTemperature => temperature_asset(
+                &world.voronoi,
+                &world
+                    .radiative_equilibrium
+                    .daily_effective_temperature_kelvin,
+                radius,
+            ),
+            Self::AnnualTemperature => temperature_asset(
+                &world.voronoi,
+                &world
+                    .radiative_equilibrium
+                    .annual_effective_temperature_kelvin,
+                radius,
+            ),
             Self::Hotspots => scalar_field_asset(
                 &world.voronoi,
                 &world.hotspots.cell_intensities,
@@ -277,6 +309,10 @@ impl DiagnosticLayer {
             Self::Motion => motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius),
         }
     }
+}
+
+fn temperature_asset(mesh: &SphereMesh, temperatures_kelvin: &[f32], radius: f32) -> GizmoAsset {
+    scalar_field_asset(mesh, temperatures_kelvin, &TEMPERATURE_COLOR_STOPS, radius)
 }
 
 fn insolation_asset(mesh: &SphereMesh, forcing: &SolarForcing, radius: f32) -> GizmoAsset {

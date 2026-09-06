@@ -131,8 +131,12 @@ Completed foundations:
   values isolated in a preset.
 - `procgen-climate`: deterministic top-of-atmosphere daily-mean insolation for
   a selected orbital phase plus a bounded-sample, elapsed-time-weighted annual
-  mean over spherical cells. It has no atmosphere, temperature, transport, or
-  climate feedbacks. See `docs/solar-forcing.md`.
+  mean over spherical cells. A separate stage converts those daily and annual
+  fields to effective radiative-equilibrium temperatures using explicit uniform
+  albedo, emissivity, and Stefan-Boltzmann radiation. Earthlike values exist only
+  as a caller-selected preset. Neither stage models atmosphere, heat transport
+  or capacity, or climate feedbacks. See `docs/solar-forcing.md` and
+  `docs/radiative-equilibrium-temperature.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

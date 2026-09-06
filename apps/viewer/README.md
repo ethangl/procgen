@@ -26,16 +26,19 @@ basin membership, then nudges a separate clamped elevation field toward that
 support. Oceanic cells and sedimentary-basin floors remain unchanged.
 An independent solar-forcing stage then derives top-of-atmosphere daily-mean
 insolation for the selected orbital phase and a bounded-sample annual mean from
-the spherical mesh. It uses the Earth preset by default and does not consume
-elevation or model atmospheric or surface response.
+the spherical mesh. A second independent stage derives daily and annual
+effective radiative-equilibrium temperatures from those fields using explicit
+uniform albedo and emissivity. The viewer selects the Earth and Earthlike
+presets by default; neither stage consumes elevation or models atmospheric or
+surface dynamics.
 Continental divergent deformation exposes a configurable negative graben
 center, weaker negative flanks, and bounded decay; oceanic ridges remain owned
 by bathymetry so their profile is not counted twice.
 
 The viewer toggles topology, plate, crust, seafloor-age, base-elevation,
 deformation, tectonic-elevation, geological-elevation, isostatic-support,
-adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, motion, and
-final-boundary diagnostics and reports aggregate
+adjusted-elevation, hotspot, volcanic-arc, craton, basin, insolation, daily- and
+annual-temperature, motion, and final-boundary diagnostics and reports aggregate
 statistics plus stage timings. Plate interiors use stable per-plate colors.
 Crust is blue for oceanic, amber for continental, and white where the classes
 meet. Seafloor age runs from cyan ridge cells to dark blue old crust, with
@@ -48,7 +51,9 @@ strength ramp with cross markers for peak candidates. Cratons use a
 dark-green-to-pale-gold strength ramp.
 Daily-mean insolation runs from dark polar night through blue and cyan to warm
 yellow at the current field maximum; the controls expose orbital phase and the
-bounded annual sampling count.
+bounded annual sampling count. Temperature uses a fixed kelvin color scale from
+dark zero through cold blue, pale freezing-point temperatures, warm yellow, and
+hot red. Its controls expose the uniform albedo and emissivity.
 
 The viewer is a consumer only. Generation and topology logic belong in reusable
 crates, never in this application.

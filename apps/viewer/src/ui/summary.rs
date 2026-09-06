@@ -1,7 +1,7 @@
 use super::{field_summary_stats, format_field_range, millis, stat, stat_grid};
 use crate::model::GeneratedWorld;
 use bevy_egui::egui;
-use procgen_climate::InsolationSummary;
+use procgen_climate::{InsolationSummary, TemperatureSummary};
 use procgen_geology::ElevationEffectDiagnostics;
 use procgen_tectonics::{BoundaryClass, CrustClass};
 
@@ -22,7 +22,42 @@ pub(super) fn world_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     geological_elevation_summary(ui, world);
     isostatic_summary(ui, world);
     solar_forcing_summary(ui, world);
+    radiative_equilibrium_summary(ui, world);
     timing_summary(ui, world);
+}
+
+fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.radiative_equilibrium.diagnostics;
+    stat_grid(ui, "Radiative equilibrium", "radiative_equilibrium", |ui| {
+        stat(
+            ui,
+            "Albedo",
+            format!("{:.3}", world.config.radiative_equilibrium.albedo),
+        );
+        stat(
+            ui,
+            "Emissivity",
+            format!("{:.3}", world.config.radiative_equilibrium.emissivity),
+        );
+        temperature_stats(ui, "Daily", &diagnostics.daily);
+        temperature_stats(ui, "Annual", &diagnostics.annual);
+    });
+}
+
+fn temperature_stats(ui: &mut egui::Ui, prefix: &str, summary: &TemperatureSummary) {
+    stat(
+        ui,
+        &format!("{prefix} range"),
+        format!(
+            "{:.1} - {:.1} K",
+            summary.minimum_kelvin, summary.maximum_kelvin
+        ),
+    );
+    stat(
+        ui,
+        &format!("{prefix} global mean"),
+        format!("{:.1} K", summary.area_weighted_mean_kelvin),
+    );
 }
 
 fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {

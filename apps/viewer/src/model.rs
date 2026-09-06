@@ -1,5 +1,8 @@
 use bevy::prelude::*;
-use procgen_climate::{SolarForcing, SolarForcingConfig, derive_solar_forcing};
+use procgen_climate::{
+    RadiativeEquilibriumConfig, RadiativeEquilibriumTemperature, SolarForcing, SolarForcingConfig,
+    derive_radiative_equilibrium_temperature, derive_solar_forcing,
+};
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
     GeologicalElevationInputs, HotspotField, HotspotFieldConfig, IsostaticAdjustment,
@@ -49,6 +52,7 @@ pub struct GenerationSettings {
     /// Explicit preset selection; editable planet inputs are outside this slice.
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
+    pub radiative_equilibrium: RadiativeEquilibriumConfig,
 }
 
 impl Default for GenerationSettings {
@@ -87,6 +91,7 @@ impl Default for GenerationSettings {
             isostasy: IsostaticAdjustmentConfig::default(),
             planet: Planet::EARTH,
             solar_forcing: SolarForcingConfig::default(),
+            radiative_equilibrium: RadiativeEquilibriumConfig::EARTHLIKE,
         }
     }
 }
@@ -169,6 +174,7 @@ pub struct GeneratedWorld {
     pub geological_elevation: GeologicalElevation,
     pub isostasy: IsostaticAdjustment,
     pub solar_forcing: SolarForcing,
+    pub radiative_equilibrium: RadiativeEquilibriumTemperature,
     pub timings: GenerationTimings,
     pub config: GenerationSettings,
 }
@@ -262,6 +268,13 @@ impl GeneratedWorld {
         let solar_forcing = timings.record("Solar forcing", || {
             derive_solar_forcing(&voronoi, config.planet, config.solar_forcing)
         })?;
+        let radiative_equilibrium = timings.record("Radiative equilibrium", || {
+            derive_radiative_equilibrium_temperature(
+                &voronoi,
+                &solar_forcing,
+                config.radiative_equilibrium,
+            )
+        })?;
 
         Ok(Self {
             voronoi,
@@ -282,6 +295,7 @@ impl GeneratedWorld {
             geological_elevation,
             isostasy,
             solar_forcing,
+            radiative_equilibrium,
             timings,
             config,
         })
@@ -392,6 +406,20 @@ mod tests {
             world.solar_forcing.annual_mean_insolation.len(),
             world.voronoi.cell_count()
         );
+        assert_eq!(
+            world
+                .radiative_equilibrium
+                .daily_effective_temperature_kelvin
+                .len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world
+                .radiative_equilibrium
+                .annual_effective_temperature_kelvin
+                .len(),
+            world.voronoi.cell_count()
+        );
     }
 
     #[test]
@@ -477,6 +505,7 @@ mod tests {
                 orbital_phase: 0.25,
                 annual_sample_count: 48,
             },
+            radiative_equilibrium: RadiativeEquilibriumConfig::new(0.25, 0.9),
         };
         app.insert_resource(current)
             .insert_resource(requested)
@@ -507,6 +536,10 @@ mod tests {
         assert_eq!(world.config.isostasy, requested.isostasy);
         assert_eq!(world.config.planet, requested.planet);
         assert_eq!(world.config.solar_forcing, requested.solar_forcing);
+        assert_eq!(
+            world.config.radiative_equilibrium,
+            requested.radiative_equilibrium
+        );
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
     }
