@@ -276,18 +276,20 @@ impl DiagnosticLayer {
                 radius,
             ),
             Self::Insolation => insolation_asset(&world.voronoi, &world.solar_forcing, radius),
-            Self::DailyTemperature => temperature_asset(
+            Self::DailyTemperature => scalar_field_asset(
                 &world.voronoi,
                 &world
                     .radiative_equilibrium
                     .daily_effective_temperature_kelvin,
+                &TEMPERATURE_COLOR_STOPS,
                 radius,
             ),
-            Self::AnnualTemperature => temperature_asset(
+            Self::AnnualTemperature => scalar_field_asset(
                 &world.voronoi,
                 &world
                     .radiative_equilibrium
                     .annual_effective_temperature_kelvin,
+                &TEMPERATURE_COLOR_STOPS,
                 radius,
             ),
             Self::Hotspots => scalar_field_asset(
@@ -311,15 +313,8 @@ impl DiagnosticLayer {
     }
 }
 
-fn temperature_asset(mesh: &SphereMesh, temperatures_kelvin: &[f32], radius: f32) -> GizmoAsset {
-    scalar_field_asset(mesh, temperatures_kelvin, &TEMPERATURE_COLOR_STOPS, radius)
-}
-
 fn insolation_asset(mesh: &SphereMesh, forcing: &SolarForcing, radius: f32) -> GizmoAsset {
-    let maximum = forcing
-        .diagnostics
-        .daily_mean
-        .maximum_watts_per_square_meter;
+    let maximum = forcing.diagnostics.daily_mean.maximum;
     let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
     let normalized = forcing
         .daily_mean_insolation

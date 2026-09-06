@@ -1,4 +1,4 @@
-use crate::SolarForcing;
+use crate::{AreaWeightedSummary, SolarForcing, SolarForcingError};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
@@ -19,29 +19,14 @@ impl RadiativeEquilibriumConfig {
         albedo: 0.3,
         emissivity: 1.0,
     };
-
-    pub const fn new(albedo: f64, emissivity: f64) -> Self {
-        Self { albedo, emissivity }
-    }
-}
-
-impl Default for RadiativeEquilibriumConfig {
-    fn default() -> Self {
-        Self::EARTHLIKE
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TemperatureSummary {
-    pub minimum_kelvin: f32,
-    pub maximum_kelvin: f32,
-    pub area_weighted_mean_kelvin: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RadiativeEquilibriumDiagnostics {
-    pub daily: TemperatureSummary,
-    pub annual: TemperatureSummary,
+    /// Daily effective-temperature statistics in kelvin.
+    pub daily: AreaWeightedSummary,
+    /// Annual effective-temperature statistics in kelvin.
+    pub annual: AreaWeightedSummary,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,12 +40,7 @@ pub struct RadiativeEquilibriumTemperature {
 pub enum RadiativeEquilibriumError {
     Albedo,
     Emissivity,
-    CellCount {
-        expected: usize,
-        daily: usize,
-        annual: usize,
-    },
-    Insolation,
+    SolarForcing(SolarForcingError),
     NumericalRange,
 }
 
@@ -71,17 +51,7 @@ impl fmt::Display for RadiativeEquilibriumError {
             Self::Emissivity => {
                 formatter.write_str("emissivity must be finite, greater than 0, and at most 1")
             }
-            Self::CellCount {
-                expected,
-                daily,
-                annual,
-            } => write!(
-                formatter,
-                "solar-forcing field lengths must match the mesh cell count ({expected}); got {daily} daily and {annual} annual values"
-            ),
-            Self::Insolation => {
-                formatter.write_str("solar-forcing fields must contain finite nonnegative values")
-            }
+            Self::SolarForcing(error) => error.fmt(formatter),
             Self::NumericalRange => formatter.write_str(
                 "radiative-equilibrium temperature is outside the finite f32 output range",
             ),
@@ -89,7 +59,20 @@ impl fmt::Display for RadiativeEquilibriumError {
     }
 }
 
-impl std::error::Error for RadiativeEquilibriumError {}
+impl std::error::Error for RadiativeEquilibriumError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::SolarForcing(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<SolarForcingError> for RadiativeEquilibriumError {
+    fn from(error: SolarForcingError) -> Self {
+        Self::SolarForcing(error)
+    }
+}
 
 /// Derives instantaneous radiative equilibrium from each daily-mean forcing
 /// value and equilibrium with the annual-mean forcing for each annual value.
@@ -98,82 +81,46 @@ pub fn derive_radiative_equilibrium_temperature(
     forcing: &SolarForcing,
     config: RadiativeEquilibriumConfig,
 ) -> Result<RadiativeEquilibriumTemperature, RadiativeEquilibriumError> {
-    validate_inputs(mesh, forcing, config)?;
+    validate_config(config)?;
+    forcing.validate(mesh)?;
     let radiation_scale = (1.0 - config.albedo) / (config.emissivity * STEFAN_BOLTZMANN_CONSTANT);
     if !radiation_scale.is_finite() {
         return Err(RadiativeEquilibriumError::NumericalRange);
     }
 
     let daily_effective_temperature_kelvin =
-        temperatures(&forcing.daily_mean_insolation, radiation_scale)?;
+        temperatures(&forcing.daily_mean_insolation, radiation_scale);
     let annual_effective_temperature_kelvin =
-        temperatures(&forcing.annual_mean_insolation, radiation_scale)?;
+        temperatures(&forcing.annual_mean_insolation, radiation_scale);
+    let daily = AreaWeightedSummary::from_field(mesh, &daily_effective_temperature_kelvin);
+    let annual = AreaWeightedSummary::from_field(mesh, &annual_effective_temperature_kelvin);
+    let maximum_kelvin = daily.maximum.max(annual.maximum);
+    if !maximum_kelvin.is_finite() {
+        return Err(RadiativeEquilibriumError::NumericalRange);
+    }
 
     Ok(RadiativeEquilibriumTemperature {
-        diagnostics: RadiativeEquilibriumDiagnostics {
-            daily: summarize(mesh, &daily_effective_temperature_kelvin),
-            annual: summarize(mesh, &annual_effective_temperature_kelvin),
-        },
+        diagnostics: RadiativeEquilibriumDiagnostics { daily, annual },
         daily_effective_temperature_kelvin,
         annual_effective_temperature_kelvin,
     })
 }
 
-fn validate_inputs(
-    mesh: &SphereMesh,
-    forcing: &SolarForcing,
-    config: RadiativeEquilibriumConfig,
-) -> Result<(), RadiativeEquilibriumError> {
+fn validate_config(config: RadiativeEquilibriumConfig) -> Result<(), RadiativeEquilibriumError> {
     if !config.albedo.is_finite() || !(0.0..=1.0).contains(&config.albedo) {
         return Err(RadiativeEquilibriumError::Albedo);
     }
     if !(config.emissivity.is_finite() && 0.0 < config.emissivity && config.emissivity <= 1.0) {
         return Err(RadiativeEquilibriumError::Emissivity);
     }
-    let expected = mesh.cell_count();
-    let daily = forcing.daily_mean_insolation.len();
-    let annual = forcing.annual_mean_insolation.len();
-    if daily != expected || annual != expected {
-        return Err(RadiativeEquilibriumError::CellCount {
-            expected,
-            daily,
-            annual,
-        });
-    }
-    if forcing
-        .daily_mean_insolation
-        .iter()
-        .chain(&forcing.annual_mean_insolation)
-        .any(|value| !value.is_finite() || *value < 0.0)
-    {
-        return Err(RadiativeEquilibriumError::Insolation);
-    }
     Ok(())
 }
 
-fn temperatures(
-    insolation: &[f32],
-    radiation_scale: f64,
-) -> Result<Vec<f32>, RadiativeEquilibriumError> {
+fn temperatures(insolation: &[f32], radiation_scale: f64) -> Vec<f32> {
     insolation
         .iter()
-        .map(|&value| {
-            let temperature = (f64::from(value) * radiation_scale).sqrt().sqrt();
-            if temperature <= f64::from(f32::MAX) {
-                Ok(temperature as f32)
-            } else {
-                Err(RadiativeEquilibriumError::NumericalRange)
-            }
-        })
+        .map(|&value| (f64::from(value) * radiation_scale).sqrt().sqrt() as f32)
         .collect()
-}
-
-fn summarize(mesh: &SphereMesh, values: &[f32]) -> TemperatureSummary {
-    TemperatureSummary {
-        minimum_kelvin: values.iter().copied().fold(f32::INFINITY, f32::min),
-        maximum_kelvin: values.iter().copied().fold(f32::NEG_INFINITY, f32::max),
-        area_weighted_mean_kelvin: mesh.area_weighted_mean(values),
-    }
 }
 
 #[cfg(test)]
@@ -223,7 +170,10 @@ mod tests {
                 derive_radiative_equilibrium_temperature(
                     &mesh,
                     &forcing,
-                    RadiativeEquilibriumConfig::new(albedo, 1.0),
+                    RadiativeEquilibriumConfig {
+                        albedo,
+                        emissivity: 1.0,
+                    },
                 ),
                 Err(RadiativeEquilibriumError::Albedo)
             );
@@ -233,7 +183,10 @@ mod tests {
                 derive_radiative_equilibrium_temperature(
                     &mesh,
                     &forcing,
-                    RadiativeEquilibriumConfig::new(0.3, emissivity),
+                    RadiativeEquilibriumConfig {
+                        albedo: 0.3,
+                        emissivity,
+                    },
                 ),
                 Err(RadiativeEquilibriumError::Emissivity)
             );
@@ -247,7 +200,9 @@ mod tests {
                 &wrong_length,
                 RadiativeEquilibriumConfig::EARTHLIKE,
             ),
-            Err(RadiativeEquilibriumError::CellCount { .. })
+            Err(RadiativeEquilibriumError::SolarForcing(
+                SolarForcingError::Cells
+            ))
         ));
 
         for value in [f32::NAN, -1.0] {
@@ -259,7 +214,9 @@ mod tests {
                     &invalid_value,
                     RadiativeEquilibriumConfig::EARTHLIKE,
                 ),
-                Err(RadiativeEquilibriumError::Insolation)
+                Err(RadiativeEquilibriumError::SolarForcing(
+                    SolarForcingError::Insolation
+                ))
             );
         }
     }
@@ -292,11 +249,11 @@ mod tests {
         );
         assert_eq!(
             temperatures.diagnostics.daily,
-            TemperatureSummary::default()
+            AreaWeightedSummary::default()
         );
         assert_eq!(
             temperatures.diagnostics.annual,
-            TemperatureSummary::default()
+            AreaWeightedSummary::default()
         );
     }
 
@@ -309,9 +266,18 @@ mod tests {
         let derive =
             |config| derive_radiative_equilibrium_temperature(&mesh, &forcing, config).unwrap();
 
-        let baseline = derive(RadiativeEquilibriumConfig::new(0.3, 1.0));
-        let darker = derive(RadiativeEquilibriumConfig::new(0.1, 1.0));
-        let lower_emissivity = derive(RadiativeEquilibriumConfig::new(0.3, 0.5));
+        let baseline = derive(RadiativeEquilibriumConfig {
+            albedo: 0.3,
+            emissivity: 1.0,
+        });
+        let darker = derive(RadiativeEquilibriumConfig {
+            albedo: 0.1,
+            emissivity: 1.0,
+        });
+        let lower_emissivity = derive(RadiativeEquilibriumConfig {
+            albedo: 0.3,
+            emissivity: 0.5,
+        });
         assert!(
             baseline.annual_effective_temperature_kelvin[0]
                 > baseline.daily_effective_temperature_kelvin[0]
@@ -333,7 +299,10 @@ mod tests {
         let reflective = derive_radiative_equilibrium_temperature(
             &mesh,
             &forcing,
-            RadiativeEquilibriumConfig::new(1.0, f64::MIN_POSITIVE),
+            RadiativeEquilibriumConfig {
+                albedo: 1.0,
+                emissivity: f64::MIN_POSITIVE,
+            },
         )
         .unwrap();
         assert!(
@@ -353,18 +322,19 @@ mod tests {
             derive_radiative_equilibrium_temperature(
                 &mesh,
                 &forcing,
-                RadiativeEquilibriumConfig::new(0.0, f64::MIN_POSITIVE),
+                RadiativeEquilibriumConfig {
+                    albedo: 0.0,
+                    emissivity: f64::MIN_POSITIVE,
+                },
             ),
             Err(RadiativeEquilibriumError::NumericalRange)
         );
     }
 
     #[test]
-    fn earthlike_is_an_explicit_preset_with_known_stefan_boltzmann_response() {
-        assert_eq!(
-            RadiativeEquilibriumConfig::default(),
-            RadiativeEquilibriumConfig::EARTHLIKE
-        );
+    fn earthlike_preset_has_known_stefan_boltzmann_response() {
+        assert_eq!(RadiativeEquilibriumConfig::EARTHLIKE.albedo, 0.3);
+        assert_eq!(RadiativeEquilibriumConfig::EARTHLIKE.emissivity, 1.0);
         let temperature = (240.0_f64 / STEFAN_BOLTZMANN_CONSTANT).sqrt().sqrt();
         assert!((temperature - 255.0).abs() < 0.1);
     }

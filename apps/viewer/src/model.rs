@@ -505,7 +505,10 @@ mod tests {
                 orbital_phase: 0.25,
                 annual_sample_count: 48,
             },
-            radiative_equilibrium: RadiativeEquilibriumConfig::new(0.25, 0.9),
+            radiative_equilibrium: RadiativeEquilibriumConfig {
+                albedo: 0.25,
+                emissivity: 0.9,
+            },
         };
         app.insert_resource(current)
             .insert_resource(requested)
