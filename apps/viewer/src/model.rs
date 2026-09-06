@@ -69,6 +69,7 @@ impl Default for GenerationSettings {
                 major_plate_count: 11,
                 minor_plate_count: 111,
                 major_head_start_rounds: 5,
+                growth_roughness: 35,
                 seed: 7,
             },
             crust: CrustClassificationConfig {

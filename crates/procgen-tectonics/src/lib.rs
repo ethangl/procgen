@@ -53,7 +53,10 @@ pub use migration::{
 pub use motion::{
     PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
 };
-pub use partition::{PlatePartition, PlatePartitionConfig, PlatePartitionError, partition_plates};
+pub use partition::{
+    MAX_GROWTH_ROUGHNESS, PlatePartition, PlatePartitionConfig, PlatePartitionError,
+    partition_plates,
+};
 pub use seafloor_age::{
     SeafloorAge, SeafloorAgeConfig, SeafloorAgeDiagnostics, derive_seafloor_age,
 };

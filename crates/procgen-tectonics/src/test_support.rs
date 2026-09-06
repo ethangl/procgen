@@ -26,6 +26,7 @@ pub const fn reference_partition_config() -> PlatePartitionConfig {
         major_plate_count: 5,
         minor_plate_count: 11,
         major_head_start_rounds: 2,
+        growth_roughness: 0,
         seed: 7,
     }
 }
