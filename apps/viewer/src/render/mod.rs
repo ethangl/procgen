@@ -102,7 +102,6 @@ fn spawn_layer(commands: &mut Commands, handle: Handle<GizmoAsset>, layer: Diagn
         },
         layer,
         RenderLayers::layer(layer.render_layer()),
-        Transform::IDENTITY,
     ));
 }
 

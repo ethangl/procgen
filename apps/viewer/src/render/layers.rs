@@ -300,7 +300,7 @@ impl DiagnosticLayer {
         self.spec().build(world)
     }
 
-    pub(super) const fn depth_bucket(self) -> DepthBucket {
+    const fn depth_bucket(self) -> DepthBucket {
         match self {
             Self::Wind | Self::Motion => DepthBucket::Vector,
             Self::Delaunay
