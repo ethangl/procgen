@@ -2,7 +2,14 @@ use super::assets::{
     boundary_asset, delaunay_asset, motion_asset, oceanic_peak_markers, plate_border_asset,
     point_asset, volcanic_arc_markers, voronoi_asset, wind_asset,
 };
-use super::palette::*;
+use super::palette::{
+    ALBEDO_COLOR_STOPS, CORIOLIS_COLOR_STOPS, CRATON_COLOR_STOPS, DEFORMATION_COLOR_STOPS,
+    ELEVATION_COLOR_STOPS, FRACTION_COLOR_STOPS, HOTSPOT_COLOR_STOPS, HUMIDITY_COLOR_STOPS,
+    LAND_ICE_COLOR_STOPS, OCEANIC_PEAK_COLOR_STOPS, PRECIPITATION_COLOR_STOPS,
+    PRESSURE_ACCELERATION_COLOR_STOPS, SEA_ICE_COLOR_STOPS, SNOW_COVER_COLOR_STOPS,
+    TEMPERATURE_AMPLITUDE_COLOR_STOPS, TEMPERATURE_COLOR_STOPS, TEMPERATURE_GRADIENT_COLOR_STOPS,
+    VOLCANIC_ARC_COLOR_STOPS, WIND_SPEED_COLOR_STOPS,
+};
 use super::surfaces::{
     basin_surface_mesh, crust_surface_mesh, insolation_surface_mesh, plate_surface_mesh,
     scalar_surface_mesh, seafloor_age_surface_mesh,
@@ -10,7 +17,7 @@ use super::surfaces::{
 use crate::model::GeneratedWorld;
 use bevy::prelude::{Component, GizmoAsset, Mesh, Vec3};
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum DiagnosticLayer {
     Delaunay,
@@ -54,9 +61,6 @@ pub enum DiagnosticLayer {
     Motion,
 }
 
-const DRAW_RADIUS_BASE: f32 = 1.0;
-const PLATE_BORDER_RADIUS_OFFSET: f32 = 0.002;
-
 /// Declaration order is also the outward draw order for visible overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayKind {
@@ -87,23 +91,15 @@ enum LayerSpec {
     },
     Overlay {
         label: &'static str,
+        kind: OverlayKind,
         gizmo: GizmoSpec,
     },
 }
 
-enum SurfaceSource {
-    Scalar {
-        values: CellValues,
-        stops: &'static [(f32, Vec3)],
-    },
-    Custom(fn(&GeneratedWorld) -> Mesh),
-}
-
-#[derive(Clone, Copy)]
-struct GizmoSpec {
-    kind: OverlayKind,
+#[derive(Component, Clone, Copy)]
+pub(super) struct GizmoSpec {
     line_width: f32,
-    build: fn(&GeneratedWorld, f32) -> GizmoAsset,
+    build: fn(&GeneratedWorld) -> GizmoAsset,
 }
 
 impl LayerSpec {
@@ -119,14 +115,13 @@ impl LayerSpec {
         label: &'static str,
         values: CellValues,
         stops: &'static [(f32, Vec3)],
-        kind: OverlayKind,
         line_width: f32,
-        overlay: fn(&GeneratedWorld, f32) -> GizmoAsset,
+        overlay: fn(&GeneratedWorld) -> GizmoAsset,
     ) -> Self {
         Self::Fill {
             label,
             surface: SurfaceSource::Scalar { values, stops },
-            gizmo: Some(GizmoSpec::new(kind, line_width, overlay)),
+            gizmo: Some(GizmoSpec::new(line_width, overlay)),
         }
     }
 
@@ -146,11 +141,12 @@ impl LayerSpec {
         label: &'static str,
         kind: OverlayKind,
         line_width: f32,
-        source: fn(&GeneratedWorld, f32) -> GizmoAsset,
+        source: fn(&GeneratedWorld) -> GizmoAsset,
     ) -> Self {
         Self::Overlay {
             label,
-            gizmo: GizmoSpec::new(kind, line_width, source),
+            kind,
+            gizmo: GizmoSpec::new(line_width, source),
         }
     }
 
@@ -166,30 +162,35 @@ impl LayerSpec {
             Self::Overlay { gizmo, .. } => Some(*gizmo),
         }
     }
-
-    fn build_surface(self, world: &GeneratedWorld) -> Mesh {
-        let Self::Fill { surface, .. } = self else {
-            unreachable!("only a surface selection can build a surface mesh");
-        };
-        match surface {
-            SurfaceSource::Scalar { values, stops } => {
-                scalar_surface_mesh(world, values(world), stops)
-            }
-            SurfaceSource::Custom(build) => build(world),
-        }
-    }
 }
 
 impl GizmoSpec {
-    const fn new(
-        kind: OverlayKind,
-        line_width: f32,
-        build: fn(&GeneratedWorld, f32) -> GizmoAsset,
-    ) -> Self {
-        Self {
-            kind,
-            line_width,
-            build,
+    const fn new(line_width: f32, build: fn(&GeneratedWorld) -> GizmoAsset) -> Self {
+        Self { line_width, build }
+    }
+
+    pub(super) const fn line_width(self) -> f32 {
+        self.line_width
+    }
+
+    pub(super) fn build(self, world: &GeneratedWorld) -> GizmoAsset {
+        (self.build)(world)
+    }
+}
+
+pub(super) enum SurfaceSource {
+    Scalar {
+        values: CellValues,
+        stops: &'static [(f32, Vec3)],
+    },
+    Custom(fn(&GeneratedWorld) -> Mesh),
+}
+
+impl SurfaceSource {
+    pub(super) fn build(self, world: &GeneratedWorld) -> Mesh {
+        match self {
+            Self::Scalar { values, stops } => scalar_surface_mesh(world, values(world), stops),
+            Self::Custom(build) => build(world),
         }
     }
 }
@@ -236,6 +237,7 @@ impl DiagnosticLayer {
         Self::Boundaries,
         Self::Motion,
     ];
+    pub(super) const COUNT: usize = Self::ALL.len();
     pub(super) const fn index(self) -> usize {
         self as usize
     }
@@ -248,61 +250,47 @@ impl DiagnosticLayer {
         self.spec().label()
     }
 
-    pub(super) fn gizmo_line_width(self) -> Option<f32> {
-        self.spec().gizmo().map(|gizmo| gizmo.line_width)
-    }
-
-    pub(super) fn build_gizmo(self, world: &GeneratedWorld) -> Option<GizmoAsset> {
-        self.spec()
-            .gizmo()
-            .map(|gizmo| (gizmo.build)(world, DRAW_RADIUS_BASE))
-    }
-
-    pub(super) fn build_surface(self, world: &GeneratedWorld) -> Mesh {
-        self.spec().build_surface(world)
+    pub(super) fn gizmo(self) -> Option<GizmoSpec> {
+        self.spec().gizmo()
     }
 
     pub fn is_fill(self) -> bool {
-        matches!(self.spec(), LayerSpec::Fill { .. })
+        self.surface().is_some()
+    }
+
+    pub(super) fn surface(self) -> Option<SurfaceSource> {
+        match self.spec() {
+            LayerSpec::Fill { surface, .. } => Some(surface),
+            LayerSpec::Overlay { .. } => None,
+        }
     }
 
     pub fn overlay_kind(self) -> Option<OverlayKind> {
         match self.spec() {
             LayerSpec::Fill { .. } => None,
-            LayerSpec::Overlay { gizmo, .. } => Some(gizmo.kind),
+            LayerSpec::Overlay { kind, .. } => Some(kind),
         }
+    }
+
+    pub(super) fn depth_order(self) -> Option<(OverlayKind, usize)> {
+        self.overlay_kind().map(|kind| (kind, self.index()))
     }
 
     fn spec(self) -> LayerSpec {
         match self {
             Self::Delaunay => {
-                LayerSpec::overlay("Delaunay", OverlayKind::Edges, 1.1, |world, radius| {
-                    delaunay_asset(&world.voronoi, radius)
-                })
+                LayerSpec::overlay("Delaunay", OverlayKind::Edges, 1.1, delaunay_asset)
             }
-            Self::Voronoi => {
-                LayerSpec::overlay("Voronoi", OverlayKind::Edges, 1.5, |world, radius| {
-                    voronoi_asset(&world.voronoi, radius)
-                })
-            }
+            Self::Voronoi => LayerSpec::overlay("Voronoi", OverlayKind::Edges, 1.5, voronoi_asset),
             Self::Plates => LayerSpec::surface(
                 "Tectonic plates",
                 plate_surface_mesh,
-                Some(GizmoSpec::new(OverlayKind::Edges, 2.4, |world, radius| {
-                    plate_border_asset(
-                        &world.voronoi,
-                        &world.plates,
-                        radius + PLATE_BORDER_RADIUS_OFFSET,
-                    )
-                })),
+                Some(GizmoSpec::new(2.4, plate_border_asset)),
             ),
             Self::Crust => LayerSpec::surface("Crust classes", crust_surface_mesh, None),
-            Self::Points => LayerSpec::overlay(
-                "Cell centers",
-                OverlayKind::Markers,
-                1.8,
-                |world, radius| point_asset(&world.voronoi, radius),
-            ),
+            Self::Points => {
+                LayerSpec::overlay("Cell centers", OverlayKind::Markers, 1.8, point_asset)
+            }
             Self::SeafloorAge => {
                 LayerSpec::surface("Seafloor age", seafloor_age_surface_mesh, None)
             }
@@ -428,12 +416,7 @@ impl DiagnosticLayer {
                 },
                 WIND_SPEED_COLOR_STOPS,
             ),
-            Self::Wind => LayerSpec::overlay(
-                "Wind vectors",
-                OverlayKind::Vectors,
-                2.6,
-                |world, radius| wind_asset(world, radius, WIND_SPEED_COLOR_STOPS),
-            ),
+            Self::Wind => LayerSpec::overlay("Wind vectors", OverlayKind::Vectors, 2.6, wind_asset),
             Self::Humidity => LayerSpec::scalar(
                 "Atmospheric humidity",
                 |world| &world.moisture_transport.cell_humidity_kg_per_m2,
@@ -472,7 +455,6 @@ impl DiagnosticLayer {
                 "Seamount / abyssal peaks",
                 |world| &world.oceanic_peaks.cell_densities,
                 OCEANIC_PEAK_COLOR_STOPS,
-                OverlayKind::Markers,
                 3.8,
                 oceanic_peak_markers,
             ),
@@ -480,9 +462,8 @@ impl DiagnosticLayer {
                 "Volcanic arcs",
                 |world| &world.volcanic_arcs.cell_strengths,
                 VOLCANIC_ARC_COLOR_STOPS,
-                OverlayKind::Markers,
                 3.8,
-                |world, radius| volcanic_arc_markers(&world.voronoi, &world.volcanic_arcs, radius),
+                volcanic_arc_markers,
             ),
             Self::Cratons => LayerSpec::scalar(
                 "Craton strength",
@@ -490,20 +471,12 @@ impl DiagnosticLayer {
                 CRATON_COLOR_STOPS,
             ),
             Self::Basins => LayerSpec::surface("Sedimentary basins", basin_surface_mesh, None),
-            Self::Boundaries => LayerSpec::overlay(
-                "Boundary classes",
-                OverlayKind::Edges,
-                4.0,
-                |world, radius| boundary_asset(&world.voronoi, &world.boundaries, radius),
-            ),
-            Self::Motion => LayerSpec::overlay(
-                "Plate motion",
-                OverlayKind::Vectors,
-                2.6,
-                |world, radius| {
-                    motion_asset(&world.voronoi, &world.plates, &world.kinematics, radius)
-                },
-            ),
+            Self::Boundaries => {
+                LayerSpec::overlay("Boundary classes", OverlayKind::Edges, 4.0, boundary_asset)
+            }
+            Self::Motion => {
+                LayerSpec::overlay("Plate motion", OverlayKind::Vectors, 2.6, motion_asset)
+            }
         }
     }
 }

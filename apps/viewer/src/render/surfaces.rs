@@ -1,5 +1,8 @@
-use super::palette::{
-    INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, id_color, opaque_color, piecewise_lerp,
+use super::{
+    SURFACE_RADIUS,
+    palette::{
+        INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, id_color, opaque_color, piecewise_lerp,
+    },
     to_bevy,
 };
 use crate::model::GeneratedWorld;
@@ -11,8 +14,6 @@ use bevy::{
 };
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::CrustClass;
-
-const SURFACE_RADIUS: f32 = 1.0;
 
 pub(super) fn empty_surface_mesh() -> Mesh {
     Mesh::new(

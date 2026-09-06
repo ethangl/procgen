@@ -7,19 +7,20 @@ pub use layers::{DiagnosticLayer, OverlayKind};
 
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
-use std::collections::BTreeSet;
+use layers::GizmoSpec;
 use surfaces::empty_surface_mesh;
 
+pub(super) const SURFACE_RADIUS: f32 = 1.0;
 const DEPTH_SCALE_STEP: f32 = 0.004;
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct OverlaySettings {
-    visible: BTreeSet<DiagnosticLayer>,
+    visible: [bool; DiagnosticLayer::COUNT],
 }
 
 impl OverlaySettings {
     pub fn is_visible(&self, layer: DiagnosticLayer) -> bool {
-        self.visible.contains(&layer)
+        self.visible[layer.index()]
     }
 
     pub fn set_visible(&mut self, layer: DiagnosticLayer, visible: bool) {
@@ -27,28 +28,32 @@ impl OverlaySettings {
             layer.overlay_kind().is_some(),
             "only overlays can be toggled"
         );
-        if visible {
-            self.visible.insert(layer);
-        } else {
-            self.visible.remove(&layer);
-        }
+        self.visible[layer.index()] = visible;
     }
 
-    fn depth_scale(&self, surface: &SurfaceSelection, layer: DiagnosticLayer) -> f32 {
-        if layer.is_fill() {
-            return 1.0;
-        }
-        let layer_order = (layer.overlay_kind().unwrap(), layer.index());
-        let visible_layers_before = usize::from(surface.selected().is_some())
-            + self
-                .visible
-                .iter()
-                .filter(|&&candidate| {
-                    (candidate.overlay_kind().unwrap(), candidate.index()) < layer_order
-                })
-                .count();
+    fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
+        let layer_order = layer
+            .depth_order()
+            .expect("only standalone overlays have a depth scale");
+        let visible_layers_before = DiagnosticLayer::ALL
+            .iter()
+            .filter(|&&candidate| {
+                self.is_visible(candidate)
+                    && candidate
+                        .depth_order()
+                        .is_some_and(|order| order < layer_order)
+            })
+            .count();
 
-        1.0 + visible_layers_before as f32 * DEPTH_SCALE_STEP
+        1.0 + (visible_layers_before + 1) as f32 * DEPTH_SCALE_STEP
+    }
+}
+
+impl Default for OverlaySettings {
+    fn default() -> Self {
+        Self {
+            visible: [false; DiagnosticLayer::COUNT],
+        }
     }
 }
 
@@ -71,9 +76,6 @@ impl Default for SurfaceSelection {
         Self(Some(DiagnosticLayer::IsostaticElevation))
     }
 }
-
-#[derive(Resource)]
-struct DiagnosticAssets(Vec<(DiagnosticLayer, Handle<GizmoAsset>)>);
 
 #[derive(Component)]
 struct SurfaceLayer;
@@ -129,37 +131,33 @@ fn setup_scene(
         SurfaceLayer,
         Visibility::Hidden,
     ));
-    let diagnostic_assets = DiagnosticLayer::ALL
-        .iter()
-        .filter_map(|&layer| {
-            let line_width = layer.gizmo_line_width()?;
+    for &layer in DiagnosticLayer::ALL {
+        if let Some(gizmo) = layer.gizmo() {
             let handle = gizmo_assets.add(GizmoAsset::new());
-            spawn_layer(&mut commands, handle.clone(), layer, line_width);
-            Some((layer, handle))
-        })
-        .collect();
+            spawn_layer(&mut commands, handle, layer, gizmo);
+        }
+    }
     spawn_axes(&mut commands, &mut gizmo_assets);
-
-    commands.insert_resource(DiagnosticAssets(diagnostic_assets));
 }
 
 fn spawn_layer(
     commands: &mut Commands,
     handle: Handle<GizmoAsset>,
     layer: DiagnosticLayer,
-    line_width: f32,
+    spec: GizmoSpec,
 ) {
     commands.spawn((
         Gizmo {
             handle,
             line_config: GizmoLineConfig {
-                width: line_width,
+                width: spec.line_width(),
                 perspective: false,
                 ..default()
             },
             depth_bias: -0.0005,
         },
         layer,
+        spec,
         RenderLayers::layer(layer.render_layer()),
     ));
 }
@@ -185,13 +183,11 @@ fn spawn_axes(commands: &mut Commands, assets: &mut Assets<GizmoAsset>) {
 
 fn rebuild_diagnostic_assets(
     world: Res<GeneratedWorld>,
-    assets: Res<DiagnosticAssets>,
+    gizmos: Query<(&GizmoSpec, &Gizmo)>,
     mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
-    for (layer, handle) in &assets.0 {
-        *gizmo_assets.get_mut(handle).unwrap() = layer
-            .build_gizmo(&world)
-            .expect("diagnostic assets only contains gizmo layers");
+    for (spec, gizmo) in &gizmos {
+        *gizmo_assets.get_mut(&gizmo.handle).unwrap() = spec.build(&world);
     }
 }
 
@@ -203,7 +199,10 @@ fn rebuild_surface(
 ) {
     let (surface_mesh, mut visibility) = surface.into_inner();
     if let Some(layer) = selection.selected() {
-        *meshes.get_mut(&surface_mesh.0).unwrap() = layer.build_surface(&world);
+        *meshes.get_mut(&surface_mesh.0).unwrap() = layer
+            .surface()
+            .expect("surface selection only stores fill layers")
+            .build(&world);
         *visibility = Visibility::Inherited;
     } else {
         *visibility = Visibility::Hidden;
@@ -217,7 +216,9 @@ fn sync_layer_render_state(
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
     for (layer, mut transform) in &mut layer_transforms {
-        transform.scale = Vec3::splat(overlays.depth_scale(&surface, *layer));
+        if layer.overlay_kind().is_some() {
+            transform.scale = Vec3::splat(overlays.depth_scale(*layer));
+        }
     }
 
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
@@ -225,17 +226,21 @@ fn sync_layer_render_state(
     layers.extend(
         surface
             .selected()
-            .filter(|layer| layer.gizmo_line_width().is_some())
+            .filter(|layer| layer.gizmo().is_some())
             .map(DiagnosticLayer::render_layer),
     );
     layers.extend(
-        overlays
-            .visible
+        DiagnosticLayer::ALL
             .iter()
             .copied()
+            .filter(|&layer| overlays.is_visible(layer))
             .map(DiagnosticLayer::render_layer),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
+}
+
+pub(super) fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
+    Vec3::new(point.x, point.y, point.z)
 }
 
 #[cfg(test)]
@@ -244,30 +249,27 @@ mod tests {
 
     #[test]
     fn depth_scales_only_count_visible_layers() {
-        let surface = SurfaceSelection(None);
         let mut overlays = OverlaySettings::default();
         overlays.set_visible(DiagnosticLayer::Motion, true);
 
-        assert_eq!(overlays.depth_scale(&surface, DiagnosticLayer::Motion), 1.0);
+        assert_eq!(
+            overlays.depth_scale(DiagnosticLayer::Motion),
+            1.0 + DEPTH_SCALE_STEP
+        );
     }
 
     #[test]
     fn depth_scales_follow_overlay_kind_order() {
-        let surface = SurfaceSelection::default();
         let mut overlays = OverlaySettings::default();
         overlays.set_visible(DiagnosticLayer::Motion, true);
         overlays.set_visible(DiagnosticLayer::Boundaries, true);
 
         assert_eq!(
-            overlays.depth_scale(&surface, DiagnosticLayer::IsostaticElevation),
-            1.0
-        );
-        assert_eq!(
-            overlays.depth_scale(&surface, DiagnosticLayer::Boundaries),
+            overlays.depth_scale(DiagnosticLayer::Boundaries),
             1.0 + DEPTH_SCALE_STEP
         );
         assert_eq!(
-            overlays.depth_scale(&surface, DiagnosticLayer::Motion),
+            overlays.depth_scale(DiagnosticLayer::Motion),
             1.0 + 2.0 * DEPTH_SCALE_STEP
         );
     }

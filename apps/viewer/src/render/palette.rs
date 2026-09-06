@@ -1,5 +1,4 @@
 use bevy::prelude::{Color, Vec3};
-use procgen_core::Vec3 as SphereVec3;
 use procgen_tectonics::SEA_LEVEL;
 
 pub(super) const DEFORMATION_COLOR_STOPS: &[(f32, Vec3)] = &[
@@ -151,8 +150,4 @@ pub(super) fn id_color(id: usize) -> Color {
 
 pub(super) fn opaque_color(color: Vec3) -> Color {
     Color::srgb(color.x, color.y, color.z)
-}
-
-pub(super) fn to_bevy(point: SphereVec3) -> Vec3 {
-    Vec3::new(point.x, point.y, point.z)
 }
