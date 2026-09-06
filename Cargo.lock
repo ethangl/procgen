@@ -3141,6 +3141,7 @@ dependencies = [
 name = "procgen-climate"
 version = "0.1.0"
 dependencies = [
+ "procgen-core",
  "procgen-planet",
  "procgen-sphere",
  "procgen-sphere-mesh",

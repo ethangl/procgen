@@ -1,15 +1,22 @@
 //! Deterministic climate stages over the authoritative spherical mesh.
 //!
-//! Solar forcing, radiative-equilibrium temperature, and local seasonal thermal
-//! response are independent pure stages. None contains lateral transport,
-//! atmospheric physics, or coupled feedbacks.
+//! Solar forcing, radiative-equilibrium temperature, local seasonal thermal
+//! response, and coarse atmospheric circulation are independent pure stages.
+//! They contain no coupled feedbacks.
 
+mod circulation;
 mod field;
 mod orbit;
 mod radiative_equilibrium;
 mod seasonal_thermal;
 mod solar_forcing;
 
+pub use circulation::{
+    AtmosphericCirculation, AtmosphericCirculationConfig, AtmosphericCirculationDiagnostics,
+    AtmosphericCirculationError, AtmosphericCirculationInputs, CALM_WIND_SPEED_METERS_PER_SECOND,
+    DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE, TERRAIN_STEERING_RANGE,
+    derive_atmospheric_circulation,
+};
 pub use field::AreaWeightedSummary;
 pub use radiative_equilibrium::{
     RadiativeEquilibriumConfig, RadiativeEquilibriumDiagnostics, RadiativeEquilibriumError,

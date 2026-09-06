@@ -1,6 +1,6 @@
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
-use procgen_climate::SolarForcing;
+use procgen_climate::{CALM_WIND_SPEED_METERS_PER_SECOND, SolarForcing};
 use procgen_core::Vec3 as SphereVec3;
 use procgen_geology::{OceanicPeakField, OceanicPeakKind, VolcanicArcField};
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
@@ -32,6 +32,12 @@ pub enum DiagnosticLayer {
     SeasonalMinimumTemperature,
     SeasonalMaximumTemperature,
     SeasonalTemperatureAmplitude,
+    TemperatureGradient,
+    PressureGradientAcceleration,
+    CoriolisParameter,
+    TerrainSteering,
+    WindSpeed,
+    Wind,
     Hotspots,
     OceanicPeaks,
     VolcanicArcs,
@@ -45,6 +51,7 @@ const DRAW_RADIUS_BASE: f32 = 1.0;
 const DRAW_RADIUS_STEP: f32 = 0.004;
 const FIELD_LINE_WIDTH: f32 = 3.5;
 const OVERLAY_LINE_WIDTH: f32 = 3.8;
+const MAXIMUM_VECTOR_COUNT: usize = 256;
 const DEFORMATION_COLOR_STOPS: [(f32, Vec3); 3] = [
     (-0.5, Vec3::new(0.08, 0.35, 0.95)),
     (0.0, Vec3::new(0.12, 0.12, 0.16)),
@@ -84,6 +91,35 @@ const TEMPERATURE_AMPLITUDE_COLOR_STOPS: [(f32, Vec3); 5] = [
     (30.0, Vec3::new(0.12, 0.72, 0.72)),
     (75.0, Vec3::new(1.0, 0.68, 0.1)),
     (150.0, Vec3::new(0.9, 0.08, 0.035)),
+];
+const TEMPERATURE_GRADIENT_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.09)),
+    (25.0, Vec3::new(0.08, 0.4, 0.72)),
+    (75.0, Vec3::new(0.2, 0.82, 0.65)),
+    (200.0, Vec3::new(1.0, 0.42, 0.08)),
+];
+const PRESSURE_ACCELERATION_COLOR_STOPS: [(f32, Vec3); 4] = [
+    (0.0, Vec3::new(0.02, 0.035, 0.09)),
+    (0.001, Vec3::new(0.12, 0.35, 0.8)),
+    (0.004, Vec3::new(0.25, 0.82, 0.65)),
+    (0.012, Vec3::new(1.0, 0.35, 0.08)),
+];
+const CORIOLIS_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (-0.000_16, Vec3::new(0.15, 0.4, 1.0)),
+    (0.0, Vec3::new(0.94, 0.94, 0.94)),
+    (0.000_16, Vec3::new(1.0, 0.3, 0.15)),
+];
+const FRACTION_COLOR_STOPS: [(f32, Vec3); 3] = [
+    (0.0, Vec3::new(0.03, 0.05, 0.1)),
+    (0.5, Vec3::new(0.16, 0.68, 0.7)),
+    (1.0, Vec3::new(1.0, 0.75, 0.15)),
+];
+const WIND_SPEED_COLOR_STOPS: [(f32, Vec3); 5] = [
+    (0.0, Vec3::new(0.03, 0.05, 0.1)),
+    (10.0, Vec3::new(0.08, 0.38, 0.72)),
+    (30.0, Vec3::new(0.12, 0.75, 0.72)),
+    (60.0, Vec3::new(1.0, 0.72, 0.12)),
+    (100.0, Vec3::new(0.9, 0.1, 0.04)),
 ];
 const HOTSPOT_COLOR_STOPS: [(f32, Vec3); 4] = [
     (0.0, Vec3::new(0.08, 0.06, 0.12)),
@@ -189,6 +225,12 @@ impl DiagnosticLayer {
         Self::SeasonalMinimumTemperature,
         Self::SeasonalMaximumTemperature,
         Self::SeasonalTemperatureAmplitude,
+        Self::TemperatureGradient,
+        Self::PressureGradientAcceleration,
+        Self::CoriolisParameter,
+        Self::TerrainSteering,
+        Self::WindSpeed,
+        Self::Wind,
         Self::Hotspots,
         Self::OceanicPeaks,
         Self::VolcanicArcs,
@@ -330,6 +372,55 @@ impl DiagnosticLayer {
                 |world| &world.seasonal_thermal.annual_amplitude_kelvin,
                 &TEMPERATURE_AMPLITUDE_COLOR_STOPS,
             ),
+            Self::TemperatureGradient => LayerSpec::scalar(
+                "Seasonal temperature gradient",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_temperature_gradient_kelvin_per_radian
+                },
+                &TEMPERATURE_GRADIENT_COLOR_STOPS,
+            ),
+            Self::PressureGradientAcceleration => LayerSpec::scalar(
+                "Pressure-gradient acceleration",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_pressure_gradient_acceleration_meters_per_second_squared
+                },
+                &PRESSURE_ACCELERATION_COLOR_STOPS,
+            ),
+            Self::CoriolisParameter => LayerSpec::scalar(
+                "Coriolis parameter",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_coriolis_parameter_per_second
+                },
+                &CORIOLIS_COLOR_STOPS,
+            ),
+            Self::TerrainSteering => LayerSpec::scalar(
+                "Terrain steering",
+                FIELD_LINE_WIDTH,
+                |world| &world.atmospheric_circulation.cell_terrain_steering_fraction,
+                &FRACTION_COLOR_STOPS,
+            ),
+            Self::WindSpeed => LayerSpec::scalar(
+                "Wind speed",
+                FIELD_LINE_WIDTH,
+                |world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_wind_speed_meters_per_second
+                },
+                &WIND_SPEED_COLOR_STOPS,
+            ),
+            Self::Wind => LayerSpec::custom("Wind vectors", 2.6, |world, radius| {
+                wind_asset(world, radius)
+            }),
             Self::Hotspots => LayerSpec::scalar(
                 "Mantle hotspots",
                 OVERLAY_LINE_WIDTH,
@@ -737,7 +828,7 @@ fn motion_asset(
     radius: f32,
 ) -> GizmoAsset {
     let mut asset = GizmoAsset::new();
-    let stride = (mesh.cell_count() / 256).max(1);
+    let stride = (mesh.cell_count() / MAXIMUM_VECTOR_COUNT).max(1);
     for cell in (0..mesh.cell_count()).step_by(stride) {
         let plate = plates.cell_plates[cell];
         let position = mesh.cell_centers[cell];
@@ -746,6 +837,31 @@ fn motion_asset(
         if velocity.length_squared() > 1.0e-12 {
             asset.arrow(start, start + velocity * 0.09, id_color(plate));
         }
+    }
+    asset
+}
+
+fn wind_asset(world: &GeneratedWorld, radius: f32) -> GizmoAsset {
+    let mut asset = GizmoAsset::new();
+    let mesh = &world.voronoi;
+    let circulation = &world.atmospheric_circulation;
+    let stride = (mesh.cell_count() / MAXIMUM_VECTOR_COUNT).max(1);
+    let maximum_speed = circulation
+        .diagnostics
+        .wind_speed_meters_per_second
+        .maximum
+        .max(CALM_WIND_SPEED_METERS_PER_SECOND);
+    for cell in (0..mesh.cell_count()).step_by(stride) {
+        let wind = circulation.cell_wind_meters_per_second[cell];
+        let speed = circulation.cell_wind_speed_meters_per_second[cell];
+        if speed <= CALM_WIND_SPEED_METERS_PER_SECOND {
+            continue;
+        }
+        let start = to_bevy(mesh.cell_centers[cell].normalized()) * radius;
+        let direction = to_bevy(wind) / speed;
+        let length = 0.025 + 0.075 * (speed / maximum_speed);
+        let color = opaque_color(piecewise_lerp(speed, &WIND_SPEED_COLOR_STOPS));
+        asset.arrow(start, start + direction * length, color);
     }
     asset
 }
