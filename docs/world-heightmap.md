@@ -127,8 +127,9 @@ Completed foundations:
   geological-elevation effect controls and final layer, per-effect aggregate
   diagnostics, isostatic support and adjusted-elevation controls and layers,
   aggregate rise/sink diagnostics, and stage timings.
-- `procgen-planet`: minimal SI-unit stellar and orbital inputs, with Earth-like
-  values isolated in a preset.
+- `procgen-planet`: minimal SI-unit stellar, orbital, size, rotation, atmosphere,
+  and physical land-elevation-scale inputs, with Earth-like values isolated in a
+  preset.
 - `procgen-climate`: deterministic top-of-atmosphere daily-mean insolation for
   a selected orbital phase plus a bounded-sample, elapsed-time-weighted annual
   mean over spherical cells. A separate stage converts those daily and annual
@@ -142,11 +143,19 @@ Completed foundations:
   from selected seasonal-temperature gradients, explicit planetary rotation
   and atmospheric gas properties, linear surface drag, and bounded terrain
   steering. It contains no hard-coded latitude bands. These stages model no
-  moisture, precipitation, ocean currents, or coupled climate feedbacks. See
+  coupled climate feedbacks. A fifth pure fixed-step stage starts with an empty
+  atmospheric column, evaporates water from exposed ocean cells according to
+  selected temperature and bounded moisture capacity, conservatively transports
+  it over mesh edges with the wind field, and removes capacity condensation,
+  background rainfall, and bounded terrain-ascent orographic precipitation. It
+  reports a spherical-area-weighted mass-balance residual and retains no state
+  between runs. It adds no surface or subsurface hydrology, ocean circulation,
+  cryosphere, or acceleration backend. See
   `docs/solar-forcing.md`,
   `docs/radiative-equilibrium-temperature.md`, and
   `docs/seasonal-thermal-response.md`, and
-  `docs/coarse-atmospheric-circulation.md`.
+  `docs/coarse-atmospheric-circulation.md`, and
+  `docs/moisture-transport.md`.
 
 The viewer should gain new diagnostic layers as later pipeline attributes are
 added. Accelerate a generation stage only when its workload and data layout

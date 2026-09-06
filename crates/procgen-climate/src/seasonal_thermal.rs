@@ -1,15 +1,15 @@
 use crate::{
-    AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SolarForcingConfig,
-    SolarForcingError,
+    AreaWeightedSummary, RadiativeEquilibriumConfig, RadiativeEquilibriumError, SECONDS_PER_DAY,
+    SolarForcingConfig, SolarForcingError,
     orbit::{OrbitalSampler, daily_mean_at, orbital_state},
     radiative_equilibrium::RadiativeEquilibriumModel,
+    validate_range,
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::is_land;
 use std::{fmt, ops::RangeInclusive};
 
-const SECONDS_PER_DAY: f64 = 86_400.0;
 pub const THERMAL_CAPACITY_RANGE: RangeInclusive<f64> = 0.0..=1.0e12;
 pub const ORBITAL_PERIOD_DAYS_RANGE: RangeInclusive<f64> = 0.01..=1.0e6;
 const MINIMUM_POSITIVE_THERMAL_CAPACITY: f64 = 1.0;
@@ -393,18 +393,17 @@ fn validate_inputs(
     if !valid_heat_capacity(config.ocean_heat_capacity) {
         return Err(SeasonalThermalError::HeatCapacity(Surface::Ocean));
     }
-    if !config.orbital_period_days.is_finite()
-        || !ORBITAL_PERIOD_DAYS_RANGE.contains(&config.orbital_period_days)
-    {
-        return Err(SeasonalThermalError::OrbitalPeriod);
-    }
+    validate_range(
+        config.orbital_period_days,
+        &ORBITAL_PERIOD_DAYS_RANGE,
+        SeasonalThermalError::OrbitalPeriod,
+    )?;
     Ok(())
 }
 
 fn valid_heat_capacity(value: f64) -> bool {
     value == 0.0
-        || (value.is_finite()
-            && (MINIMUM_POSITIVE_THERMAL_CAPACITY..=*THERMAL_CAPACITY_RANGE.end()).contains(&value))
+        || (MINIMUM_POSITIVE_THERMAL_CAPACITY..=*THERMAL_CAPACITY_RANGE.end()).contains(&value)
 }
 
 fn solve_periodic_cycle(

@@ -4,16 +4,19 @@ use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_climate::{
     ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, DRAG_RATE_RANGE, MAXIMUM_WIND_SPEED_RANGE,
-    ORBITAL_PERIOD_DAYS_RANGE, RadiativeEquilibriumConfig, SeasonalThermalConfig,
-    SolarForcingConfig, TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE,
+    MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MOISTURE_STEP_COUNT_RANGE,
+    MOISTURE_STEP_SECONDS_RANGE, MoistureTransportConfig, ORBITAL_PERIOD_DAYS_RANGE,
+    OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE, RadiativeEquilibriumConfig,
+    SeasonalThermalConfig, SolarForcingConfig, TEMPERATURE_SENSITIVITY_RANGE,
+    TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE, TRANSPORT_FRACTION_RANGE,
 };
 use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
 use procgen_planet::{
-    ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE, PLANET_RADIUS_METERS_RANGE, Planet,
-    SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE,
+    ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE, MAXIMUM_LAND_ELEVATION_METERS_RANGE,
+    PLANET_RADIUS_METERS_RANGE, Planet, SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE,
 };
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
@@ -105,9 +108,97 @@ pub(super) fn generation_controls(
     section(ui, "Atmospheric circulation", |ui| {
         atmospheric_circulation_controls(ui, &mut generation.atmospheric_circulation)
     });
+    section(ui, "Moisture and precipitation", |ui| {
+        moisture_transport_controls(ui, &mut generation.moisture_transport)
+    });
     if ui.button("Regenerate").clicked() {
         regenerate.write_default();
     }
+}
+
+fn moisture_transport_controls(ui: &mut egui::Ui, config: &mut MoistureTransportConfig) {
+    drag_value(
+        ui,
+        "Steps",
+        &mut config.step_count,
+        MOISTURE_STEP_COUNT_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Step seconds",
+        &mut config.step_seconds,
+        MOISTURE_STEP_SECONDS_RANGE,
+        3_600.0,
+    );
+    drag_value(
+        ui,
+        "Reference capacity",
+        &mut config.reference_capacity_kg_per_m2,
+        MOISTURE_CAPACITY_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Reference temperature",
+        &mut config.reference_temperature_kelvin,
+        REFERENCE_TEMPERATURE_KELVIN_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Capacity temperature response",
+        &mut config.capacity_temperature_sensitivity_per_kelvin,
+        TEMPERATURE_SENSITIVITY_RANGE,
+        0.001,
+    );
+    drag_value(
+        ui,
+        "Minimum capacity",
+        &mut config.minimum_capacity_kg_per_m2,
+        MOISTURE_CAPACITY_RANGE,
+        0.1,
+    );
+    drag_value(
+        ui,
+        "Maximum capacity",
+        &mut config.maximum_capacity_kg_per_m2,
+        MOISTURE_CAPACITY_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Ocean evaporation rate",
+        &mut config.ocean_evaporation_rate_per_second,
+        MOISTURE_RATE_RANGE,
+        1.0e-7,
+    );
+    drag_value(
+        ui,
+        "Rainfall rate",
+        &mut config.rainfall_rate_per_second,
+        MOISTURE_RATE_RANGE,
+        1.0e-7,
+    );
+    drag_value(
+        ui,
+        "Orographic coefficient",
+        &mut config.orographic_coefficient_per_meter,
+        OROGRAPHIC_COEFFICIENT_RANGE,
+        1.0e-5,
+    );
+    slider(
+        ui,
+        "Maximum orographic fraction",
+        &mut config.maximum_orographic_fraction_per_step,
+        TRANSPORT_FRACTION_RANGE,
+    );
+    slider(
+        ui,
+        "Maximum transport fraction",
+        &mut config.maximum_transport_fraction_per_step,
+        TRANSPORT_FRACTION_RANGE,
+    );
 }
 
 fn atmospheric_circulation_controls(ui: &mut egui::Ui, config: &mut AtmosphericCirculationConfig) {
@@ -154,6 +245,13 @@ fn planet_controls(ui: &mut egui::Ui, planet: &mut Planet) {
         &mut planet.atmospheric_specific_gas_constant_joules_per_kilogram_kelvin,
         ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE,
         1.0,
+    );
+    drag_value(
+        ui,
+        "Maximum land elevation meters",
+        &mut planet.maximum_land_elevation_meters,
+        MAXIMUM_LAND_ELEVATION_METERS_RANGE,
+        100.0,
     );
 }
 

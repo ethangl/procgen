@@ -1,11 +1,28 @@
 //! Deterministic climate stages over the authoritative spherical mesh.
 //!
 //! Solar forcing, radiative-equilibrium temperature, local seasonal thermal
-//! response, and coarse atmospheric circulation are independent pure stages.
-//! They contain no coupled feedbacks.
+//! response, coarse atmospheric circulation, and moisture transport are pure
+//! stages. They contain no coupled feedbacks or persistent generation state.
+
+use std::ops::RangeInclusive;
+
+pub(crate) const SECONDS_PER_DAY: f64 = 86_400.0;
+
+pub(crate) fn validate_range<T: PartialOrd, E>(
+    value: T,
+    range: &RangeInclusive<T>,
+    error: E,
+) -> Result<(), E> {
+    if range.contains(&value) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
 
 mod circulation;
 mod field;
+mod moisture;
 mod orbit;
 mod radiative_equilibrium;
 mod seasonal_thermal;
@@ -18,6 +35,13 @@ pub use circulation::{
     derive_atmospheric_circulation,
 };
 pub use field::AreaWeightedSummary;
+pub use moisture::{
+    MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MOISTURE_STEP_COUNT_RANGE,
+    MOISTURE_STEP_SECONDS_RANGE, MoistureTransport, MoistureTransportConfig,
+    MoistureTransportDiagnostics, MoistureTransportError, MoistureTransportInputs,
+    OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE,
+    TEMPERATURE_SENSITIVITY_RANGE, TRANSPORT_FRACTION_RANGE, derive_moisture_transport,
+};
 pub use radiative_equilibrium::{
     RadiativeEquilibriumConfig, RadiativeEquilibriumDiagnostics, RadiativeEquilibriumError,
     RadiativeEquilibriumTemperature, STEFAN_BOLTZMANN_CONSTANT,

@@ -1,6 +1,7 @@
 use crate::{
     AreaWeightedSummary,
     orbit::{Daylight, OrbitalSampler, daily_mean_at, orbital_state},
+    validate_range,
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -31,9 +32,11 @@ impl SolarForcingConfig {
         if !self.orbital_phase.is_finite() {
             return Err(SolarForcingError::OrbitalPhase);
         }
-        if !ANNUAL_SAMPLE_RANGE.contains(&self.annual_sample_count) {
-            return Err(SolarForcingError::AnnualSampleCount);
-        }
+        validate_range(
+            self.annual_sample_count,
+            &ANNUAL_SAMPLE_RANGE,
+            SolarForcingError::AnnualSampleCount,
+        )?;
         Ok(())
     }
 }

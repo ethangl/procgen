@@ -10,6 +10,17 @@ pub const fn is_land(elevation: f32) -> bool {
     elevation > SEA_LEVEL
 }
 
+/// Converts normalized land elevation to physical meters. Ocean and sea-level
+/// cells have zero land height.
+pub fn land_elevation_meters(elevation: f32, maximum_land_elevation_meters: f64) -> f64 {
+    if is_land(elevation) {
+        (f64::from(elevation) - f64::from(SEA_LEVEL)) / (1.0 - f64::from(SEA_LEVEL))
+            * maximum_land_elevation_meters
+    } else {
+        0.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CoarseElevationConfig {
     pub smoothing_passes: usize,
@@ -185,6 +196,14 @@ mod tests {
         assert!(elevation.is_land(0));
         elevation.cell_elevations.pop();
         assert_eq!(elevation.validate(&mesh), Err(StageInputError::Elevation));
+    }
+
+    #[test]
+    fn normalized_land_elevation_has_one_canonical_physical_scale() {
+        assert_eq!(land_elevation_meters(SEA_LEVEL, 10_000.0), 0.0);
+        assert_eq!(land_elevation_meters(0.75, 10_000.0), 5_000.0);
+        assert_eq!(land_elevation_meters(1.0, 10_000.0), 10_000.0);
+        assert_eq!(land_elevation_meters(0.25, 10_000.0), 0.0);
     }
 
     #[test]

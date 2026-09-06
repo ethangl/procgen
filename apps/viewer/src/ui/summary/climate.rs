@@ -9,6 +9,84 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     radiative_equilibrium_summary(ui, world);
     seasonal_thermal_summary(ui, world);
     atmospheric_circulation_summary(ui, world);
+    moisture_transport_summary(ui, world);
+}
+
+fn moisture_transport_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+    let diagnostics = &world.moisture_transport.diagnostics;
+    let config = world.config.moisture_transport;
+    stat_grid(ui, "Moisture and precipitation", "moisture", |ui| {
+        stat(ui, "Steps", config.step_count);
+        stat(
+            ui,
+            "Step duration",
+            format!("{:.1} h", config.step_seconds / 3_600.0),
+        );
+        stat(
+            ui,
+            "Simulated duration",
+            format!("{:.1} days", diagnostics.simulated_days),
+        );
+        area_weighted_stats(
+            ui,
+            "Humidity",
+            "kg/m2",
+            &diagnostics.humidity_kg_per_m2,
+            fixed_one,
+        );
+        area_weighted_stats(
+            ui,
+            "Capacity",
+            "kg/m2",
+            &diagnostics.moisture_capacity_kg_per_m2,
+            fixed_one,
+        );
+        area_weighted_stats(
+            ui,
+            "Evaporation",
+            "kg/m2/day",
+            &diagnostics.evaporation_kg_per_m2_per_day,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Precipitation",
+            "kg/m2/day",
+            &diagnostics.precipitation_kg_per_m2_per_day,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Condensation",
+            "kg/m2/day",
+            &diagnostics.condensation_kg_per_m2_per_day,
+            scientific_three,
+        );
+        area_weighted_stats(
+            ui,
+            "Orographic",
+            "kg/m2/day",
+            &diagnostics.orographic_precipitation_kg_per_m2_per_day,
+            scientific_three,
+        );
+        stat(ui, "Ocean cells", diagnostics.ocean_cell_count);
+        stat(
+            ui,
+            "Precipitating cells",
+            diagnostics.precipitating_cell_count,
+        );
+        stat(ui, "Orographic cells", diagnostics.orographic_cell_count);
+        stat(
+            ui,
+            "Maximum orographic fraction",
+            format!("{:.3}", diagnostics.maximum_orographic_fraction_per_step),
+        );
+        stat(
+            ui,
+            "Mass-balance residual",
+            format!("{:.3e} kg/m2", diagnostics.mass_balance_error_kg_per_m2),
+        );
+    });
 }
 
 fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
@@ -31,6 +109,11 @@ fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
                 "{:.2} J/kg/K",
                 planet.atmospheric_specific_gas_constant_joules_per_kilogram_kelvin
             ),
+        );
+        stat(
+            ui,
+            "Maximum land elevation",
+            format!("{:.1} km", planet.maximum_land_elevation_meters / 1_000.0),
         );
     });
 }
