@@ -135,7 +135,6 @@ struct CellCirculation {
     pressure_acceleration: f32,
     coriolis: f32,
     terrain_steering_fraction: f32,
-    terrain_steered: bool,
     speed_capped: bool,
     tangency_error: f32,
 }
@@ -199,7 +198,6 @@ impl AtmosphericCirculationModel {
             pressure_acceleration: acceleration.length(),
             coriolis: coriolis as f32,
             terrain_steering_fraction,
-            terrain_steered: terrain_steering_fraction > 0.0,
             speed_capped,
             tangency_error: wind.dot(normal).abs(),
         }
@@ -246,7 +244,10 @@ impl AtmosphericCirculation {
                 .iter()
                 .filter(|cell| cell.speed <= CALM_WIND_SPEED_METERS_PER_SECOND)
                 .count(),
-            terrain_steered_cell_count: cells.iter().filter(|cell| cell.terrain_steered).count(),
+            terrain_steered_cell_count: cells
+                .iter()
+                .filter(|cell| cell.terrain_steering_fraction > 0.0)
+                .count(),
             speed_capped_cell_count: cells.iter().filter(|cell| cell.speed_capped).count(),
             maximum_tangency_error_meters_per_second: cells
                 .iter()
