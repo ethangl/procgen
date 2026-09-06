@@ -10,7 +10,7 @@ use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, pr
 use layers::GizmoSpec;
 use surfaces::empty_surface_mesh;
 
-pub(super) const SURFACE_RADIUS: f32 = 1.0;
+const SURFACE_RADIUS: f32 = 1.0;
 const DEPTH_SCALE_STEP: f32 = 0.004;
 
 #[derive(Resource)]
@@ -31,10 +31,8 @@ impl OverlaySettings {
         self.visible[layer.index()] = visible;
     }
 
-    fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
-        let layer_order = layer
-            .depth_order()
-            .expect("only standalone overlays have a depth scale");
+    fn depth_scale(&self, layer: DiagnosticLayer) -> Option<f32> {
+        let layer_order = layer.depth_order()?;
         let visible_layers_before = DiagnosticLayer::ALL
             .iter()
             .filter(|&&candidate| {
@@ -45,7 +43,7 @@ impl OverlaySettings {
             })
             .count();
 
-        1.0 + (visible_layers_before + 1) as f32 * DEPTH_SCALE_STEP
+        Some(1.0 + (visible_layers_before + 1) as f32 * DEPTH_SCALE_STEP)
     }
 }
 
@@ -216,8 +214,8 @@ fn sync_layer_render_state(
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
     for (layer, mut transform) in &mut layer_transforms {
-        if layer.overlay_kind().is_some() {
-            transform.scale = Vec3::splat(overlays.depth_scale(*layer));
+        if let Some(depth_scale) = overlays.depth_scale(*layer) {
+            transform.scale = Vec3::splat(depth_scale);
         }
     }
 
@@ -239,7 +237,7 @@ fn sync_layer_render_state(
     **camera_layers = RenderLayers::from_layers(&layers);
 }
 
-pub(super) fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
+fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
     Vec3::new(point.x, point.y, point.z)
 }
 
@@ -254,7 +252,7 @@ mod tests {
 
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Motion),
-            1.0 + DEPTH_SCALE_STEP
+            Some(1.0 + DEPTH_SCALE_STEP)
         );
     }
 
@@ -266,11 +264,11 @@ mod tests {
 
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Boundaries),
-            1.0 + DEPTH_SCALE_STEP
+            Some(1.0 + DEPTH_SCALE_STEP)
         );
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Motion),
-            1.0 + 2.0 * DEPTH_SCALE_STEP
+            Some(1.0 + 2.0 * DEPTH_SCALE_STEP)
         );
     }
 }
