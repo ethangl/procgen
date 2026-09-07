@@ -3163,6 +3163,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "procgen-noise"
+version = "0.1.0"
+dependencies = [
+ "procgen-core",
+]
+
+[[package]]
 name = "procgen-planet"
 version = "0.1.0"
 
