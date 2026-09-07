@@ -16,19 +16,15 @@ pub struct OctaveConfig {
     pub frequency: f32,
     /// Frequency multiplier applied after each octave.
     pub lacunarity: f32,
-    /// Amplitude applied to octave zero.
-    pub amplitude: f32,
-    /// Amplitude multiplier applied after each octave.
-    pub gain: f32,
 }
 
 impl OctaveConfig {
     /// Validates the configuration once before repeated sampling.
-    pub fn validate(self) -> Result<ValidatedOctaveConfig, FractalParameterError> {
+    pub fn validate(self) -> Result<Validated<Self>, FractalParameterError> {
         if self.octaves > MAX_OCTAVES {
             return Err(FractalParameterError::InvalidParameter {
                 name: "octaves",
-                requirement: "must not exceed 32",
+                requirement: "must not exceed MAX_OCTAVES",
             });
         }
         validate_positive("frequency", self.frequency)?;
@@ -38,53 +34,48 @@ impl OctaveConfig {
                 requirement: "must be finite and at least 1",
             });
         }
-        validate_non_negative("amplitude", self.amplitude)?;
-        if !self.gain.is_finite() || !(0.0..=1.0).contains(&self.gain) {
-            return Err(FractalParameterError::InvalidParameter {
-                name: "gain",
-                requirement: "must be finite and in [0, 1]",
+        if self
+            .octaves(OctaveGain(1.0))
+            .any(|octave| !octave.frequency.is_finite())
+        {
+            return Err(FractalParameterError::NumericalRange {
+                name: "octave frequency progression",
             });
         }
+        Ok(Validated(self))
+    }
 
-        let validated = ValidatedOctaveConfig(self);
-        let mut amplitude_sum = 0.0;
-        for octave in validated.octaves() {
-            if !octave.frequency.is_finite() {
-                return Err(FractalParameterError::NumericalRange {
-                    name: "octave frequency progression",
-                });
-            }
-            amplitude_sum += octave.amplitude;
-            if !amplitude_sum.is_finite() {
-                return Err(FractalParameterError::NumericalRange {
-                    name: "octave amplitude sum",
-                });
-            }
+    fn octaves(self, gain: OctaveGain) -> Octaves {
+        Octaves {
+            remaining: self.octaves,
+            frequency: self.frequency,
+            lacunarity: self.lacunarity,
+            amplitude: 1.0,
+            gain: gain.0,
         }
-        Ok(validated)
     }
 }
 
-/// An octave configuration validated for repeated sampling.
+/// A configuration validated for repeated sampling.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ValidatedOctaveConfig(OctaveConfig);
+pub struct Validated<T>(T);
 
-impl ValidatedOctaveConfig {
-    /// Sum of the configured octave amplitudes.
-    ///
-    /// Fractal outputs are deliberately not normalized. This value lets a
-    /// caller normalize explicitly or apply the documented conservative bounds.
-    pub fn amplitude_sum(self) -> f32 {
-        self.octaves().map(|octave| octave.amplitude).sum()
-    }
+/// A validated per-sample amplitude gain for successive octaves.
+///
+/// Keeping gain separate from [`OctaveConfig`] lets a roughness field vary it
+/// per position without repeating structural octave validation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OctaveGain(f32);
 
-    fn octaves(self) -> Octaves {
-        Octaves {
-            remaining: self.0.octaves,
-            frequency: self.0.frequency,
-            lacunarity: self.0.lacunarity,
-            amplitude: self.0.amplitude,
-            gain: self.0.gain,
+impl OctaveGain {
+    pub fn new(value: f32) -> Result<Self, FractalParameterError> {
+        if value.is_finite() && (0.0..=1.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(FractalParameterError::InvalidParameter {
+                name: "gain",
+                requirement: "must be finite and in [0, 1]",
+            })
         }
     }
 }
@@ -101,24 +92,12 @@ pub struct RidgedMultifractalConfig {
 
 impl RidgedMultifractalConfig {
     /// Validates the configuration once before repeated sampling.
-    pub fn validate(self) -> Result<ValidatedRidgedMultifractalConfig, FractalParameterError> {
-        let octaves = self.octaves.validate()?;
+    pub fn validate(self) -> Result<Validated<Self>, FractalParameterError> {
+        self.octaves.validate()?;
         validate_positive("ridge_offset", self.ridge_offset)?;
         validate_non_negative("ridge_gain", self.ridge_gain)?;
-        Ok(ValidatedRidgedMultifractalConfig {
-            octaves,
-            ridge_offset: self.ridge_offset,
-            ridge_gain: self.ridge_gain,
-        })
+        Ok(Validated(self))
     }
-}
-
-/// A ridged multifractal configuration validated for repeated sampling.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ValidatedRidgedMultifractalConfig {
-    octaves: ValidatedOctaveConfig,
-    ridge_offset: f32,
-    ridge_gain: f32,
 }
 
 /// Controls for derivative-damped fbm accumulation.
@@ -131,21 +110,11 @@ pub struct DerivativeDampedConfig {
 
 impl DerivativeDampedConfig {
     /// Validates the configuration once before repeated sampling.
-    pub fn validate(self) -> Result<ValidatedDerivativeDampedConfig, FractalParameterError> {
-        let octaves = self.octaves.validate()?;
+    pub fn validate(self) -> Result<Validated<Self>, FractalParameterError> {
+        self.octaves.validate()?;
         validate_non_negative("damping", self.damping)?;
-        Ok(ValidatedDerivativeDampedConfig {
-            octaves,
-            damping: self.damping,
-        })
+        Ok(Validated(self))
     }
-}
-
-/// A derivative-damped configuration validated for repeated sampling.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ValidatedDerivativeDampedConfig {
-    octaves: ValidatedOctaveConfig,
-    damping: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,15 +184,36 @@ impl Iterator for Octaves {
     }
 }
 
+/// Sum of the unit starting amplitude and its gain-scaled octave amplitudes.
+///
+/// Fractal outputs are deliberately not normalized. This factor lets callers
+/// normalize explicitly or apply the documented conservative bounds. The
+/// explicit zero fold is part of the canonical CPU arithmetic.
+pub fn amplitude_sum(config: Validated<OctaveConfig>, gain: OctaveGain) -> f32 {
+    config
+        .0
+        .octaves(gain)
+        .fold(0.0, |sum, octave| sum + octave.amplitude)
+}
+
 /// Accumulates plain fractional Brownian motion from [`gradient_noise_3d`].
 ///
 /// Values are an unnormalized amplitude-weighted sum. Cubic gradient noise is
 /// conservatively bounded by `[-2, 2]`, so this result is bounded by twice
-/// [`ValidatedOctaveConfig::amplitude_sum`]. Each octave sample includes the
+/// [`amplitude_sum`]. Each octave sample includes the
 /// chain-rule frequency factor in its spatial derivative before accumulation.
-pub fn fbm_3d(seed: u64, position: Vec3, config: ValidatedOctaveConfig) -> NoiseSample3 {
+/// Octave zero has unit amplitude; callers apply a spatially varying overall
+/// amplitude by multiplying the returned sample, scaling value and derivative
+/// together.
+pub fn fbm_3d(
+    seed: u64,
+    position: Vec3,
+    config: Validated<OctaveConfig>,
+    gain: OctaveGain,
+) -> NoiseSample3 {
     config
-        .octaves()
+        .0
+        .octaves(gain)
         .fold(NoiseSample3::default(), |sum, octave| {
             sum + octave.sample(seed, position) * octave.amplitude
         })
@@ -237,19 +227,22 @@ pub fn fbm_3d(seed: u64, position: Vec3, config: ValidatedOctaveConfig) -> Noise
 /// `[-2, 2]` bound, the value is at most the amplitude sum multiplied by
 /// `max(ridge_offset, abs(ridge_offset - 2))^2`. Derivatives propagate through
 /// the absolute value, square, feedback weight, and amplitude. The derivative
-/// of `abs` is defined as zero at exactly zero.
+/// of `abs` is defined as zero at exactly zero. Callers apply overall amplitude
+/// to the returned sample.
 pub fn ridged_multifractal_3d(
     seed: u64,
     position: Vec3,
-    config: ValidatedRidgedMultifractalConfig,
+    config: Validated<RidgedMultifractalConfig>,
+    gain: OctaveGain,
 ) -> NoiseSample3 {
+    let config = config.0;
     let mut result = NoiseSample3::default();
     let mut weight = NoiseSample3 {
         value: 1.0,
         derivative: Vec3::ZERO,
     };
 
-    for octave in config.octaves.octaves() {
+    for octave in config.octaves.octaves(gain) {
         let sample = octave.sample(seed, position);
         let absolute_derivative = if sample.value > 0.0 {
             sample.derivative
@@ -294,13 +287,16 @@ pub fn ridged_multifractal_3d(
 /// returned derivative is the accumulated slope used by the damping recurrence;
 /// as is conventional for derivative-damped fbm, the spatial derivative of the
 /// adaptive damping weight itself is not included.
+/// Callers apply overall amplitude to the returned sample.
 pub fn derivative_damped_fbm_3d(
     seed: u64,
     position: Vec3,
-    config: ValidatedDerivativeDampedConfig,
+    config: Validated<DerivativeDampedConfig>,
+    gain: OctaveGain,
 ) -> NoiseSample3 {
+    let config = config.0;
     let mut result = NoiseSample3::default();
-    for octave in config.octaves.octaves() {
+    for octave in config.octaves.octaves(gain) {
         let attenuation = (1.0 + config.damping * result.derivative.length_squared()).recip();
         result += octave.sample(seed, position) * (octave.amplitude * attenuation);
     }
@@ -342,16 +338,18 @@ mod tests {
             octaves,
             frequency: 1.25,
             lacunarity: 2.0,
-            amplitude: 0.8,
-            gain: 0.5,
         }
     }
 
-    fn valid_octaves(octaves: u32) -> ValidatedOctaveConfig {
+    fn gain() -> OctaveGain {
+        OctaveGain::new(0.5).unwrap()
+    }
+
+    fn valid_octaves(octaves: u32) -> Validated<OctaveConfig> {
         octave_config(octaves).validate().unwrap()
     }
 
-    fn valid_ridged(octaves: u32, ridge_gain: f32) -> ValidatedRidgedMultifractalConfig {
+    fn valid_ridged(octaves: u32, ridge_gain: f32) -> Validated<RidgedMultifractalConfig> {
         RidgedMultifractalConfig {
             octaves: octave_config(octaves),
             ridge_offset: 1.0,
@@ -361,7 +359,7 @@ mod tests {
         .unwrap()
     }
 
-    fn valid_damped(octaves: u32, damping: f32) -> ValidatedDerivativeDampedConfig {
+    fn valid_damped(octaves: u32, damping: f32) -> Validated<DerivativeDampedConfig> {
         DerivativeDampedConfig {
             octaves: octave_config(octaves),
             damping,
@@ -372,60 +370,80 @@ mod tests {
 
     #[test]
     fn stable_vectors() {
-        let fbm = fbm_3d(SEED, POSITION, valid_octaves(5));
-        let ridged = ridged_multifractal_3d(SEED, POSITION, valid_ridged(5, 2.0));
-        let damped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 0.75));
+        let fbm = fbm_3d(SEED, POSITION, valid_octaves(5), gain());
+        let ridged = ridged_multifractal_3d(SEED, POSITION, valid_ridged(5, 2.0), gain());
+        let damped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 0.75), gain());
 
         assert_eq!(
             sample_bits(fbm),
-            [0x3E84_2ED8, 0x3F12_1C87, 0x3FE6_089A, 0xC003_8B2B]
+            [0x3EA5_3A8E, 0x3F36_A3A8, 0x400F_C560, 0xC024_6DF6]
         );
         assert_eq!(
             sample_bits(ridged),
-            [0x3F86_9004, 0xBF7D_D485, 0xC08A_D25A, 0x3ED6_FF7C]
+            [0x3FA8_3406, 0xBF9E_A4D2, 0xC0AD_86F0, 0x3F06_5FAE]
         );
         assert_eq!(
             sample_bits(damped),
-            [0x3E4F_8209, 0xBF02_7974, 0x3FA8_44CE, 0xBFA7_BED1]
+            [0x3E7C_0C6E, 0xBF3D_220F, 0x3FC2_824C, 0xBFBB_CC53]
         );
     }
 
     #[test]
     fn zero_and_one_octave_cutoffs_are_exact() {
         let zero = valid_octaves(0);
-        assert_eq!(fbm_3d(SEED, POSITION, zero), NoiseSample3::default());
+        assert_eq!(amplitude_sum(zero, gain()).to_bits(), 0.0_f32.to_bits());
         assert_eq!(
-            derivative_damped_fbm_3d(SEED, POSITION, valid_damped(0, 100.0)),
+            fbm_3d(SEED, POSITION, zero, gain()),
             NoiseSample3::default()
         );
         assert_eq!(
-            ridged_multifractal_3d(SEED, POSITION, valid_ridged(0, 2.0)),
+            derivative_damped_fbm_3d(SEED, POSITION, valid_damped(0, 100.0), gain()),
+            NoiseSample3::default()
+        );
+        assert_eq!(
+            ridged_multifractal_3d(SEED, POSITION, valid_ridged(0, 2.0), gain()),
             NoiseSample3::default()
         );
 
         let config = octave_config(1);
         let basis = gradient_noise_3d(SEED, POSITION * config.frequency);
         let expected_fbm = NoiseSample3 {
-            value: basis.value * config.amplitude,
-            derivative: basis.derivative * config.frequency * config.amplitude,
+            value: basis.value,
+            derivative: basis.derivative * config.frequency,
         };
         assert_eq!(
-            fbm_3d(SEED, POSITION, config.validate().unwrap()),
+            fbm_3d(SEED, POSITION, config.validate().unwrap(), gain()),
             expected_fbm
         );
         assert_eq!(
-            derivative_damped_fbm_3d(SEED, POSITION, valid_damped(1, 100.0)),
+            derivative_damped_fbm_3d(SEED, POSITION, valid_damped(1, 100.0), gain()),
             expected_fbm
+        );
+    }
+
+    #[test]
+    fn gain_can_vary_per_sample_without_revalidating_octave_structure() {
+        let config = valid_octaves(5);
+        let smooth = OctaveGain::new(0.25).unwrap();
+        let rough = OctaveGain::new(0.75).unwrap();
+
+        assert_ne!(
+            fbm_3d(SEED, POSITION, config, smooth),
+            fbm_3d(SEED, POSITION, config, rough)
+        );
+        assert_eq!(
+            fbm_3d(SEED, POSITION, valid_octaves(1), smooth),
+            fbm_3d(SEED, POSITION, valid_octaves(1), rough)
         );
     }
 
     #[test]
     fn increasing_fbm_cutoff_adds_exactly_one_octave() {
         let config = octave_config(5);
-        let four_sample = fbm_3d(SEED, POSITION, valid_octaves(4));
-        let five_sample = fbm_3d(SEED, POSITION, config.validate().unwrap());
+        let four_sample = fbm_3d(SEED, POSITION, valid_octaves(4), gain());
+        let five_sample = fbm_3d(SEED, POSITION, config.validate().unwrap(), gain());
         let fifth_frequency = config.frequency * config.lacunarity.powi(4);
-        let fifth_amplitude = config.amplitude * config.gain.powi(4);
+        let fifth_amplitude = 0.5_f32.powi(4);
         let fifth_basis = gradient_noise_3d(SEED, POSITION * fifth_frequency);
 
         assert_eq!(
@@ -445,20 +463,22 @@ mod tests {
         let octaves = valid_octaves(4);
         let ridged = valid_ridged(4, 1.4);
 
-        assert_derivative_matches(STEP, TOLERANCE, |position| fbm_3d(SEED, position, octaves));
         assert_derivative_matches(STEP, TOLERANCE, |position| {
-            ridged_multifractal_3d(SEED, position, ridged)
+            fbm_3d(SEED, position, octaves, gain())
+        });
+        assert_derivative_matches(STEP, TOLERANCE, |position| {
+            ridged_multifractal_3d(SEED, position, ridged, gain())
         });
     }
 
     #[test]
     fn zero_damping_matches_fbm_and_positive_damping_suppresses_later_octaves() {
-        let plain = fbm_3d(SEED, POSITION, valid_octaves(5));
-        let undamped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 0.0));
+        let plain = fbm_3d(SEED, POSITION, valid_octaves(5), gain());
+        let undamped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 0.0), gain());
         assert_eq!(undamped, plain);
 
-        let first = fbm_3d(SEED, POSITION, valid_octaves(1));
-        let damped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 4.0));
+        let first = fbm_3d(SEED, POSITION, valid_octaves(1), gain());
+        let damped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 4.0), gain());
         assert!((damped.value - first.value).abs() < (plain.value - first.value).abs());
         assert!(
             (damped.derivative - first.derivative).length()
@@ -488,15 +508,8 @@ mod tests {
             config.lacunarity = invalid;
             assert!(config.validate().is_err());
         }
-        for invalid in [-1.0, f32::INFINITY, f32::NAN] {
-            let mut config = octave_config(4);
-            config.amplitude = invalid;
-            assert!(config.validate().is_err());
-        }
         for invalid in [-0.1, 1.1, f32::INFINITY, f32::NAN] {
-            let mut config = octave_config(4);
-            config.gain = invalid;
-            assert!(config.validate().is_err());
+            assert!(OctaveGain::new(invalid).is_err());
         }
 
         let mut config = octave_config(MAX_OCTAVES);
@@ -507,16 +520,6 @@ mod tests {
                 name: "octave frequency progression"
             })
         ));
-        config = octave_config(MAX_OCTAVES);
-        config.amplitude = f32::MAX;
-        config.gain = 1.0;
-        assert!(matches!(
-            config.validate(),
-            Err(FractalParameterError::NumericalRange {
-                name: "octave amplitude sum"
-            })
-        ));
-
         for invalid in [0.0, -1.0, f32::INFINITY, f32::NAN] {
             assert!(
                 RidgedMultifractalConfig {
@@ -555,9 +558,8 @@ mod tests {
             octaves: 11,
             frequency: 0.75,
             lacunarity: 2.0,
-            amplitude: 1.0,
-            gain: 0.5,
         };
+        let gain = OctaveGain::new(0.5).unwrap();
         let octaves = octave_config.validate().unwrap();
         let ridged = RidgedMultifractalConfig {
             octaves: octave_config,
@@ -579,19 +581,25 @@ mod tests {
             Vec3::new(8.25, -13.5, 21.75),
         ];
         assert_ne!(
-            fbm_3d(SEED, POSITION, octaves),
-            fbm_3d(SEED + 1, POSITION, octaves)
+            fbm_3d(SEED, POSITION, octaves, gain),
+            fbm_3d(SEED + 1, POSITION, octaves, gain)
         );
 
         for position in positions {
             let samples = [
-                fbm_3d(SEED, position, octaves),
-                ridged_multifractal_3d(SEED, position, ridged),
-                derivative_damped_fbm_3d(SEED, position, damped),
+                fbm_3d(SEED, position, octaves, gain),
+                ridged_multifractal_3d(SEED, position, ridged, gain),
+                derivative_damped_fbm_3d(SEED, position, damped, gain),
             ];
-            assert_eq!(samples[0], fbm_3d(SEED, position, octaves));
-            assert_eq!(samples[1], ridged_multifractal_3d(SEED, position, ridged));
-            assert_eq!(samples[2], derivative_damped_fbm_3d(SEED, position, damped));
+            assert_eq!(samples[0], fbm_3d(SEED, position, octaves, gain));
+            assert_eq!(
+                samples[1],
+                ridged_multifractal_3d(SEED, position, ridged, gain)
+            );
+            assert_eq!(
+                samples[2],
+                derivative_damped_fbm_3d(SEED, position, damped, gain)
+            );
 
             for sample in samples {
                 assert!(sample.value.is_finite());
@@ -599,9 +607,10 @@ mod tests {
                 assert!(sample.derivative.y.is_finite());
                 assert!(sample.derivative.z.is_finite());
             }
-            assert!(samples[0].value.abs() <= 2.0 * octaves.amplitude_sum());
-            assert!(samples[2].value.abs() <= 2.0 * octaves.amplitude_sum());
-            assert!((0.0..=octaves.amplitude_sum()).contains(&samples[1].value));
+            let amplitude_sum = amplitude_sum(octaves, gain);
+            assert!(samples[0].value.abs() <= 2.0 * amplitude_sum);
+            assert!(samples[2].value.abs() <= 2.0 * amplitude_sum);
+            assert!((0.0..=amplitude_sum).contains(&samples[1].value));
         }
     }
 
