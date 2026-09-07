@@ -7,7 +7,7 @@ use crate::{NoiseSample3, gradient_noise_3d};
 /// Maximum supported octave count for CPU fractal accumulation.
 pub const MAX_OCTAVES: u32 = 32;
 
-/// Frequency and amplitude progression for fractal noise.
+/// Octave count and frequency progression for fractal noise.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OctaveConfig {
     /// Number of octaves to accumulate. Zero produces a zero sample.
