@@ -1,6 +1,6 @@
 //! Deterministic composition of authoritative coarse fields into terrain-detail controls.
 //!
-//! This crate only derives per-cell controls and stable sparse stamp inputs. It does not
+//! This module only derives per-cell controls and stable sparse stamp inputs. It does not
 //! interpolate, bake, evaluate noise, or mutate any upstream field.
 
 use procgen_core::Vec3;
@@ -233,12 +233,14 @@ struct CellBoundaryStrengths {
 }
 
 impl CellBoundaryStrengths {
-    fn for_class(&mut self, class: BoundaryClass) -> Option<&mut f32> {
+    fn for_class(&mut self, class: BoundaryClass) -> &mut f32 {
         match class {
-            BoundaryClass::Convergent => Some(&mut self.convergent),
-            BoundaryClass::Divergent => Some(&mut self.divergent),
-            BoundaryClass::Transform => Some(&mut self.transform),
-            BoundaryClass::Interior => None,
+            BoundaryClass::Convergent => &mut self.convergent,
+            BoundaryClass::Divergent => &mut self.divergent,
+            BoundaryClass::Transform => &mut self.transform,
+            BoundaryClass::Interior => {
+                unreachable!("interior edges do not have boundary strength")
+            }
         }
     }
 }
@@ -259,9 +261,8 @@ pub fn compose_terrain_controls(
         };
         let strength = (strength / config.boundary_strength_saturation).clamp(0.0, 1.0);
         for &cell in &edge.cells {
-            if let Some(cell_strength) = boundary_strengths[cell].for_class(class) {
-                *cell_strength = cell_strength.max(strength);
-            }
+            let cell_strength = boundary_strengths[cell].for_class(class);
+            *cell_strength = cell_strength.max(strength);
         }
     }
 
