@@ -130,12 +130,13 @@ bit-exact across x86 and ARM, so an export that must be reproducible anywhere
 runs on the CPU. GPU paths exist for speed and must agree with the CPU within
 one named tolerance constant.
 
-- The lattice hash is integer-only. `RandomStream` is 64-bit and WGSL has no
-  64-bit integers, so `procgen-core` gains a 32-bit counter-addressable hash
-  addressed by seed and three lattice coordinates. Its public vector table is
-  provisional until the first noise basis consumes it, then WGSL and CUDA
-  mirrors reproduce those same vectors bit-exactly. Agreement is verified by a
-  compute dispatch in a test rather than by inspection.
+- Lattice hashing is integer-only. `RandomStream` is 64-bit and WGSL has no
+  64-bit integers, so `procgen-core` gains a generic four-word 32-bit hash.
+  `procgen-noise` owns the lattice wrapper: it accepts a `u32` seed and three
+  `i32` coordinates, then reinterprets each signed coordinate's bits as `u32`.
+  Rust, WGSL, and CUDA use that same conversion. The core hash's public vector
+  table is provisional until this first consumer exists, then GPU mirrors
+  reproduce those vectors bit-exactly in a compute-dispatch test.
 - The float path uses add, multiply, floor, and lerp only. No transcendental
   functions inside noise, no fast-math flags, and FMA contraction either
   disabled or applied identically on every backend.
@@ -206,11 +207,11 @@ here.
 
 ## Crate layout
 
-- `procgen-core` gains a 32-bit counter-addressable hash beside
-  `RandomStream`. It is a pure primitive.
+- `procgen-core` gains a generic four-word 32-bit hash beside `RandomStream`.
+  It is a pure primitive.
 - `procgen-noise` is new: basis functions, fbm variants, the CPU
-  implementation, and the WGSL source as a checked-in asset. It carries no
-  domain knowledge.
+  implementation, the signed lattice-coordinate wrapper, and the WGSL source
+  as a checked-in asset. It carries no domain knowledge.
 - `procgen-gpu-tests` is a test-only integration crate added with the first GPU
   mirror. It owns wgpu dispatch agreement tests and has no production API.
 - `procgen-sphere-mesh` gains Delaunay point location. It is a mesh query.
@@ -233,8 +234,8 @@ Settled before implementation:
 - Control-face resolution is derived from the mesh at four texels per cell,
   not fixed.
 - The first basis is cubic-lattice gradient noise with analytic derivatives.
-  Plain fbm, ridged, and derivative-damped variants ship in the first slice;
-  domain warp ships with the first tile slice.
+  The basis ships in slice 2; plain fbm, ridged, and derivative-damped variants
+  ship in slice 3; domain warp ships in slice 10.
 - The CPU path is canonical. GPU agreement is one named constant set at ten
   times measured divergence, provisionally 1e-5 normalized.
 - `procgen-core` and `procgen-sphere-mesh` gain primitives; `procgen-noise`,
@@ -252,7 +253,7 @@ into the viewer.
 
 ### `procgen-core` hash and `procgen-noise`: gradient basis with derivatives, fbm, ridged, and derivative-damped accumulation, CPU implementation, WGSL source, and agreement tests.
 
-1. ~~Add the 32-bit counter-addressable hash and fixed test vectors to procgen-core.~~
+1. ~~Add the generic four-word 32-bit hash and provisional test vectors to procgen-core.~~
 2. Create procgen-noise with the CPU gradient basis and analytic derivatives only.
 3. Add CPU fbm, ridged, and derivative-damped accumulation.
 4. Add the WGSL mirror and a procgen-gpu-tests agreement dispatch—without viewer integration.
