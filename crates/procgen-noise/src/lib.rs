@@ -2,8 +2,15 @@
 
 use procgen_core::{Vec3, hash_u32};
 
+mod fractal;
+
+pub use fractal::{
+    DerivativeDampedSettings, FractalParameterError, MAX_OCTAVES, OctaveSettings,
+    RidgedMultifractalSettings, derivative_damped_fbm_3d, fbm_3d, ridged_multifractal_3d,
+};
+
 /// A cubic-lattice gradient-noise sample and its spatial derivative.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NoiseSample3 {
     pub value: f32,
     pub derivative: Vec3,
@@ -11,10 +18,11 @@ pub struct NoiseSample3 {
 
 /// Samples cubic-lattice gradient noise with a quintic interpolation curve.
 ///
-/// The supplied seed is narrowed once before lattice addressing. Positions
-/// whose floored components fit in `i32` are supported. Lattice hashing uses
-/// the signed coordinates' bit patterns, making the integer path directly
-/// reproducible in WGSL and CUDA.
+/// The workspace-standard `u64` seed is folded once into a `u32` lattice key;
+/// both halves influence that key, but the mapping is necessarily many-to-one.
+/// Positions whose floored components fit in `i32` are supported. Lattice
+/// hashing uses the signed coordinates' bit patterns, making the integer path
+/// directly reproducible in WGSL and CUDA.
 pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
     let seed = narrow_seed_to_u32(seed);
     let cell = [

@@ -130,13 +130,16 @@ bit-exact across x86 and ARM, so an export that must be reproducible anywhere
 runs on the CPU. GPU paths exist for speed and must agree with the CPU within
 one named tolerance constant.
 
-- Lattice hashing is integer-only. `RandomStream` is 64-bit and WGSL has no
-  64-bit integers, so `procgen-core` gains a generic four-word 32-bit hash.
-  `procgen-noise` owns the lattice wrapper: it accepts a `u32` seed and three
-  `i32` coordinates, then reinterprets each signed coordinate's bits as `u32`.
-  Rust, WGSL, and CUDA use that same conversion. The core hash's public vector
-  table is provisional until this first consumer exists, then GPU mirrors
-  reproduce those vectors bit-exactly in a compute-dispatch test.
+- Lattice hashing is integer-only. Workspace-facing noise APIs retain the
+  existing `u64` seed convention, while WGSL has no 64-bit integers.
+  `procgen-noise` therefore owns one named conversion that hashes both 32-bit
+  halves of the seed into a `u32` lattice key. This is deliberately a
+  many-to-one fold: all seed bits influence the result, but noise has a 32-bit
+  field-key namespace and distinct `u64` seeds are not guaranteed to select
+  distinct fields. Callers never narrow seeds themselves. The lattice wrapper
+  combines that key with three `i32` coordinates, reinterpreting each signed
+  coordinate's bits as `u32`. Rust, WGSL, and CUDA use the same conversion and
+  reproduce the core hash vectors bit-exactly in a compute-dispatch test.
 - The float path uses add, multiply, floor, and lerp only. No transcendental
   functions inside noise, no fast-math flags, and FMA contraction either
   disabled or applied identically on every backend.
@@ -254,8 +257,8 @@ into the viewer.
 ### `procgen-core` hash and `procgen-noise`: gradient basis with derivatives, fbm, ridged, and derivative-damped accumulation, CPU implementation, WGSL source, and agreement tests.
 
 1. ~~Add the generic four-word 32-bit hash and provisional test vectors to procgen-core.~~
-2. Create procgen-noise with the CPU gradient basis and analytic derivatives only.
-3. Add CPU fbm, ridged, and derivative-damped accumulation.
+2. ~~Create procgen-noise with the CPU gradient basis and analytic derivatives only.~~
+3. ~~Add CPU fbm, ridged, and derivative-damped accumulation.~~
 4. Add the WGSL mirror and a procgen-gpu-tests agreement dispatch—without viewer integration.
 
 ### `procgen-sphere-mesh` point location, `procgen-cubesphere` mapping and bake, and `procgen-terrain` control composition, cached with the snapshot.
