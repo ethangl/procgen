@@ -54,7 +54,7 @@ Port and validate one boundary at a time:
 2. Spherical topology and mesh invariants.
 3. Plate and coarse-elevation state.
 4. Geological modifiers and climate, individually.
-5. Dense terrain/refinement.
+5. Dense terrain/refinement; see `docs/terrain-detail-refinement.md`.
 6. Projection and tiled rasterization.
 7. Raster detail, filtering, previews, and exports.
 
