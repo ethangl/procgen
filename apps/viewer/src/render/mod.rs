@@ -19,6 +19,7 @@ pub struct ViewerRenderSettings {
     pub light_azimuth_degrees: f32,
     pub light_elevation_degrees: f32,
     pub light_illuminance: f32,
+    pub ambient_brightness: f32,
 }
 
 impl Default for ViewerRenderSettings {
@@ -27,7 +28,8 @@ impl Default for ViewerRenderSettings {
             relief_exaggeration: 0.16,
             light_azimuth_degrees: 35.0,
             light_elevation_degrees: 30.0,
-            light_illuminance: 80_000.0,
+            light_illuminance: 10_000.0,
+            ambient_brightness: 300.0,
         }
     }
 }
@@ -123,7 +125,7 @@ impl Plugin for DiagnosticRenderPlugin {
                             .or(resource_changed::<GeneratedWorld>)
                             .or(resource_changed::<ViewerRenderSettings>),
                     ),
-                    sync_directional_light.run_if(resource_changed::<ViewerRenderSettings>),
+                    sync_lighting.run_if(resource_changed::<ViewerRenderSettings>),
                 ),
             );
     }
@@ -283,9 +285,10 @@ fn sync_layer_render_state(
     **camera_layers = RenderLayers::from_layers(&layers);
 }
 
-fn sync_directional_light(
+fn sync_lighting(
     settings: Res<ViewerRenderSettings>,
     light: Single<(&mut DirectionalLight, &mut Transform), With<ViewerDirectionalLight>>,
+    mut ambient: ResMut<GlobalAmbientLight>,
 ) {
     let (mut directional_light, mut transform) = light.into_inner();
     directional_light.illuminance = settings.light_illuminance;
@@ -299,6 +302,7 @@ fn sync_directional_light(
         horizontal * azimuth.cos(),
     );
     *transform = Transform::from_translation(source * 3.0).looking_at(Vec3::ZERO, Vec3::Y);
+    ambient.brightness = settings.ambient_brightness;
 }
 
 fn to_bevy(point: procgen_core::Vec3) -> Vec3 {

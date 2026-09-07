@@ -131,6 +131,7 @@ fn cell_surface_mesh(
 
     let vertex_count = sphere.corners.len() + sphere.cell_count();
     let mut positions = Vec::with_capacity(vertex_count);
+    let mut normal_sources = Vec::with_capacity(vertex_count);
     let mut vertex_colors = Vec::with_capacity(vertex_count);
     let mut indices = Vec::with_capacity(sphere.corners.len() * 3);
 
@@ -145,6 +146,7 @@ fn cell_surface_mesh(
         let linear_color = LinearRgba::from(color).to_f32_array();
 
         positions.push(center.to_array());
+        normal_sources.push(cell);
         vertex_colors.push(linear_color);
         for corner in corners {
             let position = displaced_position(
@@ -153,6 +155,7 @@ fn cell_surface_mesh(
                 relief_exaggeration,
             );
             positions.push(position.to_array());
+            normal_sources.push(sphere.cell_count() + corner.vertex);
             vertex_colors.push(linear_color);
         }
 
@@ -169,12 +172,49 @@ fn cell_surface_mesh(
         }
     }
 
-    let mut mesh = empty_surface_mesh()
+    let normals = shared_geometry_normals(
+        &positions,
+        &indices,
+        &normal_sources,
+        sphere.cell_count() + sphere.vertex_count(),
+    );
+    empty_surface_mesh()
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors)
-        .with_inserted_indices(Indices::U32(indices));
-    mesh.compute_smooth_normals();
-    mesh
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+fn shared_geometry_normals(
+    positions: &[[f32; 3]],
+    indices: &[u32],
+    normal_sources: &[usize],
+    source_count: usize,
+) -> Vec<[f32; 3]> {
+    let mut source_normals = vec![Vec3::ZERO; source_count];
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = triangle else { unreachable!() };
+        let a = Vec3::from_array(positions[*a as usize]);
+        let b = Vec3::from_array(positions[*b as usize]);
+        let c = Vec3::from_array(positions[*c as usize]);
+        let face_normal = (b - a).cross(c - a);
+        for &vertex in triangle {
+            source_normals[normal_sources[vertex as usize]] += face_normal;
+        }
+    }
+
+    positions
+        .iter()
+        .zip(normal_sources)
+        .map(|(position, &source)| {
+            let normal = source_normals[source];
+            if normal.is_finite() && normal.length_squared() > 1.0e-20 {
+                normal.normalize().to_array()
+            } else {
+                Vec3::from_array(*position).normalize().to_array()
+            }
+        })
+        .collect()
 }
 
 fn displaced_position(direction: Vec3, elevation: f32, relief_exaggeration: f32) -> Vec3 {
@@ -316,5 +356,17 @@ mod tests {
                         > 1.0e-4
                 )
         );
+
+        let mut shared_corner_normals = vec![Vec::new(); sphere.vertex_count()];
+        let mut base = 0;
+        for cell in 0..sphere.cell_count() {
+            for (corner_offset, corner) in sphere.cell_corners(cell).iter().enumerate() {
+                shared_corner_normals[corner.vertex].push(relief_normals[base + 1 + corner_offset]);
+            }
+            base += 1 + sphere.cell_corners(cell).len();
+        }
+        assert!(shared_corner_normals.into_iter().all(|copies| {
+            copies.len() == 3 && copies[1..].iter().all(|copy| *copy == copies[0])
+        }));
     }
 }

@@ -97,8 +97,15 @@ fn render_controls(ui: &mut egui::Ui, settings: &mut ViewerRenderSettings) {
         ui,
         "Illuminance",
         &mut settings.light_illuminance,
-        0.0..=200_000.0,
-        1_000.0,
+        0.0..=30_000.0,
+        500.0,
+    );
+    drag_value(
+        ui,
+        "Ambient fill",
+        &mut settings.ambient_brightness,
+        0.0..=2_000.0,
+        50.0,
     );
 }
 
