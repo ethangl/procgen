@@ -1,8 +1,8 @@
 use crate::Vec3;
 
-const ITEM_MIX: u64 = 0xD1B5_4A32_D192_ED03;
-const STREAM_MIX: u64 = 0x8CB9_2BA7_2F3D_8DD7;
-const SAMPLE_STEP: u64 = 0x9E37_79B9_7F4A_7C15;
+const RANDOM_STREAM_ITEM_MIX: u64 = 0xD1B5_4A32_D192_ED03;
+const RANDOM_STREAM_ID_MIX: u64 = 0x8CB9_2BA7_2F3D_8DD7;
+const RANDOM_STREAM_SAMPLE_STEP: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// A deterministic, counter-addressable random stream.
 ///
@@ -21,8 +21,16 @@ impl RandomStream {
     }
 
     pub const fn sample_u64(self, item: u64, sample: u64) -> u64 {
-        let state = self.seed ^ item.wrapping_mul(ITEM_MIX) ^ self.stream.wrapping_mul(STREAM_MIX);
-        mix64(state.wrapping_add(sample.wrapping_add(1).wrapping_mul(SAMPLE_STEP)))
+        let state = self.seed
+            ^ item.wrapping_mul(RANDOM_STREAM_ITEM_MIX)
+            ^ self.stream.wrapping_mul(RANDOM_STREAM_ID_MIX);
+        mix64(
+            state.wrapping_add(
+                sample
+                    .wrapping_add(1)
+                    .wrapping_mul(RANDOM_STREAM_SAMPLE_STEP),
+            ),
+        )
     }
 
     /// Returns a reproducible value in `[0, 1)` using 24 significant bits.
@@ -44,6 +52,8 @@ impl RandomStream {
     }
 }
 
+// SplitMix64 finalizer by Sebastiano Vigna:
+// https://prng.di.unimi.it/splitmix64.c
 const fn mix64(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);

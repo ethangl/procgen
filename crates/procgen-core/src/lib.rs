@@ -11,6 +11,6 @@ mod random;
 pub mod random_streams;
 
 pub use fingerprint::fingerprint;
-pub use hash32::hash_u32;
+pub use hash32::{HASH_U32_TEST_VECTORS, hash_u32};
 pub use math::Vec3;
 pub use random::RandomStream;

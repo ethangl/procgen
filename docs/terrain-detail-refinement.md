@@ -103,14 +103,14 @@ so the noise begins where the mesh stops carrying information. With lacunarity
 The first basis is gradient noise on the cubic lattice with a quintic fade and
 analytic derivatives. It has the fewest float operations before the lattice
 floor, so the fewest points where backends can diverge, and it is the easiest
-to mirror across Rust, WGSL, and CUDA. Its grid artifacts are mostly hidden by
-the ridge and roughness controls; the basis sits behind a small interface so
-simplex can replace it if artifacts show on the sphere. Derivatives give tile
-normals without finite differences and enable derivative-damped accumulation,
-which suppresses high octaves on steep slopes and reads as erosion rather than
-static. Ridged multifractal handles mountain belts. Plain fbm, ridged, and
-derivative-damped accumulation ship together, because the baked ridge and
-roughness channels presuppose them.
+to mirror across Rust, WGSL, and CUDA. It ships as a plain function; a shared
+basis interface is extracted only if a second implementation proves the
+boundary. Its grid artifacts are mostly hidden by the ridge and roughness
+controls. Derivatives give tile normals without finite differences and enable
+derivative-damped accumulation, which suppresses high octaves on steep slopes
+and reads as erosion rather than static. Ridged multifractal handles mountain
+belts. Plain fbm, ridged, and derivative-damped accumulation ship together,
+because the baked ridge and roughness channels presuppose them.
 
 Coastlines are the one place additive noise misbehaves: it fragments the shore
 into lakes and islets and makes the fine ocean mask disagree with the mask
@@ -132,9 +132,10 @@ one named tolerance constant.
 
 - The lattice hash is integer-only. `RandomStream` is 64-bit and WGSL has no
   64-bit integers, so `procgen-core` gains a 32-bit counter-addressable hash
-  with stable test vectors. WGSL and CUDA mirrors reproduce those vectors
-  bit-exactly, verified by a compute dispatch in a test rather than by
-  inspection.
+  addressed by seed and three lattice coordinates. Its public vector table is
+  provisional until the first noise basis consumes it, then WGSL and CUDA
+  mirrors reproduce those same vectors bit-exactly. Agreement is verified by a
+  compute dispatch in a test rather than by inspection.
 - The float path uses add, multiply, floor, and lerp only. No transcendental
   functions inside noise, no fast-math flags, and FMA contraction either
   disabled or applied identically on every backend.
@@ -210,6 +211,8 @@ here.
 - `procgen-noise` is new: basis functions, fbm variants, the CPU
   implementation, and the WGSL source as a checked-in asset. It carries no
   domain knowledge.
+- `procgen-gpu-tests` is a test-only integration crate added with the first GPU
+  mirror. It owns wgpu dispatch agreement tests and has no production API.
 - `procgen-sphere-mesh` gains Delaunay point location. It is a mesh query.
 - `procgen-cubesphere` is new: the equi-angular mapping, tile addressing, and
   rasterization of mesh fields into faces. The heightmap plan already names
@@ -218,10 +221,9 @@ here.
   consumes the controls. They are one contract, and this is the layer where
   noise becomes terrain.
 
-The viewer consumes these crates and owns no generation logic. The wgpu
-dispatch test that checks the WGSL mirror against the CPU vectors lives where
-wgpu is already a dependency, so `procgen-noise` stays free of it even in
-tests.
+The viewer consumes these crates and owns no generation logic. GPU agreement
+also stays outside the viewer, so application structure does not own generation
+correctness.
 
 ## Decisions
 
@@ -253,7 +255,7 @@ into the viewer.
 1. ~~Add the 32-bit counter-addressable hash and fixed test vectors to procgen-core.~~
 2. Create procgen-noise with the CPU gradient basis and analytic derivatives only.
 3. Add CPU fbm, ridged, and derivative-damped accumulation.
-4. Add the WGSL mirror and GPU agreement tests—without viewer integration.
+4. Add the WGSL mirror and a procgen-gpu-tests agreement dispatch—without viewer integration.
 
 `procgen-sphere-mesh` point location, `procgen-cubesphere` mapping and bake, and `procgen-terrain` control composition, cached with the snapshot.
 
