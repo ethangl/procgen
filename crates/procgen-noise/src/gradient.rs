@@ -46,7 +46,10 @@ impl Mul<f32> for NoiseSample3 {
 /// hashing uses the signed coordinates' bit patterns, making the integer path
 /// directly reproducible in WGSL and CUDA.
 pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
-    let seed = fold_seed_u64_to_u32(seed);
+    gradient_noise_3d_from_key(fold_seed_u64_to_u32(seed), position)
+}
+
+pub(crate) fn gradient_noise_3d_from_key(seed: u32, position: Vec3) -> NoiseSample3 {
     let cell = [
         position.x.floor() as i32,
         position.y.floor() as i32,
@@ -67,11 +70,13 @@ pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
     for corner_z in 0..2 {
         for corner_y in 0..2 {
             for corner_x in 0..2 {
-                let gradient = lattice_gradient(
+                let gradient = lattice_gradient_3d(
                     seed,
-                    cell[0].wrapping_add(corner_x as i32),
-                    cell[1].wrapping_add(corner_y as i32),
-                    cell[2].wrapping_add(corner_z as i32),
+                    [
+                        cell[0].wrapping_add(corner_x as i32),
+                        cell[1].wrapping_add(corner_y as i32),
+                        cell[2].wrapping_add(corner_z as i32),
+                    ],
                 );
                 let displacement =
                     offset - Vec3::new(corner_x as f32, corner_y as f32, corner_z as f32);
@@ -97,7 +102,8 @@ pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
 ///
 /// The fixed domain tags keep this conversion distinct from lattice addresses.
 /// Both halves participate in the result, but the mapping is necessarily
-/// many-to-one. CPU and shader callers use this single canonical conversion.
+/// many-to-one. Host callers use this conversion once before passing the key
+/// to WGSL or CUDA.
 pub const fn fold_seed_u64_to_u32(seed: u64) -> u32 {
     const SEED_DOMAIN_TAG: u32 = 0x5345_4544; // ASCII "SEED"
     const NOISE_DOMAIN_TAG: u32 = 0x4E4F_4953; // ASCII "NOIS"
@@ -110,8 +116,13 @@ pub const fn fold_seed_u64_to_u32(seed: u64) -> u32 {
     )
 }
 
-fn lattice_gradient(seed: u32, x: i32, y: i32, z: i32) -> Vec3 {
-    GRADIENTS[(hash_u32(seed, x as u32, y as u32, z as u32) % GRADIENTS.len() as u32) as usize]
+/// Selects the cubic basis gradient for a folded field key and signed lattice cell.
+///
+/// Signed coordinates are hashed by their two's-complement `u32` bit patterns,
+/// matching WGSL's `bitcast<u32>` exactly.
+pub fn lattice_gradient_3d(key: u32, cell: [i32; 3]) -> Vec3 {
+    GRADIENTS[(hash_u32(key, cell[0] as u32, cell[1] as u32, cell[2] as u32)
+        % GRADIENTS.len() as u32) as usize]
 }
 
 const GRADIENTS: [Vec3; 12] = [

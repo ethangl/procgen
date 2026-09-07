@@ -5,9 +5,8 @@ const WORD_3_MIX: u32 = 0x27D4_EB2F;
 
 /// Cross-backend vectors for [`hash_u32`], stored as `([word0, ..., word3], hash)`.
 ///
-/// The values remain provisional until the first noise implementation consumes
-/// this primitive. CPU and GPU agreement tests should share this table rather
-/// than duplicate its literals.
+/// CPU and GPU agreement tests share this table rather than duplicate its
+/// literals.
 pub const HASH_U32_TEST_VECTORS: [([u32; 4], u32); 4] = [
     ([0, 0, 0, 0], 0x01FC_E552),
     ([7, 0, 0, 0], 0x3FD9_ABDB),

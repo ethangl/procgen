@@ -5,10 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-[[test]]
-name = "noise_agreement"
-path = "tests/noise_agreement.rs"
-
 [dev-dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
 procgen-core = { path = "../procgen-core" }

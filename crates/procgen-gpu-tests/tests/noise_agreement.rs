@@ -6,50 +6,280 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use procgen_core::{HASH_U32_TEST_VECTORS, Vec3, hash_u32};
+use procgen_core::{HASH_U32_TEST_VECTORS, Vec3};
 use procgen_noise::{
-    DerivativeDampedConfig, NoiseSample3, OctaveConfig, OctaveGain, RidgedMultifractalConfig,
-    WGSL_SOURCE, derivative_damped_fbm_3d, fbm_3d, fold_seed_u64_to_u32, gradient_noise_3d,
-    ridged_multifractal_3d,
+    DerivativeDampedConfig, NoiseSample3, OctaveConfig, OctaveGain,
+    PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE, PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE,
+    RidgedMultifractalConfig, WGSL_SOURCE, derivative_damped_fbm_3d, fbm_3d, fold_seed_u64_to_u32,
+    gradient_noise_3d, lattice_gradient_3d, ridged_multifractal_3d,
 };
 use wgpu::util::DeviceExt;
-
-/// Provisional absolute CPU/GPU agreement tolerance in normalized units.
-///
-/// The terrain-detail plan sets this at `1e-5`; measurements printed by this
-/// test will inform a later Metal-and-CUDA calibration.
-const PROVISIONAL_NOISE_AGREEMENT_TOLERANCE: f32 = 1.0e-5;
 
 const MODE_BASIS: u32 = 0;
 const MODE_FBM: u32 = 1;
 const MODE_RIDGED: u32 = 2;
 const MODE_DAMPED: u32 = 3;
 const MODE_CORE_HASH: u32 = 4;
-const MODE_LATTICE_HASH: u32 = 5;
+const MODE_LATTICE_GRADIENT: u32 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ShaderInput {
     words: [u32; 4],
-    seed: [u32; 2],
+    lattice_cell: [i32; 4],
+    position: [f32; 4],
+    key: u32,
     mode: u32,
     octaves: u32,
-    position: [f32; 4],
-    config: [f32; 4],
-    ridge: [f32; 4],
+    _padding_0: u32,
+    frequency: f32,
+    lacunarity: f32,
+    gain: f32,
+    damping: f32,
+    ridge_offset: f32,
+    ridge_gain: f32,
+    _padding_1: [u32; 2],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct ShaderOutput {
     hashes: [u32; 4],
-    sample: [f32; 4],
+    exact_sample: [f32; 4],
+    noise_sample: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
-struct FloatCase {
+struct NoiseParameters {
+    octaves: u32,
+    frequency: f32,
+    lacunarity: f32,
+    gain: f32,
+    damping: f32,
+    ridge_offset: f32,
+    ridge_gain: f32,
+}
+
+impl NoiseParameters {
+    const BASIS: Self = Self {
+        octaves: 0,
+        frequency: 0.0,
+        lacunarity: 0.0,
+        gain: 0.0,
+        damping: 0.0,
+        ridge_offset: 0.0,
+        ridge_gain: 0.0,
+    };
+
+    fn octave_config(self) -> OctaveConfig {
+        OctaveConfig {
+            octaves: self.octaves,
+            frequency: self.frequency,
+            lacunarity: self.lacunarity,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NoiseKind {
+    Basis,
+    Fbm,
+    Ridged,
+    Damped,
+}
+
+impl NoiseKind {
+    const fn mode(self) -> u32 {
+        match self {
+            Self::Basis => MODE_BASIS,
+            Self::Fbm => MODE_FBM,
+            Self::Ridged => MODE_RIDGED,
+            Self::Damped => MODE_DAMPED,
+        }
+    }
+
+    fn canonical_sample(
+        self,
+        seed: u64,
+        position: Vec3,
+        parameters: NoiseParameters,
+    ) -> NoiseSample3 {
+        if matches!(self, Self::Basis) {
+            return gradient_noise_3d(seed, position);
+        }
+
+        let gain = OctaveGain::new(parameters.gain).unwrap();
+        match self {
+            Self::Basis => unreachable!(),
+            Self::Fbm => fbm_3d(
+                seed,
+                position,
+                parameters.octave_config().validate().unwrap(),
+                gain,
+            ),
+            Self::Ridged => ridged_multifractal_3d(
+                seed,
+                position,
+                RidgedMultifractalConfig {
+                    octaves: parameters.octave_config(),
+                    ridge_offset: parameters.ridge_offset,
+                    ridge_gain: parameters.ridge_gain,
+                }
+                .validate()
+                .unwrap(),
+                gain,
+            ),
+            Self::Damped => derivative_damped_fbm_3d(
+                seed,
+                position,
+                DerivativeDampedConfig {
+                    octaves: parameters.octave_config(),
+                    damping: parameters.damping,
+                }
+                .validate()
+                .unwrap(),
+                gain,
+            ),
+        }
+    }
+}
+
+enum Case {
+    CoreHash {
+        words: [u32; 4],
+        expected: u32,
+    },
+    LatticeGradient {
+        label: &'static str,
+        key: u32,
+        cell: [i32; 3],
+        expected: Vec3,
+    },
+    Noise {
+        label: &'static str,
+        key: u32,
+        kind: NoiseKind,
+        position: Vec3,
+        parameters: NoiseParameters,
+        expected: NoiseSample3,
+    },
+}
+
+impl Case {
+    fn noise(
+        label: &'static str,
+        seed: u64,
+        kind: NoiseKind,
+        position: Vec3,
+        parameters: NoiseParameters,
+    ) -> Self {
+        Self::Noise {
+            label,
+            key: fold_seed_u64_to_u32(seed),
+            kind,
+            position,
+            parameters,
+            expected: kind.canonical_sample(seed, position, parameters),
+        }
+    }
+
+    fn input(&self) -> ShaderInput {
+        match *self {
+            Self::CoreHash { words, .. } => ShaderInput {
+                words,
+                mode: MODE_CORE_HASH,
+                ..ShaderInput::zeroed()
+            },
+            Self::LatticeGradient { key, cell, .. } => ShaderInput {
+                lattice_cell: [cell[0], cell[1], cell[2], 0],
+                key,
+                mode: MODE_LATTICE_GRADIENT,
+                ..ShaderInput::zeroed()
+            },
+            Self::Noise {
+                key,
+                kind,
+                position,
+                parameters,
+                ..
+            } => ShaderInput {
+                position: [position.x, position.y, position.z, 0.0],
+                key,
+                mode: kind.mode(),
+                octaves: parameters.octaves,
+                frequency: parameters.frequency,
+                lacunarity: parameters.lacunarity,
+                gain: parameters.gain,
+                damping: parameters.damping,
+                ridge_offset: parameters.ridge_offset,
+                ridge_gain: parameters.ridge_gain,
+                ..ShaderInput::zeroed()
+            },
+        }
+    }
+
+    fn check(&self, output: &ShaderOutput) -> Option<FloatMeasurement> {
+        match *self {
+            Self::CoreHash { expected, .. } => {
+                assert_eq!(output.hashes[0], expected, "core hash output");
+                None
+            }
+            Self::LatticeGradient {
+                label, expected, ..
+            } => {
+                let expected = [expected.x, expected.y, expected.z];
+                for (component, (&actual, &expected)) in
+                    output.exact_sample[..3].iter().zip(&expected).enumerate()
+                {
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "{label} lattice-gradient component {component}"
+                    );
+                }
+                None
+            }
+            Self::Noise {
+                label, expected, ..
+            } => {
+                let actual = NoiseSample3 {
+                    value: output.noise_sample[0],
+                    derivative: Vec3::new(
+                        output.noise_sample[1],
+                        output.noise_sample[2],
+                        output.noise_sample[3],
+                    ),
+                };
+                let value_difference = (actual.value - expected.value).abs();
+                let derivative_angle = derivative_angle(actual.derivative, expected.derivative);
+                assert!(
+                    value_difference <= PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE,
+                    "{label} value: GPU {} CPU {} difference {} exceeds {}",
+                    actual.value,
+                    expected.value,
+                    value_difference,
+                    PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE
+                );
+                assert!(
+                    derivative_angle <= PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE,
+                    "{label} derivative angle {derivative_angle} exceeds {}",
+                    PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE
+                );
+                Some(FloatMeasurement {
+                    label,
+                    value_difference,
+                    derivative_angle,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FloatMeasurement {
     label: &'static str,
-    expected: NoiseSample3,
+    value_difference: f32,
+    derivative_angle: f32,
 }
 
 #[test]
@@ -82,241 +312,164 @@ fn wgsl_noise_agrees_with_canonical_cpu() {
     }))
     .expect("a compatible adapter must provide a baseline compute device");
 
-    let (inputs, float_cases) = agreement_cases();
+    let cases = agreement_cases();
+    let inputs: Vec<_> = cases.iter().map(Case::input).collect();
     let outputs = dispatch(&device, &queue, &inputs);
-    assert_eq!(outputs.len(), inputs.len());
+    assert_eq!(outputs.len(), cases.len());
 
-    for (index, &([word0, word1, word2, word3], expected)) in
-        HASH_U32_TEST_VECTORS.iter().enumerate()
-    {
-        assert_eq!(
-            outputs[index].hashes[0], expected,
-            "core hash vector {index}"
-        );
-        assert_eq!(hash_u32(word0, word1, word2, word3), expected);
-    }
-
-    let lattice_start = HASH_U32_TEST_VECTORS.len();
-    for (case_index, input) in inputs[lattice_start..lattice_start + 4].iter().enumerate() {
-        let output = outputs[lattice_start + case_index];
-        let key = fold_seed_u64_to_u32(join_seed(input.seed));
-        let expected = hash_u32(key, input.words[0], input.words[1], input.words[2]);
-        assert_eq!(output.hashes[1], key, "seed fold vector {case_index}");
-        assert_eq!(
-            output.hashes[2], expected,
-            "lattice hash vector {case_index}"
-        );
-    }
-
-    let float_start = lattice_start + 4;
-    let mut maximum_difference = 0.0_f32;
-    let mut maximum_label = "";
-    let mut maximum_component = 0;
-    for (case_index, case) in float_cases.iter().enumerate() {
-        let actual = outputs[float_start + case_index].sample;
-        let expected = sample_components(case.expected);
-        for component in 0..4 {
-            let difference = (actual[component] - expected[component]).abs();
-            if difference > maximum_difference {
-                maximum_difference = difference;
-                maximum_label = case.label;
-                maximum_component = component;
-            }
-            assert!(
-                difference <= PROVISIONAL_NOISE_AGREEMENT_TOLERANCE,
-                "{} component {component}: GPU {} CPU {} difference {} exceeds {}",
-                case.label,
-                actual[component],
-                expected[component],
-                difference,
-                PROVISIONAL_NOISE_AGREEMENT_TOLERANCE
-            );
-        }
-    }
+    let measurements: Vec<_> = cases
+        .iter()
+        .zip(&outputs)
+        .filter_map(|(case, output)| case.check(output))
+        .collect();
+    let maximum_value = measurements
+        .iter()
+        .max_by(|left, right| left.value_difference.total_cmp(&right.value_difference))
+        .unwrap();
+    let maximum_derivative = measurements
+        .iter()
+        .max_by(|left, right| left.derivative_angle.total_cmp(&right.derivative_angle))
+        .unwrap();
     println!(
-        "noise agreement: {} float samples, maximum absolute difference {:.9e} at {} component {}, tolerance {:.1e}",
-        float_cases.len(),
-        maximum_difference,
-        maximum_label,
-        maximum_component,
-        PROVISIONAL_NOISE_AGREEMENT_TOLERANCE
+        "noise agreement: {} float samples, maximum value difference {:.9e} at {}, tolerance {:.1e}; maximum derivative angle {:.9e} radians at {}, tolerance {:.1e}",
+        measurements.len(),
+        maximum_value.value_difference,
+        maximum_value.label,
+        PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE,
+        maximum_derivative.derivative_angle,
+        maximum_derivative.label,
+        PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE,
     );
 }
 
-fn agreement_cases() -> (Vec<ShaderInput>, Vec<FloatCase>) {
-    let mut inputs = Vec::new();
-    for &([word0, word1, word2, word3], _) in &HASH_U32_TEST_VECTORS {
-        inputs.push(ShaderInput {
-            words: [word0, word1, word2, word3],
-            mode: MODE_CORE_HASH,
-            ..ShaderInput::zeroed()
-        });
-    }
+fn agreement_cases() -> Vec<Case> {
+    let mut cases: Vec<_> = HASH_U32_TEST_VECTORS
+        .iter()
+        .map(|&(words, expected)| Case::CoreHash { words, expected })
+        .collect();
 
-    // These explicitly exercise both seed halves and negative lattice-address bits.
-    for (seed, coordinates) in [
-        (0x0000_0000_0000_0001, [0, 0, 0]),
-        (0x0000_0001_0000_0000, [-1, 2, -3]),
-        (0x0123_4567_89ab_cdef, [i32::MIN, -17, i32::MAX]),
-        (u64::MAX, [-32_769, -1, 32_768]),
-    ] {
-        inputs.push(ShaderInput {
-            words: [
-                coordinates[0] as u32,
-                coordinates[1] as u32,
-                coordinates[2] as u32,
-                0,
-            ],
-            seed: split_seed(seed),
-            mode: MODE_LATTICE_HASH,
-            ..ShaderInput::zeroed()
-        });
-    }
+    // Fold on the host, then exercise signed-cell bitcasts and gradient selection on the GPU.
+    cases.extend([
+        lattice_case("lattice-origin", 0x0000_0000_0000_0001, [0, 0, 0]),
+        lattice_case("lattice-signed", 0x0000_0001_0000_0000, [-1, 2, -3]),
+        lattice_case(
+            "lattice-extremes",
+            0x0123_4567_89ab_cdef,
+            [i32::MIN, -17, i32::MAX],
+        ),
+        lattice_case("lattice-wide", u64::MAX, [-32_769, -1, 32_768]),
+    ]);
 
-    let positions = [
-        Vec3::new(0.25, 0.5, 0.75),
-        Vec3::new(-1.25, 2.5, -9.75),
-        Vec3::new(12.345, -67.89, 0.125),
-    ];
-    let seeds = [1_u64, 0x0000_0001_0000_0000, 0x0123_4567_89ab_cdef];
-    let basis_labels = ["basis-a", "basis-b", "basis-c"];
-    let mut float_cases = Vec::new();
-    for (case_index, (&seed, &position)) in seeds.iter().zip(&positions).enumerate() {
-        push_float_case(
-            &mut inputs,
-            &mut float_cases,
-            basis_labels[case_index],
-            seed,
-            position,
-            MODE_BASIS,
-            0,
-            [0.0; 4],
-            [0.0; 4],
-            gradient_noise_3d(seed, position),
-        );
-    }
+    cases.extend([
+        Case::noise(
+            "basis-low-half",
+            1,
+            NoiseKind::Basis,
+            Vec3::new(0.25, 0.5, 0.75),
+            NoiseParameters::BASIS,
+        ),
+        Case::noise(
+            "basis-high-half",
+            0x0000_0001_0000_0000,
+            NoiseKind::Basis,
+            Vec3::new(-1.25, 2.5, -9.75),
+            NoiseParameters::BASIS,
+        ),
+        Case::noise(
+            "basis-mixed",
+            0x0123_4567_89ab_cdef,
+            NoiseKind::Basis,
+            Vec3::new(12.345, -67.89, 0.125),
+            NoiseParameters::BASIS,
+        ),
+    ]);
 
     let configurations = [
-        (3, 0.75, 2.0, 0.5, 1.0, 2.0, 0.75),
-        (5, 1.25, 1.75, 0.625, 1.2, 1.4, 1.5),
+        (
+            [
+                ("fbm-a", NoiseKind::Fbm),
+                ("ridged-a", NoiseKind::Ridged),
+                ("damped-a", NoiseKind::Damped),
+            ],
+            0x0000_0001_0000_0000,
+            Vec3::new(-1.25, 2.5, -9.75),
+            NoiseParameters {
+                octaves: 3,
+                frequency: 0.75,
+                lacunarity: 2.0,
+                gain: 0.5,
+                damping: 0.75,
+                ridge_offset: 1.0,
+                ridge_gain: 2.0,
+            },
+        ),
+        (
+            [
+                ("fbm-b", NoiseKind::Fbm),
+                ("ridged-b", NoiseKind::Ridged),
+                ("damped-b", NoiseKind::Damped),
+            ],
+            0x0123_4567_89ab_cdef,
+            Vec3::new(12.345, -67.89, 0.125),
+            NoiseParameters {
+                octaves: 5,
+                frequency: 1.25,
+                lacunarity: 1.75,
+                gain: 0.625,
+                damping: 1.5,
+                ridge_offset: 1.2,
+                ridge_gain: 1.4,
+            },
+        ),
+        (
+            [
+                ("fbm-eleven-octave", NoiseKind::Fbm),
+                ("ridged-eleven-octave", NoiseKind::Ridged),
+                ("damped-eleven-octave", NoiseKind::Damped),
+            ],
+            u64::MAX,
+            Vec3::new(0.577_350_26, -0.577_350_26, 0.577_350_26),
+            NoiseParameters {
+                octaves: 11,
+                frequency: 0.75,
+                lacunarity: 2.0,
+                gain: 0.5,
+                damping: 1.0,
+                ridge_offset: 1.0,
+                ridge_gain: 2.0,
+            },
+        ),
     ];
-    for (
-        configuration_index,
-        &(octaves, frequency, lacunarity, gain, ridge_offset, ridge_gain, damping),
-    ) in configurations.iter().enumerate()
-    {
-        let position = positions[configuration_index + 1];
-        let seed = seeds[configuration_index + 1];
-        let octave_config = OctaveConfig {
-            octaves,
-            frequency,
-            lacunarity,
-        };
-        let octave_gain = OctaveGain::new(gain).unwrap();
-        let config = [frequency, lacunarity, gain, damping];
-        let ridge = [ridge_offset, ridge_gain, 0.0, 0.0];
-        push_float_case(
-            &mut inputs,
-            &mut float_cases,
-            if configuration_index == 0 {
-                "fbm-a"
-            } else {
-                "fbm-b"
-            },
-            seed,
-            position,
-            MODE_FBM,
-            octaves,
-            config,
-            ridge,
-            fbm_3d(
-                seed,
-                position,
-                octave_config.validate().unwrap(),
-                octave_gain,
-            ),
-        );
-        push_float_case(
-            &mut inputs,
-            &mut float_cases,
-            if configuration_index == 0 {
-                "ridged-a"
-            } else {
-                "ridged-b"
-            },
-            seed,
-            position,
-            MODE_RIDGED,
-            octaves,
-            config,
-            ridge,
-            ridged_multifractal_3d(
-                seed,
-                position,
-                RidgedMultifractalConfig {
-                    octaves: octave_config,
-                    ridge_offset,
-                    ridge_gain,
-                }
-                .validate()
-                .unwrap(),
-                octave_gain,
-            ),
-        );
-        push_float_case(
-            &mut inputs,
-            &mut float_cases,
-            if configuration_index == 0 {
-                "damped-a"
-            } else {
-                "damped-b"
-            },
-            seed,
-            position,
-            MODE_DAMPED,
-            octaves,
-            config,
-            ridge,
-            derivative_damped_fbm_3d(
-                seed,
-                position,
-                DerivativeDampedConfig {
-                    octaves: octave_config,
-                    damping,
-                }
-                .validate()
-                .unwrap(),
-                octave_gain,
-            ),
-        );
+    for (labels, seed, position, parameters) in configurations {
+        for (label, kind) in labels {
+            cases.push(Case::noise(label, seed, kind, position, parameters));
+        }
     }
-    (inputs, float_cases)
+    cases
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_float_case(
-    inputs: &mut Vec<ShaderInput>,
-    cases: &mut Vec<FloatCase>,
-    label: &'static str,
-    seed: u64,
-    position: Vec3,
-    mode: u32,
-    octaves: u32,
-    config: [f32; 4],
-    ridge: [f32; 4],
-    expected: NoiseSample3,
-) {
-    let input = ShaderInput {
-        seed: split_seed(seed),
-        mode,
-        octaves,
-        position: [position.x, position.y, position.z, 0.0],
-        config,
-        ridge,
-        ..ShaderInput::zeroed()
-    };
-    inputs.push(input);
-    cases.push(FloatCase { label, expected });
+fn lattice_case(label: &'static str, seed: u64, cell: [i32; 3]) -> Case {
+    let key = fold_seed_u64_to_u32(seed);
+    Case::LatticeGradient {
+        label,
+        key,
+        cell,
+        expected: lattice_gradient_3d(key, cell),
+    }
+}
+
+fn derivative_angle(left: Vec3, right: Vec3) -> f32 {
+    let left_length = left.length();
+    let right_length = right.length();
+    if left_length <= f32::EPSILON && right_length <= f32::EPSILON {
+        return 0.0;
+    }
+    if left_length <= f32::EPSILON || right_length <= f32::EPSILON {
+        return std::f32::consts::PI;
+    }
+    (left.dot(right) / (left_length * right_length))
+        .clamp(-1.0, 1.0)
+        .acos()
 }
 
 fn dispatch(
@@ -330,14 +483,25 @@ fn dispatch(
 
 struct Input {{
     words: vec4<u32>,
-    seed: vec2<u32>,
+    lattice_cell: vec4<i32>,
+    position: vec4<f32>,
+    key: u32,
     mode: u32,
     octaves: u32,
-    position: vec4<f32>,
-    config: vec4<f32>,
-    ridge: vec4<f32>,
+    padding_0: u32,
+    frequency: f32,
+    lacunarity: f32,
+    gain: f32,
+    damping: f32,
+    ridge_offset: f32,
+    ridge_gain: f32,
+    padding_1: vec2<u32>,
 }}
-struct Output {{ hashes: vec4<u32>, sample: vec4<f32> }}
+struct Output {{
+    hashes: vec4<u32>,
+    exact_sample: vec4<f32>,
+    noise_sample: vec4<f32>,
+}}
 @group(0) @binding(0) var<storage, read> inputs: array<Input>;
 @group(0) @binding(1) var<storage, read_write> outputs: array<Output>;
 
@@ -345,24 +509,23 @@ struct Output {{ hashes: vec4<u32>, sample: vec4<f32> }}
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     if (id.x >= arrayLength(&inputs)) {{ return; }}
     let input = inputs[id.x];
-    let key = fold_seed_u64_to_u32(input.seed.x, input.seed.y);
     var hashes = vec4(0u);
-    var sample = NoiseSample3(0.0, vec3(0.0));
+    var exact_sample = vec4(0.0);
+    var noise_sample = NoiseSample3(0.0, vec3(0.0));
     if (input.mode == {MODE_CORE_HASH}u) {{
         hashes.x = hash_u32(input.words.x, input.words.y, input.words.z, input.words.w);
-    }} else if (input.mode == {MODE_LATTICE_HASH}u) {{
-        hashes.y = key;
-        hashes.z = hash_u32(key, input.words.x, input.words.y, input.words.z);
+    }} else if (input.mode == {MODE_LATTICE_GRADIENT}u) {{
+        exact_sample = vec4(lattice_gradient(input.key, input.lattice_cell.xyz), 0.0);
     }} else if (input.mode == {MODE_BASIS}u) {{
-        sample = gradient_noise_3d(input.seed.x, input.seed.y, input.position.xyz);
+        noise_sample = gradient_noise_3d(input.key, input.position.xyz);
     }} else if (input.mode == {MODE_FBM}u) {{
-        sample = fbm_3d(input.seed.x, input.seed.y, input.position.xyz, input.octaves, input.config.x, input.config.y, input.config.z);
+        noise_sample = fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain);
     }} else if (input.mode == {MODE_RIDGED}u) {{
-        sample = ridged_multifractal_3d(input.seed.x, input.seed.y, input.position.xyz, input.octaves, input.config.x, input.config.y, input.config.z, input.ridge.x, input.ridge.y);
+        noise_sample = ridged_multifractal_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.ridge_offset, input.ridge_gain);
     }} else if (input.mode == {MODE_DAMPED}u) {{
-        sample = derivative_damped_fbm_3d(input.seed.x, input.seed.y, input.position.xyz, input.octaves, input.config.x, input.config.y, input.config.z, input.config.w);
+        noise_sample = derivative_damped_fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.damping);
     }}
-    outputs[id.x] = Output(hashes, vec4(sample.value, sample.derivative));
+    outputs[id.x] = Output(hashes, exact_sample, vec4(noise_sample.value, noise_sample.derivative));
 }}
 "#
     );
@@ -442,23 +605,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     drop(mapped);
     readback.unmap();
     outputs
-}
-
-fn split_seed(seed: u64) -> [u32; 2] {
-    [seed as u32, (seed >> 32) as u32]
-}
-
-fn join_seed(seed: [u32; 2]) -> u64 {
-    u64::from(seed[0]) | (u64::from(seed[1]) << 32)
-}
-
-fn sample_components(sample: NoiseSample3) -> [f32; 4] {
-    [
-        sample.value,
-        sample.derivative.x,
-        sample.derivative.y,
-        sample.derivative.z,
-    ]
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {

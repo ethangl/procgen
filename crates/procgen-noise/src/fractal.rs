@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use procgen_core::Vec3;
 
-use crate::{NoiseSample3, gradient_noise_3d};
+use crate::{NoiseSample3, fold_seed_u64_to_u32, gradient::gradient_noise_3d_from_key};
 
 /// Maximum supported octave count for CPU fractal accumulation.
 pub const MAX_OCTAVES: u32 = 32;
@@ -150,8 +150,8 @@ struct Octave {
 }
 
 impl Octave {
-    fn sample(self, seed: u64, position: Vec3) -> NoiseSample3 {
-        let mut sample = gradient_noise_3d(seed, position * self.frequency);
+    fn sample(self, key: u32, position: Vec3) -> NoiseSample3 {
+        let mut sample = gradient_noise_3d_from_key(key, position * self.frequency);
         sample.derivative = sample.derivative * self.frequency;
         sample
     }
@@ -211,11 +211,12 @@ pub fn fbm_3d(
     config: Validated<OctaveConfig>,
     gain: OctaveGain,
 ) -> NoiseSample3 {
+    let key = fold_seed_u64_to_u32(seed);
     config
         .0
         .octaves(gain)
         .fold(NoiseSample3::default(), |sum, octave| {
-            sum + octave.sample(seed, position) * octave.amplitude
+            sum + octave.sample(key, position) * octave.amplitude
         })
 }
 
@@ -236,6 +237,7 @@ pub fn ridged_multifractal_3d(
     gain: OctaveGain,
 ) -> NoiseSample3 {
     let config = config.0;
+    let key = fold_seed_u64_to_u32(seed);
     let mut result = NoiseSample3::default();
     let mut weight = NoiseSample3 {
         value: 1.0,
@@ -243,7 +245,7 @@ pub fn ridged_multifractal_3d(
     };
 
     for octave in config.octaves.octaves(gain) {
-        let sample = octave.sample(seed, position);
+        let sample = octave.sample(key, position);
         let absolute_derivative = if sample.value > 0.0 {
             sample.derivative
         } else if sample.value < 0.0 {
@@ -295,10 +297,11 @@ pub fn derivative_damped_fbm_3d(
     gain: OctaveGain,
 ) -> NoiseSample3 {
     let config = config.0;
+    let key = fold_seed_u64_to_u32(seed);
     let mut result = NoiseSample3::default();
     for octave in config.octaves.octaves(gain) {
         let attenuation = (1.0 + config.damping * result.derivative.length_squared()).recip();
-        result += octave.sample(seed, position) * (octave.amplitude * attenuation);
+        result += octave.sample(key, position) * (octave.amplitude * attenuation);
     }
     result
 }
@@ -328,6 +331,7 @@ fn validate_non_negative(name: &'static str, value: f32) -> Result<(), FractalPa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gradient_noise_3d;
     use crate::test_support::{central_difference, sample_bits};
 
     const SEED: u64 = 0x0123_4567_89AB_CDEF;

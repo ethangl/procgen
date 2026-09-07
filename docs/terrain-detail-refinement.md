@@ -136,10 +136,12 @@ one named tolerance constant.
   halves of the seed into a `u32` lattice key. This is deliberately a
   many-to-one fold: all seed bits influence the result, but noise has a 32-bit
   field-key namespace and distinct `u64` seeds are not guaranteed to select
-  distinct fields. Callers never narrow seeds themselves. The lattice wrapper
-  combines that key with three `i32` coordinates, reinterpreting each signed
-  coordinate's bits as `u32`. Rust, WGSL, and CUDA use the same conversion and
-  reproduce the core hash vectors bit-exactly in a compute-dispatch test.
+  distinct fields. `procgen-noise` folds the seed once on the host; WGSL and
+  CUDA receive that key rather than reimplementing or repeating the conversion.
+  The lattice wrapper combines the key with three `i32` coordinates,
+  reinterpreting each signed coordinate's bits as `u32`. Backend tests reproduce
+  the core hash vectors and selected lattice gradients bit-exactly in a compute
+  dispatch.
 - The float path uses add, multiply, floor, and lerp only. No transcendental
   functions inside noise, no fast-math flags, and FMA contraction either
   disabled or applied identically on every backend.
