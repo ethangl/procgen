@@ -6,6 +6,15 @@ Run from the workspace root:
 cargo run -p procgen-viewer
 ```
 
+Startup reuses the last successfully generated world from the operating
+system's per-user cache directory when the viewer snapshot format, generator
+build identity, mesh topology, and field lengths still match. Otherwise it
+regenerates normally; cache read and write failures remain nonfatal. The cached
+snapshot contains generation settings and domain data only, so render assets
+are rebuilt and generation timings are not restored. **Regenerate** always runs
+the complete pipeline before atomically replacing the snapshot, and **Clear
+cache** removes it without changing the active world.
+
 Drag the empty viewport with the left mouse button to orbit and use the scroll
 wheel to zoom. The control panel regenerates the sphere, tectonic plate
 partition, static crust classification, angular velocities, and one simultaneous

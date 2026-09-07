@@ -1,7 +1,10 @@
 mod controls;
 mod summary;
 
-use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
+use crate::model::{
+    ClearWorldCache, GeneratedWorld, GenerationSettings, GenerationSource, GenerationStatus,
+    RegenerateWorld,
+};
 use crate::render::{
     DiagnosticLayer, LightingSettings, OverlayKind, OverlaySettings, ReliefSettings,
     SurfaceSelection,
@@ -31,6 +34,7 @@ fn viewer_ui(
     status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
     mut regenerate: MessageWriter<RegenerateWorld>,
+    mut clear_cache: MessageWriter<ClearWorldCache>,
 ) -> Result {
     egui::SidePanel::left("controls")
         .default_width(250.0)
@@ -39,10 +43,29 @@ fn viewer_ui(
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Sphere topology");
                 ui.add_space(6.0);
-                controls::generation_controls(ui, &mut generation, &mut regenerate);
+                controls::generation_controls(
+                    ui,
+                    &mut generation,
+                    &mut regenerate,
+                    &mut clear_cache,
+                );
+
+                if let Some(report) = status.last_report {
+                    let action = match report.source {
+                        GenerationSource::Cache => "Loaded cached world",
+                        GenerationSource::Pipeline => "Generated world",
+                    };
+                    ui.label(format!(
+                        "{action} in {:.2} ms",
+                        report.duration.as_secs_f64() * 1_000.0
+                    ));
+                }
 
                 if let Some(error) = &status.last_error {
                     ui.colored_label(egui::Color32::from_rgb(255, 110, 110), error);
+                }
+                if let Some(notice) = &status.cache_notice {
+                    ui.small(notice);
                 }
 
                 ui.separator();

@@ -1,3 +1,4 @@
+use crate::cache::WorldCache;
 use bevy::prelude::*;
 use procgen_climate::{
     AtmosphericCirculation, ClimateCoupling, ClimateCouplingConfig, ClimateCouplingDiagnostics,
@@ -33,7 +34,7 @@ use std::{
 
 pub const WORLD_RADIUS: f32 = 1.0;
 
-#[derive(Clone, Copy, Debug, Resource)]
+#[derive(Clone, Copy, Debug, PartialEq, Resource)]
 pub struct GenerationSettings {
     pub fibonacci: FibonacciConfig,
     pub plates: PlatePartitionConfig,
@@ -99,25 +100,47 @@ impl Default for GenerationSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GenerationSource {
+    Cache,
+    Pipeline,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GenerationReport {
+    pub source: GenerationSource,
+    pub duration: Duration,
+}
+
 #[derive(Resource, Default)]
 pub struct GenerationStatus {
     pub last_error: Option<String>,
+    pub cache_notice: Option<String>,
+    pub last_report: Option<GenerationReport>,
 }
 
 #[derive(Message, Default)]
 pub struct RegenerateWorld;
+
+#[derive(Message, Default)]
+pub struct ClearWorldCache;
 
 pub struct WorldModelPlugin;
 
 impl Plugin for WorldModelPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<RegenerateWorld>()
+            .add_message::<ClearWorldCache>()
+            .init_resource::<WorldCache>()
             .init_resource::<GenerationSettings>()
             .init_resource::<GenerationStatus>()
             .init_resource::<GeneratedWorld>()
             .add_systems(
                 Update,
-                regenerate_world.run_if(on_message::<RegenerateWorld>),
+                (
+                    regenerate_world.run_if(on_message::<RegenerateWorld>),
+                    clear_world_cache.run_if(on_message::<ClearWorldCache>),
+                ),
             );
     }
 }
@@ -157,7 +180,7 @@ impl GenerationTimings {
     }
 }
 
-#[derive(Resource)]
+#[derive(Clone, Resource)]
 pub struct GeneratedWorld {
     pub voronoi: SphereMesh,
     pub plates: PlatePartition,
@@ -333,29 +356,123 @@ impl GeneratedWorld {
 
 impl FromWorld for GeneratedWorld {
     fn from_world(world: &mut World) -> Self {
-        let config = *world.resource::<GenerationSettings>();
-        Self::generate(config).expect("default world generation must succeed")
+        let started = Instant::now();
+        let cache = world.resource::<WorldCache>().clone();
+        match cache.load() {
+            Ok((settings, generated)) => {
+                *world.resource_mut::<GenerationSettings>() = settings;
+                world.resource_mut::<GenerationStatus>().last_report = Some(GenerationReport {
+                    source: GenerationSource::Cache,
+                    duration: started.elapsed(),
+                });
+                generated
+            }
+            Err(load_error) => {
+                let config = *world.resource::<GenerationSettings>();
+                let generated =
+                    Self::generate(config).expect("default world generation must succeed");
+                let cache_notice = cache
+                    .store(&config, &generated)
+                    .err()
+                    .map(|error| format!("Could not save world cache: {error}"))
+                    .or_else(|| {
+                        (!WorldCache::is_missing(&load_error))
+                            .then(|| format!("Ignored world cache: {load_error}"))
+                    });
+                let mut status = world.resource_mut::<GenerationStatus>();
+                status.cache_notice = cache_notice;
+                status.last_report = Some(GenerationReport {
+                    source: GenerationSource::Pipeline,
+                    duration: started.elapsed(),
+                });
+                generated
+            }
+        }
     }
 }
 
 fn regenerate_world(
     settings: Res<GenerationSettings>,
+    cache: Res<WorldCache>,
     mut world: ResMut<GeneratedWorld>,
     mut status: ResMut<GenerationStatus>,
 ) {
+    let started = Instant::now();
     match GeneratedWorld::generate(*settings) {
         Ok(generated) => {
+            status.cache_notice = cache
+                .store(&settings, &generated)
+                .err()
+                .map(|error| format!("Could not save world cache: {error}"));
             *world = generated;
             status.last_error = None;
+            status.last_report = Some(GenerationReport {
+                source: GenerationSource::Pipeline,
+                duration: started.elapsed(),
+            });
         }
         Err(error) => status.last_error = Some(error.to_string()),
     }
 }
 
+fn clear_world_cache(cache: Res<WorldCache>, mut status: ResMut<GenerationStatus>) {
+    status.cache_notice = Some(match cache.clear() {
+        Ok(true) => "World cache cleared.".to_owned(),
+        Ok(false) => "World cache is already empty.".to_owned(),
+        Err(error) => format!("Could not clear world cache: {error}"),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::WorldCache;
     use procgen_tectonics::{CrustClass, PlateMigrationConfig};
+    use std::{
+        env, fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn test_settings(cell_count: usize, seed: u64) -> GenerationSettings {
+        GenerationSettings {
+            fibonacci: FibonacciConfig {
+                jitter: 0.25,
+                seed,
+                ..FibonacciConfig::new(cell_count)
+            },
+            plates: PlatePartitionConfig {
+                seed,
+                ..PlatePartitionConfig::new(2, 2)
+            },
+            crust: CrustClassificationConfig::new(seed),
+            kinematics: PlateKinematicsConfig::new(seed),
+            evolution: PlateEvolutionConfig {
+                step_count: 4,
+                ..Default::default()
+            },
+            hotspots: HotspotFieldConfig {
+                hotspot_count: 3,
+                maximum_trail_cells: 4,
+                seed,
+            },
+            oceanic_peaks: OceanicPeakFieldConfig::new(seed),
+            ..GenerationSettings::default()
+        }
+    }
+
+    fn test_cache(name: &str) -> (PathBuf, WorldCache) {
+        let directory = env::temp_dir().join(format!(
+            "procgen-viewer-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cache = WorldCache::new(directory.join("world.bin"));
+        (directory, cache)
+    }
 
     #[test]
     fn default_generation_profile_generates() {
@@ -538,6 +655,62 @@ mod tests {
     }
 
     #[test]
+    fn startup_loads_cached_world_and_restores_its_settings() {
+        let (cache_dir, cache) = test_cache("startup-load");
+        let cached_settings = test_settings(32, 41);
+        let cached_world = GeneratedWorld::generate(cached_settings).unwrap();
+        cache.store(&cached_settings, &cached_world).unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(cache)
+            .insert_resource(test_settings(48, 42))
+            .add_plugins(WorldModelPlugin);
+
+        assert_eq!(
+            *app.world().resource::<GenerationSettings>(),
+            cached_settings
+        );
+        let world = app.world().resource::<GeneratedWorld>();
+        assert_eq!(world.config, cached_settings);
+        assert_eq!(world.voronoi.cell_count(), 32);
+        assert!(world.timings.stages().is_empty());
+        assert_eq!(
+            app.world()
+                .resource::<GenerationStatus>()
+                .last_report
+                .unwrap()
+                .source,
+            GenerationSource::Cache
+        );
+
+        fs::remove_dir_all(cache_dir).unwrap();
+    }
+
+    #[test]
+    fn corrupt_startup_cache_is_nonfatal_and_replaced_after_generation() {
+        let (cache_dir, cache) = test_cache("startup-corrupt");
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(cache_dir.join("world.bin"), b"not a snapshot").unwrap();
+        let requested = test_settings(32, 43);
+
+        let mut app = App::new();
+        app.insert_resource(cache.clone())
+            .insert_resource(requested)
+            .add_plugins(WorldModelPlugin);
+
+        assert_eq!(app.world().resource::<GeneratedWorld>().config, requested);
+        let status = app.world().resource::<GenerationStatus>();
+        assert_eq!(
+            status.last_report.unwrap().source,
+            GenerationSource::Pipeline
+        );
+        assert!(status.cache_notice.as_deref().unwrap().contains("Ignored"));
+        assert_eq!(cache.load().unwrap().0, requested);
+
+        fs::remove_dir_all(cache_dir).unwrap();
+    }
+
+    #[test]
     fn regeneration_message_replaces_the_active_world() {
         let mut app = App::new();
         let current = GeneratedWorld::generate(GenerationSettings {
@@ -629,7 +802,10 @@ mod tests {
                 ..ClimateCouplingConfig::EARTHLIKE
             },
         };
-        app.insert_resource(current)
+        let (cache_dir, cache) = test_cache("regenerate");
+        cache.store(&current.config, &current).unwrap();
+        app.insert_resource(cache.clone())
+            .insert_resource(current)
             .insert_resource(requested)
             .add_plugins(WorldModelPlugin);
 
@@ -661,5 +837,9 @@ mod tests {
         assert_eq!(world.config.climate_coupling, requested.climate_coupling);
         assert_eq!(world.voronoi.cell_count(), requested.fibonacci.count);
         assert_eq!(world.plates.plate_count, requested.plates.plate_count());
+        let (cached_settings, cached_world) = cache.load().unwrap();
+        assert_eq!(cached_settings, requested);
+        assert_eq!(cached_world.voronoi.cell_count(), requested.fibonacci.count);
+        fs::remove_dir_all(cache_dir).unwrap();
     }
 }

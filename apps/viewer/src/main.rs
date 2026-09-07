@@ -1,3 +1,4 @@
+mod cache;
 mod camera;
 mod model;
 mod render;
