@@ -17,63 +17,45 @@ pub struct NoiseSample3 {
 /// reproducible in WGSL and CUDA.
 pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
     let seed = narrow_seed_to_u32(seed);
-    let lattice = [
+    let cell = [
         position.x.floor() as i32,
         position.y.floor() as i32,
         position.z.floor() as i32,
     ];
     let offset = Vec3::new(
-        position.x - lattice[0] as f32,
-        position.y - lattice[1] as f32,
-        position.z - lattice[2] as f32,
+        position.x - cell[0] as f32,
+        position.y - cell[1] as f32,
+        position.z - cell[2] as f32,
     );
-    let fade = Vec3::new(
-        quintic_fade(offset.x),
-        quintic_fade(offset.y),
-        quintic_fade(offset.z),
-    );
-    let fade_derivative = Vec3::new(
-        quintic_fade_derivative(offset.x),
-        quintic_fade_derivative(offset.y),
-        quintic_fade_derivative(offset.z),
-    );
+    let (wx, dwx) = axis_weights(offset.x);
+    let (wy, dwy) = axis_weights(offset.y);
+    let (wz, dwz) = axis_weights(offset.z);
 
     let mut value = 0.0;
     let mut derivative = Vec3::ZERO;
 
-    for corner_z in 0..=1 {
-        for corner_y in 0..=1 {
-            for corner_x in 0..=1 {
-                let corner = [corner_x, corner_y, corner_z];
-                let gradient = lattice_gradient(seed, lattice, corner);
-                let displacement = Vec3::new(
-                    offset.x - corner_x as f32,
-                    offset.y - corner_y as f32,
-                    offset.z - corner_z as f32,
+    for corner_z in 0..2 {
+        for corner_y in 0..2 {
+            for corner_x in 0..2 {
+                let gradient = lattice_gradient(
+                    seed,
+                    cell[0].wrapping_add(corner_x as i32),
+                    cell[1].wrapping_add(corner_y as i32),
+                    cell[2].wrapping_add(corner_z as i32),
                 );
+                let displacement =
+                    offset - Vec3::new(corner_x as f32, corner_y as f32, corner_z as f32);
                 let contribution = gradient.dot(displacement);
-
-                let wx = corner_weight(fade.x, corner_x);
-                let wy = corner_weight(fade.y, corner_y);
-                let wz = corner_weight(fade.z, corner_z);
-                let weight = wx * wy * wz;
+                let weight = wx[corner_x] * wy[corner_y] * wz[corner_z];
 
                 value += contribution * weight;
-                derivative.x += gradient.x * weight
-                    + contribution
-                        * corner_weight_derivative(fade_derivative.x, corner_x)
-                        * wy
-                        * wz;
-                derivative.y += gradient.y * weight
-                    + contribution
-                        * wx
-                        * corner_weight_derivative(fade_derivative.y, corner_y)
-                        * wz;
-                derivative.z += gradient.z * weight
-                    + contribution
-                        * wx
-                        * wy
-                        * corner_weight_derivative(fade_derivative.z, corner_z);
+                derivative = derivative
+                    + gradient * weight
+                    + Vec3::new(
+                        dwx[corner_x] * wy[corner_y] * wz[corner_z],
+                        wx[corner_x] * dwy[corner_y] * wz[corner_z],
+                        wx[corner_x] * wy[corner_y] * dwz[corner_z],
+                    ) * contribution;
             }
         }
     }
@@ -84,14 +66,19 @@ pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
 // The fixed domain tags keep this conversion distinct from lattice addresses.
 // Both halves of the workspace-standard seed participate in the result.
 const fn narrow_seed_to_u32(seed: u64) -> u32 {
-    hash_u32(seed as u32, (seed >> 32) as u32, 0x5345_4544, 0x4E4F_4953)
+    const SEED_DOMAIN_TAG: u32 = 0x5345_4544; // ASCII "SEED"
+    const NOISE_DOMAIN_TAG: u32 = 0x4E4F_4953; // ASCII "NOIS"
+
+    hash_u32(
+        seed as u32,
+        (seed >> 32) as u32,
+        SEED_DOMAIN_TAG,
+        NOISE_DOMAIN_TAG,
+    )
 }
 
-fn lattice_gradient(seed: u32, lattice: [i32; 3], corner: [i32; 3]) -> Vec3 {
-    let x = lattice[0].wrapping_add(corner[0]) as u32;
-    let y = lattice[1].wrapping_add(corner[1]) as u32;
-    let z = lattice[2].wrapping_add(corner[2]) as u32;
-    GRADIENTS[(hash_u32(seed, x, y, z) % GRADIENTS.len() as u32) as usize]
+fn lattice_gradient(seed: u32, x: i32, y: i32, z: i32) -> Vec3 {
+    GRADIENTS[(hash_u32(seed, x as u32, y as u32, z as u32) % GRADIENTS.len() as u32) as usize]
 }
 
 const GRADIENTS: [Vec3; 12] = [
@@ -109,29 +96,18 @@ const GRADIENTS: [Vec3; 12] = [
     Vec3::new(0.0, -1.0, -1.0),
 ];
 
-fn quintic_fade(value: f32) -> f32 {
-    value * value * value * (value * (value * 6.0 - 15.0) + 10.0)
-}
-
-fn quintic_fade_derivative(value: f32) -> f32 {
-    30.0 * value * value * (value * (value - 2.0) + 1.0)
-}
-
-fn corner_weight(fade: f32, corner: i32) -> f32 {
-    if corner == 0 { 1.0 - fade } else { fade }
-}
-
-fn corner_weight_derivative(fade_derivative: f32, corner: i32) -> f32 {
-    if corner == 0 {
-        -fade_derivative
-    } else {
-        fade_derivative
-    }
+/// Quintic fade weights for the low and high corner on one axis and their derivatives.
+fn axis_weights(value: f32) -> ([f32; 2], [f32; 2]) {
+    let fade = value * value * value * (value * (value * 6.0 - 15.0) + 10.0);
+    let fade_derivative = 30.0 * value * value * (value * (value - 2.0) + 1.0);
+    ([1.0 - fade, fade], [-fade_derivative, fade_derivative])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DERIVATIVE_TEST_SEED: u64 = 0xCAFE_BABE_DEAD_BEEF;
 
     #[test]
     fn seed_narrowing_has_stable_vectors_and_uses_both_halves() {
@@ -165,7 +141,7 @@ mod tests {
             (
                 0x0123_4567_89AB_CDEF,
                 Vec3::new(12.345, -67.89, 0.125),
-                [0xBEEA_265B, 0xBF28_D842, 0xBF14_8D6D, 0x3ED8_54D9],
+                [0xBEEA_265B, 0xBF28_D843, 0xBF14_8D6D, 0x3ED8_54D9],
             ),
         ];
 
@@ -194,7 +170,7 @@ mod tests {
         ];
 
         for position in positions {
-            let sample = gradient_noise_3d(0xCAFE_BABE_DEAD_BEEF, position);
+            let sample = gradient_noise_3d(DERIVATIVE_TEST_SEED, position);
             let finite_difference = Vec3::new(
                 central_difference(position, Vec3::new(STEP, 0.0, 0.0)),
                 central_difference(position, Vec3::new(0.0, STEP, 0.0)),
@@ -205,8 +181,8 @@ mod tests {
     }
 
     fn central_difference(position: Vec3, offset: Vec3) -> f32 {
-        let positive = gradient_noise_3d(0xCAFE_BABE_DEAD_BEEF, position + offset).value;
-        let negative = gradient_noise_3d(0xCAFE_BABE_DEAD_BEEF, position - offset).value;
+        let positive = gradient_noise_3d(DERIVATIVE_TEST_SEED, position + offset).value;
+        let negative = gradient_noise_3d(DERIVATIVE_TEST_SEED, position - offset).value;
         (positive - negative) / (2.0 * offset.length())
     }
 
