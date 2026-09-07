@@ -1,0 +1,18 @@
+[package]
+name = "procgen-gpu-tests"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dev-dependencies]
+bytemuck = { version = "1.24", features = ["derive"] }
+procgen-core = { path = "../procgen-core" }
+procgen-noise = { path = "../procgen-noise" }
+wgpu = { version = "27.0.1", default-features = false, features = [
+    "dx12",
+    "metal",
+    "std",
+    "vulkan",
+    "wgsl",
+] }
