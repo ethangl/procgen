@@ -3217,6 +3217,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "procgen-terrain"
+version = "0.1.0"
+dependencies = [
+ "procgen-core",
+ "procgen-geology",
+ "procgen-sphere",
+ "procgen-sphere-mesh",
+ "procgen-tectonics",
+]
+
+[[package]]
 name = "procgen-viewer"
 version = "0.1.0"
 dependencies = [
