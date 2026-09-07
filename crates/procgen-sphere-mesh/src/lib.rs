@@ -9,7 +9,7 @@ mod location;
 mod mesh;
 
 pub use hull::SphericalDelaunay;
-pub use location::{DelaunayLocation, PointLocationError};
+pub use location::DelaunayLocation;
 pub use mesh::{
     CellCorner, SphereMesh, VoronoiEdge, connected_components, edge_cell_distances,
     multi_source_distances,
@@ -17,6 +17,8 @@ pub use mesh::{
 
 use procgen_core::Vec3;
 use std::fmt;
+
+const UNIT_SPHERE_TOLERANCE: f32 = 1.0e-4;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TopologyError {

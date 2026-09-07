@@ -16,6 +16,10 @@ impl Vec3 {
         Self { x, y, z }
     }
 
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+
     pub fn length_squared(self) -> f32 {
         self.x * self.x + self.y * self.y + self.z * self.z
     }
@@ -93,6 +97,8 @@ mod tests {
 
         assert_eq!(x.cross(y), Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(x.dot(y), 0.0);
+        assert!(x.is_finite());
+        assert!(!Vec3::new(f32::NAN, 0.0, 0.0).is_finite());
         assert!(((x + y).normalized().length() - 1.0).abs() < 1.0e-6);
         assert_eq!(Vec3::ZERO.normalized(), Vec3::ZERO);
     }
