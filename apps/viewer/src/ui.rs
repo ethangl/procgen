@@ -72,32 +72,32 @@ fn render_controls(
     relief: &mut ReliefSettings,
     lighting: &mut LightingSettings,
 ) {
-    ui.label("Terrain relief");
-    slider(ui, "Exaggeration", &mut relief.exaggeration, 0.0..=0.4);
-
-    ui.add_space(4.0);
-    ui.label("Directional light");
-    slider(ui, "Azimuth", &mut lighting.azimuth_degrees, -180.0..=180.0);
-    slider(
-        ui,
-        "Elevation",
-        &mut lighting.elevation_degrees,
-        -89.0..=89.0,
-    );
-    drag_value(
-        ui,
-        "Illuminance",
-        &mut lighting.illuminance,
-        0.0..=30_000.0,
-        500.0,
-    );
-    drag_value(
-        ui,
-        "Ambient fill",
-        &mut lighting.ambient_brightness,
-        0.0..=2_000.0,
-        50.0,
-    );
+    section(ui, "Terrain relief", |ui| {
+        slider(ui, "Exaggeration", &mut relief.exaggeration, 0.0..=0.4)
+    });
+    section(ui, "Directional light", |ui| {
+        slider(ui, "Azimuth", &mut lighting.azimuth_degrees, -180.0..=180.0);
+        slider(
+            ui,
+            "Elevation",
+            &mut lighting.elevation_degrees,
+            -89.0..=89.0,
+        );
+        drag_value(
+            ui,
+            "Illuminance",
+            &mut lighting.illuminance,
+            0.0..=30_000.0,
+            500.0,
+        );
+        drag_value(
+            ui,
+            "Ambient fill",
+            &mut lighting.ambient_brightness,
+            0.0..=2_000.0,
+            50.0,
+        );
+    });
 }
 
 fn layer_controls(

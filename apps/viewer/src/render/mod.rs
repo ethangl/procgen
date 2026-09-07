@@ -47,20 +47,19 @@ impl OverlaySettings {
     }
 
     fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
-        let Some(layer_order) = layer.depth_order() else {
-            return 1.0 + DEPTH_SCALE_STEP;
-        };
-        let visible_layers_before = DiagnosticLayer::ALL
-            .iter()
-            .filter(|&&candidate| {
-                self.is_visible(candidate)
-                    && candidate
-                        .depth_order()
-                        .is_some_and(|order| order < layer_order)
-            })
-            .count();
-
-        1.0 + (visible_layers_before + 1) as f32 * DEPTH_SCALE_STEP
+        let slot = layer.depth_order().map_or(0, |layer_order| {
+            DiagnosticLayer::ALL
+                .iter()
+                .filter(|&&candidate| {
+                    self.is_visible(candidate)
+                        && candidate
+                            .depth_order()
+                            .is_some_and(|order| order < layer_order)
+                })
+                .count()
+                + 1
+        });
+        1.0 + slot as f32 * DEPTH_SCALE_STEP
     }
 }
 
@@ -273,14 +272,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn depth_scales_only_count_visible_layers() {
+    fn fill_gizmos_use_the_surface_slot_before_the_first_overlay() {
         let mut overlays = OverlaySettings::default();
         overlays.set_visible(DiagnosticLayer::Motion, true);
 
-        assert_eq!(
-            overlays.depth_scale(DiagnosticLayer::Plates),
-            1.0 + DEPTH_SCALE_STEP
-        );
+        assert_eq!(overlays.depth_scale(DiagnosticLayer::Plates), 1.0);
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Motion),
             1.0 + DEPTH_SCALE_STEP

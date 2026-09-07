@@ -194,7 +194,7 @@ impl SurfaceSource {
         };
         cell_surface_mesh(
             &world.voronoi,
-            colors,
+            &colors,
             &world.isostasy.cell_elevations,
             relief_exaggeration,
         )

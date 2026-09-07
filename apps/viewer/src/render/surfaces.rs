@@ -78,11 +78,10 @@ pub(super) fn basin_colors(world: &GeneratedWorld) -> Vec<Color> {
 
 pub(super) fn cell_surface_mesh(
     sphere: &SphereMesh,
-    colors: impl IntoIterator<Item = Color>,
+    colors: &[Color],
     cell_elevations: &[f32],
     relief_exaggeration: f32,
 ) -> Mesh {
-    let colors = colors.into_iter().collect::<Vec<_>>();
     assert_eq!(colors.len(), sphere.cell_count());
     assert_eq!(cell_elevations.len(), sphere.cell_count());
     assert!(relief_exaggeration.is_finite() && relief_exaggeration >= 0.0);
@@ -118,11 +117,8 @@ pub(super) fn cell_surface_mesh(
         for corner in 0..corners.len() {
             let current = corners[corner].vertex;
             let next = corners[(corner + 1) % corners.len()].vertex;
-            let mut face_normal =
-                (corner_positions[current] - center).cross(corner_positions[next] - center);
-            if face_normal.dot(center) < 0.0 {
-                face_normal = -face_normal;
-            }
+            let face_normal =
+                (corner_positions[next] - center).cross(corner_positions[current] - center);
             center_normals[cell] += face_normal;
             corner_normals[current] += face_normal;
             corner_normals[next] += face_normal;
@@ -135,7 +131,7 @@ pub(super) fn cell_surface_mesh(
     let mut vertex_colors = Vec::with_capacity(vertex_count);
     let mut indices = Vec::with_capacity(sphere.corners.len() * 3);
 
-    for (cell, color) in colors.into_iter().enumerate() {
+    for (cell, &color) in colors.iter().enumerate() {
         let center = center_positions[cell];
         let corners = sphere.cell_corners(cell);
         let base = u32::try_from(positions.len()).expect("surface mesh exceeds u32 indices");
@@ -154,13 +150,7 @@ pub(super) fn cell_surface_mesh(
         for corner in 0..corners.len() {
             let current = base + 1 + corner as u32;
             let next = base + 1 + ((corner + 1) % corners.len()) as u32;
-            let a = Vec3::from_array(positions[current as usize]);
-            let b = Vec3::from_array(positions[next as usize]);
-            if (a - center).cross(b - center).dot(center) >= 0.0 {
-                indices.extend([base, current, next]);
-            } else {
-                indices.extend([base, next, current]);
-            }
+            indices.extend([base, next, current]);
         }
     }
 
@@ -240,7 +230,7 @@ mod tests {
     #[test]
     fn zero_exaggeration_leaves_every_vertex_at_surface_radius() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(&sphere, [Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.0);
+        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.0);
 
         let positions = float3_attribute(&mesh, Mesh::ATTRIBUTE_POSITION);
         assert!(positions.iter().all(|position| {
@@ -251,7 +241,7 @@ mod tests {
     #[test]
     fn incident_fans_share_identical_displaced_corner_positions() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(&sphere, [Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.3);
+        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.3);
         let positions = float3_attribute(&mesh, Mesh::ATTRIBUTE_POSITION);
         assert_shared_corner_values(corner_copies(&sphere, positions));
     }
@@ -259,7 +249,7 @@ mod tests {
     #[test]
     fn displaced_triangle_fans_remain_finite_and_outward() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(&sphere, [Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.4);
+        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.4);
 
         assert_eq!(
             mesh.count_vertices(),
@@ -289,8 +279,8 @@ mod tests {
     fn normals_are_recomputed_from_displaced_geometry() {
         let sphere = tetrahedron_mesh();
         let elevations = [0.0, 0.3, 0.7, 1.0];
-        let flat = cell_surface_mesh(&sphere, [Color::WHITE; 4], &elevations, 0.0);
-        let relief = cell_surface_mesh(&sphere, [Color::WHITE; 4], &elevations, 0.4);
+        let flat = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &elevations, 0.0);
+        let relief = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &elevations, 0.4);
         let flat_normals = float3_attribute(&flat, Mesh::ATTRIBUTE_NORMAL);
         let relief_positions = float3_attribute(&relief, Mesh::ATTRIBUTE_POSITION);
         let relief_normals = float3_attribute(&relief, Mesh::ATTRIBUTE_NORMAL);
