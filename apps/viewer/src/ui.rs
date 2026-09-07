@@ -3,22 +3,15 @@ mod summary;
 
 use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
 use crate::render::{
-    DiagnosticLayer, OverlayKind, OverlaySettings, SurfaceSelection, ViewerRenderSettings,
+    DiagnosticLayer, LightingSettings, OverlayKind, OverlaySettings, ReliefSettings,
+    SurfaceSelection,
 };
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
-
-#[derive(SystemParam)]
-struct ViewerDisplaySettings<'w> {
-    surface: ResMut<'w, SurfaceSelection>,
-    overlays: ResMut<'w, OverlaySettings>,
-    render: ResMut<'w, ViewerRenderSettings>,
-}
 
 impl Plugin for ViewerUiPlugin {
     fn build(&self, app: &mut App) {
@@ -27,10 +20,14 @@ impl Plugin for ViewerUiPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn viewer_ui(
     mut contexts: EguiContexts,
     mut generation: ResMut<GenerationSettings>,
-    mut display: ViewerDisplaySettings,
+    mut surface: ResMut<SurfaceSelection>,
+    mut overlays: ResMut<OverlaySettings>,
+    mut relief: ResMut<ReliefSettings>,
+    mut lighting: ResMut<LightingSettings>,
     status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
     mut regenerate: MessageWriter<RegenerateWorld>,
@@ -49,14 +46,14 @@ fn viewer_ui(
                 }
 
                 ui.separator();
-                let mut next_render_settings = *display.render;
-                render_controls(ui, &mut next_render_settings);
-                if next_render_settings != *display.render {
-                    *display.render = next_render_settings;
-                }
+                let mut next_relief = *relief;
+                let mut next_lighting = *lighting;
+                render_controls(ui, &mut next_relief, &mut next_lighting);
+                relief.set_if_neq(next_relief);
+                lighting.set_if_neq(next_lighting);
 
                 ui.separator();
-                layer_controls(ui, display.surface.reborrow(), display.overlays.reborrow());
+                layer_controls(ui, surface.reborrow(), overlays.reborrow());
 
                 ui.separator();
                 summary::world_summary(ui, &world);
@@ -70,40 +67,34 @@ fn viewer_ui(
     Ok(())
 }
 
-fn render_controls(ui: &mut egui::Ui, settings: &mut ViewerRenderSettings) {
+fn render_controls(
+    ui: &mut egui::Ui,
+    relief: &mut ReliefSettings,
+    lighting: &mut LightingSettings,
+) {
     ui.label("Terrain relief");
-    slider(
-        ui,
-        "Exaggeration",
-        &mut settings.relief_exaggeration,
-        0.0..=0.4,
-    );
+    slider(ui, "Exaggeration", &mut relief.exaggeration, 0.0..=0.4);
 
     ui.add_space(4.0);
     ui.label("Directional light");
-    slider(
-        ui,
-        "Azimuth",
-        &mut settings.light_azimuth_degrees,
-        -180.0..=180.0,
-    );
+    slider(ui, "Azimuth", &mut lighting.azimuth_degrees, -180.0..=180.0);
     slider(
         ui,
         "Elevation",
-        &mut settings.light_elevation_degrees,
+        &mut lighting.elevation_degrees,
         -89.0..=89.0,
     );
     drag_value(
         ui,
         "Illuminance",
-        &mut settings.light_illuminance,
+        &mut lighting.illuminance,
         0.0..=30_000.0,
         500.0,
     );
     drag_value(
         ui,
         "Ambient fill",
-        &mut settings.ambient_brightness,
+        &mut lighting.ambient_brightness,
         0.0..=2_000.0,
         50.0,
     );

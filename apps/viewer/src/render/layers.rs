@@ -8,14 +8,14 @@ use super::palette::{
     LAND_ICE_COLOR_STOPS, OCEANIC_PEAK_COLOR_STOPS, PRECIPITATION_COLOR_STOPS,
     PRESSURE_ACCELERATION_COLOR_STOPS, SEA_ICE_COLOR_STOPS, SNOW_COVER_COLOR_STOPS,
     TEMPERATURE_AMPLITUDE_COLOR_STOPS, TEMPERATURE_COLOR_STOPS, TEMPERATURE_GRADIENT_COLOR_STOPS,
-    VOLCANIC_ARC_COLOR_STOPS, WIND_SPEED_COLOR_STOPS,
+    VOLCANIC_ARC_COLOR_STOPS, WIND_SPEED_COLOR_STOPS, opaque_color, piecewise_lerp,
 };
 use super::surfaces::{
-    basin_surface_mesh, crust_surface_mesh, insolation_surface_mesh, plate_surface_mesh,
-    scalar_surface_mesh, seafloor_age_surface_mesh,
+    basin_colors, cell_surface_mesh, crust_colors, insolation_colors, plate_colors,
+    seafloor_age_colors,
 };
 use crate::model::GeneratedWorld;
-use bevy::prelude::{Component, GizmoAsset, Mesh, Vec3};
+use bevy::prelude::{Color, Component, GizmoAsset, Mesh, Vec3};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
@@ -82,7 +82,7 @@ impl OverlayKind {
 }
 
 type CellValues = for<'a> fn(&'a GeneratedWorld) -> &'a [f32];
-type SurfaceBuilder = fn(&GeneratedWorld, f32) -> Mesh;
+type CellColors = fn(&GeneratedWorld) -> Vec<Color>;
 
 enum LayerSpec {
     Fill {
@@ -126,10 +126,10 @@ impl LayerSpec {
         }
     }
 
-    fn surface(label: &'static str, build: SurfaceBuilder, gizmo: Option<GizmoSpec>) -> Self {
+    fn surface(label: &'static str, colors: CellColors, gizmo: Option<GizmoSpec>) -> Self {
         Self::Fill {
             label,
-            surface: SurfaceSource::Custom(build),
+            surface: SurfaceSource::Custom(colors),
             gizmo,
         }
     }
@@ -180,17 +180,24 @@ pub(super) enum SurfaceSource {
         values: CellValues,
         stops: &'static [(f32, Vec3)],
     },
-    Custom(SurfaceBuilder),
+    Custom(CellColors),
 }
 
 impl SurfaceSource {
     pub(super) fn build(self, world: &GeneratedWorld, relief_exaggeration: f32) -> Mesh {
-        match self {
-            Self::Scalar { values, stops } => {
-                scalar_surface_mesh(world, values(world), stops, relief_exaggeration)
-            }
-            Self::Custom(build) => build(world, relief_exaggeration),
-        }
+        let colors = match self {
+            Self::Scalar { values, stops } => values(world)
+                .iter()
+                .map(|&value| opaque_color(piecewise_lerp(value, stops)))
+                .collect(),
+            Self::Custom(colors) => colors(world),
+        };
+        cell_surface_mesh(
+            &world.voronoi,
+            colors,
+            &world.isostasy.cell_elevations,
+            relief_exaggeration,
+        )
     }
 }
 
@@ -283,16 +290,14 @@ impl DiagnosticLayer {
             Self::Voronoi => LayerSpec::overlay("Voronoi", OverlayKind::Edges, 1.5, voronoi_asset),
             Self::Plates => LayerSpec::surface(
                 "Tectonic plates",
-                plate_surface_mesh,
+                plate_colors,
                 Some(GizmoSpec::new(2.4, plate_border_asset)),
             ),
-            Self::Crust => LayerSpec::surface("Crust classes", crust_surface_mesh, None),
+            Self::Crust => LayerSpec::surface("Crust classes", crust_colors, None),
             Self::Points => {
                 LayerSpec::overlay("Cell centers", OverlayKind::Markers, 1.8, point_asset)
             }
-            Self::SeafloorAge => {
-                LayerSpec::surface("Seafloor age", seafloor_age_surface_mesh, None)
-            }
+            Self::SeafloorAge => LayerSpec::surface("Seafloor age", seafloor_age_colors, None),
             Self::BaseElevation => LayerSpec::scalar(
                 "Base elevation",
                 |world| &world.base_elevation.cell_elevations,
@@ -324,7 +329,7 @@ impl DiagnosticLayer {
                 ELEVATION_COLOR_STOPS,
             ),
             Self::Insolation => {
-                LayerSpec::surface("Daily-mean insolation", insolation_surface_mesh, None)
+                LayerSpec::surface("Daily-mean insolation", insolation_colors, None)
             }
             Self::CoupledAlbedo => LayerSpec::scalar(
                 "Coupled surface albedo",
@@ -469,7 +474,7 @@ impl DiagnosticLayer {
                 |world| &world.cratons.cell_strengths,
                 CRATON_COLOR_STOPS,
             ),
-            Self::Basins => LayerSpec::surface("Sedimentary basins", basin_surface_mesh, None),
+            Self::Basins => LayerSpec::surface("Sedimentary basins", basin_colors, None),
             Self::Boundaries => {
                 LayerSpec::overlay("Boundary classes", OverlayKind::Edges, 4.0, boundary_asset)
             }
