@@ -11,6 +11,9 @@ pub struct Vec3 {
 
 impl Vec3 {
     pub const ZERO: Self = Self::new(0.0, 0.0, 0.0);
+    pub const X: Self = Self::new(1.0, 0.0, 0.0);
+    pub const Y: Self = Self::new(0.0, 1.0, 0.0);
+    pub const Z: Self = Self::new(0.0, 0.0, 1.0);
 
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
@@ -92,10 +95,10 @@ mod tests {
 
     #[test]
     fn vector_operations_obey_basic_invariants() {
-        let x = Vec3::new(1.0, 0.0, 0.0);
-        let y = Vec3::new(0.0, 1.0, 0.0);
+        let x = Vec3::X;
+        let y = Vec3::Y;
 
-        assert_eq!(x.cross(y), Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(x.cross(y), Vec3::Z);
         assert_eq!(x.dot(y), 0.0);
         assert!(x.is_finite());
         assert!(!Vec3::new(f32::NAN, 0.0, 0.0).is_finite());

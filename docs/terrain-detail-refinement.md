@@ -267,7 +267,7 @@ into the viewer.
 ### `procgen-sphere-mesh` point location, `procgen-cubesphere` mapping and bake, and `procgen-terrain` control composition, cached with the snapshot.
 
 5. ~~Add Delaunay point location to procgen-sphere-mesh.~~
-6. Add cube-sphere mapping, integer tile addressing, and seam tests to procgen-cubesphere.
+6. ~~Add cube-sphere mapping, integer tile addressing, and seam tests to procgen-cubesphere.~~
 7. Add terrain-control composition to procgen-terrain.
 8. Add CPU control-face baking and deterministic bilinear sampling.
 9. Cache the control bake with generated-world snapshots.

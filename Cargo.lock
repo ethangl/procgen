@@ -3153,6 +3153,13 @@ name = "procgen-core"
 version = "0.1.0"
 
 [[package]]
+name = "procgen-cubesphere"
+version = "0.1.0"
+dependencies = [
+ "procgen-core",
+]
+
+[[package]]
 name = "procgen-geology"
 version = "0.1.0"
 dependencies = [
