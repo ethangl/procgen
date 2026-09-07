@@ -128,7 +128,7 @@ implementation is the canonical result. With integer hashing, no
 transcendental functions, and Rust's default of no FMA contraction, it is
 bit-exact across x86 and ARM, so an export that must be reproducible anywhere
 runs on the CPU. GPU paths exist for speed and must agree with the CPU within
-one named tolerance constant.
+named value and derivative-angle tolerances.
 
 - Lattice hashing is integer-only. Workspace-facing noise APIs retain the
   existing `u64` seed convention, while WGSL has no 64-bit integers.
@@ -148,9 +148,9 @@ one named tolerance constant.
 - Every backend derives the sample direction from integer face, level, and
   tile coordinates in f32 using the same expression order, so coordinate
   quantization is shared rather than a source of disagreement.
-- The tolerance constant is set at ten times the measured maximum divergence
-  over a large sample on both Metal and CUDA, and the measurement is recorded
-  beside the constant. The provisional value is an absolute height difference
+- The tolerances are set from measured maximum divergence over a large sample
+  on both Metal and CUDA, and the measurements are recorded beside the
+  constants. The provisional value tolerance is an absolute height difference
   of 1e-5 in normalized units, about 10 cm at the Earth preset, with normals
   within 1e-3 radians. Expected drift is dominated by the finest octave's
   sensitivity to direction rounding and should land well under that.
@@ -241,8 +241,8 @@ Settled before implementation:
 - The first basis is cubic-lattice gradient noise with analytic derivatives.
   The basis ships in slice 2; plain fbm, ridged, and derivative-damped variants
   ship in slice 3; domain warp ships in slice 10.
-- The CPU path is canonical. GPU agreement is one named constant set at ten
-  times measured divergence, provisionally 1e-5 normalized.
+- The CPU path is canonical. GPU agreement uses named value and
+  derivative-angle tolerances, provisionally 1e-5 normalized and 1e-3 radians.
 - `procgen-core` and `procgen-sphere-mesh` gain primitives; `procgen-noise`,
   `procgen-cubesphere`, and `procgen-terrain` are new.
 
@@ -282,7 +282,7 @@ into the viewer.
 13. Add quadtree selection and bounded tile-generation scheduling.
 14. Add skirts, relative tile origins, octave fading, and closer camera behavior.
 
-### CPU and CUDA tile export sharing the viewer's function, with the tolerance constant measured and recorded.
+### CPU and CUDA tile export sharing the viewer's function, with the tolerances measured and recorded.
 
 15. Add deterministic CPU tile export.
 16. Add CUDA export and measure the final cross-backend tolerance.

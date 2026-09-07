@@ -49,7 +49,7 @@ pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
     gradient_noise_3d_from_key(fold_seed_u64_to_u32(seed), position)
 }
 
-pub(crate) fn gradient_noise_3d_from_key(seed: u32, position: Vec3) -> NoiseSample3 {
+pub(crate) fn gradient_noise_3d_from_key(key: u32, position: Vec3) -> NoiseSample3 {
     let cell = [
         position.x.floor() as i32,
         position.y.floor() as i32,
@@ -71,7 +71,7 @@ pub(crate) fn gradient_noise_3d_from_key(seed: u32, position: Vec3) -> NoiseSamp
         for corner_y in 0..2 {
             for corner_x in 0..2 {
                 let gradient = lattice_gradient_3d(
-                    seed,
+                    key,
                     [
                         cell[0].wrapping_add(corner_x as i32),
                         cell[1].wrapping_add(corner_y as i32),

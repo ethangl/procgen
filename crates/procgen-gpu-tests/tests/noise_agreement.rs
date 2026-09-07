@@ -8,10 +8,10 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{HASH_U32_TEST_VECTORS, Vec3};
 use procgen_noise::{
-    DerivativeDampedConfig, NoiseSample3, OctaveConfig, OctaveGain,
-    PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE, PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE,
-    RidgedMultifractalConfig, WGSL_SOURCE, derivative_damped_fbm_3d, fbm_3d, fold_seed_u64_to_u32,
-    gradient_noise_3d, lattice_gradient_3d, ridged_multifractal_3d,
+    DerivativeDampedConfig, NOISE_DERIVATIVE_ANGLE_TOLERANCE, NOISE_VALUE_TOLERANCE, NoiseSample3,
+    OctaveConfig, OctaveGain, RidgedMultifractalConfig, Validated, WGSL_SOURCE,
+    derivative_damped_fbm_3d, fbm_3d, fold_seed_u64_to_u32, gradient_noise_3d, lattice_gradient_3d,
+    ridged_multifractal_3d,
 };
 use wgpu::util::DeviceExt;
 
@@ -44,9 +44,10 @@ struct ShaderInput {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct ShaderOutput {
-    hashes: [u32; 4],
-    exact_sample: [f32; 4],
-    noise_sample: [f32; 4],
+    hash: u32,
+    _hash_padding: [u32; 3],
+    gradient: [f32; 4],
+    sample: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -71,12 +72,39 @@ impl NoiseParameters {
         ridge_gain: 0.0,
     };
 
+    fn gain(self) -> OctaveGain {
+        OctaveGain::new(self.gain).unwrap()
+    }
+
     fn octave_config(self) -> OctaveConfig {
         OctaveConfig {
             octaves: self.octaves,
             frequency: self.frequency,
             lacunarity: self.lacunarity,
         }
+    }
+
+    fn octaves(self) -> Validated<OctaveConfig> {
+        self.octave_config().validate().unwrap()
+    }
+
+    fn ridged(self) -> Validated<RidgedMultifractalConfig> {
+        RidgedMultifractalConfig {
+            octaves: self.octave_config(),
+            ridge_offset: self.ridge_offset,
+            ridge_gain: self.ridge_gain,
+        }
+        .validate()
+        .unwrap()
+    }
+
+    fn damped(self) -> Validated<DerivativeDampedConfig> {
+        DerivativeDampedConfig {
+            octaves: self.octave_config(),
+            damping: self.damping,
+        }
+        .validate()
+        .unwrap()
     }
 }
 
@@ -104,42 +132,15 @@ impl NoiseKind {
         position: Vec3,
         parameters: NoiseParameters,
     ) -> NoiseSample3 {
-        if matches!(self, Self::Basis) {
-            return gradient_noise_3d(seed, position);
-        }
-
-        let gain = OctaveGain::new(parameters.gain).unwrap();
         match self {
-            Self::Basis => unreachable!(),
-            Self::Fbm => fbm_3d(
-                seed,
-                position,
-                parameters.octave_config().validate().unwrap(),
-                gain,
-            ),
-            Self::Ridged => ridged_multifractal_3d(
-                seed,
-                position,
-                RidgedMultifractalConfig {
-                    octaves: parameters.octave_config(),
-                    ridge_offset: parameters.ridge_offset,
-                    ridge_gain: parameters.ridge_gain,
-                }
-                .validate()
-                .unwrap(),
-                gain,
-            ),
-            Self::Damped => derivative_damped_fbm_3d(
-                seed,
-                position,
-                DerivativeDampedConfig {
-                    octaves: parameters.octave_config(),
-                    damping: parameters.damping,
-                }
-                .validate()
-                .unwrap(),
-                gain,
-            ),
+            Self::Basis => gradient_noise_3d(seed, position),
+            Self::Fbm => fbm_3d(seed, position, parameters.octaves(), parameters.gain()),
+            Self::Ridged => {
+                ridged_multifractal_3d(seed, position, parameters.ridged(), parameters.gain())
+            }
+            Self::Damped => {
+                derivative_damped_fbm_3d(seed, position, parameters.damped(), parameters.gain())
+            }
         }
     }
 }
@@ -166,6 +167,16 @@ enum Case {
 }
 
 impl Case {
+    fn lattice_gradient(label: &'static str, seed: u64, cell: [i32; 3]) -> Self {
+        let key = fold_seed_u64_to_u32(seed);
+        Self::LatticeGradient {
+            label,
+            key,
+            cell,
+            expected: lattice_gradient_3d(key, cell),
+        }
+    }
+
     fn noise(
         label: &'static str,
         seed: u64,
@@ -221,7 +232,7 @@ impl Case {
     fn check(&self, output: &ShaderOutput) -> Option<FloatMeasurement> {
         match *self {
             Self::CoreHash { expected, .. } => {
-                assert_eq!(output.hashes[0], expected, "core hash output");
+                assert_eq!(output.hash, expected, "core hash output");
                 None
             }
             Self::LatticeGradient {
@@ -229,7 +240,7 @@ impl Case {
             } => {
                 let expected = [expected.x, expected.y, expected.z];
                 for (component, (&actual, &expected)) in
-                    output.exact_sample[..3].iter().zip(&expected).enumerate()
+                    output.gradient[..3].iter().zip(&expected).enumerate()
                 {
                     assert_eq!(
                         actual.to_bits(),
@@ -243,27 +254,23 @@ impl Case {
                 label, expected, ..
             } => {
                 let actual = NoiseSample3 {
-                    value: output.noise_sample[0],
-                    derivative: Vec3::new(
-                        output.noise_sample[1],
-                        output.noise_sample[2],
-                        output.noise_sample[3],
-                    ),
+                    value: output.sample[0],
+                    derivative: Vec3::new(output.sample[1], output.sample[2], output.sample[3]),
                 };
                 let value_difference = (actual.value - expected.value).abs();
                 let derivative_angle = derivative_angle(actual.derivative, expected.derivative);
                 assert!(
-                    value_difference <= PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE,
+                    value_difference <= NOISE_VALUE_TOLERANCE,
                     "{label} value: GPU {} CPU {} difference {} exceeds {}",
                     actual.value,
                     expected.value,
                     value_difference,
-                    PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE
+                    NOISE_VALUE_TOLERANCE
                 );
                 assert!(
-                    derivative_angle <= PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE,
+                    derivative_angle <= NOISE_DERIVATIVE_ANGLE_TOLERANCE,
                     "{label} derivative angle {derivative_angle} exceeds {}",
-                    PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE
+                    NOISE_DERIVATIVE_ANGLE_TOLERANCE
                 );
                 Some(FloatMeasurement {
                     label,
@@ -335,10 +342,10 @@ fn wgsl_noise_agrees_with_canonical_cpu() {
         measurements.len(),
         maximum_value.value_difference,
         maximum_value.label,
-        PROVISIONAL_NOISE_VALUE_ABSOLUTE_TOLERANCE,
+        NOISE_VALUE_TOLERANCE,
         maximum_derivative.derivative_angle,
         maximum_derivative.label,
-        PROVISIONAL_NOISE_DERIVATIVE_ANGLE_TOLERANCE,
+        NOISE_DERIVATIVE_ANGLE_TOLERANCE,
     );
 }
 
@@ -350,14 +357,14 @@ fn agreement_cases() -> Vec<Case> {
 
     // Fold on the host, then exercise signed-cell bitcasts and gradient selection on the GPU.
     cases.extend([
-        lattice_case("lattice-origin", 0x0000_0000_0000_0001, [0, 0, 0]),
-        lattice_case("lattice-signed", 0x0000_0001_0000_0000, [-1, 2, -3]),
-        lattice_case(
+        Case::lattice_gradient("lattice-origin", 0x0000_0000_0000_0001, [0, 0, 0]),
+        Case::lattice_gradient("lattice-signed", 0x0000_0001_0000_0000, [-1, 2, -3]),
+        Case::lattice_gradient(
             "lattice-extremes",
             0x0123_4567_89ab_cdef,
             [i32::MIN, -17, i32::MAX],
         ),
-        lattice_case("lattice-wide", u64::MAX, [-32_769, -1, 32_768]),
+        Case::lattice_gradient("lattice-wide", u64::MAX, [-32_769, -1, 32_768]),
     ]);
 
     cases.extend([
@@ -448,28 +455,8 @@ fn agreement_cases() -> Vec<Case> {
     cases
 }
 
-fn lattice_case(label: &'static str, seed: u64, cell: [i32; 3]) -> Case {
-    let key = fold_seed_u64_to_u32(seed);
-    Case::LatticeGradient {
-        label,
-        key,
-        cell,
-        expected: lattice_gradient_3d(key, cell),
-    }
-}
-
 fn derivative_angle(left: Vec3, right: Vec3) -> f32 {
-    let left_length = left.length();
-    let right_length = right.length();
-    if left_length <= f32::EPSILON && right_length <= f32::EPSILON {
-        return 0.0;
-    }
-    if left_length <= f32::EPSILON || right_length <= f32::EPSILON {
-        return std::f32::consts::PI;
-    }
-    (left.dot(right) / (left_length * right_length))
-        .clamp(-1.0, 1.0)
-        .acos()
+    left.cross(right).length().atan2(left.dot(right))
 }
 
 fn dispatch(
@@ -498,9 +485,12 @@ struct Input {{
     padding_1: vec2<u32>,
 }}
 struct Output {{
-    hashes: vec4<u32>,
-    exact_sample: vec4<f32>,
-    noise_sample: vec4<f32>,
+    hash: u32,
+    hash_padding_0: u32,
+    hash_padding_1: u32,
+    hash_padding_2: u32,
+    gradient: vec4<f32>,
+    sample: vec4<f32>,
 }}
 @group(0) @binding(0) var<storage, read> inputs: array<Input>;
 @group(0) @binding(1) var<storage, read_write> outputs: array<Output>;
@@ -509,23 +499,23 @@ struct Output {{
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     if (id.x >= arrayLength(&inputs)) {{ return; }}
     let input = inputs[id.x];
-    var hashes = vec4(0u);
-    var exact_sample = vec4(0.0);
-    var noise_sample = NoiseSample3(0.0, vec3(0.0));
+    var hash = 0u;
+    var gradient = vec4(0.0);
+    var sample = NoiseSample3(0.0, vec3(0.0));
     if (input.mode == {MODE_CORE_HASH}u) {{
-        hashes.x = hash_u32(input.words.x, input.words.y, input.words.z, input.words.w);
+        hash = hash_u32(input.words.x, input.words.y, input.words.z, input.words.w);
     }} else if (input.mode == {MODE_LATTICE_GRADIENT}u) {{
-        exact_sample = vec4(lattice_gradient(input.key, input.lattice_cell.xyz), 0.0);
+        gradient = vec4(lattice_gradient(input.key, input.lattice_cell.xyz), 0.0);
     }} else if (input.mode == {MODE_BASIS}u) {{
-        noise_sample = gradient_noise_3d(input.key, input.position.xyz);
+        sample = gradient_noise_3d(input.key, input.position.xyz);
     }} else if (input.mode == {MODE_FBM}u) {{
-        noise_sample = fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain);
+        sample = fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain);
     }} else if (input.mode == {MODE_RIDGED}u) {{
-        noise_sample = ridged_multifractal_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.ridge_offset, input.ridge_gain);
+        sample = ridged_multifractal_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.ridge_offset, input.ridge_gain);
     }} else if (input.mode == {MODE_DAMPED}u) {{
-        noise_sample = derivative_damped_fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.damping);
+        sample = derivative_damped_fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.damping);
     }}
-    outputs[id.x] = Output(hashes, exact_sample, vec4(noise_sample.value, noise_sample.derivative));
+    outputs[id.x] = Output(hash, 0u, 0u, 0u, gradient, vec4(sample.value, sample.derivative));
 }}
 "#
     );
