@@ -2,7 +2,10 @@ mod controls;
 mod summary;
 
 use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
-use crate::render::{DiagnosticLayer, OverlayKind, OverlaySettings, SurfaceSelection};
+use crate::render::{
+    DiagnosticLayer, LightingSettings, OverlayKind, OverlaySettings, ReliefSettings,
+    SurfaceSelection,
+};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -17,11 +20,14 @@ impl Plugin for ViewerUiPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn viewer_ui(
     mut contexts: EguiContexts,
     mut generation: ResMut<GenerationSettings>,
     mut surface: ResMut<SurfaceSelection>,
     mut overlays: ResMut<OverlaySettings>,
+    mut relief: ResMut<ReliefSettings>,
+    mut lighting: ResMut<LightingSettings>,
     status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
     mut regenerate: MessageWriter<RegenerateWorld>,
@@ -40,6 +46,13 @@ fn viewer_ui(
                 }
 
                 ui.separator();
+                let mut next_relief = *relief;
+                let mut next_lighting = *lighting;
+                render_controls(ui, &mut next_relief, &mut next_lighting);
+                relief.set_if_neq(next_relief);
+                lighting.set_if_neq(next_lighting);
+
+                ui.separator();
                 layer_controls(ui, surface.reborrow(), overlays.reborrow());
 
                 ui.separator();
@@ -52,6 +65,39 @@ fn viewer_ui(
             });
         });
     Ok(())
+}
+
+fn render_controls(
+    ui: &mut egui::Ui,
+    relief: &mut ReliefSettings,
+    lighting: &mut LightingSettings,
+) {
+    section(ui, "Terrain relief", |ui| {
+        slider(ui, "Exaggeration", &mut relief.exaggeration, 0.0..=0.4)
+    });
+    section(ui, "Directional light", |ui| {
+        slider(ui, "Azimuth", &mut lighting.azimuth_degrees, -180.0..=180.0);
+        slider(
+            ui,
+            "Elevation",
+            &mut lighting.elevation_degrees,
+            -89.0..=89.0,
+        );
+        drag_value(
+            ui,
+            "Illuminance",
+            &mut lighting.illuminance,
+            0.0..=30_000.0,
+            500.0,
+        );
+        drag_value(
+            ui,
+            "Ambient fill",
+            &mut lighting.ambient_brightness,
+            0.0..=2_000.0,
+            50.0,
+        );
+    });
 }
 
 fn layer_controls(

@@ -70,8 +70,12 @@ wind speed, humidity, precipitation, snow cover, land-ice cover, and sea-ice
 cover. Delaunay, Voronoi, and final-boundary diagnostics remain edge overlays;
 cell centers remain markers; wind and plate motion remain vectors. The viewer
 also reports aggregate statistics and stage timings.
-Filled fields use each cell's exact value across its flat Voronoi face rather
-than averaging neighboring values onto shared edges.
+Filled fields retain each cell's exact diagnostic color while viewer-only
+terrain relief radially displaces cell centers from sea level using final
+adjusted elevation. Shared corner heights are the deterministic mean of their
+three incident cells, keeping adjacent fans watertight. Relief exaggeration and
+directional-light azimuth, elevation, illuminance, and ambient fill are display
+controls only; they do not alter generation, solar forcing, or climate.
 Plate interiors use stable per-plate colors.
 Crust is blue for oceanic and amber for continental. Seafloor age runs from
 cyan ridge cells to dark blue old crust, with

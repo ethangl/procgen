@@ -1,17 +1,32 @@
 mod assets;
 mod layers;
+mod lighting;
 mod palette;
 mod surfaces;
 
 pub use layers::{DiagnosticLayer, OverlayKind};
+pub use lighting::LightingSettings;
 
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use layers::GizmoSpec;
-use surfaces::empty_surface_mesh;
+use surfaces::{empty_surface_mesh, maximum_surface_radius};
 
 const SURFACE_RADIUS: f32 = 1.0;
 const DEPTH_SCALE_STEP: f32 = 0.004;
+
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct ReliefSettings {
+    pub exaggeration: f32,
+}
+
+impl Default for ReliefSettings {
+    fn default() -> Self {
+        Self {
+            exaggeration: 0.036,
+        }
+    }
+}
 
 #[derive(Resource)]
 pub struct OverlaySettings {
@@ -31,19 +46,20 @@ impl OverlaySettings {
         self.visible[layer.index()] = visible;
     }
 
-    fn depth_scale(&self, layer: DiagnosticLayer) -> Option<f32> {
-        let layer_order = layer.depth_order()?;
-        let visible_layers_before = DiagnosticLayer::ALL
-            .iter()
-            .filter(|&&candidate| {
-                self.is_visible(candidate)
-                    && candidate
-                        .depth_order()
-                        .is_some_and(|order| order < layer_order)
-            })
-            .count();
-
-        Some(1.0 + (visible_layers_before + 1) as f32 * DEPTH_SCALE_STEP)
+    fn depth_scale(&self, layer: DiagnosticLayer) -> f32 {
+        let slot = layer.depth_order().map_or(0, |layer_order| {
+            DiagnosticLayer::ALL
+                .iter()
+                .filter(|&&candidate| {
+                    self.is_visible(candidate)
+                        && candidate
+                            .depth_order()
+                            .is_some_and(|order| order < layer_order)
+                })
+                .count()
+                + 1
+        });
+        1.0 + slot as f32 * DEPTH_SCALE_STEP
     }
 }
 
@@ -84,18 +100,25 @@ impl Plugin for DiagnosticRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceSelection>()
             .init_resource::<OverlaySettings>()
+            .init_resource::<ReliefSettings>()
+            .init_resource::<LightingSettings>()
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
                 (
                     rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
                     rebuild_surface.run_if(
-                        resource_changed::<GeneratedWorld>.or(resource_changed::<SurfaceSelection>),
+                        resource_changed::<GeneratedWorld>
+                            .or(resource_changed::<SurfaceSelection>)
+                            .or(resource_changed::<ReliefSettings>),
                     ),
                     sync_layer_render_state.run_if(
                         resource_changed::<SurfaceSelection>
-                            .or(resource_changed::<OverlaySettings>),
+                            .or(resource_changed::<OverlaySettings>)
+                            .or(resource_changed::<GeneratedWorld>)
+                            .or(resource_changed::<ReliefSettings>),
                     ),
+                    lighting::sync.run_if(resource_changed::<LightingSettings>),
                 ),
             );
     }
@@ -117,13 +140,14 @@ fn setup_scene(
         })),
     ));
 
+    lighting::spawn(&mut commands);
+
     let surface = meshes.add(empty_surface_mesh());
     commands.spawn((
         Mesh3d(surface.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 1.0,
-            unlit: true,
             ..default()
         })),
         SurfaceLayer,
@@ -192,6 +216,7 @@ fn rebuild_diagnostic_assets(
 fn rebuild_surface(
     world: Res<GeneratedWorld>,
     selection: Res<SurfaceSelection>,
+    relief: Res<ReliefSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
     surface: Single<(&Mesh3d, &mut Visibility), With<SurfaceLayer>>,
 ) {
@@ -200,7 +225,7 @@ fn rebuild_surface(
         *meshes.get_mut(&surface_mesh.0).unwrap() = layer
             .surface()
             .expect("surface selection only stores fill layers")
-            .build(&world);
+            .build(&world, relief.exaggeration);
         *visibility = Visibility::Inherited;
     } else {
         *visibility = Visibility::Hidden;
@@ -210,13 +235,14 @@ fn rebuild_surface(
 fn sync_layer_render_state(
     surface: Res<SurfaceSelection>,
     overlays: Res<OverlaySettings>,
+    world: Res<GeneratedWorld>,
+    relief: Res<ReliefSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
+    let outer_radius = maximum_surface_radius(&world.isostasy.cell_elevations, relief.exaggeration);
     for (layer, mut transform) in &mut layer_transforms {
-        if let Some(depth_scale) = overlays.depth_scale(*layer) {
-            transform.scale = Vec3::splat(depth_scale);
-        }
+        transform.scale = Vec3::splat(outer_radius * overlays.depth_scale(*layer) / SURFACE_RADIUS);
     }
 
     // Retained gizmos ignore `Visibility`, so filtering must happen on the camera's render layers.
@@ -246,13 +272,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn depth_scales_only_count_visible_layers() {
+    fn fill_gizmos_use_the_surface_slot_before_the_first_overlay() {
         let mut overlays = OverlaySettings::default();
         overlays.set_visible(DiagnosticLayer::Motion, true);
 
+        assert_eq!(overlays.depth_scale(DiagnosticLayer::Plates), 1.0);
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Motion),
-            Some(1.0 + DEPTH_SCALE_STEP)
+            1.0 + DEPTH_SCALE_STEP
         );
     }
 
@@ -264,11 +291,11 @@ mod tests {
 
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Boundaries),
-            Some(1.0 + DEPTH_SCALE_STEP)
+            1.0 + DEPTH_SCALE_STEP
         );
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Motion),
-            Some(1.0 + 2.0 * DEPTH_SCALE_STEP)
+            1.0 + 2.0 * DEPTH_SCALE_STEP
         );
     }
 }

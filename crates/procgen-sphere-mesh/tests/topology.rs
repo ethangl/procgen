@@ -20,6 +20,21 @@ fn assert_outward(hull: &SphericalDelaunay) {
     }
 }
 
+fn assert_cell_rings_clockwise(mesh: &SphereMesh) {
+    for cell in 0..mesh.cell_count() {
+        let center = mesh.cell_centers[cell];
+        let corners = mesh.cell_corners(cell);
+        for corner in 0..corners.len() {
+            let current = mesh.vertices[corners[corner].vertex];
+            let next = mesh.vertices[corners[(corner + 1) % corners.len()].vertex];
+            assert!(
+                (current - center).cross(next - center).dot(center) < 0.0,
+                "cell {cell}, corner {corner}"
+            );
+        }
+    }
+}
+
 #[test]
 fn validates_inputs() {
     assert_eq!(
@@ -73,6 +88,24 @@ fn input_order_does_not_determine_face_winding() {
     let hull = SphericalDelaunay::build(reversed).unwrap();
 
     assert_outward(&hull);
+}
+
+#[test]
+fn voronoi_cell_rings_are_clockwise_from_outside() {
+    let tetrahedron = [
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, -1.0, -1.0),
+        Vec3::new(-1.0, 1.0, -1.0),
+        Vec3::new(-1.0, -1.0, 1.0),
+    ]
+    .into_iter()
+    .map(Vec3::normalized)
+    .collect();
+
+    for sample in [tetrahedron, points(128, 0.5)] {
+        let mesh = build_sphere_mesh(sample, 1.0).unwrap();
+        assert_cell_rings_clockwise(&mesh);
+    }
 }
 
 #[test]

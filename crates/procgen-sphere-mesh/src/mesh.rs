@@ -166,6 +166,9 @@ impl SphereMesh {
             .collect()
     }
 
+    /// Returns the cell's corners clockwise when viewed from outside the
+    /// sphere. The cell center, each corner's successor, and that corner
+    /// therefore form an outward-facing triangle fan.
     pub fn cell_corners(&self, cell: usize) -> &[CellCorner] {
         &self.corners[self.cell_offsets[cell]..self.cell_offsets[cell + 1]]
     }
