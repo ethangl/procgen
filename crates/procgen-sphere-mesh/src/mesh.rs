@@ -140,7 +140,7 @@ impl SphereMesh {
                 .cell_centers
                 .iter()
                 .chain(&self.vertices)
-                .any(|point| !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite())
+                .any(|point| !point.is_finite())
             || self.cell_offsets.len() != cells + 1
             || self.cell_offsets.first() != Some(&0)
             || self.cell_offsets.last() != Some(&self.corners.len())

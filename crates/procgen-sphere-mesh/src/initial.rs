@@ -1,7 +1,5 @@
-use crate::TopologyError;
+use crate::{TopologyError, UNIT_SPHERE_TOLERANCE};
 use procgen_core::Vec3;
-
-const UNIT_SPHERE_TOLERANCE: f32 = 1.0e-4;
 
 pub(super) fn validate_points(points: &[Vec3]) -> Result<(), TopologyError> {
     if points.len() < 4 {
@@ -9,7 +7,7 @@ pub(super) fn validate_points(points: &[Vec3]) -> Result<(), TopologyError> {
     }
 
     for (index, point) in points.iter().enumerate() {
-        if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
+        if !point.is_finite() {
             return Err(TopologyError::NonFinitePoint { index });
         }
         let length = point.length();
