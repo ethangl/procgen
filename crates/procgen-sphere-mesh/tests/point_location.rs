@@ -117,7 +117,7 @@ fn rejects_non_unit_direction() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "index out of bounds")]
 fn rejects_invalid_hint() {
     let mesh = mesh(32);
     mesh.locate_delaunay(Vec3::new(1.0, 0.0, 0.0), mesh.vertex_count());

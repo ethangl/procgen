@@ -47,21 +47,24 @@ impl EdgeSides {
     }
 
     fn touches_boundary(self) -> bool {
-        self.distances
-            .iter()
-            .any(|distance| distance.abs() <= BOUNDARY_EPSILON)
+        (0..3).any(|edge| self.on_edge(edge))
+    }
+
+    fn on_edge(self, edge: usize) -> bool {
+        self.distances[edge].abs() <= BOUNDARY_EPSILON
     }
 
     fn weights(self) -> [f32; 3] {
         // Directed edges are [a-b, b-c, c-a], so the side opposite each
         // barycentric corner is [b-c, c-a, a-b].
-        let mut weights = [self.numerators[1], self.numerators[2], self.numerators[0]];
-        let opposite_distances = [self.distances[1], self.distances[2], self.distances[0]];
-        for (weight, distance) in weights.iter_mut().zip(opposite_distances) {
-            if distance.abs() <= BOUNDARY_EPSILON {
-                *weight = 0.0;
+        let weights = std::array::from_fn(|corner| {
+            let opposite_edge = (corner + 1) % 3;
+            if self.on_edge(opposite_edge) {
+                0.0
+            } else {
+                self.numerators[opposite_edge]
             }
-        }
+        });
         let sum = weights.iter().sum::<f64>();
         weights.map(|weight| (weight / sum) as f32)
     }
@@ -92,18 +95,20 @@ impl SphereMesh {
         let mut triangle = hint;
 
         for _ in 0..self.vertex_count() {
-            let sides = self.edge_sides(triangle, direction);
+            let mut sides = self.edge_sides(triangle, direction);
             if let Some(edge) = sides.exit_edge() {
                 triangle = self.vertex_neighbors[triangle][edge];
                 continue;
             }
 
-            let (triangle, sides) = if sides.touches_boundary() {
-                self.canonical_boundary_triangle(triangle, sides, direction)
-            } else {
-                (triangle, sides)
+            if sides.touches_boundary() {
+                (triangle, sides) = self.canonical_boundary_triangle(triangle, sides, direction);
+            }
+            return DelaunayLocation {
+                triangle,
+                cells: self.vertex_cells[triangle],
+                weights: sides.weights(),
             };
-            return self.location_in_triangle(triangle, sides);
         }
 
         panic!("Delaunay triangle walk did not converge");
@@ -120,40 +125,35 @@ impl SphereMesh {
         initial_sides: EdgeSides,
         direction: [f64; 3],
     ) -> (usize, EdgeSides) {
-        let mut pending = vec![(initial, initial_sides)];
-        let mut candidates = vec![initial];
-        let mut best = (initial, initial_sides);
+        let mut component = vec![(initial, initial_sides)];
+        let mut cursor = 0;
 
-        while let Some((triangle, sides)) = pending.pop() {
-            for (edge, distance) in sides.distances.into_iter().enumerate() {
-                if distance.abs() > BOUNDARY_EPSILON {
+        while cursor < component.len() {
+            let (triangle, sides) = component[cursor];
+            cursor += 1;
+            for edge in 0..3 {
+                if !sides.on_edge(edge) {
                     continue;
                 }
                 let neighbor = self.vertex_neighbors[triangle][edge];
-                if candidates.contains(&neighbor) {
+                if component
+                    .iter()
+                    .any(|(candidate, _)| *candidate == neighbor)
+                {
                     continue;
                 }
                 let neighbor_sides = self.edge_sides(neighbor, direction);
                 if neighbor_sides.exit_edge().is_some() {
                     continue;
                 }
-                if neighbor < best.0 {
-                    best = (neighbor, neighbor_sides);
-                }
-                candidates.push(neighbor);
-                pending.push((neighbor, neighbor_sides));
+                component.push((neighbor, neighbor_sides));
             }
         }
 
-        best
-    }
-
-    fn location_in_triangle(&self, triangle: usize, sides: EdgeSides) -> DelaunayLocation {
-        DelaunayLocation {
-            triangle,
-            cells: self.vertex_cells[triangle],
-            weights: sides.weights(),
-        }
+        component
+            .into_iter()
+            .min_by_key(|(triangle, _)| *triangle)
+            .expect("boundary component contains the initial triangle")
     }
 }
 
