@@ -148,12 +148,12 @@ named value and derivative-angle tolerances.
 - Every backend derives the sample direction from integer face, level, and
   tile coordinates in f32 using the same expression order, so coordinate
   quantization is shared rather than a source of disagreement.
-- The tolerances are set from measured maximum divergence over a large sample
-  on both Metal and CUDA, and the measurements are recorded beside the
-  constants. The provisional value tolerance is an absolute height difference
-  of 1e-5 in normalized units, about 10 cm at the Earth preset, with normals
-  within 1e-3 radians. Expected drift is dominated by the finest octave's
-  sensitivity to direction rounding and should land well under that.
+- The tolerances are set at ten times the measured maximum divergence over a
+  large sample on both Metal and CUDA, and the measurements are recorded beside
+  the constants. The provisional value tolerance is an absolute height
+  difference of 1e-5 in normalized units, about 10 cm at the Earth preset,
+  with normals within 1e-3 radians. Expected drift is dominated by the finest
+  octave's sensitivity to direction rounding and should land well under that.
 
 Two invariants get tests independent of backend:
 
@@ -242,7 +242,8 @@ Settled before implementation:
   The basis ships in slice 2; plain fbm, ridged, and derivative-damped variants
   ship in slice 3; domain warp ships in slice 10.
 - The CPU path is canonical. GPU agreement uses named value and
-  derivative-angle tolerances, provisionally 1e-5 normalized and 1e-3 radians.
+  derivative-angle tolerances set at ten times measured divergence,
+  provisionally 1e-5 normalized and 1e-3 radians.
 - `procgen-core` and `procgen-sphere-mesh` gain primitives; `procgen-noise`,
   `procgen-cubesphere`, and `procgen-terrain` are new.
 

@@ -15,18 +15,18 @@ pub use gradient::{NoiseSample3, fold_seed_u64_to_u32, gradient_noise_3d, lattic
 
 /// Absolute CPU/backend tolerance for noise values in normalized units.
 ///
-/// This value remains provisional pending CUDA calibration. On Apple M1 Max
-/// via Metal, commit `00ec06ad12f83cc0f95fe2c37697aab70010c969`
-/// measured a maximum `1.192092896e-7` across 12 representative samples.
+/// This value remains provisional pending CUDA calibration. On 2026-09-07,
+/// `wgsl_noise_agrees_with_canonical_cpu` measured a maximum
+/// `1.192092896e-7` across 12 representative samples on Apple M1 Max via Metal.
 pub const NOISE_VALUE_TOLERANCE: f32 = 1.0e-5;
 
 /// CPU/backend angular tolerance for noise derivatives, in radians.
 ///
 /// Derivatives are compared by direction so increasing octave frequency does
 /// not turn ordinary floating-point scaling into a false agreement failure.
-/// This value remains provisional pending CUDA calibration. On Apple M1 Max
-/// via Metal, commit `00ec06ad12f83cc0f95fe2c37697aab70010c969`
-/// measured a maximum `4.657744739e-6` across 12 representative samples.
+/// This value remains provisional pending CUDA calibration. On 2026-09-07,
+/// `wgsl_noise_agrees_with_canonical_cpu` measured a maximum
+/// `4.657744739e-6` across 12 representative samples on Apple M1 Max via Metal.
 pub const NOISE_DERIVATIVE_ANGLE_TOLERANCE: f32 = 1.0e-3;
 
 /// WGSL mirror of the canonical CPU noise implementation.

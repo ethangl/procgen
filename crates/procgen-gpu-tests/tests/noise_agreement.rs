@@ -84,7 +84,7 @@ impl NoiseParameters {
         }
     }
 
-    fn octaves(self) -> Validated<OctaveConfig> {
+    fn fbm(self) -> Validated<OctaveConfig> {
         self.octave_config().validate().unwrap()
     }
 
@@ -134,7 +134,7 @@ impl NoiseKind {
     ) -> NoiseSample3 {
         match self {
             Self::Basis => gradient_noise_3d(seed, position),
-            Self::Fbm => fbm_3d(seed, position, parameters.octaves(), parameters.gain()),
+            Self::Fbm => fbm_3d(seed, position, parameters.fbm(), parameters.gain()),
             Self::Ridged => {
                 ridged_multifractal_3d(seed, position, parameters.ridged(), parameters.gain())
             }
@@ -167,6 +167,16 @@ enum Case {
 }
 
 impl Case {
+    fn basis(label: &'static str, seed: u64, position: Vec3) -> Self {
+        Self::noise(
+            label,
+            seed,
+            NoiseKind::Basis,
+            position,
+            NoiseParameters::BASIS,
+        )
+    }
+
     fn lattice_gradient(label: &'static str, seed: u64, cell: [i32; 3]) -> Self {
         let key = fold_seed_u64_to_u32(seed);
         Self::LatticeGradient {
@@ -368,26 +378,16 @@ fn agreement_cases() -> Vec<Case> {
     ]);
 
     cases.extend([
-        Case::noise(
-            "basis-low-half",
-            1,
-            NoiseKind::Basis,
-            Vec3::new(0.25, 0.5, 0.75),
-            NoiseParameters::BASIS,
-        ),
-        Case::noise(
+        Case::basis("basis-low-half", 1, Vec3::new(0.25, 0.5, 0.75)),
+        Case::basis(
             "basis-high-half",
             0x0000_0001_0000_0000,
-            NoiseKind::Basis,
             Vec3::new(-1.25, 2.5, -9.75),
-            NoiseParameters::BASIS,
         ),
-        Case::noise(
+        Case::basis(
             "basis-mixed",
             0x0123_4567_89ab_cdef,
-            NoiseKind::Basis,
             Vec3::new(12.345, -67.89, 0.125),
-            NoiseParameters::BASIS,
         ),
     ]);
 
