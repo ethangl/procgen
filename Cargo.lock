@@ -3159,7 +3159,6 @@ dependencies = [
  "procgen-core",
  "procgen-sphere",
  "procgen-sphere-mesh",
- "procgen-terrain",
  "rayon",
 ]
 

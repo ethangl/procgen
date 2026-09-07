@@ -5,7 +5,8 @@ mod mapping;
 mod tile;
 
 pub use controls::{
-    ControlBake, ControlBakeError, ControlFace, bake_control_faces, control_face_resolution,
+    BakeError, CubeField, FaceField, MAX_CONTROL_FACE_RESOLUTION, bake_cube_field,
+    control_face_resolution,
 };
 pub use mapping::{
     CubeFace, FaceCoordinates, FaceFrame, MappingError, direction_to_face, face_to_direction,

@@ -42,6 +42,17 @@ impl CubeFace {
         Self::NegativeZ,
     ];
 
+    pub const fn index(self) -> usize {
+        match self {
+            Self::PositiveX => 0,
+            Self::NegativeX => 1,
+            Self::PositiveY => 2,
+            Self::NegativeY => 3,
+            Self::PositiveZ => 4,
+            Self::NegativeZ => 5,
+        }
+    }
+
     /// The single definition of every face's `(normal, +u, +v)` frame.
     pub fn frame(self) -> FaceFrame {
         let (x, y, z) = (Vec3::X, Vec3::Y, Vec3::Z);
@@ -102,8 +113,8 @@ pub fn face_to_direction(coordinates: FaceCoordinates) -> Result<Vec3, MappingEr
     Ok(unit_direction(coordinates))
 }
 
-/// The mapping without validation, for callers that construct coordinates
-/// already known to lie on the face.
+/// The mapping without validation. Coordinates normally lie on the selected
+/// face, but may extend by one texel for seamless filtering across its edges.
 pub(crate) fn unit_direction(coordinates: FaceCoordinates) -> Vec3 {
     let FaceFrame {
         normal,
@@ -126,18 +137,25 @@ pub fn direction_to_face(direction: Vec3) -> Result<FaceCoordinates, MappingErro
         return Err(MappingError::ZeroDirection);
     }
 
-    let face = dominant_face(direction);
+    Ok(canonical_face_coordinates(direction))
+}
+
+pub(crate) fn canonical_face_coordinates(direction: Vec3) -> FaceCoordinates {
+    project_direction_onto_face(direction, dominant_face(direction))
+}
+
+pub(crate) fn project_direction_onto_face(direction: Vec3, face: CubeFace) -> FaceCoordinates {
     let FaceFrame {
         normal,
         u_axis,
         v_axis,
     } = face.frame();
     let depth = direction.dot(normal);
-    Ok(FaceCoordinates {
+    FaceCoordinates {
         face,
         u: (direction.dot(u_axis) / depth).atan() / FRAC_PI_4,
         v: (direction.dot(v_axis) / depth).atan() / FRAC_PI_4,
-    })
+    }
 }
 
 fn dominant_face(direction: Vec3) -> CubeFace {
@@ -189,6 +207,13 @@ mod tests {
                     assert_direction_close(direction, face_to_direction(canonical).unwrap());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn face_indices_match_all_order() {
+        for (index, face) in CubeFace::ALL.into_iter().enumerate() {
+            assert_eq!(face.index(), index);
         }
     }
 

@@ -1,70 +1,82 @@
-//! Typed CPU control-face baking and seamless direction-based sampling.
+//! Typed CPU cube-field baking and seamless direction-based sampling.
 
-use crate::mapping::{CubeFace, FaceCoordinates, MappingError, direction_to_face, unit_direction};
+use crate::mapping::{
+    CubeFace, FaceCoordinates, MappingError, canonical_face_coordinates, direction_to_face,
+    project_direction_onto_face, unit_direction,
+};
 use procgen_core::Vec3;
 use procgen_sphere_mesh::{SphereMesh, TopologyError};
-use procgen_terrain::{TerrainCellControls, TerrainControls, TerrainStampInput};
 use rayon::prelude::*;
+use std::array;
 use std::f64::consts::PI;
 use std::fmt;
 
-/// One typed CPU face of interpolated terrain controls.
+const PARALLEL_ROW_THRESHOLD: usize = 8;
+
+/// Largest power-of-two face edge whose texel count fits in `u32` arithmetic.
+pub const MAX_CONTROL_FACE_RESOLUTION: u32 = 1 << 15;
+
+const _: () = assert!(
+    MAX_CONTROL_FACE_RESOLUTION
+        .checked_mul(MAX_CONTROL_FACE_RESOLUTION)
+        .is_some()
+);
+const _: () = assert!(
+    (MAX_CONTROL_FACE_RESOLUTION * 2)
+        .checked_mul(MAX_CONTROL_FACE_RESOLUTION * 2)
+        .is_none()
+);
+
+/// One typed CPU face of an interpolated multi-channel field.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ControlFace {
-    resolution: u32,
-    texels: Vec<TerrainCellControls>,
+pub struct FaceField<const N: usize> {
+    texels: Vec<[f32; N]>,
 }
 
-impl ControlFace {
-    pub const fn resolution(&self) -> u32 {
-        self.resolution
+impl<const N: usize> FaceField<N> {
+    pub fn resolution(&self) -> u32 {
+        self.texels.len().isqrt() as u32
     }
 
-    pub fn texels(&self) -> &[TerrainCellControls] {
+    pub fn texels(&self) -> &[[f32; N]] {
         &self.texels
     }
 
-    pub fn texel(&self, x: u32, y: u32) -> Option<TerrainCellControls> {
-        if x >= self.resolution || y >= self.resolution {
+    pub fn texel(&self, x: u32, y: u32) -> Option<[f32; N]> {
+        let resolution = self.resolution();
+        if x >= resolution || y >= resolution {
             return None;
         }
-        Some(self.texels[(y * self.resolution + x) as usize])
+        Some(self.texels[(y * resolution + x) as usize])
     }
 }
 
-/// Six CPU control faces plus sparse stamps retained in their source form.
+/// Six typed CPU faces of an interpolated multi-channel field.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ControlBake {
-    resolution: u32,
-    faces: [ControlFace; 6],
-    stamps: Vec<TerrainStampInput>,
+pub struct CubeField<const N: usize> {
+    faces: [FaceField<N>; 6],
 }
 
-impl ControlBake {
-    pub const fn resolution(&self) -> u32 {
-        self.resolution
+impl<const N: usize> CubeField<N> {
+    pub fn resolution(&self) -> u32 {
+        self.faces[0].resolution()
     }
 
-    pub fn face(&self, face: CubeFace) -> &ControlFace {
-        &self.faces[face_index(face)]
-    }
-
-    pub fn stamps(&self) -> &[TerrainStampInput] {
-        &self.stamps
+    pub fn face(&self, face: CubeFace) -> &FaceField<N> {
+        &self.faces[face.index()]
     }
 
     /// Bilinearly samples a direction, remapping taps outside the selected face
-    /// through their directions onto adjacent faces. This is the CPU analogue
-    /// of seamless cube filtering and applies the same rule at corners.
-    pub fn sample(&self, direction: Vec3) -> Result<TerrainCellControls, MappingError> {
-        let coordinates = direction_to_face(direction)?;
-        Ok(self.sample_face_coordinates(coordinates))
+    /// through their directions onto adjacent faces. At a corner the three
+    /// incident face texels are averaged, matching seamless cube filtering.
+    pub fn sample(&self, direction: Vec3) -> Result<[f32; N], MappingError> {
+        Ok(self.sample_face_coordinates(direction_to_face(direction)?))
     }
 
-    fn sample_face_coordinates(&self, coordinates: FaceCoordinates) -> TerrainCellControls {
-        let resolution = self.resolution as f32;
-        let x = snap_integer((coordinates.u + 1.0) * 0.5 * resolution - 0.5);
-        let y = snap_integer((coordinates.v + 1.0) * 0.5 * resolution - 0.5);
+    fn sample_face_coordinates(&self, coordinates: FaceCoordinates) -> [f32; N] {
+        let resolution = self.resolution();
+        let x = face_to_texel(coordinates.u, resolution);
+        let y = face_to_texel(coordinates.v, resolution);
         let x0 = x.floor() as i64;
         let y0 = y.floor() as i64;
         let tx = x - x.floor();
@@ -74,91 +86,87 @@ impl ControlBake {
         let lower_right = self.tap(coordinates.face, x0 + 1, y0);
         let upper_left = self.tap(coordinates.face, x0, y0 + 1);
         let upper_right = self.tap(coordinates.face, x0 + 1, y0 + 1);
-        lerp_controls(
-            lerp_controls(lower_left, lower_right, tx),
-            lerp_controls(upper_left, upper_right, tx),
+        lerp(
+            lerp(lower_left, lower_right, tx),
+            lerp(upper_left, upper_right, tx),
             ty,
         )
     }
 
-    fn tap(&self, source_face: CubeFace, x: i64, y: i64) -> TerrainCellControls {
-        let edge = i64::from(self.resolution);
+    fn tap(&self, source_face: CubeFace, x: i64, y: i64) -> [f32; N] {
+        let edge = i64::from(self.resolution());
         if (0..edge).contains(&x) && (0..edge).contains(&y) {
             return self.face(source_face).texels[(y * edge + x) as usize];
         }
-
-        let outside_x = !(0..edge).contains(&x);
-        let outside_y = !(0..edge).contains(&y);
-        if outside_x && outside_y {
+        if !(0..edge).contains(&x) && !(0..edge).contains(&y) {
             return self.corner_tap(source_face, x, y);
         }
 
-        let resolution = self.resolution as f32;
         let coordinates = FaceCoordinates {
             face: source_face,
-            u: 2.0 * (x as f32 + 0.5) / resolution - 1.0,
-            v: 2.0 * (y as f32 + 0.5) / resolution - 1.0,
+            u: texel_to_face(x as f32, self.resolution()),
+            v: texel_to_face(y as f32, self.resolution()),
         };
-        let adjacent = direction_to_face(unit_direction(coordinates))
-            .expect("an extended face coordinate always produces a finite direction");
-        let adjacent_x = nearest_texel(adjacent.u, self.resolution);
-        let adjacent_y = nearest_texel(adjacent.v, self.resolution);
-        self.face(adjacent.face).texels[(adjacent_y * edge + adjacent_x) as usize]
+        let adjacent = canonical_face_coordinates(unit_direction(coordinates));
+        self.nearest_texel(adjacent)
     }
 
-    fn corner_tap(&self, source_face: CubeFace, x: i64, y: i64) -> TerrainCellControls {
+    fn corner_tap(&self, source_face: CubeFace, x: i64, y: i64) -> [f32; N] {
         let corner = unit_direction(FaceCoordinates {
             face: source_face,
             u: if x < 0 { -1.0 } else { 1.0 },
             v: if y < 0 { -1.0 } else { 1.0 },
         });
-        let mut incident = CubeFace::ALL
+        let incident: Vec<_> = CubeFace::ALL
             .into_iter()
             .filter(|face| corner.dot(face.frame().normal) > 0.0)
-            .map(|face| {
-                let coordinates = coordinates_on_face(corner, face);
-                let x = nearest_texel(coordinates.u, self.resolution);
-                let y = nearest_texel(coordinates.v, self.resolution);
-                let edge = i64::from(self.resolution);
-                self.face(face).texels[(y * edge + x) as usize]
-            });
-        let first = incident.next().expect("a cube corner meets three faces");
-        let second = incident.next().expect("a cube corner meets three faces");
-        let third = incident.next().expect("a cube corner meets three faces");
-        debug_assert!(incident.next().is_none());
-        weighted_controls([first, second, third], [1.0 / 3.0; 3])
+            .map(|face| self.nearest_texel(project_direction_onto_face(corner, face)))
+            .collect();
+        debug_assert_eq!(incident.len(), 3);
+        array::from_fn(|channel| {
+            incident.iter().map(|texel| texel[channel]).sum::<f32>() / incident.len() as f32
+        })
+    }
+
+    fn nearest_texel(&self, coordinates: FaceCoordinates) -> [f32; N] {
+        let resolution = self.resolution();
+        let x = face_to_texel(coordinates.u, resolution)
+            .round()
+            .clamp(0.0, resolution as f32 - 1.0) as u32;
+        let y = face_to_texel(coordinates.v, resolution)
+            .round()
+            .clamp(0.0, resolution as f32 - 1.0) as u32;
+        self.face(coordinates.face).texels[(y * resolution + x) as usize]
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum ControlBakeError {
+pub enum BakeError {
     InvalidCellCount,
-    ResolutionOverflow,
     InvalidMesh(TopologyError),
-    CellCountMismatch { mesh: usize, controls: usize },
-    NonFiniteControl { cell: usize },
-    InvalidStamp { stamp: usize },
+    CellCountMismatch { mesh: usize, cells: usize },
+    NonFiniteCell { cell: usize },
 }
 
-impl fmt::Display for ControlBakeError {
+impl fmt::Display for BakeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCellCount => formatter.write_str("cell count must be at least four"),
-            Self::ResolutionOverflow => formatter.write_str("control-face resolution exceeds u32"),
-            Self::InvalidMesh(error) => write!(formatter, "invalid sphere mesh: {error}"),
-            Self::CellCountMismatch { mesh, controls } => write!(
+            Self::InvalidCellCount => write!(
                 formatter,
-                "mesh has {mesh} cells but terrain controls have {controls}"
+                "cell count must derive a control-face resolution between 1 and {MAX_CONTROL_FACE_RESOLUTION}"
             ),
-            Self::NonFiniteControl { cell } => {
-                write!(formatter, "terrain controls for cell {cell} are not finite")
+            Self::InvalidMesh(error) => write!(formatter, "invalid sphere mesh: {error}"),
+            Self::CellCountMismatch { mesh, cells } => {
+                write!(formatter, "mesh has {mesh} cells but field has {cells}")
             }
-            Self::InvalidStamp { stamp } => write!(formatter, "terrain stamp {stamp} is invalid"),
+            Self::NonFiniteCell { cell } => {
+                write!(formatter, "field channels for cell {cell} are not finite")
+            }
         }
     }
 }
 
-impl std::error::Error for ControlBakeError {
+impl std::error::Error for BakeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidMesh(error) => Some(error),
@@ -172,152 +180,97 @@ impl std::error::Error for ControlBakeError {
 ///
 /// A mean cell spans `sqrt(4 PI / cells)` radians while a cube face spans
 /// `PI / 2`, so the unsnapped requirement is `sqrt(PI * cells)` texels.
-pub fn control_face_resolution(cell_count: usize) -> Result<u32, ControlBakeError> {
+pub fn control_face_resolution(cell_count: usize) -> Result<u32, BakeError> {
     if cell_count < 4 {
-        return Err(ControlBakeError::InvalidCellCount);
+        return Err(BakeError::InvalidCellCount);
     }
     let required = (PI * cell_count as f64).sqrt().ceil();
-    if required > f64::from(u32::MAX) {
-        return Err(ControlBakeError::ResolutionOverflow);
+    if required > f64::from(MAX_CONTROL_FACE_RESOLUTION) {
+        return Err(BakeError::InvalidCellCount);
     }
     (required as u32)
         .checked_next_power_of_two()
-        .ok_or(ControlBakeError::ResolutionOverflow)
+        .filter(|resolution| *resolution <= MAX_CONTROL_FACE_RESOLUTION)
+        .ok_or(BakeError::InvalidCellCount)
 }
 
-/// Bakes all five terrain-control channels at equi-angular face texel centers.
-pub fn bake_control_faces(
+/// Bakes every channel at equi-angular face texel centers.
+pub fn bake_cube_field<const N: usize>(
     mesh: &SphereMesh,
-    controls: &TerrainControls,
-) -> Result<ControlBake, ControlBakeError> {
-    mesh.validate().map_err(ControlBakeError::InvalidMesh)?;
-    if controls.cells.len() != mesh.cell_count() {
-        return Err(ControlBakeError::CellCountMismatch {
+    cells: &[[f32; N]],
+) -> Result<CubeField<N>, BakeError> {
+    mesh.validate().map_err(BakeError::InvalidMesh)?;
+    if cells.len() != mesh.cell_count() {
+        return Err(BakeError::CellCountMismatch {
             mesh: mesh.cell_count(),
-            controls: controls.cells.len(),
+            cells: cells.len(),
         });
     }
-    if let Some(cell) = controls.cells.iter().position(|control| !finite(*control)) {
-        return Err(ControlBakeError::NonFiniteControl { cell });
-    }
-    if let Some(stamp) = controls.stamps.iter().position(|stamp| {
-        stamp.cell >= mesh.cell_count()
-            || !stamp.position.is_finite()
-            || !stamp.strength.is_finite()
-            || !(0.0..=1.0).contains(&stamp.strength)
-    }) {
-        return Err(ControlBakeError::InvalidStamp { stamp });
+    if let Some(cell) = cells
+        .iter()
+        .position(|channels| !channels.iter().all(|value| value.is_finite()))
+    {
+        return Err(BakeError::NonFiniteCell { cell });
     }
 
     let resolution = control_face_resolution(mesh.cell_count())?;
-    let faces = CubeFace::ALL
-        .into_par_iter()
-        .map(|face| bake_face(mesh, &controls.cells, face, resolution))
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("there are exactly six cube faces");
-    Ok(ControlBake {
-        resolution,
-        faces,
-        stamps: controls.stamps.clone(),
+    Ok(CubeField {
+        faces: CubeFace::ALL.map(|face| bake_face(mesh, cells, face, resolution)),
     })
 }
 
-fn bake_face(
+fn bake_face<const N: usize>(
     mesh: &SphereMesh,
-    controls: &[TerrainCellControls],
+    cells: &[[f32; N]],
     face: CubeFace,
     resolution: u32,
-) -> ControlFace {
-    let mut hint = 0;
-    let mut texels = Vec::with_capacity((resolution * resolution) as usize);
-    for y in 0..resolution {
-        for x in 0..resolution {
-            let direction = unit_direction(texel_center(face, x, y, resolution));
-            let location = mesh.locate_delaunay(direction, hint);
-            hint = location.triangle;
-            texels.push(weighted_controls(
-                location.cells.map(|cell| controls[cell]),
-                location.weights,
-            ));
-        }
+) -> FaceField<N> {
+    let rows: Vec<Vec<_>> = (0..resolution)
+        .into_par_iter()
+        .with_min_len(PARALLEL_ROW_THRESHOLD)
+        .map(|y| {
+            let mut hint = 0;
+            (0..resolution)
+                .map(|x| {
+                    let direction = unit_direction(texel_center(face, x, y, resolution));
+                    let location = mesh.locate_delaunay(direction, hint);
+                    hint = location.triangle;
+                    weighted(location.cells.map(|cell| cells[cell]), location.weights)
+                })
+                .collect()
+        })
+        .collect();
+    FaceField {
+        texels: rows.into_iter().flatten().collect(),
     }
-    ControlFace { resolution, texels }
 }
 
 fn texel_center(face: CubeFace, x: u32, y: u32, resolution: u32) -> FaceCoordinates {
-    let resolution = resolution as f32;
     FaceCoordinates {
         face,
-        u: 2.0 * (x as f32 + 0.5) / resolution - 1.0,
-        v: 2.0 * (y as f32 + 0.5) / resolution - 1.0,
+        u: texel_to_face(x as f32, resolution),
+        v: texel_to_face(y as f32, resolution),
     }
 }
 
-fn finite(control: TerrainCellControls) -> bool {
-    control.base_elevation.is_finite()
-        && control.detail_amplitude.is_finite()
-        && control.ridge_weight.is_finite()
-        && control.octave_gain.is_finite()
-        && control.abyssal_amplitude.is_finite()
+fn texel_to_face(texel: f32, resolution: u32) -> f32 {
+    2.0 * (texel + 0.5) / resolution as f32 - 1.0
 }
 
-fn weighted_controls(controls: [TerrainCellControls; 3], weights: [f32; 3]) -> TerrainCellControls {
-    let channel = |read: fn(TerrainCellControls) -> f32| {
-        let first = read(controls[0]);
-        first + (read(controls[1]) - first) * weights[1] + (read(controls[2]) - first) * weights[2]
-    };
-    TerrainCellControls {
-        base_elevation: channel(|control| control.base_elevation),
-        detail_amplitude: channel(|control| control.detail_amplitude),
-        ridge_weight: channel(|control| control.ridge_weight),
-        octave_gain: channel(|control| control.octave_gain),
-        abyssal_amplitude: channel(|control| control.abyssal_amplitude),
-    }
+fn face_to_texel(coordinate: f32, resolution: u32) -> f32 {
+    (coordinate + 1.0) * 0.5 * resolution as f32 - 0.5
 }
 
-fn lerp_controls(
-    left: TerrainCellControls,
-    right: TerrainCellControls,
-    amount: f32,
-) -> TerrainCellControls {
-    let weights = [1.0 - amount, amount, 0.0];
-    weighted_controls([left, right, TerrainCellControls::default()], weights)
+fn weighted<const N: usize>(cells: [[f32; N]; 3], weights: [f32; 3]) -> [f32; N] {
+    array::from_fn(|channel| {
+        cells[0][channel] * weights[0]
+            + cells[1][channel] * weights[1]
+            + cells[2][channel] * weights[2]
+    })
 }
 
-fn nearest_texel(coordinate: f32, resolution: u32) -> i64 {
-    let index = ((coordinate + 1.0) * 0.5 * resolution as f32 - 0.5).round() as i64;
-    index.clamp(0, i64::from(resolution) - 1)
-}
-
-fn coordinates_on_face(direction: Vec3, face: CubeFace) -> FaceCoordinates {
-    let frame = face.frame();
-    let depth = direction.dot(frame.normal);
-    FaceCoordinates {
-        face,
-        u: (direction.dot(frame.u_axis) / depth).atan() / std::f32::consts::FRAC_PI_4,
-        v: (direction.dot(frame.v_axis) / depth).atan() / std::f32::consts::FRAC_PI_4,
-    }
-}
-
-fn snap_integer(value: f32) -> f32 {
-    let rounded = value.round();
-    if (value - rounded).abs() <= 8.0 * f32::EPSILON * value.abs().max(1.0) {
-        rounded
-    } else {
-        value
-    }
-}
-
-const fn face_index(face: CubeFace) -> usize {
-    match face {
-        CubeFace::PositiveX => 0,
-        CubeFace::NegativeX => 1,
-        CubeFace::PositiveY => 2,
-        CubeFace::NegativeY => 3,
-        CubeFace::PositiveZ => 4,
-        CubeFace::NegativeZ => 5,
-    }
+fn lerp<const N: usize>(left: [f32; N], right: [f32; N], amount: f32) -> [f32; N] {
+    array::from_fn(|channel| left[channel] + (right[channel] - left[channel]) * amount)
 }
 
 #[cfg(test)]
@@ -325,7 +278,8 @@ mod tests {
     use super::*;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
-    use procgen_terrain::{TerrainStampInput, TerrainStampKind};
+
+    const CHANNELS: usize = 5;
 
     fn mesh(cell_count: usize) -> SphereMesh {
         let points = fibonacci_sphere(FibonacciConfig {
@@ -337,31 +291,12 @@ mod tests {
         build_sphere_mesh(points, 6_371.0).unwrap()
     }
 
-    fn control(value: f32) -> TerrainCellControls {
-        TerrainCellControls {
-            base_elevation: value,
-            detail_amplitude: value + 1.0,
-            ridge_weight: value + 2.0,
-            octave_gain: value + 3.0,
-            abyssal_amplitude: value + 4.0,
-        }
+    fn channels(value: f32) -> [f32; CHANNELS] {
+        array::from_fn(|channel| value + channel as f32)
     }
 
-    fn controls(mesh: &SphereMesh, make: impl Fn(usize) -> TerrainCellControls) -> TerrainControls {
-        TerrainControls {
-            cells: (0..mesh.cell_count()).map(make).collect(),
-            stamps: Vec::new(),
-        }
-    }
-
-    fn assert_control_close(left: TerrainCellControls, right: TerrainCellControls, epsilon: f32) {
-        for (left, right) in [
-            (left.base_elevation, right.base_elevation),
-            (left.detail_amplitude, right.detail_amplitude),
-            (left.ridge_weight, right.ridge_weight),
-            (left.octave_gain, right.octave_gain),
-            (left.abyssal_amplitude, right.abyssal_amplitude),
-        ] {
+    fn assert_channels_close<const N: usize>(left: [f32; N], right: [f32; N], epsilon: f32) {
+        for (left, right) in left.into_iter().zip(right) {
             assert!(
                 (left - right).abs() <= epsilon,
                 "left={left}, right={right}"
@@ -379,58 +314,46 @@ mod tests {
     }
 
     #[test]
-    fn constant_fields_bake_all_channels_and_keep_stamps_sparse() {
+    fn constant_fields_bake_every_channel() {
         let mesh = mesh(32);
-        let expected = control(0.25);
-        let stamp = TerrainStampInput {
-            cell: 3,
-            kind: TerrainStampKind::Hotspot,
-            source_index: 7,
-            position: mesh.cell_centers[3],
-            strength: 0.75,
-        };
-        let mut controls = controls(&mesh, |_| expected);
-        controls.stamps.push(stamp);
-
-        let bake = bake_control_faces(&mesh, &controls).unwrap();
-        assert_eq!(bake.stamps(), &[stamp]);
+        let expected = channels(0.25);
+        let bake = bake_cube_field(&mesh, &vec![expected; mesh.cell_count()]).unwrap();
         for face in CubeFace::ALL {
-            assert!(
-                bake.face(face)
-                    .texels()
-                    .iter()
-                    .all(|texel| *texel == expected)
-            );
+            for texel in bake.face(face).texels() {
+                assert_channels_close(*texel, expected, 4.0 * f32::EPSILON);
+            }
         }
     }
 
     #[test]
     fn bake_uses_delaunay_barycentric_interpolation() {
         let mesh = mesh(32);
-        let controls = controls(&mesh, |cell| control(cell as f32 * 0.125));
-        let bake = bake_control_faces(&mesh, &controls).unwrap();
+        let cells: Vec<_> = (0..mesh.cell_count())
+            .map(|cell| channels(cell as f32 * 0.125))
+            .collect();
+        let bake = bake_cube_field(&mesh, &cells).unwrap();
         let (face, x, y) = (CubeFace::PositiveZ, 3, 5);
         let direction = unit_direction(texel_center(face, x, y, bake.resolution()));
         let location = mesh.locate_delaunay(direction, 0);
-        let expected = weighted_controls(
-            location.cells.map(|cell| controls.cells[cell]),
-            location.weights,
-        );
+        let expected = weighted(location.cells.map(|cell| cells[cell]), location.weights);
         assert_eq!(bake.face(face).texel(x, y), Some(expected));
     }
 
     #[test]
-    fn sampling_at_every_texel_center_returns_that_texel() {
+    fn sampling_at_texel_centers_recovers_values_with_float_tolerance() {
         let mesh = mesh(32);
-        let controls = controls(&mesh, |cell| control(cell as f32 * 0.03125));
-        let bake = bake_control_faces(&mesh, &controls).unwrap();
+        let cells: Vec<_> = (0..mesh.cell_count())
+            .map(|cell| channels(cell as f32 * 0.03125))
+            .collect();
+        let bake = bake_cube_field(&mesh, &cells).unwrap();
         for face in CubeFace::ALL {
             for y in 0..bake.resolution() {
                 for x in 0..bake.resolution() {
                     let direction = unit_direction(texel_center(face, x, y, bake.resolution()));
-                    assert_eq!(
+                    assert_channels_close(
                         bake.sample(direction).unwrap(),
-                        bake.face(face).texel(x, y).unwrap()
+                        bake.face(face).texel(x, y).unwrap(),
+                        2.0e-5,
                     );
                 }
             }
@@ -440,22 +363,17 @@ mod tests {
     #[test]
     fn direction_filter_is_continuous_across_edges_and_corners() {
         let resolution = 64;
-        let faces = CubeFace::ALL.map(|face| ControlFace {
-            resolution,
+        let faces = CubeFace::ALL.map(|face| FaceField {
             texels: (0..resolution)
                 .flat_map(|y| {
                     (0..resolution).map(move |x| {
                         let direction = unit_direction(texel_center(face, x, y, resolution));
-                        control(direction.x * 0.2 + direction.y * 0.3 + direction.z * 0.5)
+                        channels(direction.x * 0.2 + direction.y * 0.3 + direction.z * 0.5)
                     })
                 })
                 .collect(),
         });
-        let bake = ControlBake {
-            resolution,
-            faces,
-            stamps: Vec::new(),
-        };
+        let bake = CubeField { faces };
 
         for direction in [
             Vec3::new(1.0, 0.37, 1.0).normalized(),
@@ -474,11 +392,11 @@ mod tests {
             });
             let samples: Vec<_> = incident
                 .map(|face| {
-                    bake.sample_face_coordinates(super::coordinates_on_face(direction, face))
+                    bake.sample_face_coordinates(project_direction_onto_face(direction, face))
                 })
                 .collect();
             for sample in &samples[1..] {
-                assert_control_close(samples[0], *sample, 2.0e-4);
+                assert_channels_close(samples[0], *sample, 2.0e-4);
             }
         }
     }
@@ -486,13 +404,15 @@ mod tests {
     #[test]
     fn repeated_bakes_and_samples_are_bit_deterministic() {
         let mesh = mesh(64);
-        let controls = controls(&mesh, |cell| control((cell as f32 * 0.17).sin()));
+        let cells: Vec<_> = (0..mesh.cell_count())
+            .map(|cell| channels((cell as f32 * 0.17).sin()))
+            .collect();
         let bake_with_threads = |threads| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap()
-                .install(|| bake_control_faces(&mesh, &controls).unwrap())
+                .install(|| bake_cube_field(&mesh, &cells).unwrap())
         };
         let first = bake_with_threads(1);
         let second = bake_with_threads(4);
@@ -504,53 +424,33 @@ mod tests {
 
     #[test]
     fn rejects_invalid_inputs() {
-        assert_eq!(
-            control_face_resolution(0),
-            Err(ControlBakeError::InvalidCellCount)
-        );
+        assert_eq!(control_face_resolution(0), Err(BakeError::InvalidCellCount));
         assert_eq!(
             control_face_resolution(usize::MAX),
-            Err(ControlBakeError::ResolutionOverflow)
+            Err(BakeError::InvalidCellCount)
         );
 
         let mesh = mesh(16);
-        let too_few = TerrainControls::default();
         assert_eq!(
-            bake_control_faces(&mesh, &too_few),
-            Err(ControlBakeError::CellCountMismatch {
-                mesh: 16,
-                controls: 0
-            })
+            bake_cube_field::<CHANNELS>(&mesh, &[]),
+            Err(BakeError::CellCountMismatch { mesh: 16, cells: 0 })
         );
 
-        let mut non_finite = controls(&mesh, |_| control(0.0));
-        non_finite.cells[4].ridge_weight = f32::NAN;
+        let mut non_finite = vec![channels(0.0); mesh.cell_count()];
+        non_finite[4][2] = f32::NAN;
         assert_eq!(
-            bake_control_faces(&mesh, &non_finite),
-            Err(ControlBakeError::NonFiniteControl { cell: 4 })
-        );
-
-        let mut invalid_stamp = controls(&mesh, |_| control(0.0));
-        invalid_stamp.stamps.push(TerrainStampInput {
-            cell: mesh.cell_count(),
-            kind: TerrainStampKind::Hotspot,
-            source_index: 0,
-            position: Vec3::X,
-            strength: 1.0,
-        });
-        assert_eq!(
-            bake_control_faces(&mesh, &invalid_stamp),
-            Err(ControlBakeError::InvalidStamp { stamp: 0 })
+            bake_cube_field(&mesh, &non_finite),
+            Err(BakeError::NonFiniteCell { cell: 4 })
         );
 
         let mut invalid_mesh = mesh.clone();
         invalid_mesh.cell_offsets.clear();
         assert!(matches!(
-            bake_control_faces(&invalid_mesh, &controls(&mesh, |_| control(0.0))),
-            Err(ControlBakeError::InvalidMesh(TopologyError::InvalidMesh))
+            bake_cube_field(&invalid_mesh, &vec![channels(0.0); mesh.cell_count()]),
+            Err(BakeError::InvalidMesh(TopologyError::InvalidMesh))
         ));
         assert_eq!(
-            bake_control_faces(&mesh, &controls(&mesh, |_| control(0.0)))
+            bake_cube_field(&mesh, &vec![channels(0.0); mesh.cell_count()])
                 .unwrap()
                 .sample(Vec3::ZERO),
             Err(MappingError::ZeroDirection)

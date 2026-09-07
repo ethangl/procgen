@@ -3,6 +3,7 @@
 mod controls;
 
 pub use controls::{
-    TerrainCellControls, TerrainControlConfig, TerrainControlError, TerrainControlInputs,
-    TerrainControls, TerrainStampInput, TerrainStampKind, compose_terrain_controls,
+    TERRAIN_CONTROL_CHANNELS, TerrainCellControls, TerrainControlConfig, TerrainControlError,
+    TerrainControlInputs, TerrainControls, TerrainControlsError, TerrainStampInput,
+    TerrainStampKind, compose_terrain_controls,
 };
