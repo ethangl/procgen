@@ -5,9 +5,11 @@
 
 mod hull;
 mod initial;
+mod location;
 mod mesh;
 
 pub use hull::SphericalDelaunay;
+pub use location::{DelaunayLocation, PointLocationError};
 pub use mesh::{
     CellCorner, SphereMesh, VoronoiEdge, connected_components, edge_cell_distances,
     multi_source_distances,
