@@ -259,7 +259,7 @@ into the viewer.
 1. ~~Add the generic four-word 32-bit hash and provisional test vectors to procgen-core.~~
 2. ~~Create procgen-noise with the CPU gradient basis and analytic derivatives only.~~
 3. ~~Add CPU fbm, ridged, and derivative-damped accumulation.~~
-4. Add the WGSL mirror and a procgen-gpu-tests agreement dispatch—without viewer integration.
+4. ~~Add the WGSL mirror and a procgen-gpu-tests agreement dispatch—without viewer integration.~~
 
 ### `procgen-sphere-mesh` point location, `procgen-cubesphere` mapping and bake, and `procgen-terrain` control composition, cached with the snapshot.
 

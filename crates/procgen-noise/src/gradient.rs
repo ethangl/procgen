@@ -46,7 +46,7 @@ impl Mul<f32> for NoiseSample3 {
 /// hashing uses the signed coordinates' bit patterns, making the integer path
 /// directly reproducible in WGSL and CUDA.
 pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
-    let seed = narrow_seed_to_u32(seed);
+    let seed = fold_seed_u64_to_u32(seed);
     let cell = [
         position.x.floor() as i32,
         position.y.floor() as i32,
@@ -93,9 +93,12 @@ pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
     NoiseSample3 { value, derivative }
 }
 
-// The fixed domain tags keep this conversion distinct from lattice addresses.
-// Both halves of the workspace-standard seed participate in the result.
-const fn narrow_seed_to_u32(seed: u64) -> u32 {
+/// Folds the workspace-standard `u64` seed into the noise field's `u32` key.
+///
+/// The fixed domain tags keep this conversion distinct from lattice addresses.
+/// Both halves participate in the result, but the mapping is necessarily
+/// many-to-one. CPU and shader callers use this single canonical conversion.
+pub const fn fold_seed_u64_to_u32(seed: u64) -> u32 {
     const SEED_DOMAIN_TAG: u32 = 0x5345_4544; // ASCII "SEED"
     const NOISE_DOMAIN_TAG: u32 = 0x4E4F_4953; // ASCII "NOIS"
 
@@ -151,9 +154,9 @@ mod tests {
         ];
 
         for (seed, expected) in vectors {
-            assert_eq!(narrow_seed_to_u32(seed), expected, "seed {seed:#018x}");
+            assert_eq!(fold_seed_u64_to_u32(seed), expected, "seed {seed:#018x}");
         }
-        assert_ne!(narrow_seed_to_u32(1), narrow_seed_to_u32(1_u64 << 32));
+        assert_ne!(fold_seed_u64_to_u32(1), fold_seed_u64_to_u32(1_u64 << 32));
     }
 
     #[test]

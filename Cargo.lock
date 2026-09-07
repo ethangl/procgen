@@ -3163,6 +3163,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "procgen-gpu-tests"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "procgen-core",
+ "procgen-noise",
+ "wgpu",
+]
+
+[[package]]
 name = "procgen-noise"
 version = "0.1.0"
 dependencies = [
