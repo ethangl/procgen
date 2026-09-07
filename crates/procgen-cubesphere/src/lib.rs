@@ -1,8 +1,12 @@
-//! Equi-angular cube-sphere mapping and power-of-two tile addressing.
+//! Equi-angular cube-sphere mapping, control faces, and tile addressing.
 
+mod controls;
 mod mapping;
 mod tile;
 
+pub use controls::{
+    ControlBake, ControlBakeError, ControlFace, bake_control_faces, control_face_resolution,
+};
 pub use mapping::{
     CubeFace, FaceCoordinates, FaceFrame, MappingError, direction_to_face, face_to_direction,
 };
