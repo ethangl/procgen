@@ -1,6 +1,6 @@
 use crate::{
-    AreaWeightedSummary, RadiativeEquilibriumError, SECONDS_PER_DAY, SolarForcingConfig,
-    SolarForcingError, Surface,
+    AreaWeightedSummary, ClimateOutputError, RadiativeEquilibriumError, SECONDS_PER_DAY,
+    SolarForcingConfig, SolarForcingError, Surface,
     orbit::{OrbitalSampler, daily_mean_at, orbital_state, selected_sample_index},
     radiative_equilibrium::{RadiativeEquilibriumModel, validate_albedo_field},
     validate_range,
@@ -91,7 +91,7 @@ pub struct SeasonalThermalResponse {
 }
 
 impl SeasonalThermalResponse {
-    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), ClimateOutputError> {
         let cells = mesh.cell_count();
         if self.annual_sample_count == 0
             || self.selected_temperature_kelvin.len() != cells
@@ -102,7 +102,7 @@ impl SeasonalThermalResponse {
             || self.annual_maximum_temperature_kelvin.len() != cells
             || self.annual_amplitude_kelvin.len() != cells
         {
-            return Err(crate::ClimateOutputError::SeasonalThermal);
+            return Err(ClimateOutputError::SeasonalThermal);
         }
         Ok(())
     }

@@ -81,18 +81,9 @@ fn generation_status(ui: &mut egui::Ui, status: &GenerationStatus) {
                 millis(*duration)
             ));
         }
-        GenerationStatus::StartupGenerated {
-            duration,
-            cache_notice,
-        } => {
-            ui.label(format!("Generated world in {:.2} ms", millis(*duration)));
-            if let Some(notice) = cache_notice {
-                ui.small(notice);
-            }
-        }
-        GenerationStatus::Regenerated { cache_notice } => {
-            ui.label("Regenerated world.");
-            if let Some(notice) = cache_notice {
+        GenerationStatus::Generated { cache_notices } => {
+            ui.label("Generated world.");
+            for notice in cache_notices {
                 ui.small(notice);
             }
         }

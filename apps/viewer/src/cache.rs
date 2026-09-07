@@ -18,7 +18,6 @@ use std::{
 };
 
 const MAGIC: &[u8; 8] = b"PRCGENW\0";
-const FORMAT_VERSION: u32 = 1;
 const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_COLLECTION_ITEMS: usize = 32 * 1024 * 1024;
 const GENERATOR_BUILD_ID: &str = env!("PROCGEN_GENERATOR_BUILD_ID");
@@ -115,7 +114,7 @@ fn platform_cache_path() -> PathBuf {
 
     base.unwrap_or_else(env::temp_dir)
         .join("procgen-viewer")
-        .join("last-world-v1.bin")
+        .join("last-world.bin")
 }
 
 fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
@@ -169,7 +168,6 @@ impl Drop for AtomicReplacement {
 fn encode_snapshot(world: &GeneratedWorld) -> Vec<u8> {
     let mut encoder = Encoder::default();
     encoder.bytes.extend_from_slice(MAGIC);
-    FORMAT_VERSION.encode(&mut encoder);
     GENERATOR_BUILD_ID.to_owned().encode(&mut encoder);
     world.encode(&mut encoder);
     encoder.bytes
@@ -180,11 +178,6 @@ fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
     if decoder.read_exact(MAGIC.len())? != MAGIC {
         return Err(CacheError::invalid("snapshot magic does not match"));
     }
-    if u32::decode(&mut decoder)? != FORMAT_VERSION {
-        return Err(CacheError::invalid(
-            "snapshot format version does not match",
-        ));
-    }
     if String::decode(&mut decoder)? != GENERATOR_BUILD_ID {
         return Err(CacheError::invalid(
             "generator build identity does not match",
@@ -194,99 +187,8 @@ fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
     if decoder.offset != bytes.len() {
         return Err(CacheError::invalid("snapshot contains trailing data"));
     }
-    validate_world(&world)?;
+    world.validate().map_err(CacheError::invalid)?;
     Ok(world)
-}
-
-fn validate_world(world: &GeneratedWorld) -> Result<(), CacheError> {
-    let mesh = &world.voronoi;
-    let cells = mesh.cell_count();
-    if world.config.fibonacci.count != cells
-        || world.config.plates.plate_count() != world.plates.plate_count
-        || world.config.hotspots.hotspot_count != world.hotspots.hotspots.len()
-        || world.config.solar_forcing.annual_sample_count
-            != world.seasonal_thermal.annual_sample_count
-        || world.cell_albedo.len() != cells
-    {
-        return Err(CacheError::invalid(
-            "snapshot settings or viewer-owned fields are inconsistent with the world",
-        ));
-    }
-
-    mesh.validate().map_err(CacheError::invalid)?;
-    world.plates.validate(mesh).map_err(CacheError::invalid)?;
-    world
-        .crust
-        .validate(&world.plates)
-        .map_err(CacheError::invalid)?;
-    world
-        .kinematics
-        .validate(&world.plates)
-        .map_err(CacheError::invalid)?;
-    world
-        .boundaries
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .seafloor_age
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .base_elevation
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .deformation
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .elevation
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .hotspots
-        .validate_for_partition(mesh, &world.plates)
-        .map_err(CacheError::invalid)?;
-    world
-        .oceanic_peaks
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .volcanic_arcs
-        .validate_for_partition(mesh, &world.plates)
-        .map_err(CacheError::invalid)?;
-    world.cratons.validate(mesh).map_err(CacheError::invalid)?;
-    world.basins.validate(mesh).map_err(CacheError::invalid)?;
-    world
-        .geological_elevation
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world.isostasy.validate(mesh).map_err(CacheError::invalid)?;
-    world
-        .solar_forcing
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .radiative_equilibrium
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .seasonal_thermal
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .atmospheric_circulation
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .moisture_transport
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    world
-        .cryosphere
-        .validate(mesh)
-        .map_err(CacheError::invalid)?;
-    Ok(())
 }
 
 #[derive(Default)]
@@ -652,15 +554,11 @@ mod tests {
     }
 
     #[test]
-    fn format_and_build_identity_mismatches_invalidate_snapshot() {
+    fn build_identity_mismatch_invalidates_snapshot() {
         let world = fixture(32, 12);
 
-        let mut wrong_version = encode_snapshot(&world);
-        wrong_version[MAGIC.len()] ^= 1;
-        assert!(decode_snapshot(&wrong_version).is_err());
-
         let mut wrong_build = encode_snapshot(&world);
-        let identity_start = MAGIC.len() + size_of::<u32>() + size_of::<u64>();
+        let identity_start = MAGIC.len() + size_of::<u64>();
         wrong_build[identity_start] ^= 1;
         assert!(decode_snapshot(&wrong_build).is_err());
     }
@@ -685,10 +583,14 @@ mod tests {
         assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
 
         let mut world = fixture(32, 16);
-        world.cryosphere.cell_snow_cover_fraction.pop();
+        world.hotspots.hotspots[0].plate = world.plates.plate_count;
         assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
 
         let mut world = fixture(32, 17);
+        world.cryosphere.cell_snow_cover_fraction.pop();
+        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+
+        let mut world = fixture(32, 18);
         world.cell_albedo.pop();
         assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
     }
@@ -696,8 +598,8 @@ mod tests {
     #[test]
     fn successful_store_atomically_replaces_previous_snapshot() {
         let (cache_dir, cache) = test_cache("replace");
-        let first = fixture(32, 18);
-        let second = fixture(48, 19);
+        let first = fixture(32, 19);
+        let second = fixture(48, 20);
         cache.store(&first).unwrap();
         cache.store(&second).unwrap();
 
@@ -716,7 +618,7 @@ mod tests {
     #[test]
     fn failed_atomic_write_preserves_previous_snapshot() {
         let (cache_dir, cache) = test_cache("failed-replace");
-        let world = fixture(32, 20);
+        let world = fixture(32, 21);
         cache.store(&world).unwrap();
         let original = fs::read(&cache.path).unwrap();
 

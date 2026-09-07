@@ -104,22 +104,6 @@ impl VolcanicArcField {
         }
         Ok(())
     }
-
-    pub fn validate_for_partition(
-        &self,
-        mesh: &SphereMesh,
-        plates: &PlatePartition,
-    ) -> Result<(), GeologyInputError> {
-        self.validate(mesh)?;
-        if self
-            .segments
-            .iter()
-            .any(|segment| segment.overriding_plate >= plates.plate_count)
-        {
-            return Err(GeologyInputError::VolcanicArcs);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

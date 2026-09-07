@@ -102,25 +102,11 @@ impl Default for GenerationSettings {
 
 #[derive(Debug, Resource)]
 pub enum GenerationStatus {
-    StartupLoaded {
-        duration: Duration,
-    },
-    StartupGenerated {
-        duration: Duration,
-        cache_notice: Option<String>,
-    },
-    Regenerated {
-        cache_notice: Option<String>,
-    },
-    GenerationFailed {
-        error: String,
-    },
-    CacheCleared {
-        existed: bool,
-    },
-    CacheClearFailed {
-        error: String,
-    },
+    StartupLoaded { duration: Duration },
+    Generated { cache_notices: Vec<String> },
+    GenerationFailed { error: String },
+    CacheCleared { existed: bool },
+    CacheClearFailed { error: String },
 }
 
 #[derive(Message, Default)]
@@ -129,24 +115,18 @@ pub struct RegenerateWorld;
 #[derive(Message, Default)]
 pub struct ClearWorldCache;
 
-pub struct WorldModelPlugin;
+#[derive(Default)]
+pub struct WorldModelPlugin {
+    pub cache: WorldCache,
+    pub settings: GenerationSettings,
+}
 
 impl Plugin for WorldModelPlugin {
     fn build(&self, app: &mut App) {
-        let cache = app
-            .world()
-            .get_resource::<WorldCache>()
-            .cloned()
-            .unwrap_or_default();
-        let fallback_settings = app
-            .world()
-            .get_resource::<GenerationSettings>()
-            .copied()
-            .unwrap_or_default();
-        let (world, status) = load_or_generate_world(&cache, fallback_settings);
+        let (world, status) = load_or_generate_world(&self.cache, self.settings);
         let settings = world.config;
 
-        app.insert_resource(cache)
+        app.insert_resource(self.cache.clone())
             .insert_resource(settings)
             .insert_resource(status)
             .insert_resource(world);
@@ -369,6 +349,54 @@ impl GeneratedWorld {
             config,
         })
     }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        let mesh = &self.voronoi;
+        let cells = mesh.cell_count();
+        if self.config.fibonacci.count != cells
+            || self.config.plates.plate_count() != self.plates.plate_count
+            || self.config.hotspots.hotspot_count != self.hotspots.hotspots.len()
+            || self.config.solar_forcing.annual_sample_count
+                != self.seasonal_thermal.annual_sample_count
+            || self.cell_albedo.len() != cells
+            || self
+                .hotspots
+                .hotspots
+                .iter()
+                .any(|hotspot| hotspot.plate >= self.plates.plate_count)
+            || self
+                .volcanic_arcs
+                .segments
+                .iter()
+                .any(|segment| segment.overriding_plate >= self.plates.plate_count)
+        {
+            return Err("generated world fields are internally inconsistent".into());
+        }
+
+        mesh.validate()?;
+        self.plates.validate(mesh)?;
+        self.crust.validate(&self.plates)?;
+        self.kinematics.validate(&self.plates)?;
+        self.boundaries.validate(mesh)?;
+        self.seafloor_age.validate(mesh)?;
+        self.base_elevation.validate(mesh)?;
+        self.deformation.validate(mesh)?;
+        self.elevation.validate(mesh)?;
+        self.hotspots.validate(mesh)?;
+        self.oceanic_peaks.validate(mesh)?;
+        self.volcanic_arcs.validate(mesh)?;
+        self.cratons.validate(mesh)?;
+        self.basins.validate(mesh)?;
+        self.geological_elevation.validate(mesh)?;
+        self.isostasy.validate(mesh)?;
+        self.solar_forcing.validate(mesh)?;
+        self.radiative_equilibrium.validate(mesh)?;
+        self.seasonal_thermal.validate(mesh)?;
+        self.atmospheric_circulation.validate(mesh)?;
+        self.moisture_transport.validate(mesh)?;
+        self.cryosphere.validate(mesh)?;
+        Ok(())
+    }
 }
 
 fn load_or_generate_world(
@@ -384,22 +412,12 @@ fn load_or_generate_world(
             },
         ),
         Err(load_error) => {
-            let (world, store_notice) = generate_and_store(fallback_settings, cache)
+            let (world, mut cache_notices) = generate_and_store(fallback_settings, cache)
                 .expect("default world generation must succeed");
-            let mut notices = Vec::new();
             if !WorldCache::is_missing(&load_error) {
-                notices.push(format!("Ignored world cache: {load_error}"));
+                cache_notices.insert(0, format!("Ignored world cache: {load_error}"));
             }
-            if let Some(store_notice) = store_notice {
-                notices.push(store_notice);
-            }
-            (
-                world,
-                GenerationStatus::StartupGenerated {
-                    duration: started.elapsed(),
-                    cache_notice: (!notices.is_empty()).then(|| notices.join(" ")),
-                },
-            )
+            (world, GenerationStatus::Generated { cache_notices })
         }
     }
 }
@@ -407,13 +425,13 @@ fn load_or_generate_world(
 fn generate_and_store(
     settings: GenerationSettings,
     cache: &WorldCache,
-) -> Result<(GeneratedWorld, Option<String>), Box<dyn Error>> {
+) -> Result<(GeneratedWorld, Vec<String>), Box<dyn Error>> {
     let world = GeneratedWorld::generate(settings)?;
-    let cache_notice = cache
+    let cache_notices = cache
         .store(&world)
         .err()
         .map(|error| format!("Could not save world cache: {error}"));
-    Ok((world, cache_notice))
+    Ok((world, cache_notices.into_iter().collect()))
 }
 
 fn regenerate_world(
@@ -423,9 +441,9 @@ fn regenerate_world(
     mut status: ResMut<GenerationStatus>,
 ) {
     match generate_and_store(*settings, &cache) {
-        Ok((generated, cache_notice)) => {
+        Ok((generated, cache_notices)) => {
             *world = generated;
-            *status = GenerationStatus::Regenerated { cache_notice };
+            *status = GenerationStatus::Generated { cache_notices };
         }
         Err(error) => {
             *status = GenerationStatus::GenerationFailed {
@@ -471,106 +489,14 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(world.voronoi.cell_count(), 128);
-        assert_eq!(world.voronoi.vertex_count(), 252);
-        assert_eq!(world.voronoi.edge_count(), 378);
+        world.validate().unwrap();
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
         assert!(world.crust.plate_count(CrustClass::Continental) > 0);
         assert!(world.evolution.migrated_cell_count > 0);
-        assert_eq!(
-            world.seafloor_age.cell_ages.len(),
-            world.voronoi.cell_count()
-        );
         assert!(world.seafloor_age.diagnostics.oceanic_cell_count > 0);
-        assert_eq!(
-            world.base_elevation.cell_elevations.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.deformation.cell_deformation.len(),
-            world.voronoi.cell_count()
-        );
         assert!(world.deformation.diagnostics.affected_cell_count() > 0);
-        assert_eq!(
-            world.elevation.cell_elevations.len(),
-            world.voronoi.cell_count()
-        );
         assert!(world.elevation.diagnostics.minimum >= 0.0);
         assert!(world.elevation.diagnostics.maximum <= 1.0);
-        assert_eq!(
-            world.hotspots.cell_intensities.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.hotspots.hotspots.len(),
-            world.config.hotspots.hotspot_count
-        );
-        assert_eq!(
-            world.oceanic_peaks.cell_densities.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.volcanic_arcs.cell_strengths.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.cratons.cell_strengths.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(world.basins.cell_basins.len(), world.voronoi.cell_count());
-        assert_eq!(
-            world.geological_elevation.cell_elevations.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.isostasy.cell_support.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.isostasy.cell_elevations.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.solar_forcing.daily_mean_insolation.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.solar_forcing.annual_mean_insolation.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world
-                .radiative_equilibrium
-                .daily_effective_temperature_kelvin
-                .len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.seasonal_thermal.selected_temperature_kelvin.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.seasonal_thermal.annual_mean_temperature_kelvin.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.seasonal_thermal.annual_amplitude_kelvin.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world
-                .atmospheric_circulation
-                .cell_wind_meters_per_second
-                .len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world
-                .atmospheric_circulation
-                .cell_temperature_gradient_kelvin_per_radian
-                .len(),
-            world.voronoi.cell_count()
-        );
         assert!(
             world
                 .atmospheric_circulation
@@ -586,30 +512,6 @@ mod tests {
                 .speed_capped_cell_count
                 < world.voronoi.cell_count()
         );
-        assert_eq!(
-            world.moisture_transport.cell_humidity_kg_per_m2.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world
-                .moisture_transport
-                .cell_precipitation_kg_per_m2_per_day
-                .len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.cryosphere.cell_snow_cover_fraction.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.cryosphere.cell_land_ice_cover_fraction.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(
-            world.cryosphere.cell_sea_ice_cover_fraction.len(),
-            world.voronoi.cell_count()
-        );
-        assert_eq!(world.cell_albedo.len(), world.voronoi.cell_count());
         assert!(
             world.climate_coupling_diagnostics.iterations
                 <= world.config.climate_coupling.maximum_iterations
@@ -622,13 +524,6 @@ mod tests {
                 .abs()
                 <= 1.0e-10
         );
-        assert_eq!(
-            world
-                .radiative_equilibrium
-                .annual_effective_temperature_kelvin
-                .len(),
-            world.voronoi.cell_count()
-        );
     }
 
     #[test]
@@ -639,9 +534,10 @@ mod tests {
         cache.store(&cached_world).unwrap();
 
         let mut app = App::new();
-        app.insert_resource(cache)
-            .insert_resource(test_settings(48, 42))
-            .add_plugins(WorldModelPlugin);
+        app.add_plugins(WorldModelPlugin {
+            cache,
+            settings: test_settings(48, 42),
+        });
 
         assert_eq!(
             *app.world().resource::<GenerationSettings>(),
@@ -667,18 +563,17 @@ mod tests {
         let requested = test_settings(32, 43);
 
         let mut app = App::new();
-        app.insert_resource(cache.clone())
-            .insert_resource(requested)
-            .add_plugins(WorldModelPlugin);
+        app.add_plugins(WorldModelPlugin {
+            cache: cache.clone(),
+            settings: requested,
+        });
 
         assert_eq!(app.world().resource::<GeneratedWorld>().config, requested);
         let status = app.world().resource::<GenerationStatus>();
         assert!(matches!(
             status,
-            GenerationStatus::StartupGenerated {
-                cache_notice: Some(notice),
-                ..
-            } if notice.contains("Ignored")
+            GenerationStatus::Generated { cache_notices }
+                if cache_notices.iter().any(|notice| notice.contains("Ignored"))
         ));
         assert_eq!(cache.load().unwrap().config, requested);
 
@@ -779,8 +674,10 @@ mod tests {
         };
         let (cache_dir, cache) = test_cache("regenerate");
         cache.store(&current).unwrap();
-        app.insert_resource(cache.clone())
-            .add_plugins(WorldModelPlugin);
+        app.add_plugins(WorldModelPlugin {
+            cache: cache.clone(),
+            settings: GenerationSettings::default(),
+        });
         app.insert_resource(requested);
 
         app.world_mut().write_message(RegenerateWorld);
@@ -816,7 +713,7 @@ mod tests {
         assert_eq!(cached_world.voronoi.cell_count(), requested.fibonacci.count);
         assert!(matches!(
             app.world().resource::<GenerationStatus>(),
-            GenerationStatus::Regenerated { .. }
+            GenerationStatus::Generated { .. }
         ));
         fs::remove_dir_all(cache_dir).unwrap();
     }

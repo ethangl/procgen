@@ -1,4 +1,4 @@
-use crate::{AreaWeightedSummary, validate_range};
+use crate::{AreaWeightedSummary, ClimateOutputError, validate_range};
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -62,7 +62,7 @@ pub struct AtmosphericCirculation {
 }
 
 impl AtmosphericCirculation {
-    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), ClimateOutputError> {
         let cells = mesh.cell_count();
         if self.cell_wind_meters_per_second.len() != cells
             || self.cell_wind_speed_meters_per_second.len() != cells
@@ -74,7 +74,7 @@ impl AtmosphericCirculation {
             || self.cell_coriolis_parameter_per_second.len() != cells
             || self.cell_terrain_steering_fraction.len() != cells
         {
-            return Err(crate::ClimateOutputError::AtmosphericCirculation);
+            return Err(ClimateOutputError::AtmosphericCirculation);
         }
         Ok(())
     }

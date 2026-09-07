@@ -1,4 +1,5 @@
 use crate::{FieldSummary, SeafloorAge, StageInputError};
+use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,7 +39,7 @@ pub struct BaseElevation {
 }
 
 impl BaseElevation {
-    pub fn validate(&self, mesh: &procgen_sphere_mesh::SphereMesh) -> Result<(), StageInputError> {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
         if self.cell_elevations.len() != mesh.cell_count() {
             return Err(StageInputError::BaseElevation);
         }

@@ -125,8 +125,7 @@ impl SphereMesh {
         self.cell_centers.len()
     }
 
-    /// Validates the complete public mesh representation after reconstruction
-    /// from an external boundary such as a viewer cache.
+    /// Validates the complete public mesh representation.
     pub fn validate(&self) -> Result<(), TopologyError> {
         let cells = self.cell_count();
         let vertices = self.vertex_count();

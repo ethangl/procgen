@@ -26,7 +26,7 @@ fn main() {
         }))
         .add_plugins((
             EguiPlugin::default(),
-            WorldModelPlugin,
+            WorldModelPlugin::default(),
             OrbitCameraPlugin,
             DiagnosticRenderPlugin,
             ViewerUiPlugin,

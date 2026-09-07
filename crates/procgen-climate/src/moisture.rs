@@ -1,4 +1,4 @@
-use crate::{AreaWeightedSummary, SECONDS_PER_DAY, validate_range};
+use crate::{AreaWeightedSummary, ClimateOutputError, SECONDS_PER_DAY, validate_range};
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -94,7 +94,7 @@ pub struct MoistureTransport {
 }
 
 impl MoistureTransport {
-    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), ClimateOutputError> {
         let cells = mesh.cell_count();
         if self.cell_humidity_kg_per_m2.len() != cells
             || self.cell_moisture_capacity_kg_per_m2.len() != cells
@@ -103,7 +103,7 @@ impl MoistureTransport {
             || self.cell_condensation_kg_per_m2_per_day.len() != cells
             || self.cell_orographic_precipitation_kg_per_m2_per_day.len() != cells
         {
-            return Err(crate::ClimateOutputError::MoistureTransport);
+            return Err(ClimateOutputError::MoistureTransport);
         }
         Ok(())
     }

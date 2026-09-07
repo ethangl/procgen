@@ -1,4 +1,5 @@
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::is_land;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +25,6 @@ impl fmt::Display for ClimateOutputError {
 }
 
 impl std::error::Error for ClimateOutputError {}
-use procgen_tectonics::is_land;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {

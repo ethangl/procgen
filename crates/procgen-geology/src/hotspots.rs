@@ -84,22 +84,6 @@ impl HotspotField {
         }
         Ok(())
     }
-
-    pub fn validate_for_partition(
-        &self,
-        mesh: &SphereMesh,
-        plates: &PlatePartition,
-    ) -> Result<(), GeologyInputError> {
-        self.validate(mesh)?;
-        if self
-            .hotspots
-            .iter()
-            .any(|hotspot| hotspot.plate >= plates.plate_count)
-        {
-            return Err(GeologyInputError::Hotspots);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
