@@ -82,6 +82,7 @@ impl OverlayKind {
 }
 
 type CellValues = for<'a> fn(&'a GeneratedWorld) -> &'a [f32];
+type SurfaceBuilder = fn(&GeneratedWorld, f32) -> Mesh;
 
 enum LayerSpec {
     Fill {
@@ -125,11 +126,7 @@ impl LayerSpec {
         }
     }
 
-    fn surface(
-        label: &'static str,
-        build: fn(&GeneratedWorld) -> Mesh,
-        gizmo: Option<GizmoSpec>,
-    ) -> Self {
+    fn surface(label: &'static str, build: SurfaceBuilder, gizmo: Option<GizmoSpec>) -> Self {
         Self::Fill {
             label,
             surface: SurfaceSource::Custom(build),
@@ -183,14 +180,16 @@ pub(super) enum SurfaceSource {
         values: CellValues,
         stops: &'static [(f32, Vec3)],
     },
-    Custom(fn(&GeneratedWorld) -> Mesh),
+    Custom(SurfaceBuilder),
 }
 
 impl SurfaceSource {
-    pub(super) fn build(self, world: &GeneratedWorld) -> Mesh {
+    pub(super) fn build(self, world: &GeneratedWorld, relief_exaggeration: f32) -> Mesh {
         match self {
-            Self::Scalar { values, stops } => scalar_surface_mesh(world, values(world), stops),
-            Self::Custom(build) => build(world),
+            Self::Scalar { values, stops } => {
+                scalar_surface_mesh(world, values(world), stops, relief_exaggeration)
+            }
+            Self::Custom(build) => build(world, relief_exaggeration),
         }
     }
 }

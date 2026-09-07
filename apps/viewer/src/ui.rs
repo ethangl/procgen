@@ -2,13 +2,23 @@ mod controls;
 mod summary;
 
 use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
-use crate::render::{DiagnosticLayer, OverlayKind, OverlaySettings, SurfaceSelection};
+use crate::render::{
+    DiagnosticLayer, OverlayKind, OverlaySettings, SurfaceSelection, ViewerRenderSettings,
+};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
 const SECTION_SPACING: f32 = 6.0;
 
 pub struct ViewerUiPlugin;
+
+#[derive(SystemParam)]
+struct ViewerDisplaySettings<'w> {
+    surface: ResMut<'w, SurfaceSelection>,
+    overlays: ResMut<'w, OverlaySettings>,
+    render: ResMut<'w, ViewerRenderSettings>,
+}
 
 impl Plugin for ViewerUiPlugin {
     fn build(&self, app: &mut App) {
@@ -20,8 +30,7 @@ impl Plugin for ViewerUiPlugin {
 fn viewer_ui(
     mut contexts: EguiContexts,
     mut generation: ResMut<GenerationSettings>,
-    mut surface: ResMut<SurfaceSelection>,
-    mut overlays: ResMut<OverlaySettings>,
+    mut display: ViewerDisplaySettings,
     status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
     mut regenerate: MessageWriter<RegenerateWorld>,
@@ -40,7 +49,14 @@ fn viewer_ui(
                 }
 
                 ui.separator();
-                layer_controls(ui, surface.reborrow(), overlays.reborrow());
+                let mut next_render_settings = *display.render;
+                render_controls(ui, &mut next_render_settings);
+                if next_render_settings != *display.render {
+                    *display.render = next_render_settings;
+                }
+
+                ui.separator();
+                layer_controls(ui, display.surface.reborrow(), display.overlays.reborrow());
 
                 ui.separator();
                 summary::world_summary(ui, &world);
@@ -52,6 +68,38 @@ fn viewer_ui(
             });
         });
     Ok(())
+}
+
+fn render_controls(ui: &mut egui::Ui, settings: &mut ViewerRenderSettings) {
+    ui.label("Terrain relief");
+    slider(
+        ui,
+        "Exaggeration",
+        &mut settings.relief_exaggeration,
+        0.0..=0.4,
+    );
+
+    ui.add_space(4.0);
+    ui.label("Directional light");
+    slider(
+        ui,
+        "Azimuth",
+        &mut settings.light_azimuth_degrees,
+        -180.0..=180.0,
+    );
+    slider(
+        ui,
+        "Elevation",
+        &mut settings.light_elevation_degrees,
+        -89.0..=89.0,
+    );
+    drag_value(
+        ui,
+        "Illuminance",
+        &mut settings.light_illuminance,
+        0.0..=200_000.0,
+        1_000.0,
+    );
 }
 
 fn layer_controls(

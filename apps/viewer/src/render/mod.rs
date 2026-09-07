@@ -8,10 +8,29 @@ pub use layers::{DiagnosticLayer, OverlayKind};
 use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use layers::GizmoSpec;
-use surfaces::empty_surface_mesh;
+use surfaces::{empty_surface_mesh, maximum_surface_radius};
 
 const SURFACE_RADIUS: f32 = 1.0;
 const DEPTH_SCALE_STEP: f32 = 0.004;
+
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct ViewerRenderSettings {
+    pub relief_exaggeration: f32,
+    pub light_azimuth_degrees: f32,
+    pub light_elevation_degrees: f32,
+    pub light_illuminance: f32,
+}
+
+impl Default for ViewerRenderSettings {
+    fn default() -> Self {
+        Self {
+            relief_exaggeration: 0.16,
+            light_azimuth_degrees: 35.0,
+            light_elevation_degrees: 30.0,
+            light_illuminance: 80_000.0,
+        }
+    }
+}
 
 #[derive(Resource)]
 pub struct OverlaySettings {
@@ -78,24 +97,33 @@ impl Default for SurfaceSelection {
 #[derive(Component)]
 struct SurfaceLayer;
 
+#[derive(Component)]
+struct ViewerDirectionalLight;
+
 pub struct DiagnosticRenderPlugin;
 
 impl Plugin for DiagnosticRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceSelection>()
             .init_resource::<OverlaySettings>()
+            .init_resource::<ViewerRenderSettings>()
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
                 (
                     rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
                     rebuild_surface.run_if(
-                        resource_changed::<GeneratedWorld>.or(resource_changed::<SurfaceSelection>),
+                        resource_changed::<GeneratedWorld>
+                            .or(resource_changed::<SurfaceSelection>)
+                            .or(resource_changed::<ViewerRenderSettings>),
                     ),
                     sync_layer_render_state.run_if(
                         resource_changed::<SurfaceSelection>
-                            .or(resource_changed::<OverlaySettings>),
+                            .or(resource_changed::<OverlaySettings>)
+                            .or(resource_changed::<GeneratedWorld>)
+                            .or(resource_changed::<ViewerRenderSettings>),
                     ),
+                    sync_directional_light.run_if(resource_changed::<ViewerRenderSettings>),
                 ),
             );
     }
@@ -117,13 +145,20 @@ fn setup_scene(
         })),
     ));
 
+    commands.spawn((
+        DirectionalLight {
+            shadows_enabled: false,
+            ..default()
+        },
+        ViewerDirectionalLight,
+    ));
+
     let surface = meshes.add(empty_surface_mesh());
     commands.spawn((
         Mesh3d(surface.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 1.0,
-            unlit: true,
             ..default()
         })),
         SurfaceLayer,
@@ -192,6 +227,7 @@ fn rebuild_diagnostic_assets(
 fn rebuild_surface(
     world: Res<GeneratedWorld>,
     selection: Res<SurfaceSelection>,
+    settings: Res<ViewerRenderSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
     surface: Single<(&Mesh3d, &mut Visibility), With<SurfaceLayer>>,
 ) {
@@ -200,7 +236,7 @@ fn rebuild_surface(
         *meshes.get_mut(&surface_mesh.0).unwrap() = layer
             .surface()
             .expect("surface selection only stores fill layers")
-            .build(&world);
+            .build(&world, settings.relief_exaggeration);
         *visibility = Visibility::Inherited;
     } else {
         *visibility = Visibility::Hidden;
@@ -210,12 +246,22 @@ fn rebuild_surface(
 fn sync_layer_render_state(
     surface: Res<SurfaceSelection>,
     overlays: Res<OverlaySettings>,
+    world: Res<GeneratedWorld>,
+    settings: Res<ViewerRenderSettings>,
     mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
+    let outer_radius = maximum_surface_radius(
+        &world.isostasy.cell_elevations,
+        settings.relief_exaggeration,
+    );
     for (layer, mut transform) in &mut layer_transforms {
-        if let Some(depth_scale) = overlays.depth_scale(*layer) {
-            transform.scale = Vec3::splat(depth_scale);
+        let depth_scale = overlays.depth_scale(*layer).or_else(|| {
+            (surface.selected() == Some(*layer) && layer.gizmo().is_some())
+                .then_some(1.0 + DEPTH_SCALE_STEP)
+        });
+        if let Some(depth_scale) = depth_scale {
+            transform.scale = Vec3::splat(outer_radius * depth_scale / SURFACE_RADIUS);
         }
     }
 
@@ -235,6 +281,24 @@ fn sync_layer_render_state(
             .map(DiagnosticLayer::render_layer),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
+}
+
+fn sync_directional_light(
+    settings: Res<ViewerRenderSettings>,
+    light: Single<(&mut DirectionalLight, &mut Transform), With<ViewerDirectionalLight>>,
+) {
+    let (mut directional_light, mut transform) = light.into_inner();
+    directional_light.illuminance = settings.light_illuminance;
+
+    let azimuth = settings.light_azimuth_degrees.to_radians();
+    let elevation = settings.light_elevation_degrees.to_radians();
+    let horizontal = elevation.cos();
+    let source = Vec3::new(
+        horizontal * azimuth.sin(),
+        elevation.sin(),
+        horizontal * azimuth.cos(),
+    );
+    *transform = Transform::from_translation(source * 3.0).looking_at(Vec3::ZERO, Vec3::Y);
 }
 
 fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
