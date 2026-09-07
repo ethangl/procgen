@@ -1,4 +1,6 @@
-use crate::{AreaWeightedSummary, SolarForcing, SolarForcingError, validate_range};
+use crate::{
+    AreaWeightedSummary, ClimateOutputError, SolarForcing, SolarForcingError, validate_range,
+};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
@@ -29,6 +31,17 @@ pub struct RadiativeEquilibriumTemperature {
     pub daily_effective_temperature_kelvin: Vec<f32>,
     pub annual_effective_temperature_kelvin: Vec<f32>,
     pub diagnostics: RadiativeEquilibriumDiagnostics,
+}
+
+impl RadiativeEquilibriumTemperature {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), ClimateOutputError> {
+        if self.daily_effective_temperature_kelvin.len() != mesh.cell_count()
+            || self.annual_effective_temperature_kelvin.len() != mesh.cell_count()
+        {
+            return Err(ClimateOutputError::RadiativeEquilibrium);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

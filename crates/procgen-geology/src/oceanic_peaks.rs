@@ -82,6 +82,18 @@ pub struct OceanicPeakField {
     pub diagnostics: OceanicPeakDiagnostics,
 }
 
+impl OceanicPeakField {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
+        if self.cell_densities.len() != mesh.cell_count()
+            || self.cell_kinds.len() != mesh.cell_count()
+            || self.peaks.iter().any(|peak| peak.cell >= mesh.cell_count())
+        {
+            return Err(GeologyInputError::OceanicPeaks);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OceanicPeakFieldError {
     Input(StageInputError),

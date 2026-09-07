@@ -1,6 +1,6 @@
 use crate::{
-    ANNUAL_SAMPLE_RANGE, AreaWeightedSummary, ORBITAL_PERIOD_DAYS_RANGE, Surface,
-    orbit::selected_sample_index, validate_range,
+    ANNUAL_SAMPLE_RANGE, AreaWeightedSummary, ClimateOutputError, ORBITAL_PERIOD_DAYS_RANGE,
+    Surface, orbit::selected_sample_index, validate_range,
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{fmt, ops::RangeInclusive};
@@ -91,6 +91,21 @@ pub struct Cryosphere {
     pub cell_land_ice_cover_fraction: Vec<f32>,
     pub cell_sea_ice_cover_fraction: Vec<f32>,
     pub diagnostics: CryosphereDiagnostics,
+}
+
+impl Cryosphere {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), ClimateOutputError> {
+        let cells = mesh.cell_count();
+        if self.cell_snowfall_kg_per_m2_per_day.len() != cells
+            || self.cell_melt_kg_per_m2_per_day.len() != cells
+            || self.cell_snow_cover_fraction.len() != cells
+            || self.cell_land_ice_cover_fraction.len() != cells
+            || self.cell_sea_ice_cover_fraction.len() != cells
+        {
+            return Err(ClimateOutputError::Cryosphere);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

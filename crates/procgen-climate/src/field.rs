@@ -3,6 +3,30 @@ use procgen_tectonics::is_land;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClimateOutputError {
+    RadiativeEquilibrium,
+    SeasonalThermal,
+    AtmosphericCirculation,
+    MoistureTransport,
+    Cryosphere,
+}
+
+impl fmt::Display for ClimateOutputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let field = match self {
+            Self::RadiativeEquilibrium => "radiative-equilibrium",
+            Self::SeasonalThermal => "seasonal-thermal",
+            Self::AtmosphericCirculation => "atmospheric-circulation",
+            Self::MoistureTransport => "moisture-transport",
+            Self::Cryosphere => "cryosphere",
+        };
+        write!(formatter, "{field} output is inconsistent with the mesh")
+    }
+}
+
+impl std::error::Error for ClimateOutputError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
     Land,
     Ocean,

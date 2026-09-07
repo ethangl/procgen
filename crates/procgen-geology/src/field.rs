@@ -4,20 +4,24 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeologyInputError {
     Hotspots,
+    OceanicPeaks,
     VolcanicArcs,
     Cratons,
     Basins,
     Elevation,
+    Isostasy,
 }
 
 impl fmt::Display for GeologyInputError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field = match self {
             Self::Hotspots => "hotspot aggregate",
+            Self::OceanicPeaks => "oceanic-peak aggregate",
             Self::VolcanicArcs => "volcanic-arc aggregate",
             Self::Cratons => "craton",
             Self::Basins => "sedimentary-basin",
             Self::Elevation => "geological-elevation",
+            Self::Isostasy => "isostatic-adjustment",
         };
         write!(formatter, "{field} field is inconsistent with the mesh")
     }

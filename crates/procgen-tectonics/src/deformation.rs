@@ -115,6 +115,15 @@ pub struct BoundaryDeformation {
     pub diagnostics: BoundaryDeformationDiagnostics,
 }
 
+impl BoundaryDeformation {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_deformation.len() != mesh.cell_count() {
+            return Err(StageInputError::Deformation);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundaryDeformationError {
     InvalidConfig,

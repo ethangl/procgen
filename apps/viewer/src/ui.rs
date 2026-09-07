@@ -1,7 +1,9 @@
 mod controls;
 mod summary;
 
-use crate::model::{GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld};
+use crate::model::{
+    ClearWorldCache, GeneratedWorld, GenerationSettings, GenerationStatus, RegenerateWorld,
+};
 use crate::render::{
     DiagnosticLayer, LightingSettings, OverlayKind, OverlaySettings, ReliefSettings,
     SurfaceSelection,
@@ -31,6 +33,7 @@ fn viewer_ui(
     status: Res<GenerationStatus>,
     world: Res<GeneratedWorld>,
     mut regenerate: MessageWriter<RegenerateWorld>,
+    mut clear_cache: MessageWriter<ClearWorldCache>,
 ) -> Result {
     egui::SidePanel::left("controls")
         .default_width(250.0)
@@ -39,11 +42,14 @@ fn viewer_ui(
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Sphere topology");
                 ui.add_space(6.0);
-                controls::generation_controls(ui, &mut generation, &mut regenerate);
+                controls::generation_controls(
+                    ui,
+                    &mut generation,
+                    &mut regenerate,
+                    &mut clear_cache,
+                );
 
-                if let Some(error) = &status.last_error {
-                    ui.colored_label(egui::Color32::from_rgb(255, 110, 110), error);
-                }
+                generation_status(ui, &status);
 
                 ui.separator();
                 let mut next_relief = *relief;
@@ -65,6 +71,37 @@ fn viewer_ui(
             });
         });
     Ok(())
+}
+
+fn generation_status(ui: &mut egui::Ui, status: &GenerationStatus) {
+    match status {
+        GenerationStatus::StartupLoaded { duration } => {
+            ui.label(format!(
+                "Loaded cached world in {:.2} ms",
+                millis(*duration)
+            ));
+        }
+        GenerationStatus::Generated { cache_notices } => {
+            ui.label("Generated world.");
+            for notice in cache_notices {
+                ui.small(notice);
+            }
+        }
+        GenerationStatus::GenerationFailed { error }
+        | GenerationStatus::CacheClearFailed { error } => {
+            ui.colored_label(egui::Color32::from_rgb(255, 110, 110), error);
+        }
+        GenerationStatus::CacheCleared { existed: true } => {
+            ui.small("World cache cleared.");
+        }
+        GenerationStatus::CacheCleared { existed: false } => {
+            ui.small("World cache is already empty.");
+        }
+    }
+}
+
+fn millis(duration: std::time::Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
 }
 
 fn render_controls(

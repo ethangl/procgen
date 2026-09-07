@@ -1,4 +1,4 @@
-use crate::{AreaWeightedSummary, validate_range};
+use crate::{AreaWeightedSummary, ClimateOutputError, validate_range};
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -59,6 +59,25 @@ pub struct AtmosphericCirculation {
     pub cell_coriolis_parameter_per_second: Vec<f32>,
     pub cell_terrain_steering_fraction: Vec<f32>,
     pub diagnostics: AtmosphericCirculationDiagnostics,
+}
+
+impl AtmosphericCirculation {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), ClimateOutputError> {
+        let cells = mesh.cell_count();
+        if self.cell_wind_meters_per_second.len() != cells
+            || self.cell_wind_speed_meters_per_second.len() != cells
+            || self.cell_temperature_gradient_kelvin_per_radian.len() != cells
+            || self
+                .cell_pressure_gradient_acceleration_meters_per_second_squared
+                .len()
+                != cells
+            || self.cell_coriolis_parameter_per_second.len() != cells
+            || self.cell_terrain_steering_fraction.len() != cells
+        {
+            return Err(ClimateOutputError::AtmosphericCirculation);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

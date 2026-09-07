@@ -24,6 +24,7 @@ pub enum TopologyError {
     DegeneratePoints,
     BrokenHorizon,
     InvalidRadius,
+    InvalidMesh,
 }
 
 impl fmt::Display for TopologyError {
@@ -40,6 +41,7 @@ impl fmt::Display for TopologyError {
             Self::DegeneratePoints => formatter.write_str("points do not define a 3D hull"),
             Self::BrokenHorizon => formatter.write_str("visible hull faces have a broken horizon"),
             Self::InvalidRadius => formatter.write_str("sphere radius must be finite and positive"),
+            Self::InvalidMesh => formatter.write_str("sphere mesh topology is inconsistent"),
         }
     }
 }

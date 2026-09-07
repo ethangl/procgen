@@ -50,7 +50,7 @@ pub use cryosphere::{
     CRYOSPHERE_TEMPERATURE_RANGE, Cryosphere, CryosphereConfig, CryosphereDiagnostics,
     CryosphereError, CryosphereInputs, derive_cryosphere,
 };
-pub use field::{AreaWeightedSummary, Surface};
+pub use field::{AreaWeightedSummary, ClimateOutputError, Surface};
 pub use moisture::{
     MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MOISTURE_STEP_COUNT_RANGE,
     MOISTURE_STEP_SECONDS_RANGE, MoistureTransport, MoistureTransportConfig,

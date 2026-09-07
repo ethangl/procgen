@@ -1,5 +1,5 @@
 use super::{drag_value, section, slider};
-use crate::model::{GenerationSettings, RegenerateWorld, WORLD_RADIUS};
+use crate::model::{ClearWorldCache, GenerationSettings, RegenerateWorld, WORLD_RADIUS};
 use bevy::prelude::MessageWriter;
 use bevy_egui::egui;
 use procgen_climate::{ANNUAL_SAMPLE_RANGE, SolarForcingConfig};
@@ -39,6 +39,7 @@ pub(super) fn generation_controls(
     ui: &mut egui::Ui,
     generation: &mut GenerationSettings,
     regenerate: &mut MessageWriter<RegenerateWorld>,
+    clear_cache: &mut MessageWriter<ClearWorldCache>,
 ) {
     section(ui, "Sampling", |ui| {
         sampling_controls(ui, &mut generation.fibonacci)
@@ -95,9 +96,14 @@ pub(super) fn generation_controls(
         solar_forcing_controls(ui, &mut generation.solar_forcing)
     });
     climate::generation_controls(ui, generation);
-    if ui.button("Regenerate").clicked() {
-        regenerate.write_default();
-    }
+    ui.horizontal(|ui| {
+        if ui.button("Regenerate").clicked() {
+            regenerate.write_default();
+        }
+        if ui.small_button("Clear cache").clicked() {
+            clear_cache.write_default();
+        }
+    });
 }
 
 fn planet_controls(ui: &mut egui::Ui, planet: &mut Planet) {

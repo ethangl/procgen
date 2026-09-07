@@ -112,6 +112,7 @@ fn voronoi_cell_rings_are_clockwise_from_outside() {
 fn voronoi_has_complete_symmetric_topology() {
     let count = 1_000;
     let mesh = build_sphere_mesh(points(count, 0.5), 1.0).unwrap();
+    mesh.validate().unwrap();
 
     assert_eq!(mesh.cell_count(), count);
     assert_eq!(mesh.vertex_count(), 2 * count - 4);
@@ -134,6 +135,14 @@ fn voronoi_has_complete_symmetric_topology() {
             );
         }
     }
+}
+
+#[test]
+fn reconstructed_mesh_validation_rejects_broken_incidence() {
+    let mut mesh = build_sphere_mesh(points(128, 0.5), 1.0).unwrap();
+    mesh.edges[0].cells[0] = mesh.cell_count();
+
+    assert_eq!(mesh.validate(), Err(TopologyError::InvalidMesh));
 }
 
 #[test]
