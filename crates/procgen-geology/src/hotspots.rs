@@ -67,6 +67,34 @@ impl HotspotField {
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
         if self.cell_intensities.len() != mesh.cell_count()
             || self.cell_hotspots.len() != mesh.cell_count()
+            || self
+                .cell_hotspots
+                .iter()
+                .flatten()
+                .any(|&hotspot| hotspot >= self.hotspots.len())
+            || self.hotspots.iter().any(|hotspot| {
+                hotspot.source_cell >= mesh.cell_count()
+                    || hotspot
+                        .trail
+                        .iter()
+                        .any(|trail| trail.cell >= mesh.cell_count())
+            })
+        {
+            return Err(GeologyInputError::Hotspots);
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_partition(
+        &self,
+        mesh: &SphereMesh,
+        plates: &PlatePartition,
+    ) -> Result<(), GeologyInputError> {
+        self.validate(mesh)?;
+        if self
+            .hotspots
+            .iter()
+            .any(|hotspot| hotspot.plate >= plates.plate_count)
         {
             return Err(GeologyInputError::Hotspots);
         }

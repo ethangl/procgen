@@ -68,6 +68,17 @@ pub struct IsostaticAdjustment {
     pub diagnostics: IsostaticAdjustmentDiagnostics,
 }
 
+impl IsostaticAdjustment {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::GeologyInputError> {
+        if self.cell_support.len() != mesh.cell_count()
+            || self.cell_elevations.len() != mesh.cell_count()
+        {
+            return Err(crate::GeologyInputError::Isostasy);
+        }
+        Ok(())
+    }
+}
+
 /// Derives per-cell support from present-day fields and returns a separately
 /// adjusted, clamped elevation field. Oceanic cells and sedimentary-basin
 /// floors are unchanged, and no input field is modified.

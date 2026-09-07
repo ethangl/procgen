@@ -61,6 +61,25 @@ pub struct AtmosphericCirculation {
     pub diagnostics: AtmosphericCirculationDiagnostics,
 }
 
+impl AtmosphericCirculation {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+        let cells = mesh.cell_count();
+        if self.cell_wind_meters_per_second.len() != cells
+            || self.cell_wind_speed_meters_per_second.len() != cells
+            || self.cell_temperature_gradient_kelvin_per_radian.len() != cells
+            || self
+                .cell_pressure_gradient_acceleration_meters_per_second_squared
+                .len()
+                != cells
+            || self.cell_coriolis_parameter_per_second.len() != cells
+            || self.cell_terrain_steering_fraction.len() != cells
+        {
+            return Err(crate::ClimateOutputError::AtmosphericCirculation);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AtmosphericCirculationError {
     Planet(PlanetValidationError),

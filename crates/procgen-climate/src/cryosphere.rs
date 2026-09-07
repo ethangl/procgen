@@ -93,6 +93,21 @@ pub struct Cryosphere {
     pub diagnostics: CryosphereDiagnostics,
 }
 
+impl Cryosphere {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+        let cells = mesh.cell_count();
+        if self.cell_snowfall_kg_per_m2_per_day.len() != cells
+            || self.cell_melt_kg_per_m2_per_day.len() != cells
+            || self.cell_snow_cover_fraction.len() != cells
+            || self.cell_land_ice_cover_fraction.len() != cells
+            || self.cell_sea_ice_cover_fraction.len() != cells
+        {
+            return Err(crate::ClimateOutputError::Cryosphere);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CryosphereError {
     TemperatureCells,

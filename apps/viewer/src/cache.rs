@@ -27,8 +27,13 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug)]
 pub enum CacheError {
     Io(io::Error),
-    Invalid(&'static str),
-    InvalidOwned(String),
+    Invalid(String),
+}
+
+impl CacheError {
+    fn invalid(message: impl fmt::Display) -> Self {
+        Self::Invalid(message.to_string())
+    }
 }
 
 impl fmt::Display for CacheError {
@@ -36,7 +41,6 @@ impl fmt::Display for CacheError {
         match self {
             Self::Io(error) => error.fmt(formatter),
             Self::Invalid(message) => formatter.write_str(message),
-            Self::InvalidOwned(message) => formatter.write_str(message),
         }
     }
 }
@@ -45,7 +49,7 @@ impl std::error::Error for CacheError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::Invalid(_) | Self::InvalidOwned(_) => None,
+            Self::Invalid(_) => None,
         }
     }
 }
@@ -72,10 +76,10 @@ impl WorldCache {
         Self { path }
     }
 
-    pub fn load(&self) -> Result<(GenerationSettings, GeneratedWorld), CacheError> {
+    pub fn load(&self) -> Result<GeneratedWorld, CacheError> {
         let metadata = fs::metadata(&self.path)?;
         if metadata.len() > MAX_SNAPSHOT_BYTES {
-            return Err(CacheError::Invalid("snapshot exceeds the size limit"));
+            return Err(CacheError::invalid("snapshot exceeds the size limit"));
         }
         let bytes = fs::read(&self.path)?;
         decode_snapshot(&bytes)
@@ -85,12 +89,8 @@ impl WorldCache {
         matches!(error, CacheError::Io(error) if error.kind() == io::ErrorKind::NotFound)
     }
 
-    pub fn store(
-        &self,
-        settings: &GenerationSettings,
-        world: &GeneratedWorld,
-    ) -> Result<(), CacheError> {
-        let bytes = encode_snapshot(settings, world);
+    pub fn store(&self, world: &GeneratedWorld) -> Result<(), CacheError> {
+        let bytes = encode_snapshot(world);
         atomic_replace(&self.path, &bytes)
     }
 
@@ -119,326 +119,173 @@ fn platform_cache_path() -> PathBuf {
 }
 
 fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
-    atomic_replace_with(path, |file| file.write_all(bytes))
+    let mut replacement = AtomicReplacement::begin(path)?;
+    replacement.file.write_all(bytes)?;
+    replacement.commit()
 }
 
-fn atomic_replace_with(
-    path: &Path,
-    write: impl FnOnce(&mut File) -> io::Result<()>,
-) -> Result<(), CacheError> {
-    let parent = path
-        .parent()
-        .ok_or(CacheError::Invalid("cache path has no parent directory"))?;
-    fs::create_dir_all(parent)?;
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(".last-world-{}-{sequence}.tmp", std::process::id()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
+struct AtomicReplacement {
+    destination: PathBuf,
+    temp: PathBuf,
+    file: File,
+    committed: bool,
+}
+
+impl AtomicReplacement {
+    fn begin(destination: &Path) -> Result<Self, CacheError> {
+        let parent = destination
+            .parent()
+            .ok_or_else(|| CacheError::invalid("cache path has no parent directory"))?;
+        fs::create_dir_all(parent)?;
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(".last-world-{}-{sequence}.tmp", std::process::id()));
+        let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temp)?;
-        write(&mut file)?;
-        file.sync_all()?;
-        fs::rename(&temp, path)?;
-        sync_directory(parent)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
+        Ok(Self {
+            destination: destination.to_owned(),
+            temp,
+            file,
+            committed: false,
+        })
     }
-    result
+
+    fn commit(mut self) -> Result<(), CacheError> {
+        fs::rename(&self.temp, &self.destination)?;
+        self.committed = true;
+        Ok(())
+    }
 }
 
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
+impl Drop for AtomicReplacement {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_file(&self.temp);
+        }
+    }
 }
 
-#[cfg(not(unix))]
-fn sync_directory(_: &Path) -> io::Result<()> {
-    Ok(())
-}
-
-fn encode_snapshot(settings: &GenerationSettings, world: &GeneratedWorld) -> Vec<u8> {
+fn encode_snapshot(world: &GeneratedWorld) -> Vec<u8> {
     let mut encoder = Encoder::default();
     encoder.bytes.extend_from_slice(MAGIC);
     FORMAT_VERSION.encode(&mut encoder);
     GENERATOR_BUILD_ID.to_owned().encode(&mut encoder);
-    settings.encode(&mut encoder);
     world.encode(&mut encoder);
     encoder.bytes
 }
 
-fn decode_snapshot(bytes: &[u8]) -> Result<(GenerationSettings, GeneratedWorld), CacheError> {
+fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
     let mut decoder = Decoder { bytes, offset: 0 };
     if decoder.read_exact(MAGIC.len())? != MAGIC {
-        return Err(CacheError::Invalid("snapshot magic does not match"));
+        return Err(CacheError::invalid("snapshot magic does not match"));
     }
     if u32::decode(&mut decoder)? != FORMAT_VERSION {
-        return Err(CacheError::Invalid(
+        return Err(CacheError::invalid(
             "snapshot format version does not match",
         ));
     }
     if String::decode(&mut decoder)? != GENERATOR_BUILD_ID {
-        return Err(CacheError::Invalid(
+        return Err(CacheError::invalid(
             "generator build identity does not match",
         ));
     }
-    let settings = GenerationSettings::decode(&mut decoder)?;
-    let mut world = GeneratedWorld::decode(&mut decoder)?;
+    let world = GeneratedWorld::decode(&mut decoder)?;
     if decoder.offset != bytes.len() {
-        return Err(CacheError::Invalid("snapshot contains trailing data"));
+        return Err(CacheError::invalid("snapshot contains trailing data"));
     }
-    world.config = settings;
     validate_world(&world)?;
-    Ok((settings, world))
+    Ok(world)
 }
 
 fn validate_world(world: &GeneratedWorld) -> Result<(), CacheError> {
     let mesh = &world.voronoi;
     let cells = mesh.cell_count();
-    let vertices = mesh.vertex_count();
-    let edges = mesh.edge_count();
-
     if world.config.fibonacci.count != cells
         || world.config.plates.plate_count() != world.plates.plate_count
         || world.config.hotspots.hotspot_count != world.hotspots.hotspots.len()
         || world.config.solar_forcing.annual_sample_count
             != world.seasonal_thermal.annual_sample_count
-        || cells < 4
-        || vertices != cells.saturating_mul(2).saturating_sub(4)
-        || edges != cells.saturating_mul(3).saturating_sub(6)
-        || mesh.corners.len() != edges.saturating_mul(2)
-        || !mesh.radius.is_finite()
-        || mesh.radius <= 0.0
-        || mesh
-            .cell_centers
-            .iter()
-            .chain(&mesh.vertices)
-            .any(|point| !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite())
-        || mesh.cell_offsets.len() != cells + 1
-        || mesh.cell_offsets.first() != Some(&0)
-        || mesh.cell_offsets.last() != Some(&mesh.corners.len())
-        || mesh.cell_offsets.windows(2).any(|pair| pair[0] > pair[1])
-        || mesh
-            .cell_offsets
-            .windows(2)
-            .any(|pair| pair[1] - pair[0] < 3)
-        || mesh.cell_areas.len() != cells
-        || mesh
-            .cell_areas
-            .iter()
-            .any(|area| !area.is_finite() || *area <= 0.0)
-        || mesh.vertex_cells.len() != vertices
-        || mesh.vertex_neighbors.len() != vertices
-        || mesh.corners.iter().any(|corner| {
-            corner.vertex >= vertices || corner.neighbor >= cells || corner.edge >= edges
-        })
-        || mesh.edges.iter().any(|edge| {
-            edge.vertices.iter().any(|&vertex| vertex >= vertices)
-                || edge.cells.iter().any(|&cell| cell >= cells)
-        })
-        || mesh
-            .vertex_cells
-            .iter()
-            .flatten()
-            .any(|&cell| cell >= cells)
-        || mesh
-            .vertex_neighbors
-            .iter()
-            .flatten()
-            .any(|&vertex| vertex >= vertices)
+        || world.cell_albedo.len() != cells
     {
-        return Err(CacheError::Invalid("snapshot mesh topology is invalid"));
-    }
-
-    let mut edge_incidence = vec![0_u8; edges];
-    for (cell, offsets) in mesh.cell_offsets.windows(2).enumerate() {
-        for corner in &mesh.corners[offsets[0]..offsets[1]] {
-            let edge = mesh.edges[corner.edge];
-            let incident_cells = mesh.vertex_cells[corner.vertex];
-            if !edge.cells.contains(&cell)
-                || !edge.cells.contains(&corner.neighbor)
-                || !incident_cells.contains(&cell)
-                || !incident_cells.contains(&corner.neighbor)
-                || cell == corner.neighbor
-            {
-                return Err(CacheError::Invalid("snapshot cell rings are invalid"));
-            }
-            edge_incidence[corner.edge] = edge_incidence[corner.edge].saturating_add(1);
-        }
-    }
-    if edge_incidence.into_iter().any(|incidence| incidence != 2) {
-        return Err(CacheError::Invalid("snapshot edge incidence is invalid"));
-    }
-
-    world
-        .plates
-        .validate(mesh)
-        .and_then(|_| world.crust.validate(&world.plates))
-        .and_then(|_| world.kinematics.validate(&world.plates))
-        .and_then(|_| world.boundaries.validate(mesh))
-        .and_then(|_| world.seafloor_age.validate(mesh))
-        .and_then(|_| world.elevation.validate(mesh))
-        .map_err(|error| {
-            CacheError::InvalidOwned(format!("snapshot stage data is invalid: {error}"))
-        })?;
-
-    let cell_lengths = [
-        world.base_elevation.cell_elevations.len(),
-        world.deformation.cell_deformation.len(),
-        world.hotspots.cell_intensities.len(),
-        world.hotspots.cell_hotspots.len(),
-        world.oceanic_peaks.cell_densities.len(),
-        world.oceanic_peaks.cell_kinds.len(),
-        world.volcanic_arcs.cell_strengths.len(),
-        world.volcanic_arcs.cell_segments.len(),
-        world.cratons.cell_strengths.len(),
-        world.basins.cell_basins.len(),
-        world.geological_elevation.cell_elevations.len(),
-        world.isostasy.cell_support.len(),
-        world.isostasy.cell_elevations.len(),
-        world.solar_forcing.daily_mean_insolation.len(),
-        world.solar_forcing.annual_mean_insolation.len(),
-        world
-            .radiative_equilibrium
-            .daily_effective_temperature_kelvin
-            .len(),
-        world
-            .radiative_equilibrium
-            .annual_effective_temperature_kelvin
-            .len(),
-        world.seasonal_thermal.selected_temperature_kelvin.len(),
-        world.seasonal_thermal.annual_mean_temperature_kelvin.len(),
-        world
-            .seasonal_thermal
-            .annual_minimum_temperature_kelvin
-            .len(),
-        world
-            .seasonal_thermal
-            .annual_maximum_temperature_kelvin
-            .len(),
-        world.seasonal_thermal.annual_amplitude_kelvin.len(),
-        world
-            .atmospheric_circulation
-            .cell_wind_meters_per_second
-            .len(),
-        world
-            .atmospheric_circulation
-            .cell_wind_speed_meters_per_second
-            .len(),
-        world
-            .atmospheric_circulation
-            .cell_temperature_gradient_kelvin_per_radian
-            .len(),
-        world
-            .atmospheric_circulation
-            .cell_pressure_gradient_acceleration_meters_per_second_squared
-            .len(),
-        world
-            .atmospheric_circulation
-            .cell_coriolis_parameter_per_second
-            .len(),
-        world
-            .atmospheric_circulation
-            .cell_terrain_steering_fraction
-            .len(),
-        world.moisture_transport.cell_humidity_kg_per_m2.len(),
-        world
-            .moisture_transport
-            .cell_moisture_capacity_kg_per_m2
-            .len(),
-        world
-            .moisture_transport
-            .cell_evaporation_kg_per_m2_per_day
-            .len(),
-        world
-            .moisture_transport
-            .cell_precipitation_kg_per_m2_per_day
-            .len(),
-        world
-            .moisture_transport
-            .cell_condensation_kg_per_m2_per_day
-            .len(),
-        world
-            .moisture_transport
-            .cell_orographic_precipitation_kg_per_m2_per_day
-            .len(),
-        world.cryosphere.cell_snowfall_kg_per_m2_per_day.len(),
-        world.cryosphere.cell_melt_kg_per_m2_per_day.len(),
-        world.cryosphere.cell_snow_cover_fraction.len(),
-        world.cryosphere.cell_land_ice_cover_fraction.len(),
-        world.cryosphere.cell_sea_ice_cover_fraction.len(),
-        world.cell_albedo.len(),
-    ];
-    if cell_lengths.into_iter().any(|length| length != cells)
-        || world.seasonal_thermal.annual_sample_count == 0
-        || world
-            .seasonal_thermal
-            .annual_temperature_samples_kelvin
-            .len()
-            != cells.saturating_mul(world.seasonal_thermal.annual_sample_count)
-    {
-        return Err(CacheError::Invalid("snapshot field lengths are invalid"));
-    }
-    if world
-        .hotspots
-        .cell_hotspots
-        .iter()
-        .flatten()
-        .any(|&hotspot| hotspot >= world.hotspots.hotspots.len())
-        || world.hotspots.hotspots.iter().any(|hotspot| {
-            hotspot.source_cell >= cells
-                || hotspot.plate >= world.plates.plate_count
-                || hotspot.trail.iter().any(|trail| trail.cell >= cells)
-        })
-        || world
-            .oceanic_peaks
-            .peaks
-            .iter()
-            .any(|peak| peak.cell >= cells)
-        || world
-            .volcanic_arcs
-            .cell_segments
-            .iter()
-            .flatten()
-            .any(|&segment| segment >= world.volcanic_arcs.segments.len())
-        || world.volcanic_arcs.segments.iter().any(|segment| {
-            segment.overriding_plate >= world.plates.plate_count
-                || segment.boundary_edges.iter().any(|&edge| edge >= edges)
-                || segment.boundary_cells.iter().any(|&cell| cell >= cells)
-                || segment.arc_cells.iter().any(|arc| arc.cell >= cells)
-                || segment.peaks.iter().any(|&cell| cell >= cells)
-        })
-    {
-        return Err(CacheError::Invalid(
-            "snapshot sparse field indices are invalid",
+        return Err(CacheError::invalid(
+            "snapshot settings or viewer-owned fields are inconsistent with the world",
         ));
     }
+
+    mesh.validate().map_err(CacheError::invalid)?;
+    world.plates.validate(mesh).map_err(CacheError::invalid)?;
+    world
+        .crust
+        .validate(&world.plates)
+        .map_err(CacheError::invalid)?;
+    world
+        .kinematics
+        .validate(&world.plates)
+        .map_err(CacheError::invalid)?;
+    world
+        .boundaries
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .seafloor_age
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .base_elevation
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .deformation
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .elevation
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
     world
         .hotspots
+        .validate_for_partition(mesh, &world.plates)
+        .map_err(CacheError::invalid)?;
+    world
+        .oceanic_peaks
         .validate(mesh)
-        .map_err(|error| CacheError::InvalidOwned(error.to_string()))?;
+        .map_err(CacheError::invalid)?;
     world
         .volcanic_arcs
-        .validate(mesh)
-        .map_err(|error| CacheError::InvalidOwned(error.to_string()))?;
-    world
-        .cratons
-        .validate(mesh)
-        .map_err(|error| CacheError::InvalidOwned(error.to_string()))?;
-    world
-        .basins
-        .validate(mesh)
-        .map_err(|error| CacheError::InvalidOwned(error.to_string()))?;
+        .validate_for_partition(mesh, &world.plates)
+        .map_err(CacheError::invalid)?;
+    world.cratons.validate(mesh).map_err(CacheError::invalid)?;
+    world.basins.validate(mesh).map_err(CacheError::invalid)?;
     world
         .geological_elevation
         .validate(mesh)
-        .map_err(|error| CacheError::InvalidOwned(error.to_string()))?;
+        .map_err(CacheError::invalid)?;
+    world.isostasy.validate(mesh).map_err(CacheError::invalid)?;
     world
         .solar_forcing
         .validate(mesh)
-        .map_err(|error| CacheError::InvalidOwned(error.to_string()))?;
+        .map_err(CacheError::invalid)?;
+    world
+        .radiative_equilibrium
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .seasonal_thermal
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .atmospheric_circulation
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .moisture_transport
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
+    world
+        .cryosphere
+        .validate(mesh)
+        .map_err(CacheError::invalid)?;
     Ok(())
 }
 
@@ -458,7 +305,7 @@ impl<'a> Decoder<'a> {
             .offset
             .checked_add(length)
             .filter(|&end| end <= self.bytes.len())
-            .ok_or(CacheError::Invalid("snapshot ended unexpectedly"))?;
+            .ok_or_else(|| CacheError::invalid("snapshot ended unexpectedly"))?;
         let result = &self.bytes[self.offset..end];
         self.offset = end;
         Ok(result)
@@ -492,7 +339,7 @@ impl CacheCodec for usize {
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
         u64::decode(decoder)?
             .try_into()
-            .map_err(|_| CacheError::Invalid("snapshot integer exceeds this platform"))
+            .map_err(|_| CacheError::invalid("snapshot integer exceeds this platform"))
     }
 }
 
@@ -506,7 +353,7 @@ impl<T: CacheCodec> CacheCodec for Vec<T> {
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
         let length = usize::decode(decoder)?;
         if length > MAX_COLLECTION_ITEMS {
-            return Err(CacheError::Invalid("snapshot collection is too large"));
+            return Err(CacheError::invalid("snapshot collection is too large"));
         }
         (0..length).map(|_| T::decode(decoder)).collect()
     }
@@ -526,7 +373,7 @@ impl<T: CacheCodec> CacheCodec for Option<T> {
         match u32::decode(decoder)? {
             0 => Ok(None),
             1 => Ok(Some(T::decode(decoder)?)),
-            _ => Err(CacheError::Invalid("snapshot option tag is invalid")),
+            _ => Err(CacheError::invalid("snapshot option tag is invalid")),
         }
     }
 }
@@ -543,7 +390,7 @@ impl<T: CacheCodec, const N: usize> CacheCodec for [T; N] {
             .collect::<Result<_, _>>()?;
         values
             .try_into()
-            .map_err(|_| CacheError::Invalid("snapshot array length is invalid"))
+            .map_err(|_| CacheError::invalid("snapshot array length is invalid"))
     }
 }
 
@@ -563,7 +410,7 @@ impl CacheCodec for String {
     }
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
         String::from_utf8(Vec::<u8>::decode(decoder)?)
-            .map_err(|_| CacheError::Invalid("snapshot string is not UTF-8"))
+            .map_err(|_| CacheError::invalid("snapshot string is not UTF-8"))
     }
 }
 
@@ -702,7 +549,7 @@ macro_rules! enum_codec {
             fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
                 match u8::decode(decoder)? {
                     $($tag => Ok($value),)+
-                    _ => Err(CacheError::Invalid("snapshot enum tag is invalid")),
+                    _ => Err(CacheError::invalid("snapshot enum tag is invalid")),
                 }
             }
         }
@@ -723,6 +570,7 @@ enum_codec!(OceanicPeakKind {
 
 impl CacheCodec for GeneratedWorld {
     fn encode(&self, encoder: &mut Encoder) {
+        self.config.encode(encoder);
         self.voronoi.encode(encoder);
         self.plates.encode(encoder);
         self.crust.encode(encoder);
@@ -752,6 +600,7 @@ impl CacheCodec for GeneratedWorld {
 
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
         Ok(Self {
+            config: CacheCodec::decode(decoder)?,
             voronoi: CacheCodec::decode(decoder)?,
             plates: CacheCodec::decode(decoder)?,
             crust: CacheCodec::decode(decoder)?,
@@ -778,7 +627,6 @@ impl CacheCodec for GeneratedWorld {
             cell_albedo: CacheCodec::decode(decoder)?,
             climate_coupling_diagnostics: CacheCodec::decode(decoder)?,
             timings: GenerationTimings::default(),
-            config: GenerationSettings::default(),
         })
     }
 }
@@ -786,60 +634,15 @@ impl CacheCodec for GeneratedWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
-        GenerationSettings {
-            fibonacci: FibonacciConfig {
-                jitter: 0.25,
-                seed,
-                ..FibonacciConfig::new(cell_count)
-            },
-            plates: PlatePartitionConfig {
-                seed,
-                ..PlatePartitionConfig::new(2, 2)
-            },
-            crust: CrustClassificationConfig::new(seed),
-            kinematics: PlateKinematicsConfig::new(seed),
-            evolution: PlateEvolutionConfig {
-                step_count: 4,
-                ..Default::default()
-            },
-            hotspots: HotspotFieldConfig {
-                hotspot_count: 3,
-                maximum_trail_cells: 4,
-                seed,
-            },
-            oceanic_peaks: OceanicPeakFieldConfig::new(seed),
-            ..GenerationSettings::default()
-        }
-    }
-
-    fn fixture(cell_count: usize, seed: u64) -> (GenerationSettings, GeneratedWorld) {
-        let settings = settings(cell_count, seed);
-        let world = GeneratedWorld::generate(settings).unwrap();
-        (settings, world)
-    }
-
-    fn temp_cache(name: &str) -> WorldCache {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        WorldCache::new(env::temp_dir().join(format!(
-            "procgen-viewer-{name}-{}-{unique}/world.bin",
-            std::process::id()
-        )))
-    }
+    use crate::test_support::{cache as test_cache, fixture};
 
     #[test]
     fn snapshot_round_trip_restores_settings_and_domain_data_without_timings() {
-        let (settings, world) = fixture(32, 11);
-        let bytes = encode_snapshot(&settings, &world);
-        let (loaded_settings, loaded) = decode_snapshot(&bytes).unwrap();
+        let world = fixture(32, 11);
+        let bytes = encode_snapshot(&world);
+        let loaded = decode_snapshot(&bytes).unwrap();
 
-        assert_eq!(loaded_settings, settings);
-        assert_eq!(loaded.config, settings);
+        assert_eq!(loaded.config, world.config);
         assert_eq!(loaded.voronoi.cell_centers, world.voronoi.cell_centers);
         assert_eq!(loaded.voronoi.edges, world.voronoi.edges);
         assert_eq!(loaded.plates, world.plates);
@@ -850,13 +653,13 @@ mod tests {
 
     #[test]
     fn format_and_build_identity_mismatches_invalidate_snapshot() {
-        let (settings, world) = fixture(32, 12);
+        let world = fixture(32, 12);
 
-        let mut wrong_version = encode_snapshot(&settings, &world);
+        let mut wrong_version = encode_snapshot(&world);
         wrong_version[MAGIC.len()] ^= 1;
         assert!(decode_snapshot(&wrong_version).is_err());
 
-        let mut wrong_build = encode_snapshot(&settings, &world);
+        let mut wrong_build = encode_snapshot(&world);
         let identity_start = MAGIC.len() + size_of::<u32>() + size_of::<u64>();
         wrong_build[identity_start] ^= 1;
         assert!(decode_snapshot(&wrong_build).is_err());
@@ -864,34 +667,42 @@ mod tests {
 
     #[test]
     fn truncated_snapshot_is_nonfatal_corruption() {
-        let (settings, world) = fixture(32, 13);
-        let mut bytes = encode_snapshot(&settings, &world);
+        let world = fixture(32, 13);
+        let mut bytes = encode_snapshot(&world);
         bytes.truncate(bytes.len() / 2);
 
         assert!(decode_snapshot(&bytes).is_err());
     }
 
     #[test]
-    fn invalid_topology_and_field_lengths_are_rejected() {
-        let (settings, mut world) = fixture(32, 14);
+    fn invalid_topology_sparse_indices_and_field_lengths_are_rejected() {
+        let mut world = fixture(32, 14);
         world.voronoi.edges[0].cells[0] = world.voronoi.cell_count();
-        assert!(decode_snapshot(&encode_snapshot(&settings, &world)).is_err());
+        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
 
-        let (settings, mut world) = fixture(32, 15);
+        let mut world = fixture(32, 15);
+        world.hotspots.hotspots[0].source_cell = world.voronoi.cell_count();
+        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+
+        let mut world = fixture(32, 16);
+        world.cryosphere.cell_snow_cover_fraction.pop();
+        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+
+        let mut world = fixture(32, 17);
         world.cell_albedo.pop();
-        assert!(decode_snapshot(&encode_snapshot(&settings, &world)).is_err());
+        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
     }
 
     #[test]
     fn successful_store_atomically_replaces_previous_snapshot() {
-        let cache = temp_cache("replace");
-        let (first_settings, first) = fixture(32, 16);
-        let (second_settings, second) = fixture(48, 17);
-        cache.store(&first_settings, &first).unwrap();
-        cache.store(&second_settings, &second).unwrap();
+        let (cache_dir, cache) = test_cache("replace");
+        let first = fixture(32, 18);
+        let second = fixture(48, 19);
+        cache.store(&first).unwrap();
+        cache.store(&second).unwrap();
 
-        let (loaded_settings, loaded) = cache.load().unwrap();
-        assert_eq!(loaded_settings, second_settings);
+        let loaded = cache.load().unwrap();
+        assert_eq!(loaded.config, second.config);
         assert_eq!(loaded.voronoi.cell_count(), 48);
         let parent_entries: Vec<_> = fs::read_dir(cache.path.parent().unwrap())
             .unwrap()
@@ -899,27 +710,25 @@ mod tests {
             .collect();
         assert_eq!(parent_entries, [cache.path.file_name().unwrap()]);
 
-        fs::remove_dir_all(cache.path.parent().unwrap()).unwrap();
+        fs::remove_dir_all(cache_dir).unwrap();
     }
 
     #[test]
     fn failed_atomic_write_preserves_previous_snapshot() {
-        let cache = temp_cache("failed-replace");
-        let (settings, world) = fixture(32, 18);
-        cache.store(&settings, &world).unwrap();
+        let (cache_dir, cache) = test_cache("failed-replace");
+        let world = fixture(32, 20);
+        cache.store(&world).unwrap();
         let original = fs::read(&cache.path).unwrap();
 
-        let result = atomic_replace_with(&cache.path, |file| {
-            file.write_all(b"incomplete")?;
-            Err(io::Error::other("injected write failure"))
-        });
+        let mut replacement = AtomicReplacement::begin(&cache.path).unwrap();
+        replacement.file.write_all(b"incomplete").unwrap();
+        drop(replacement);
 
-        assert!(result.is_err());
         assert_eq!(fs::read(&cache.path).unwrap(), original);
         assert_eq!(
             fs::read_dir(cache.path.parent().unwrap()).unwrap().count(),
             1
         );
-        fs::remove_dir_all(cache.path.parent().unwrap()).unwrap();
+        fs::remove_dir_all(cache_dir).unwrap();
     }
 }

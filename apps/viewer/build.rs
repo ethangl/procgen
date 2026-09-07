@@ -11,14 +11,10 @@ fn main() {
     for path in [
         "Cargo.toml",
         "Cargo.lock",
+        "apps/viewer/Cargo.toml",
+        "apps/viewer/src/cache.rs",
         "apps/viewer/src/model.rs",
-        "crates/procgen-core",
-        "crates/procgen-sphere",
-        "crates/procgen-sphere-mesh",
-        "crates/procgen-planet",
-        "crates/procgen-tectonics",
-        "crates/procgen-geology",
-        "crates/procgen-climate",
+        "crates",
     ] {
         collect_files(&workspace.join(path), &mut files);
     }

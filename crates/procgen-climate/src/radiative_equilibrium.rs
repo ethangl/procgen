@@ -31,6 +31,17 @@ pub struct RadiativeEquilibriumTemperature {
     pub diagnostics: RadiativeEquilibriumDiagnostics,
 }
 
+impl RadiativeEquilibriumTemperature {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+        if self.daily_effective_temperature_kelvin.len() != mesh.cell_count()
+            || self.annual_effective_temperature_kelvin.len() != mesh.cell_count()
+        {
+            return Err(crate::ClimateOutputError::RadiativeEquilibrium);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadiativeEquilibriumError {
     Albedo,

@@ -79,6 +79,42 @@ impl VolcanicArcField {
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
         if self.cell_strengths.len() != mesh.cell_count()
             || self.cell_segments.len() != mesh.cell_count()
+            || self
+                .cell_segments
+                .iter()
+                .flatten()
+                .any(|&segment| segment >= self.segments.len())
+            || self.segments.iter().any(|segment| {
+                segment
+                    .boundary_edges
+                    .iter()
+                    .any(|&edge| edge >= mesh.edge_count())
+                    || segment
+                        .boundary_cells
+                        .iter()
+                        .any(|&cell| cell >= mesh.cell_count())
+                    || segment
+                        .arc_cells
+                        .iter()
+                        .any(|arc| arc.cell >= mesh.cell_count())
+                    || segment.peaks.iter().any(|&cell| cell >= mesh.cell_count())
+            })
+        {
+            return Err(GeologyInputError::VolcanicArcs);
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_partition(
+        &self,
+        mesh: &SphereMesh,
+        plates: &PlatePartition,
+    ) -> Result<(), GeologyInputError> {
+        self.validate(mesh)?;
+        if self
+            .segments
+            .iter()
+            .any(|segment| segment.overriding_plate >= plates.plate_count)
         {
             return Err(GeologyInputError::VolcanicArcs);
         }

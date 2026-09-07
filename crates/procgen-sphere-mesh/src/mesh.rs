@@ -125,6 +125,83 @@ impl SphereMesh {
         self.cell_centers.len()
     }
 
+    /// Validates the complete public mesh representation after reconstruction
+    /// from an external boundary such as a viewer cache.
+    pub fn validate(&self) -> Result<(), TopologyError> {
+        let cells = self.cell_count();
+        let vertices = self.vertex_count();
+        let edges = self.edge_count();
+        if cells < 4
+            || vertices != cells.saturating_mul(2).saturating_sub(4)
+            || edges != cells.saturating_mul(3).saturating_sub(6)
+            || self.corners.len() != edges.saturating_mul(2)
+            || !self.radius.is_finite()
+            || self.radius <= 0.0
+            || self
+                .cell_centers
+                .iter()
+                .chain(&self.vertices)
+                .any(|point| !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite())
+            || self.cell_offsets.len() != cells + 1
+            || self.cell_offsets.first() != Some(&0)
+            || self.cell_offsets.last() != Some(&self.corners.len())
+            || self.cell_offsets.windows(2).any(|pair| pair[0] > pair[1])
+            || self
+                .cell_offsets
+                .windows(2)
+                .any(|pair| pair[1] - pair[0] < 3)
+            || self.cell_areas.len() != cells
+            || self
+                .cell_areas
+                .iter()
+                .any(|area| !area.is_finite() || *area <= 0.0)
+            || self.vertex_cells.len() != vertices
+            || self.vertex_neighbors.len() != vertices
+            || self.corners.iter().any(|corner| {
+                corner.vertex >= vertices || corner.neighbor >= cells || corner.edge >= edges
+            })
+            || self.edges.iter().any(|edge| {
+                edge.vertices[0] == edge.vertices[1]
+                    || edge.cells[0] == edge.cells[1]
+                    || edge.vertices.iter().any(|&vertex| vertex >= vertices)
+                    || edge.cells.iter().any(|&cell| cell >= cells)
+            })
+            || self
+                .vertex_cells
+                .iter()
+                .flatten()
+                .any(|&cell| cell >= cells)
+            || self
+                .vertex_neighbors
+                .iter()
+                .flatten()
+                .any(|&vertex| vertex >= vertices)
+        {
+            return Err(TopologyError::InvalidMesh);
+        }
+
+        let mut edge_incidence = vec![0_u8; edges];
+        for (cell, offsets) in self.cell_offsets.windows(2).enumerate() {
+            for corner in &self.corners[offsets[0]..offsets[1]] {
+                let edge = self.edges[corner.edge];
+                let incident_cells = self.vertex_cells[corner.vertex];
+                if !edge.cells.contains(&cell)
+                    || !edge.cells.contains(&corner.neighbor)
+                    || !incident_cells.contains(&cell)
+                    || !incident_cells.contains(&corner.neighbor)
+                    || cell == corner.neighbor
+                {
+                    return Err(TopologyError::InvalidMesh);
+                }
+                edge_incidence[corner.edge] = edge_incidence[corner.edge].saturating_add(1);
+            }
+        }
+        if edge_incidence.into_iter().any(|incidence| incidence != 2) {
+            return Err(TopologyError::InvalidMesh);
+        }
+        Ok(())
+    }
+
     pub fn vertex_count(&self) -> usize {
         self.vertices.len()
     }

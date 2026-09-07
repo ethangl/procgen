@@ -93,6 +93,22 @@ pub struct MoistureTransport {
     pub diagnostics: MoistureTransportDiagnostics,
 }
 
+impl MoistureTransport {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+        let cells = mesh.cell_count();
+        if self.cell_humidity_kg_per_m2.len() != cells
+            || self.cell_moisture_capacity_kg_per_m2.len() != cells
+            || self.cell_evaporation_kg_per_m2_per_day.len() != cells
+            || self.cell_precipitation_kg_per_m2_per_day.len() != cells
+            || self.cell_condensation_kg_per_m2_per_day.len() != cells
+            || self.cell_orographic_precipitation_kg_per_m2_per_day.len() != cells
+        {
+            return Err(crate::ClimateOutputError::MoistureTransport);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MoistureTransportError {
     Planet(PlanetValidationError),

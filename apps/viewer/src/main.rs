@@ -2,6 +2,8 @@ mod cache;
 mod camera;
 mod model;
 mod render;
+#[cfg(test)]
+mod test_support;
 mod ui;
 
 use bevy::prelude::*;

@@ -90,6 +90,24 @@ pub struct SeasonalThermalResponse {
     pub diagnostics: SeasonalThermalDiagnostics,
 }
 
+impl SeasonalThermalResponse {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::ClimateOutputError> {
+        let cells = mesh.cell_count();
+        if self.annual_sample_count == 0
+            || self.selected_temperature_kelvin.len() != cells
+            || self.annual_temperature_samples_kelvin.len()
+                != cells.saturating_mul(self.annual_sample_count)
+            || self.annual_mean_temperature_kelvin.len() != cells
+            || self.annual_minimum_temperature_kelvin.len() != cells
+            || self.annual_maximum_temperature_kelvin.len() != cells
+            || self.annual_amplitude_kelvin.len() != cells
+        {
+            return Err(crate::ClimateOutputError::SeasonalThermal);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeasonalThermalError {
     Planet(PlanetValidationError),
