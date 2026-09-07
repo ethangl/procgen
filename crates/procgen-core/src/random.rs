@@ -44,6 +44,8 @@ impl RandomStream {
     }
 }
 
+// SplitMix64 finalizer by Sebastiano Vigna:
+// https://prng.di.unimi.it/splitmix64.c
 const fn mix64(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
