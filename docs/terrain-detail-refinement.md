@@ -223,19 +223,6 @@ dispatch test that checks the WGSL mirror against the CPU vectors lives where
 wgpu is already a dependency, so `procgen-noise` stays free of it even in
 tests.
 
-## Sequence
-
-1. `procgen-core` hash and `procgen-noise`: gradient basis with derivatives,
-   fbm, ridged, and derivative-damped accumulation, CPU implementation, WGSL
-   source, and agreement tests.
-2. `procgen-sphere-mesh` point location, `procgen-cubesphere` mapping and
-   bake, and `procgen-terrain` control composition, cached with the snapshot.
-3. Single-level tile generation in the viewer at a fixed level, replacing the
-   fan mesh below a zoom threshold, with coastline domain warping.
-4. Quadtree split and merge, skirts, octave fading, and a closer camera limit.
-5. CPU and CUDA tile export sharing the viewer's function, with the tolerance
-   constant measured and recorded.
-
 ## Decisions
 
 Settled before implementation:
@@ -261,20 +248,34 @@ into the viewer.
 
 ## Slices
 
+`procgen-core` hash and `procgen-noise`: gradient basis with derivatives, fbm, ridged, and derivative-damped accumulation, CPU implementation, WGSL source, and agreement tests.
+
 1. ~~Add the 32-bit counter-addressable hash and fixed test vectors to procgen-core.~~
 2. Create procgen-noise with the CPU gradient basis and analytic derivatives only.
 3. Add CPU fbm, ridged, and derivative-damped accumulation.
 4. Add the WGSL mirror and GPU agreement tests—without viewer integration.
+
+`procgen-sphere-mesh` point location, `procgen-cubesphere` mapping and bake, and `procgen-terrain` control composition, cached with the snapshot.
+
 5. Add Delaunay point location to procgen-sphere-mesh.
 6. Add cube-sphere mapping, integer tile addressing, and seam tests to procgen-cubesphere.
+
+Single-level tile generation in the viewer at a fixed level, replacing the fan mesh below a zoom threshold, with coastline domain warping.
+
 7. Add terrain-control composition to procgen-terrain.
 8. Add CPU control-face baking and deterministic bilinear sampling.
 9. Cache the control bake with generated-world snapshots.
 10. Add the backend-neutral height function and coastline domain warp.
 11. Add fixed-level CPU tile generation as the canonical reference.
 12. Add fixed-level WGSL viewer tiles below a zoom threshold.
+
+Quadtree split and merge, skirts, octave fading, and a closer camera limit.
+
 13. Add quadtree selection and bounded tile-generation scheduling.
 14. Add skirts, relative tile origins, octave fading, and closer camera behavior.
+
+CPU and CUDA tile export sharing the viewer's function, with the tolerance constant measured and recorded.
+
 15. Add deterministic CPU tile export.
 16. Add CUDA export and measure the final cross-backend tolerance.
 
