@@ -25,11 +25,11 @@ pub struct ViewerRenderSettings {
 impl Default for ViewerRenderSettings {
     fn default() -> Self {
         Self {
-            relief_exaggeration: 0.16,
-            light_azimuth_degrees: 35.0,
+            relief_exaggeration: 0.036,
+            light_azimuth_degrees: -30.0,
             light_elevation_degrees: 30.0,
-            light_illuminance: 10_000.0,
-            ambient_brightness: 300.0,
+            light_illuminance: 8_888.0,
+            ambient_brightness: 111.0,
         }
     }
 }
