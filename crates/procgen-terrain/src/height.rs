@@ -153,7 +153,7 @@ pub struct ValidatedTerrainHeightConfig {
     ridged: Validated<RidgedMultifractalConfig>,
     abyssal: Validated<DerivativeDampedConfig>,
     coast: TerrainCoastConfig,
-    stamps: TerrainStampProfiles,
+    pub(crate) stamps: TerrainStampProfiles,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,16 +319,12 @@ impl TerrainNoiseKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TerrainCellControls, TerrainStampKind};
+    use crate::{
+        TerrainCellControls, TerrainStampKind,
+        test_support::{TERRAIN_TEST_SEED, constant_bake, height_inputs, stamp},
+    };
     use procgen_cubesphere::{CubeFace, FaceCoordinates, face_to_direction};
     use procgen_tectonics::SEA_LEVEL;
-
-    const SEED: u64 = 0x0123_4567_89AB_CDEF;
-
-    fn constant_bake(controls: TerrainCellControls) -> TerrainControlBake {
-        let texel = controls.to_channels();
-        TerrainControlBake::from_face_texels(4, std::array::from_fn(|_| vec![texel; 16])).unwrap()
-    }
 
     fn varying_bake() -> TerrainControlBake {
         let resolution = 16;
@@ -389,19 +385,6 @@ mod tests {
         (axis - direction * axis.dot(direction)).normalized()
     }
 
-    fn inputs<'a>(
-        direction: Vec3,
-        controls: &'a TerrainControlBake,
-        stamps: &'a [TerrainStampInput],
-    ) -> TerrainHeightInputs<'a> {
-        TerrainHeightInputs {
-            direction,
-            controls,
-            stamps,
-            noise_keys: TerrainNoiseKeys::new(SEED),
-        }
-    }
-
     fn assert_directional_derivative(
         bake: &TerrainControlBake,
         stamps: &[TerrainStampInput],
@@ -413,14 +396,14 @@ mod tests {
         const STEP: f32 = 1.0e-4;
         let axis = tangent(direction, axis);
         let before = terrain_height(
-            inputs((direction - axis * STEP).normalized(), bake, stamps),
+            height_inputs((direction - axis * STEP).normalized(), bake, stamps),
             config,
         );
         let after = terrain_height(
-            inputs((direction + axis * STEP).normalized(), bake, stamps),
+            height_inputs((direction + axis * STEP).normalized(), bake, stamps),
             config,
         );
-        let sample = terrain_height(inputs(direction, bake, stamps), config);
+        let sample = terrain_height(height_inputs(direction, bake, stamps), config);
         let finite_difference = (after.value - before.value) / (2.0 * STEP);
         assert!(
             (sample.derivative.dot(axis) - finite_difference).abs() < tolerance,
@@ -438,16 +421,15 @@ mod tests {
             octave_gain: 0.55,
             abyssal_amplitude: 0.01,
         });
-        let stamp = TerrainStampInput {
-            cell: 0,
-            kind: TerrainStampKind::OceanicAbyssalHill,
-            source_index: 4,
-            position: Vec3::new(0.39, -0.50, 0.78).normalized(),
-            strength: 0.7,
-        };
+        let stamp = stamp(
+            TerrainStampKind::OceanicAbyssalHill,
+            4,
+            Vec3::new(0.39, -0.50, 0.78).normalized(),
+            0.7,
+        );
         let stamps = [stamp];
         let sample = terrain_height(
-            inputs(direction(), &bake, &stamps),
+            height_inputs(direction(), &bake, &stamps),
             TerrainHeightConfig::default().validate().unwrap(),
         );
         assert_eq!(
@@ -463,7 +445,7 @@ mod tests {
         assert_eq!(
             sample,
             terrain_height(
-                inputs(direction(), &bake, &stamps),
+                height_inputs(direction(), &bake, &stamps),
                 TerrainHeightConfig::default().validate().unwrap(),
             )
         );
@@ -471,8 +453,8 @@ mod tests {
             sample,
             terrain_height(
                 TerrainHeightInputs {
-                    noise_keys: TerrainNoiseKeys::new(SEED + 1),
-                    ..inputs(direction(), &bake, &stamps)
+                    noise_keys: TerrainNoiseKeys::new(TERRAIN_TEST_SEED + 1),
+                    ..height_inputs(direction(), &bake, &stamps)
                 },
                 TerrainHeightConfig::default().validate().unwrap(),
             )
@@ -489,7 +471,7 @@ mod tests {
             abyssal_amplitude: 0.0,
         });
         let sample = terrain_height(
-            inputs(direction(), &bake, &[]),
+            height_inputs(direction(), &bake, &[]),
             TerrainHeightConfig::default().validate().unwrap(),
         );
         assert_eq!(sample.value, 0.72);
@@ -502,7 +484,7 @@ mod tests {
         let validated = config.validate().unwrap();
         let direction = direction();
         let gain = OctaveGain::new(0.5).unwrap();
-        let key = TerrainNoiseKeys::new(SEED).detail;
+        let key = TerrainNoiseKeys::new(TERRAIN_TEST_SEED).detail;
         let fbm = derivative_damped_fbm_3d(key, direction, validated.detail, gain);
         let ridged = ridged_multifractal_3d(key, direction, validated.ridged, gain);
         for (weight, expected) in [(0.0, fbm.value), (1.0, ridged.value)] {
@@ -513,7 +495,7 @@ mod tests {
                 octave_gain: 0.5,
                 abyssal_amplitude: 0.0,
             });
-            let sample = terrain_height(inputs(direction, &bake, &[]), validated);
+            let sample = terrain_height(height_inputs(direction, &bake, &[]), validated);
             assert_eq!(sample.value, 0.7 + 0.01 * expected);
         }
     }
@@ -541,8 +523,8 @@ mod tests {
         };
         let smooth_bake = make_bake(0.0);
         let rough_bake = make_bake(0.85);
-        let smooth = terrain_height(inputs(direction(), &smooth_bake, &[]), config);
-        let rough = terrain_height(inputs(direction(), &rough_bake, &[]), config);
+        let smooth = terrain_height(height_inputs(direction(), &smooth_bake, &[]), config);
+        let rough = terrain_height(height_inputs(direction(), &rough_bake, &[]), config);
         assert_ne!(smooth.value.to_bits(), rough.value.to_bits());
         assert_ne!(smooth.derivative, rough.derivative);
     }
@@ -558,7 +540,7 @@ mod tests {
             abyssal_amplitude: 1.0,
         });
         let sample = terrain_height(
-            inputs(direction(), &at_coast, &[]),
+            height_inputs(direction(), &at_coast, &[]),
             config.validate().unwrap(),
         );
         assert_eq!(sample.value, SEA_LEVEL);
@@ -571,7 +553,7 @@ mod tests {
         ] {
             let warp = coast_warp(
                 direction,
-                TerrainNoiseKeys::new(SEED).coast_warp,
+                TerrainNoiseKeys::new(TERRAIN_TEST_SEED).coast_warp,
                 ScalarFieldSample3::constant(1.0),
                 config.coast,
             );
@@ -586,13 +568,7 @@ mod tests {
         let config = TerrainHeightConfig::default();
         for kind in TerrainStampKind::ALL {
             let profile = config.stamps.profile(kind);
-            let center = TerrainStampInput {
-                cell: 0,
-                kind,
-                source_index: 0,
-                position: direction,
-                strength: 0.5,
-            };
+            let center = stamp(kind, 0, direction, 0.5);
             assert_eq!(
                 stamp_contribution(direction, center, profile).value,
                 profile.amplitude * 0.5
@@ -614,20 +590,14 @@ mod tests {
         let stamps: Vec<_> = TerrainStampKind::ALL
             .into_iter()
             .enumerate()
-            .map(|(source_index, kind)| TerrainStampInput {
-                cell: 0,
-                kind,
-                source_index,
-                position: direction,
-                strength: 0.1,
-            })
+            .map(|(source_index, kind)| stamp(kind, source_index, direction, 0.1))
             .collect();
         let expected = stamps.iter().fold(0.25, |height, stamp| {
             height + stamp_contribution(direction, *stamp, config.stamps.profile(stamp.kind)).value
         });
         assert_eq!(
             terrain_height(
-                inputs(direction, &bake, &stamps),
+                height_inputs(direction, &bake, &stamps),
                 config.validate().unwrap(),
             )
             .value,
@@ -653,8 +623,8 @@ mod tests {
         .unwrap();
         assert_eq!(left, right);
         assert_eq!(
-            terrain_height(inputs(left, &bake, &[]), config),
-            terrain_height(inputs(right, &bake, &[]), config)
+            terrain_height(height_inputs(left, &bake, &[]), config),
+            terrain_height(height_inputs(right, &bake, &[]), config)
         );
     }
 
@@ -674,13 +644,12 @@ mod tests {
             },
             ..base_config
         };
-        let stamp = TerrainStampInput {
-            cell: 0,
-            kind: TerrainStampKind::Hotspot,
-            source_index: 0,
-            position: (direction + tangent(direction, Vec3::X) * 0.005).normalized(),
-            strength: 0.2,
-        };
+        let stamp = stamp(
+            TerrainStampKind::Hotspot,
+            0,
+            (direction + tangent(direction, Vec3::X) * 0.005).normalized(),
+            0.2,
+        );
         let bake = varying_bake();
         let config = config.validate().unwrap();
         assert_directional_derivative(&bake, &[stamp], config, direction, Vec3::X, 2.5e-2);

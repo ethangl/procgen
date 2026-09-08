@@ -295,7 +295,7 @@ into the viewer.
 ### Single-level tile generation in the viewer at a fixed level, replacing the fan mesh below a zoom threshold, with coastline domain warping.
 
 10. ~~Add the backend-neutral height function and coastline domain warp.~~
-11. Add fixed-level CPU tile generation as the canonical reference.
+11. ~~Add fixed-level CPU tile generation as the canonical reference.~~
 12. Add fixed-level WGSL viewer tiles below a zoom threshold.
 
 ### Quadtree split and merge, skirts, octave fading, and a closer camera limit.

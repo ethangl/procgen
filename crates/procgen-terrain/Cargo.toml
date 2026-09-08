@@ -11,6 +11,7 @@ procgen-geology = { path = "../procgen-geology" }
 procgen-noise = { path = "../procgen-noise" }
 procgen-sphere-mesh = { path = "../procgen-sphere-mesh" }
 procgen-tectonics = { path = "../procgen-tectonics" }
+rayon = "1"
 
 [dev-dependencies]
 procgen-sphere = { path = "../procgen-sphere" }

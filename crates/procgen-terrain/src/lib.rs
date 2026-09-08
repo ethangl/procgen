@@ -6,6 +6,10 @@ mod controls;
 mod field;
 mod height;
 mod stamp;
+mod tile;
+
+#[cfg(test)]
+mod test_support;
 
 pub use bake::{TerrainControlBake, bake_terrain_controls};
 pub use coast::{TerrainCoastConfig, TerrainCoastError};
@@ -18,3 +22,7 @@ pub use height::{
     TerrainHeightInputs, TerrainNoiseKeys, ValidatedTerrainHeightConfig, terrain_height,
 };
 pub use stamp::{StampCap, TerrainStampError, TerrainStampProfile, TerrainStampProfiles};
+pub use tile::{
+    TERRAIN_TILE_SAMPLE_COUNT, TerrainTile, TerrainTileError, TerrainTileInputs,
+    generate_terrain_tile,
+};
