@@ -109,10 +109,9 @@ fn run_summary(ui: &mut egui::Ui, partition: &ResidentPartition) {
     ));
     ui.label(format!(
         "Frontier passes {} of {}",
-        run.longest_relaxation_passes,
-        partition.pass_budget()
+        run.longest_relaxation_passes, run.pass_budget
     ));
-    if !partition.settled() {
+    if !run.settled() {
         ui.colored_label(
             egui::Color32::LIGHT_RED,
             "The relaxation exhausted its pass budget and did not settle.",

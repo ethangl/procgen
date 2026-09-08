@@ -100,22 +100,27 @@ Plate partition only, in a release build on the development MacBook Pro
 (Apple M1 Max via Metal) on 2026-09-08, with the default configuration of six
 major and 111 minor plates at 99 percent growth roughness and seed 0. Each
 stage is timed from submission to device idle. Frontier passes are what the
-longer of the two relaxations consumed out of its budget.
+longer of the two relaxations consumed out of its budget; the frontier's order
+varies run to run, so the count moves by a pass or two while the labels it
+settles on do not.
 
 | Face resolution | Initialize | Plate seeds | Plate growth | Total   | Passes     |
 | --------------- | ---------- | ----------- | ------------ | ------- | ---------- |
-| 128             | 3 ms       | 10 ms       | 36 ms        | 50 ms   | 115/768    |
-| 256             | 1 ms       | 13 ms       | 48 ms        | 62 ms   | 229/1536   |
-| 512             | 3 ms       | 26 ms       | 187 ms       | 215 ms  | 440/3072   |
-| 1024            | 5 ms       | 80 ms       | 921 ms       | 1007 ms | 923/6144   |
+| 128             | 3 ms       | 9 ms        | 36 ms        | 48 ms   | 115/768    |
+| 256             | 1 ms       | 12 ms       | 49 ms        | 62 ms   | 230/1536   |
+| 512             | 3 ms       | 21 ms       | 193 ms       | 218 ms  | 435/3072   |
+| 1024            | 5 ms       | 67 ms       | 947 ms       | 1020 ms | 923/6144   |
 
 Pass counts grow with the face resolution rather than with its square, and the
 budget clears the measured need by six times. Growth is dominated by the
 frontier's latency rather than its arithmetic: a pass carries a few thousand
 cells at 1024 texels per face, which occupies a small fraction of the device.
 Seeding re-evaluates every texel direction once per plate, which is why it
-grows faster than the cell count. Neither is addressed yet; the interactivity
-slice has the measurements it needs to choose.
+grows faster than the cell count; folding the distance-field update into the
+farthest-point reduction removed one of its two full passes per plate, and
+widening that reduction past 256 workgroups costs more in its serial final
+step than it recovers. Neither stage is addressed further yet; the
+interactivity slice has the measurements it needs to choose.
 
 Boundaries at 256 texels per face do not read as grid-aligned at the default
 roughness, and plate areas keep the same distribution across resolutions
@@ -315,10 +320,12 @@ Metal on macOS and Vulkan on Windows, and every pipeline must run on both.
   `terrain_tiles/compute.rs` arrives with the preview and the asynchronous
   readback.
 
-The current viewer is frozen. It is not modified, and it keeps working on the
-Voronoi path until the successor covers what it shows. Shared viewer support
-such as the orbit camera, lighting, and palette is lifted into a small crate
-when the second application needs it, which is the second-consumer rule.
+The current viewer is frozen: it takes no new features and keeps working on
+the Voronoi path until the successor covers what it shows. The one change it
+accepts is the second-consumer rule, because the alternative is a second copy
+of everything a viewer needs. Shared viewer support is lifted into
+`procgen-viewer-support` as the pilot app reaches for it, and the orbit
+controls and the identity colour ramp are there already.
 
 The pilot follows the code-quality rules in `AGENTS.md`: stage outputs own
 their validation, configs are public data, no speculative surface, one

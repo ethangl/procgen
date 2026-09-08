@@ -1,6 +1,6 @@
 use super::{
     SURFACE_RADIUS,
-    palette::{WIND_SPEED_COLOR_STOPS, id_color, opaque_color, piecewise_lerp},
+    palette::{WIND_SPEED_COLOR_STOPS, opaque_color, piecewise_lerp},
     to_bevy,
 };
 use crate::model::GeneratedWorld;
@@ -9,6 +9,7 @@ use procgen_climate::CALM_WIND_SPEED_METERS_PER_SECOND;
 use procgen_geology::OceanicPeakKind;
 use procgen_sphere_mesh::{SphereMesh, VoronoiEdge};
 use procgen_tectonics::BoundaryClass;
+use procgen_viewer_support::id_color;
 
 const MAXIMUM_VECTOR_COUNT: usize = 256;
 const PLATE_BORDER_RADIUS_OFFSET: f32 = 0.002;

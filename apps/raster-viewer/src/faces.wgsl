@@ -6,7 +6,6 @@
 
 struct RasterFaceDisplay {
     resolution: u32,
-    padding: vec3<u32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<storage, read> raster_growth_labels: array<u32>;
@@ -43,15 +42,18 @@ fn raster_hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> vec3<f32> {
     return rgb + (lightness - chroma * 0.5);
 }
 
-/// Separates neighbouring plate ids by the golden angle, matching the mesh
-/// viewer's plate palette.
+/// The shared identity ramp, evaluated per fragment rather than uploaded.
 fn raster_plate_color(label: u32) -> vec3<f32> {
     // The reserved plate id is all ones, so it doubles as the field's mask.
     let plate = label & RASTER_UNCLAIMED_PLATE;
     if plate == RASTER_UNCLAIMED_PLATE {
         return RASTER_UNCLAIMED_COLOR;
     }
-    let srgb = raster_hsl_to_rgb(fract(f32(plate) * RASTER_PLATE_HUE_STEP), 0.62, 0.62);
+    let srgb = raster_hsl_to_rgb(
+        fract(f32(plate) * RASTER_PLATE_HUE_TURNS),
+        RASTER_PLATE_SATURATION,
+        RASTER_PLATE_LIGHTNESS,
+    );
     return vec3(
         raster_srgb_channel_to_linear(srgb.r),
         raster_srgb_channel_to_linear(srgb.g),

@@ -6,11 +6,13 @@
 //! rather than reallocating them.
 
 use crate::partition::{
-    MAX_PLATE_COUNT, PackedPartitionConfig, PipelineTuning, RasterPartitionError,
-    RasterPlatePartitionConfig, SEED_CANDIDATE_SIZE, SEED_REDUCTION_WORKGROUPS, growth_passes,
-    partition_kernel_source, validate_resolution,
+    BINDING_COUNT, MAX_DISPATCH_WORKGROUPS, MAX_PLATE_COUNT, PackedPartitionConfig,
+    PackedPartitionState, PipelineTuning, RasterPartitionError, RasterPlatePartitionConfig,
+    SEED_CANDIDATE_SIZE, SEED_REDUCTION_WORKGROUPS, STORAGE_BINDING_COUNT, frontier_size,
+    growth_passes, partition_kernel_source, validate_resolution,
 };
 use std::{
+    mem::offset_of,
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -36,14 +38,6 @@ impl PipelineStage {
             Self::PlateGrowth => "Plate growth",
         }
     }
-
-    const fn index(self) -> usize {
-        match self {
-            Self::Initialize => 0,
-            Self::PlateSeeds => 1,
-            Self::PlateGrowth => 2,
-        }
-    }
 }
 
 /// Wall-clock time each stage took from submission to device idle.
@@ -54,7 +48,7 @@ pub struct StageTimings {
 
 impl StageTimings {
     pub fn duration(&self, stage: PipelineStage) -> Duration {
-        self.durations[stage.index()]
+        self.durations[stage as usize]
     }
 
     pub fn total(&self) -> Duration {
@@ -62,7 +56,7 @@ impl StageTimings {
     }
 
     fn record(&mut self, stage: PipelineStage, elapsed: Duration) {
-        self.durations[stage.index()] += elapsed;
+        self.durations[stage as usize] += elapsed;
     }
 }
 
@@ -70,10 +64,21 @@ impl StageTimings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartitionRun {
     pub timings: StageTimings,
-    /// Frontier passes the longer of the two relaxations consumed. Reaching
-    /// [`growth_passes`] means it ran out of budget instead of settling, which
-    /// leaves the partition short of its fixed point.
+    /// Frontier passes the longer of the two relaxations consumed. The
+    /// frontier's order varies run to run, so this varies by a pass or two
+    /// while the labels it settles on do not. Read it as a cost, not a result.
     pub longest_relaxation_passes: u32,
+    /// Frontier passes each relaxation was allowed.
+    pub pass_budget: u32,
+}
+
+impl PartitionRun {
+    /// Whether both relaxations reached their fixed point. A run that spends
+    /// its whole budget stopped short of one, and its ownership is not the
+    /// partition the configuration describes.
+    pub const fn settled(&self) -> bool {
+        self.longest_relaxation_passes < self.pass_budget
+    }
 }
 
 /// The GPU-resident plate partition.
@@ -96,7 +101,6 @@ struct PartitionKernels {
     seed_reduce: wgpu::ComputePipeline,
     seed_select: wgpu::ComputePipeline,
     seed_place: wgpu::ComputePipeline,
-    seed_spread: wgpu::ComputePipeline,
     prepare_relax: wgpu::ComputePipeline,
     relax: wgpu::ComputePipeline,
 }
@@ -104,6 +108,9 @@ struct PartitionKernels {
 impl PlatePartitionPipeline {
     /// Compiles the kernels and allocates every stage buffer for one face
     /// resolution. Changing the resolution builds a new pipeline.
+    ///
+    /// The device must meet `wgpu`'s default limits; [`validate_device`] states
+    /// which of them the kernels actually depend on.
     pub fn new(
         device: &wgpu::Device,
         resolution: u32,
@@ -111,6 +118,7 @@ impl PlatePartitionPipeline {
     ) -> Result<Self, RasterPartitionError> {
         let cell_count = validate_resolution(resolution)?;
         tuning.validate()?;
+        validate_device(device, cell_count, tuning)?;
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raster plate partition"),
@@ -141,7 +149,6 @@ impl PlatePartitionPipeline {
             seed_reduce: kernel("seed_reduce"),
             seed_select: kernel("seed_select"),
             seed_place: kernel("seed_place"),
-            seed_spread: kernel("seed_spread"),
             prepare_relax: kernel("prepare_relax"),
             relax: kernel("relax"),
         };
@@ -157,7 +164,7 @@ impl PlatePartitionPipeline {
         let state_buffer = buffer(
             device,
             "raster partition state",
-            PARTITION_STATE_SIZE,
+            size_of::<PackedPartitionState>() as u64,
             storage | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC,
         );
         let diagnostics = buffer(
@@ -173,7 +180,12 @@ impl PlatePartitionPipeline {
             storage | wgpu::BufferUsages::COPY_SRC,
         );
         let queued_pass = buffer(device, "raster frontier queue marks", cells, storage);
-        let frontier = buffer(device, "raster frontier", 2 * cells, storage);
+        let frontier = buffer(
+            device,
+            "raster frontier",
+            frontier_size(cell_count),
+            storage,
+        );
         let seed_distance = buffer(device, "raster farthest-point distance", cells, storage);
         let seed_partials = buffer(
             device,
@@ -276,25 +288,19 @@ impl PlatePartitionPipeline {
                 pass.dispatch_workgroups(cell_workgroups, 1, 1);
             },
         );
-        self.seed_round(
-            device,
-            queue,
-            &mut timings,
-            config.major_plate_count,
-            cell_workgroups,
-        );
+        self.seed_round(device, queue, &mut timings, 0..config.major_plate_count);
         self.grow(device, queue, &mut timings);
         self.seed_round(
             device,
             queue,
             &mut timings,
-            config.minor_plate_count,
-            cell_workgroups,
+            config.major_plate_count..config.plate_count(),
         );
         self.grow(device, queue, &mut timings);
         Ok(PartitionRun {
             timings,
             longest_relaxation_passes: self.read_longest_relaxation(device, queue),
+            pass_budget: growth_passes(self.resolution),
         })
     }
 
@@ -306,7 +312,7 @@ impl PlatePartitionPipeline {
         });
         encoder.copy_buffer_to_buffer(
             &self.state_buffer,
-            LONGEST_RELAXATION_OFFSET,
+            offset_of!(PackedPartitionState, longest_relaxation) as u64,
             &self.diagnostics,
             0,
             size_of::<u32>() as u64,
@@ -336,28 +342,28 @@ impl PlatePartitionPipeline {
         passes
     }
 
-    /// Places `plate_count` seeds, each on the eligible cell farthest from
-    /// every seed already placed.
+    /// Places one seed per plate in `plates`, each on the eligible cell
+    /// farthest from every seed already placed. Plate zero takes the
+    /// configuration's cell, so it needs no reduction.
     fn seed_round(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         timings: &mut StageTimings,
-        plate_count: u32,
-        cell_workgroups: u32,
+        plates: std::ops::Range<u32>,
     ) {
         self.submit(device, queue, timings, PipelineStage::PlateSeeds, |pass| {
             pass.set_pipeline(&self.kernels.begin_frontier);
             pass.dispatch_workgroups(1, 1, 1);
-            for _ in 0..plate_count {
-                pass.set_pipeline(&self.kernels.seed_reduce);
-                pass.dispatch_workgroups(SEED_REDUCTION_WORKGROUPS, 1, 1);
-                pass.set_pipeline(&self.kernels.seed_select);
-                pass.dispatch_workgroups(1, 1, 1);
+            for plate in plates {
+                if plate > 0 {
+                    pass.set_pipeline(&self.kernels.seed_reduce);
+                    pass.dispatch_workgroups(SEED_REDUCTION_WORKGROUPS, 1, 1);
+                    pass.set_pipeline(&self.kernels.seed_select);
+                    pass.dispatch_workgroups(1, 1, 1);
+                }
                 pass.set_pipeline(&self.kernels.seed_place);
                 pass.dispatch_workgroups(1, 1, 1);
-                pass.set_pipeline(&self.kernels.seed_spread);
-                pass.dispatch_workgroups(cell_workgroups, 1, 1);
             }
         });
     }
@@ -372,7 +378,10 @@ impl PlatePartitionPipeline {
                 pass.set_pipeline(&self.kernels.prepare_relax);
                 pass.dispatch_workgroups(1, 1, 1);
                 pass.set_pipeline(&self.kernels.relax);
-                pass.dispatch_workgroups_indirect(&self.state_buffer, RELAX_ARGS_OFFSET);
+                pass.dispatch_workgroups_indirect(
+                    &self.state_buffer,
+                    offset_of!(PackedPartitionState, relax_dispatch) as u64,
+                );
             }
         });
     }
@@ -405,13 +414,26 @@ impl PlatePartitionPipeline {
     }
 }
 
-/// Byte offsets into `RasterPartitionState`, whose fields are all `u32`.
-const RELAX_ARGS_OFFSET: u64 = 0;
-const LONGEST_RELAXATION_OFFSET: u64 = 5 * size_of::<u32>() as u64;
-/// Bytes of `RasterPartitionState`: the dispatch arguments, the pass, pass
-/// count, plate, and chosen-cell scalars, and the two frontier counts.
-const PARTITION_STATE_SIZE: u64 = 10 * size_of::<u32>() as u64;
-const BINDING_COUNT: usize = 8;
+/// The limits the kernels depend on, checked so a device that cannot run them
+/// is refused rather than failing inside `wgpu`.
+fn validate_device(
+    device: &wgpu::Device,
+    cell_count: u32,
+    tuning: PipelineTuning,
+) -> Result<(), RasterPartitionError> {
+    let limits = device.limits();
+    let frontier = frontier_size(cell_count);
+    if limits.max_storage_buffers_per_shader_stage < STORAGE_BINDING_COUNT
+        || limits.max_compute_invocations_per_workgroup < tuning.workgroup_size
+        || limits.max_compute_workgroup_size_x < tuning.workgroup_size
+        || limits.max_compute_workgroups_per_dimension < MAX_DISPATCH_WORKGROUPS
+        || u64::from(limits.max_storage_buffer_binding_size) < frontier
+        || limits.max_buffer_size < frontier
+    {
+        return Err(RasterPartitionError::UnsupportedDevice);
+    }
+    Ok(())
+}
 
 fn bind_group_layout_entries() -> [wgpu::BindGroupLayoutEntry; BINDING_COUNT] {
     std::array::from_fn(|binding| wgpu::BindGroupLayoutEntry {
@@ -447,13 +469,6 @@ fn buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stage_labels_follow_declaration_order() {
-        for (index, stage) in PipelineStage::ALL.into_iter().enumerate() {
-            assert_eq!(stage.index(), index);
-        }
-    }
 
     #[test]
     fn timings_accumulate_per_stage() {

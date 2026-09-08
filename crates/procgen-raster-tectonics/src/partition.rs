@@ -60,7 +60,7 @@ const GROWTH_PATH_ROUGHNESS_MARGIN: u32 = 2;
 /// texels. Passes past convergence find an empty frontier, dispatch no
 /// workgroups, and cost only their two commands, so the relaxation stops
 /// without a readback.
-pub const fn growth_passes(resolution: u32) -> u32 {
+pub(crate) const fn growth_passes(resolution: u32) -> u32 {
     GROWTH_PATH_ROUGHNESS_MARGIN * MAX_SHORTEST_PATH_FACE_WIDTHS * resolution
 }
 
@@ -69,7 +69,19 @@ pub const fn growth_passes(resolution: u32) -> u32 {
 pub(crate) const SEED_REDUCTION_WORKGROUPS: u32 = 256;
 
 /// Workgroups one dispatch may cover, from `wgpu`'s default device limits.
-const MAX_DISPATCH_WORKGROUPS: u32 = 65_535;
+pub(crate) const MAX_DISPATCH_WORKGROUPS: u32 = 65_535;
+
+/// Bind-group entries every kernel shares: one uniform block of configuration
+/// and the stage buffers behind it.
+pub(crate) const BINDING_COUNT: usize = 8;
+/// Storage bindings among those, which the device must supply to one stage.
+pub(crate) const STORAGE_BINDING_COUNT: u32 = BINDING_COUNT as u32 - 1;
+
+/// Bytes the frontier occupies, which is the largest binding the pipeline
+/// makes and therefore the one a device is most likely to refuse.
+pub(crate) const fn frontier_size(cell_count: u32) -> u64 {
+    2 * cell_count as u64 * size_of::<u32>() as u64
+}
 
 /// Squared chord distance no pair of unit directions can reach, used as the
 /// farthest-point field's initial value.
@@ -80,6 +92,23 @@ const NO_SEED_DISTANCE: f32 = -1.0;
 const NO_FRONTIER_PASS: u32 = u32::MAX;
 
 const PARTITION_WGSL_SOURCE: &str = include_str!("../wgsl/partition.wgsl");
+
+/// Packs an arrival cost and a plate into one growth label.
+pub const fn growth_label(cost: u32, plate: u32) -> u32 {
+    (cost << PLATE_LABEL_BITS) | plate
+}
+
+/// Returns the arrival cost a packed growth label carries.
+pub const fn growth_label_cost(label: u32) -> u32 {
+    label >> PLATE_LABEL_BITS
+}
+
+/// Returns the plate a packed growth label carries, or [`UNCLAIMED_PLATE`].
+///
+/// The reserved plate id is all ones, so it doubles as the field's mask.
+pub const fn growth_label_plate(label: u32) -> u32 {
+    label & UNCLAIMED_PLATE
+}
 
 /// Configuration of the raster plate partition.
 ///
@@ -166,6 +195,7 @@ pub(crate) fn validate_resolution(resolution: u32) -> Result<u32, RasterPartitio
 pub enum RasterPartitionError {
     Resolution(RasterError),
     UnsupportedResolution,
+    UnsupportedDevice,
     NoMajorPlates,
     TooManyPlates,
     InvalidGrowthRoughness,
@@ -187,6 +217,14 @@ impl fmt::Display for RasterPartitionError {
             Self::UnsupportedResolution => write!(
                 formatter,
                 "raster tectonics runs at face resolutions up to {MAX_TECTONIC_RESOLUTION}"
+            ),
+            Self::UnsupportedDevice => write!(
+                formatter,
+                "the device must meet wgpu's default limits: {STORAGE_BINDING_COUNT} storage \
+                 bindings per stage, {} invocations per workgroup, {MAX_DISPATCH_WORKGROUPS} \
+                 workgroups per dispatch, and a storage binding holding the frontier at the \
+                 requested face resolution",
+                PipelineTuning::MAX_WORKGROUP_SIZE
             ),
             Self::NoMajorPlates => formatter.write_str("at least one major plate is required"),
             Self::TooManyPlates => write!(
@@ -323,6 +361,22 @@ impl PackedPartitionConfig {
 /// `u32` cell id that carries it.
 pub(crate) const SEED_CANDIDATE_SIZE: u64 = 2 * size_of::<u32>() as u64;
 
+/// Mirror of `RasterPartitionState` in the kernels, so the host sizes the
+/// buffer and addresses its dispatch arguments and diagnostic by field rather
+/// than by counting words. Nothing reads the mirror's fields; `size_of` and
+/// `offset_of!` are its whole purpose.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct PackedPartitionState {
+    pub(crate) relax_dispatch: [u32; 3],
+    pub(crate) pass_index: u32,
+    pub(crate) phase_passes: u32,
+    pub(crate) longest_relaxation: u32,
+    pub(crate) next_plate: u32,
+    pub(crate) chosen_cell: u32,
+    pub(crate) frontier_count: [u32; 2],
+}
+
 /// Assembles the partition kernels for one dispatch shape.
 ///
 /// The source composes `procgen-core`'s hash and `procgen-cubesphere`'s mapping
@@ -364,10 +418,9 @@ mod tests {
 
     #[test]
     fn packed_labels_order_by_cost_then_plate() {
-        let pack = |cost: u32, plate: u32| (cost << PLATE_LABEL_BITS) | plate;
         let mut labels: Vec<u32> = [(8, 4), (7, 500), (8, 3), (7, 0)]
             .into_iter()
-            .map(|(cost, plate)| pack(cost, plate))
+            .map(|(cost, plate)| growth_label(cost, plate))
             .collect();
         labels.sort_unstable();
         assert_eq!(
@@ -382,7 +435,7 @@ mod tests {
         );
         assert_eq!(
             UNCLAIMED_LABEL,
-            pack(MAX_GROWTH_COST, UNCLAIMED_PLATE),
+            growth_label(MAX_GROWTH_COST, UNCLAIMED_PLATE),
             "the unclaimed label must be the largest label, so atomicMin settles it"
         );
     }

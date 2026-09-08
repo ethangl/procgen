@@ -3216,6 +3216,7 @@ dependencies = [
  "procgen-cubesphere",
  "procgen-raster-tectonics",
  "procgen-tectonics",
+ "procgen-viewer-support",
 ]
 
 [[package]]
@@ -3275,6 +3276,15 @@ dependencies = [
  "procgen-sphere-mesh",
  "procgen-tectonics",
  "procgen-terrain",
+ "procgen-viewer-support",
+]
+
+[[package]]
+name = "procgen-viewer-support"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
 ]
 
 [[package]]

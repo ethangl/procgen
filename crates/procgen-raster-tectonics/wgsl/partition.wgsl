@@ -30,8 +30,8 @@ struct RasterPartitionState {
     longest_relaxation: u32,
     next_plate: u32,
     chosen_cell: u32,
-    frontier_count_even: atomic<u32>,
-    frontier_count_odd: atomic<u32>,
+    /// Entries in each frontier half, indexed by the pass that fills it.
+    frontier_count: array<atomic<u32>, 2>,
 }
 
 struct RasterSeedCandidate {
@@ -81,25 +81,9 @@ fn raster_frontier_push(cell: u32) {
     if atomicExchange(&queued_pass[cell], pass_index) == pass_index {
         return;
     }
-    var slot: u32;
-    if (pass_index & 1u) == 0u {
-        slot = atomicAdd(&state.frontier_count_even, 1u);
-    } else {
-        slot = atomicAdd(&state.frontier_count_odd, 1u);
-    }
-    frontier[(pass_index & 1u) * config.cell_count + slot] = cell;
-}
-
-/// The frontier half the current pass reads, filled by the previous pass.
-fn raster_frontier_input_half() -> u32 {
-    return (state.pass_index + 1u) & 1u;
-}
-
-fn raster_frontier_input_count() -> u32 {
-    if raster_frontier_input_half() == 0u {
-        return atomicLoad(&state.frontier_count_even);
-    }
-    return atomicLoad(&state.frontier_count_odd);
+    let half = pass_index & 1u;
+    let slot = atomicAdd(&state.frontier_count[half], 1u);
+    frontier[half * config.cell_count + slot] = cell;
 }
 
 /// Arrival cost above which a cell still counts as unclaimed for seeding.
@@ -137,8 +121,8 @@ fn initialize(
         state.longest_relaxation = 0u;
         state.next_plate = 0u;
         state.chosen_cell = CUBESPHERE_NO_RASTER_CELL;
-        atomicStore(&state.frontier_count_even, 0u);
-        atomicStore(&state.frontier_count_odd, 0u);
+        atomicStore(&state.frontier_count[0], 0u);
+        atomicStore(&state.frontier_count[1], 0u);
     }
     let stride = groups.x * RASTER_WORKGROUP_SIZE;
     for (var cell = id.x; cell < config.cell_count; cell += stride) {
@@ -154,14 +138,18 @@ fn begin_frontier() {
     let pass_index = state.pass_index + 1u;
     state.pass_index = pass_index;
     state.phase_passes = 0u;
-    if (pass_index & 1u) == 0u {
-        atomicStore(&state.frontier_count_even, 0u);
-    } else {
-        atomicStore(&state.frontier_count_odd, 0u);
-    }
+    atomicStore(&state.frontier_count[pass_index & 1u], 0u);
 }
 
-/// Reduces the eligible cells to one farthest-point candidate per workgroup.
+/// Folds the previous plate's seed into the farthest-point distance field and
+/// reduces the eligible cells to one candidate per workgroup.
+///
+/// The two belong in one pass because the distance a cell contributes is the
+/// one the fold just wrote. Each cell still applies the same chain of minimums
+/// in the same order, so the field is bit-identical to folding it separately.
+/// The first plate is seeded from the configuration, so this never runs with
+/// no previous seed to fold; the last plate's seed is never folded because
+/// nothing reads the field again.
 @compute @workgroup_size(RASTER_WORKGROUP_SIZE)
 fn seed_reduce(
     @builtin(global_invocation_id) id: vec3<u32>,
@@ -170,11 +158,26 @@ fn seed_reduce(
     @builtin(num_workgroups) groups: vec3<u32>,
 ) {
     let ceiling = raster_seed_cost_ceiling();
+    let placed = plate_seed_cells[state.next_plate - 1u];
+    let seeded = placed != CUBESPHERE_NO_RASTER_CELL;
+    var placed_direction = vec3(0.0, 0.0, 0.0);
+    if seeded {
+        placed_direction = cubesphere_texel_direction(placed, config.resolution);
+    }
     let stride = groups.x * RASTER_WORKGROUP_SIZE;
     var best = raster_no_seed();
     for (var cell = id.x; cell < config.cell_count; cell += stride) {
+        var distance = seed_distance[cell];
+        if seeded {
+            let offset = cubesphere_texel_direction(cell, config.resolution) - placed_direction;
+            distance = min(
+                distance,
+                offset.x * offset.x + offset.y * offset.y + offset.z * offset.z,
+            );
+            seed_distance[cell] = distance;
+        }
         if raster_label_cost(atomicLoad(&labels[cell])) > ceiling {
-            best = raster_better_seed(best, RasterSeedCandidate(seed_distance[cell], cell));
+            best = raster_better_seed(best, RasterSeedCandidate(distance, cell));
         }
     }
     seed_reduction[local] = best;
@@ -201,8 +204,9 @@ fn seed_select() {
     state.chosen_cell = best.cell;
 }
 
-/// Places the next plate's seed. A round that finds no eligible cell leaves the
-/// plate seedless, which the seed-cell buffer records.
+/// Places the next plate's seed. The first plate takes the configuration's
+/// cell; a later round that finds no eligible cell leaves its plate seedless,
+/// which the seed-cell buffer records.
 @compute @workgroup_size(1)
 fn seed_place() {
     let plate = state.next_plate;
@@ -223,25 +227,6 @@ fn seed_place() {
     raster_frontier_push(cell);
 }
 
-/// Folds the newest seed into the running farthest-point distance field.
-@compute @workgroup_size(RASTER_WORKGROUP_SIZE)
-fn seed_spread(
-    @builtin(global_invocation_id) id: vec3<u32>,
-    @builtin(num_workgroups) groups: vec3<u32>,
-) {
-    let seed_cell = plate_seed_cells[state.next_plate - 1u];
-    if seed_cell == CUBESPHERE_NO_RASTER_CELL {
-        return;
-    }
-    let seed_direction = cubesphere_texel_direction(seed_cell, config.resolution);
-    let stride = groups.x * RASTER_WORKGROUP_SIZE;
-    for (var cell = id.x; cell < config.cell_count; cell += stride) {
-        let offset = cubesphere_texel_direction(cell, config.resolution) - seed_direction;
-        let distance = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
-        seed_distance[cell] = min(seed_distance[cell], distance);
-    }
-}
-
 /// Publishes the indirect arguments of the next relaxation pass and clears the
 /// frontier half that pass will fill.
 ///
@@ -251,12 +236,7 @@ fn seed_spread(
 @compute @workgroup_size(1)
 fn prepare_relax() {
     let pass_index = state.pass_index + 1u;
-    var count: u32;
-    if (pass_index & 1u) == 0u {
-        count = atomicLoad(&state.frontier_count_odd);
-    } else {
-        count = atomicLoad(&state.frontier_count_even);
-    }
+    let count = atomicLoad(&state.frontier_count[(pass_index + 1u) & 1u]);
     if count == 0u {
         state.relax_dispatch_x = 0u;
         return;
@@ -264,11 +244,7 @@ fn prepare_relax() {
     state.pass_index = pass_index;
     state.phase_passes = state.phase_passes + 1u;
     state.longest_relaxation = max(state.longest_relaxation, state.phase_passes);
-    if (pass_index & 1u) == 0u {
-        atomicStore(&state.frontier_count_even, 0u);
-    } else {
-        atomicStore(&state.frontier_count_odd, 0u);
-    }
+    atomicStore(&state.frontier_count[pass_index & 1u], 0u);
     let stride = RASTER_WORKGROUP_SIZE * RASTER_FRONTIER_CHUNK;
     state.relax_dispatch_x = min(
         (count + stride - 1u) / stride,
@@ -300,8 +276,9 @@ fn relax(
     @builtin(global_invocation_id) id: vec3<u32>,
     @builtin(num_workgroups) groups: vec3<u32>,
 ) {
-    let count = raster_frontier_input_count();
-    let base = raster_frontier_input_half() * config.cell_count;
+    let half = (state.pass_index + 1u) & 1u;
+    let count = atomicLoad(&state.frontier_count[half]);
+    let base = half * config.cell_count;
     let stride = groups.x * RASTER_WORKGROUP_SIZE;
     for (var index = id.x; index < count; index += stride) {
         raster_relax_cell(frontier[base + index]);

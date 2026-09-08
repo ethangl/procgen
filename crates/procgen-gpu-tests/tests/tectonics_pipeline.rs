@@ -8,9 +8,9 @@ use procgen_core::{Vec3, fingerprint, hash_u32, random_streams::PLATE_GROWTH_COS
 use procgen_cubesphere::{FaceTexel, TexelLink};
 use procgen_gpu_tests::{readback, request_device_with_limits, validate_wgsl};
 use procgen_raster_tectonics::{
-    BASE_GROWTH_COST, PLATE_LABEL_BITS, PipelineTuning, PlatePartitionPipeline,
-    RasterPlatePartitionConfig, UNCLAIMED_LABEL, first_seed_cell, fold_growth_key,
-    growth_label_cost, growth_label_plate, growth_passes, partition_kernel_source,
+    BASE_GROWTH_COST, PipelineTuning, PlatePartitionPipeline, RasterPlatePartitionConfig,
+    UNCLAIMED_LABEL, first_seed_cell, fold_growth_key, growth_label, growth_label_cost,
+    growth_label_plate, partition_kernel_source,
 };
 use std::{cmp::Reverse, collections::BinaryHeap};
 
@@ -42,13 +42,9 @@ fn partition_kernels_validate_without_a_device() {
 
 #[test]
 fn partition_is_bit_identical_run_to_run_and_across_dispatch_shapes() {
-    let Some((adapter_info, device, queue)) = partition_device() else {
+    let Some((device, queue)) = partition_device() else {
         return;
     };
-    println!(
-        "GPU adapter: {} ({:?}, {:?})",
-        adapter_info.name, adapter_info.backend, adapter_info.device_type
-    );
 
     let config = RasterPlatePartitionConfig {
         major_plate_count: 4,
@@ -62,7 +58,7 @@ fn partition_is_bit_identical_run_to_run_and_across_dispatch_shapes() {
         for run in 0..2 {
             let outcome = pipeline.run(&device, &queue, &config).unwrap();
             assert!(
-                outcome.longest_relaxation_passes < growth_passes(INVARIANCE_RESOLUTION),
+                outcome.settled(),
                 "the relaxation exhausted its pass budget at {tuning:?}"
             );
             let actual = read_partition(&device, &queue, &pipeline, &config);
@@ -79,13 +75,9 @@ fn partition_is_bit_identical_run_to_run_and_across_dispatch_shapes() {
 
 #[test]
 fn partition_settles_the_reference_shortest_path_fixed_point() {
-    let Some((adapter_info, device, queue)) = partition_device() else {
+    let Some((device, queue)) = partition_device() else {
         return;
     };
-    println!(
-        "GPU adapter: {} ({:?}, {:?})",
-        adapter_info.name, adapter_info.backend, adapter_info.device_type
-    );
 
     let pipeline =
         PlatePartitionPipeline::new(&device, REFERENCE_RESOLUTION, PipelineTuning::default())
@@ -96,10 +88,7 @@ fn partition_settles_the_reference_shortest_path_fixed_point() {
             ..reference_config()
         };
         let outcome = pipeline.run(&device, &queue, &config).unwrap();
-        assert!(
-            outcome.longest_relaxation_passes < growth_passes(REFERENCE_RESOLUTION),
-            "seed {seed} exhausted its pass budget"
-        );
+        assert!(outcome.settled(), "seed {seed} exhausted its pass budget");
         let (labels, seed_cells) = read_partition(&device, &queue, &pipeline, &config);
 
         assert!(
@@ -129,13 +118,9 @@ const PINNED_FINGERPRINTS: [(u32, u64, u64); 6] = [
 
 #[test]
 fn default_partition_has_pinned_fingerprints_per_seed() {
-    let Some((adapter_info, device, queue)) = partition_device() else {
+    let Some((device, queue)) = partition_device() else {
         return;
     };
-    println!(
-        "GPU adapter: {} ({:?}, {:?})",
-        adapter_info.name, adapter_info.backend, adapter_info.device_type
-    );
 
     let mut pipeline: Option<PlatePartitionPipeline> = None;
     for (resolution, seed, expected) in PINNED_FINGERPRINTS {
@@ -189,8 +174,14 @@ fn dispatch_shapes() -> [PipelineTuning; 4] {
     ]
 }
 
-fn partition_device() -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
-    request_device_with_limits("raster tectonics device", wgpu::Limits::default())
+fn partition_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let (adapter_info, device, queue) =
+        request_device_with_limits("raster tectonics device", wgpu::Limits::default())?;
+    println!(
+        "GPU adapter: {} ({:?}, {:?})",
+        adapter_info.name, adapter_info.backend, adapter_info.device_type
+    );
+    Some((device, queue))
 }
 
 fn read_partition(
@@ -239,36 +230,19 @@ fn reference_partition(
         first_seed_cell(config.seed, cell_count),
         "the first major seed must come from the shared random stream"
     );
+    // Mirror the kernels' own view of what is claimed: nothing but the seeds
+    // themselves while the majors are placed, then the majors' settled costs.
+    let mut labels = vec![UNCLAIMED_LABEL; cell_count as usize];
     let mut placed = Vec::new();
     for (plate, &cell) in seed_cells.iter().enumerate() {
         let plate = plate as u32;
-        let start_cost = if plate < config.major_plate_count {
-            0
-        } else {
-            head_start
-        };
+        let major = plate < config.major_plate_count;
+        let ceiling = if major { 0 } else { head_start };
+        if plate == config.major_plate_count {
+            labels = shortest_arrival(resolution, config, &placed, cell_count);
+        }
         if plate > 0 {
-            // Majors are placed before any growth, so nothing but the seeds
-            // themselves is claimed; minors see the majors' settled costs.
-            let costs = if plate < config.major_plate_count {
-                None
-            } else {
-                Some(shortest_arrival(
-                    resolution,
-                    config,
-                    &placed[..],
-                    cell_count,
-                ))
-            };
-            let eligible = |candidate: u32| match &costs {
-                None => !placed.iter().any(|&(seed, _, _)| seed == candidate),
-                Some(costs) => {
-                    growth_label_cost(costs[candidate as usize]) > head_start
-                        && !placed[config.major_plate_count as usize..]
-                            .iter()
-                            .any(|&(seed, _, _)| seed == candidate)
-                }
-            };
+            let eligible = |candidate: u32| growth_label_cost(labels[candidate as usize]) > ceiling;
             assert!(eligible(cell), "plate {plate} seeded an ineligible cell");
             let best = (0..cell_count)
                 .filter(|&candidate| eligible(candidate))
@@ -280,6 +254,8 @@ fn reference_partition(
                 "plate {plate} seeded {cell} at {chosen} rather than the farthest cell at {best}"
             );
         }
+        let start_cost = if major { 0 } else { head_start };
+        labels[cell as usize] = labels[cell as usize].min(growth_label(start_cost, plate));
         placed.push((cell, plate, start_cost));
         for (candidate, distance) in seed_distance.iter_mut().enumerate() {
             *distance =
@@ -302,7 +278,7 @@ fn shortest_arrival(
     let mut settled = vec![false; cell_count as usize];
     let mut arrivals = BinaryHeap::new();
     for &(cell, plate, start_cost) in seeds {
-        let label = (start_cost << PLATE_LABEL_BITS) | plate;
+        let label = growth_label(start_cost, plate);
         if label < labels[cell as usize] {
             labels[cell as usize] = label;
             arrivals.push(Reverse((label, cell)));
@@ -318,8 +294,10 @@ fn shortest_arrival(
                 continue;
             };
             let candidate = label
-                + (reference_link_cost(link, cell, neighbor, growth_key, config.growth_roughness)
-                    << PLATE_LABEL_BITS);
+                + growth_label(
+                    reference_link_cost(link, cell, neighbor, growth_key, config.growth_roughness),
+                    0,
+                );
             if candidate < labels[neighbor as usize] {
                 labels[neighbor as usize] = candidate;
                 arrivals.push(Reverse((candidate, neighbor)));

@@ -41,3 +41,4 @@ procgen-sphere = { path = "../../crates/procgen-sphere" }
 procgen-sphere-mesh = { path = "../../crates/procgen-sphere-mesh" }
 procgen-tectonics = { path = "../../crates/procgen-tectonics" }
 procgen-terrain = { path = "../../crates/procgen-terrain" }
+procgen-viewer-support = { path = "../../crates/procgen-viewer-support" }

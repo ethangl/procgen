@@ -30,3 +30,4 @@ bevy_egui = { version = "0.39.1", default-features = false, features = ["default
 procgen-cubesphere = { path = "../../crates/procgen-cubesphere" }
 procgen-raster-tectonics = { path = "../../crates/procgen-raster-tectonics" }
 procgen-tectonics = { path = "../../crates/procgen-tectonics" }
+procgen-viewer-support = { path = "../../crates/procgen-viewer-support" }

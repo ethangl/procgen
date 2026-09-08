@@ -252,7 +252,8 @@ climate follow, and the future of the Voronoi path.
 
 `procgen-core` owns the WGSL mirror of the four-word hash; `procgen-noise`,
 `procgen-terrain`, and `procgen-raster-tectonics` compose it rather than
-restating it.
+restating it. `procgen-viewer-support` owns what both applications need to
+present a world: the orbit controls and the identity colour ramp.
 
 Crate boundaries and the per-stage conventions in "Code quality" are
 established. New stages should follow the sibling shapes rather than introduce

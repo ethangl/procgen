@@ -16,11 +16,10 @@ use bevy::{
 };
 use procgen_cubesphere::{CubeFace, FaceCoordinates, MAPPING_WGSL_SOURCE, face_to_direction};
 use procgen_raster_tectonics::UNCLAIMED_PLATE;
+use procgen_viewer_support::{ID_HUE_STEP_DEGREES, ID_LIGHTNESS, ID_SATURATION};
 
 /// Radius the face grids are drawn at.
 const SURFACE_RADIUS: f32 = 1.0;
-/// Golden-angle hue step that separates neighbouring plate ids by colour.
-const PLATE_HUE_STEP: f32 = 0.381_966;
 
 pub const GRID_QUAD_RANGE: std::ops::RangeInclusive<u32> = 16..=256;
 const DEFAULT_GRID_QUADS: u32 = 128;
@@ -44,7 +43,6 @@ impl Default for DisplaySettings {
 #[derive(Clone, Copy, Debug, ShaderType)]
 struct PlateFaceDisplay {
     resolution: u32,
-    padding: UVec3,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, TypePath)]
@@ -92,7 +90,10 @@ impl Plugin for FaceGridRenderPlugin {
 fn register_shader(app: &mut App) {
     let constants = format!(
         "const RASTER_UNCLAIMED_PLATE: u32 = {UNCLAIMED_PLATE}u;\n\
-         const RASTER_PLATE_HUE_STEP: f32 = {PLATE_HUE_STEP};"
+         const RASTER_PLATE_HUE_TURNS: f32 = {};\n\
+         const RASTER_PLATE_SATURATION: f32 = {ID_SATURATION};\n\
+         const RASTER_PLATE_LIGHTNESS: f32 = {ID_LIGHTNESS};",
+        ID_HUE_STEP_DEGREES / 360.0,
     );
     let source = [MAPPING_WGSL_SOURCE, &constants, include_str!("faces.wgsl")].join("\n");
     app.world_mut()
@@ -128,7 +129,6 @@ fn sync_material(
         growth_labels: Buffer::from(pipeline.growth_label_buffer().clone()),
         display: PlateFaceDisplay {
             resolution: pipeline.resolution(),
-            padding: UVec3::ZERO,
         },
     };
     match existing {

@@ -5,13 +5,19 @@
 //! renders six face grids that sample the resulting buffers. No generation
 //! logic lives here.
 
-mod camera;
 mod partition;
 mod render;
 mod ui;
 
-use bevy::prelude::*;
+use bevy::{camera::PerspectiveProjection, core_pipeline::tonemapping::Tonemapping, prelude::*};
 use bevy_egui::EguiPlugin;
+use procgen_viewer_support::{OrbitCamera, OrbitCameraPlugin, OrbitLimits};
+
+/// The camera orbits the display sphere of radius one and stops just above it.
+const ORBIT_LIMITS: OrbitLimits = OrbitLimits {
+    min_distance: 1.05,
+    max_distance: 8.0,
+};
 
 fn main() {
     App::new()
@@ -26,10 +32,22 @@ fn main() {
         }))
         .add_plugins((
             EguiPlugin::default(),
-            camera::OrbitCameraPlugin,
+            OrbitCameraPlugin {
+                limits: ORBIT_LIMITS,
+            },
             partition::PlatePartitionPlugin,
             render::FaceGridRenderPlugin,
             ui::RasterViewerUiPlugin,
         ))
+        .add_systems(Startup, spawn_camera)
         .run();
+}
+
+fn spawn_camera(mut commands: Commands) {
+    commands.spawn((
+        Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection::default()),
+        Tonemapping::None,
+        OrbitCamera,
+    ));
 }

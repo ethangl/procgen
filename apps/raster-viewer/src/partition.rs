@@ -14,7 +14,7 @@ use bevy::{
 };
 use procgen_raster_tectonics::{
     MAX_PLATE_COUNT, MAX_TECTONIC_RESOLUTION, PartitionRun, PipelineTuning, PlatePartitionPipeline,
-    RasterPlatePartitionConfig, growth_passes,
+    RasterPlatePartitionConfig,
 };
 use procgen_tectonics::MAX_GROWTH_ROUGHNESS;
 
@@ -70,15 +70,6 @@ impl ResidentPartition {
     pub const fn run(&self) -> &PartitionRun {
         &self.run
     }
-
-    /// Whether the longer relaxation settled rather than exhausting its budget.
-    pub fn settled(&self) -> bool {
-        self.run.longest_relaxation_passes < growth_passes(self.pipeline.resolution())
-    }
-
-    pub fn pass_budget(&self) -> u32 {
-        growth_passes(self.pipeline.resolution())
-    }
 }
 
 pub struct PlatePartitionPlugin;
@@ -118,8 +109,10 @@ fn regenerate(
     *pending = false;
 
     // The exported ranges keep every reachable setting inside the pipeline's
-    // contract, so a rejection here means the ranges and the contract disagree.
-    const VALID: &str = "the viewer's settings ranges keep the configuration valid";
+    // contract, and Bevy has already secured a device meeting wgpu's default
+    // limits, so a rejection here means those guarantees and the contract
+    // disagree.
+    const VALID: &str = "the viewer's settings ranges and Bevy's device meet the pipeline contract";
     let device = access.device.wgpu_device();
     match resident.filter(|resident| resident.pipeline.resolution() == settings.resolution) {
         Some(mut resident) => {

@@ -17,7 +17,7 @@ use super::{
     DiagnosticLayer, ReliefSettings, SURFACE_RADIUS, SurfaceSelection,
     palette::ELEVATION_COLOR_STOPS,
 };
-use crate::{camera::ViewerCamera, model::GeneratedWorld};
+use crate::model::GeneratedWorld;
 use bevy::{
     asset::{RenderAssetUsages, uuid_handle},
     camera::{Camera, Projection, visibility::NoFrustumCulling},
@@ -38,6 +38,7 @@ use procgen_terrain::{
     TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_SOURCE, TerrainGpuParameters, TerrainHeightConfig,
     TerrainNoiseKeys, pack_control_bake, pack_stamps,
 };
+use procgen_viewer_support::OrbitCamera;
 
 /// Camera distance at or below which adjusted elevation uses GPU terrain tiles.
 const TERRAIN_TILE_ZOOM_THRESHOLD: f32 = 1.75;
@@ -179,7 +180,7 @@ impl Plugin for TerrainTileRenderPlugin {
     }
 }
 
-fn camera_changed(camera: Single<Ref<Transform>, With<ViewerCamera>>) -> bool {
+fn camera_changed(camera: Single<Ref<Transform>, With<OrbitCamera>>) -> bool {
     camera.is_changed()
 }
 
@@ -195,7 +196,7 @@ fn terrain_dispatch_completed(
 }
 
 pub(super) fn sync_mode(
-    camera: Single<&Transform, With<ViewerCamera>>,
+    camera: Single<&Transform, With<OrbitCamera>>,
     selection: Res<SurfaceSelection>,
     mut mode: ResMut<TerrainTileMode>,
 ) {
@@ -369,7 +370,7 @@ fn sync_relief(
 }
 
 fn update_tile_coverage(
-    camera: Single<(&Camera, &Projection, &Transform), With<ViewerCamera>>,
+    camera: Single<(&Camera, &Projection, &Transform), With<OrbitCamera>>,
     mode: Res<TerrainTileMode>,
     mut assets: TerrainCoverageAssets,
 ) {
@@ -516,7 +517,7 @@ mod tests {
             .add_systems(Update, sync_mode);
         let camera = app
             .world_mut()
-            .spawn((Transform::from_xyz(0.0, 0.0, 3.2), ViewerCamera))
+            .spawn((Transform::from_xyz(0.0, 0.0, 3.2), OrbitCamera))
             .id();
 
         app.update();
