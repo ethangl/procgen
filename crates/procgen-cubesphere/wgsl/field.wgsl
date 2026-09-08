@@ -2,16 +2,12 @@
 // Consumers provide cubesphere_load_field_texel for their storage layout.
 
 struct CubesphereFieldTexel {
-    channels_0: vec4<f32>,
-    channels_1: vec4<f32>,
+    // Five mirrors procgen-terrain's TERRAIN_CONTROL_CHANNELS because WGSL has no generics.
+    channels: array<f32, 5>,
 }
 
 struct CubesphereFieldSample5 {
-    channel_0: ScalarFieldSample3,
-    channel_1: ScalarFieldSample3,
-    channel_2: ScalarFieldSample3,
-    channel_3: ScalarFieldSample3,
-    channel_4: ScalarFieldSample3,
+    channels: array<ScalarFieldSample3, 5>,
 }
 
 fn cubesphere_face_to_texel(coordinate: f32, resolution: u32) -> f32 {
@@ -33,11 +29,19 @@ fn cubesphere_nearest_texel(coordinates: CubesphereFaceCoordinates, resolution: 
 }
 
 fn cubesphere_add_texels(left: CubesphereFieldTexel, right: CubesphereFieldTexel) -> CubesphereFieldTexel {
-    return CubesphereFieldTexel(left.channels_0 + right.channels_0, left.channels_1 + right.channels_1);
+    var channels: array<f32, 5>;
+    for (var channel = 0u; channel < 5u; channel++) {
+        channels[channel] = left.channels[channel] + right.channels[channel];
+    }
+    return CubesphereFieldTexel(channels);
 }
 
 fn cubesphere_scale_texel(texel: CubesphereFieldTexel, scale: f32) -> CubesphereFieldTexel {
-    return CubesphereFieldTexel(texel.channels_0 * scale, texel.channels_1 * scale);
+    var channels: array<f32, 5>;
+    for (var channel = 0u; channel < 5u; channel++) {
+        channels[channel] = texel.channels[channel] * scale;
+    }
+    return CubesphereFieldTexel(channels);
 }
 
 fn cubesphere_field_tap(source_face: u32, x: i32, y: i32, resolution: u32) -> CubesphereFieldTexel {
@@ -53,7 +57,8 @@ fn cubesphere_field_tap(source_face: u32, x: i32, y: i32, resolution: u32) -> Cu
             select(1.0, -1.0, x < 0),
             select(1.0, -1.0, y < 0),
         ));
-        var sum = CubesphereFieldTexel(vec4(0.0), vec4(0.0));
+        var zero: array<f32, 5>;
+        var sum = CubesphereFieldTexel(zero);
         var count = 0.0;
         for (var face = 0u; face < 6u; face++) {
             if dot(corner, cubesphere_face_frame(face).normal) > 0.0 {
@@ -74,8 +79,7 @@ fn cubesphere_field_tap(source_face: u32, x: i32, y: i32, resolution: u32) -> Cu
 }
 
 fn cubesphere_field_channel(texel: CubesphereFieldTexel, channel: u32) -> f32 {
-    if channel < 4u { return texel.channels_0[channel]; }
-    return texel.channels_1.x;
+    return texel.channels[channel];
 }
 
 fn cubesphere_bilinear_channel(
@@ -133,11 +137,19 @@ fn cubesphere_sample_field(direction: vec3<f32>, resolution: u32) -> CubesphereF
     let texel_scale = f32(resolution) * 0.5;
     let tx_derivative = derivative_u * texel_scale;
     let ty_derivative = derivative_v * texel_scale;
-    return CubesphereFieldSample5(
-        cubesphere_bilinear_channel(lower_left, lower_right, upper_left, upper_right, 0u, tx, ty, tx_derivative, ty_derivative),
-        cubesphere_bilinear_channel(lower_left, lower_right, upper_left, upper_right, 1u, tx, ty, tx_derivative, ty_derivative),
-        cubesphere_bilinear_channel(lower_left, lower_right, upper_left, upper_right, 2u, tx, ty, tx_derivative, ty_derivative),
-        cubesphere_bilinear_channel(lower_left, lower_right, upper_left, upper_right, 3u, tx, ty, tx_derivative, ty_derivative),
-        cubesphere_bilinear_channel(lower_left, lower_right, upper_left, upper_right, 4u, tx, ty, tx_derivative, ty_derivative),
-    );
+    var channels: array<ScalarFieldSample3, 5>;
+    for (var channel = 0u; channel < 5u; channel++) {
+        channels[channel] = cubesphere_bilinear_channel(
+            lower_left,
+            lower_right,
+            upper_left,
+            upper_right,
+            channel,
+            tx,
+            ty,
+            tx_derivative,
+            ty_derivative,
+        );
+    }
+    return CubesphereFieldSample5(channels);
 }

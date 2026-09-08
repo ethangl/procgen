@@ -76,6 +76,11 @@ impl TileAddress {
         self.y
     }
 
+    /// Encodes the storage-buffer words decoded by `cubesphere_tile_direction`.
+    pub const fn gpu_words(self) -> [u32; 4] {
+        [self.face.index() as u32, self.level as u32, self.x, self.y]
+    }
+
     pub fn parent(self) -> Option<Self> {
         (self.level > 0).then(|| Self {
             face: self.face,
@@ -193,6 +198,15 @@ mod tests {
         assert_eq!(
             TileAddress::new(CubeFace::PositiveX, MAX_TILE_LEVEL + 1, 0, 0),
             Err(TileError::LevelTooLarge)
+        );
+    }
+
+    #[test]
+    fn gpu_words_follow_the_mapping_shader_contract() {
+        let address = TileAddress::new(CubeFace::NegativeY, 4, 11, 7).unwrap();
+        assert_eq!(
+            address.gpu_words(),
+            [CubeFace::NegativeY.index() as u32, 4, 11, 7]
         );
     }
 

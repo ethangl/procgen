@@ -38,14 +38,6 @@ pub const TERRAIN_WGSL_SOURCE: &str = concat!(
     include_str!("../wgsl/terrain.wgsl")
 );
 
-/// One control texel in the shader storage layout.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-pub struct TerrainGpuControlTexel {
-    pub channels_0: [f32; 4],
-    pub channels_1: [f32; 4],
-}
-
 /// One stable terrain stamp in the shader storage layout.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -142,15 +134,16 @@ impl TerrainGpuParameters {
     }
 }
 
-pub fn pack_control_bake(controls: &TerrainControlBake) -> Vec<TerrainGpuControlTexel> {
-    procgen_cubesphere::CubeFace::ALL
-        .into_iter()
-        .flat_map(|face| controls.face(face).texels())
-        .map(|channels| TerrainGpuControlTexel {
-            channels_0: [channels[0], channels[1], channels[2], channels[3]],
-            channels_1: [channels[4], 0.0, 0.0, 0.0],
-        })
-        .collect()
+pub fn pack_control_bake(controls: &TerrainControlBake) -> Vec<[f32; 5]> {
+    let mut texels = Vec::with_capacity(
+        procgen_cubesphere::CubeFace::ALL.len()
+            * controls.resolution() as usize
+            * controls.resolution() as usize,
+    );
+    for face in procgen_cubesphere::CubeFace::ALL {
+        texels.extend_from_slice(controls.face(face).texels());
+    }
+    texels
 }
 
 pub fn pack_stamps(stamps: &[TerrainStampInput]) -> Vec<TerrainGpuStamp> {

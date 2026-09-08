@@ -16,21 +16,38 @@ struct TerrainDisplayParameters {
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> terrain_display: TerrainDisplayParameters;
 
 struct TerrainElevationPalette {
-    stops: array<vec4<f32>, 5>,
+    stops: array<vec4<f32>, TERRAIN_ELEVATION_PALETTE_STOP_COUNT>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> terrain_palette: TerrainElevationPalette;
 
+fn terrain_srgb_channel_to_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        return value / 12.92;
+    }
+    return pow((value + 0.055) / 1.055, 2.4);
+}
+
+fn terrain_srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+    return vec3(
+        terrain_srgb_channel_to_linear(color.r),
+        terrain_srgb_channel_to_linear(color.g),
+        terrain_srgb_channel_to_linear(color.b),
+    );
+}
+
 fn terrain_elevation_color(height: f32) -> vec4<f32> {
-    let value = clamp(height, terrain_palette.stops[0].w, terrain_palette.stops[4].w);
-    for (var index = 0u; index < 4u; index++) {
+    let last = TERRAIN_ELEVATION_PALETTE_STOP_COUNT - 1u;
+    let value = clamp(height, terrain_palette.stops[0].w, terrain_palette.stops[last].w);
+    for (var index = 0u; index < last; index++) {
         let low = terrain_palette.stops[index];
         let high = terrain_palette.stops[index + 1u];
         if value < high.w {
             let t = (value - low.w) / (high.w - low.w);
-            return vec4(low.xyz + (high.xyz - low.xyz) * t, 1.0);
+            let srgb = low.xyz + (high.xyz - low.xyz) * t;
+            return vec4(terrain_srgb_to_linear(srgb), 1.0);
         }
     }
-    return vec4(terrain_palette.stops[4].xyz, 1.0);
+    return vec4(terrain_srgb_to_linear(terrain_palette.stops[last].xyz), 1.0);
 }
 
 @vertex

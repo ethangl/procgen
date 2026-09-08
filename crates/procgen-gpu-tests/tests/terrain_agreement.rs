@@ -203,7 +203,7 @@ fn dispatch_tile(
     let parameters_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("terrain agreement parameters"),
         contents: bytemuck::bytes_of(&parameters),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::STORAGE,
     });
     let output_size = (TERRAIN_TILE_SAMPLE_COUNT * size_of::<Output>()) as u64;
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -212,12 +212,13 @@ fn dispatch_tile(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
+    let [face, level, x, y] = inputs.address.gpu_words();
     let shader_source = format!(
         r#"
 {TERRAIN_WGSL_SOURCE}
 @group(0) @binding(0) var<storage, read> control_texels: array<CubesphereFieldTexel>;
 @group(0) @binding(1) var<storage, read> stamps: array<TerrainStamp>;
-@group(0) @binding(2) var<uniform> parameters: TerrainParameters;
+@group(0) @binding(2) var<storage, read> parameters: TerrainParameters;
 @group(0) @binding(3) var<storage, read_write> output: array<vec4<f32>>;
 fn cubesphere_load_field_texel(index: u32) -> CubesphereFieldTexel {{ return control_texels[index]; }}
 fn terrain_load_stamp(index: u32) -> TerrainStamp {{ return stamps[index]; }}
@@ -231,10 +232,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     output[id.x] = vec4(height.value, height.derivative);
 }}
 "#,
-        face = inputs.address.face().index(),
-        level = inputs.address.level(),
-        x = inputs.address.x(),
-        y = inputs.address.y(),
+        face = face,
+        level = level,
+        x = x,
+        y = y,
     );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("terrain agreement shader"),

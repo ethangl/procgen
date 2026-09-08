@@ -19,7 +19,7 @@ pub(super) fn visible_fixed_level_tiles(camera_position: Vec3) -> Vec<TileAddres
             })
         })
         .collect::<Vec<_>>();
-    // A 3,000-direction sweep at both detailed-mode distance extrema is pinned by the caller.
+    // A 3,000-direction sweep at both detailed-mode distance extrema is pinned by a parent test.
     assert!(addresses.len() <= MAX_VISIBLE_TILES);
     addresses
 }

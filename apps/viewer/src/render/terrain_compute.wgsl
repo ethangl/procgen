@@ -1,6 +1,6 @@
 @group(0) @binding(0) var<storage, read> terrain_control_texels: array<CubesphereFieldTexel>;
 @group(0) @binding(1) var<storage, read> terrain_stamps: array<TerrainStamp>;
-@group(0) @binding(2) var<uniform> terrain_world: TerrainParameters;
+@group(0) @binding(2) var<storage, read> terrain_world: TerrainParameters;
 @group(0) @binding(3) var<storage, read> terrain_addresses: array<vec4<u32>>;
 @group(0) @binding(4) var<storage, read_write> terrain_samples: array<vec4<f32>>;
 

@@ -68,11 +68,11 @@ struct TerrainDomainWarp {
 fn terrain_sample_controls(direction: vec3<f32>) -> TerrainControlSample {
     let sample = cubesphere_sample_field(direction, terrain_parameters().control_resolution);
     return TerrainControlSample(
-        sample.channel_0,
-        sample.channel_1,
-        sample.channel_2,
-        sample.channel_3,
-        sample.channel_4,
+        sample.channels[0],
+        sample.channels[1],
+        sample.channels[2],
+        sample.channels[3],
+        sample.channels[4],
     );
 }
 

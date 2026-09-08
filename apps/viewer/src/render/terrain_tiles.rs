@@ -35,6 +35,7 @@ pub const TERRAIN_TILE_LEVEL: u8 = 4;
 
 const MAX_VISIBLE_TILES: usize = 512;
 const TERRAIN_SAMPLE_CAPACITY: usize = MAX_VISIBLE_TILES * TERRAIN_TILE_SAMPLE_COUNT;
+const ELEVATION_PALETTE_STOP_COUNT: usize = ELEVATION_COLOR_STOPS.len();
 
 const TERRAIN_VERTEX_SHADER: Handle<Shader> = uuid_handle!("f793fce0-ef68-49dd-8c98-7bba8432bc76");
 const TERRAIN_COMPUTE_SHADER: Handle<Shader> = uuid_handle!("c7c57793-ae7c-4eb7-a1a9-9b8fb2d5a651");
@@ -48,7 +49,7 @@ struct TerrainDisplayParameters {
 
 #[derive(Clone, Copy, Debug, ShaderType)]
 struct TerrainElevationPalette {
-    stops: [Vec4; 5],
+    stops: [Vec4; ELEVATION_PALETTE_STOP_COUNT],
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, TypePath)]
@@ -78,6 +79,10 @@ struct TerrainGpuResources {
     parameters: Handle<ShaderStorageBuffer>,
     addresses: Handle<ShaderStorageBuffer>,
     samples: Handle<ShaderStorageBuffer>,
+}
+
+#[derive(Resource)]
+struct TerrainTileAssets {
     mesh: Handle<Mesh>,
     material: Handle<TerrainTileMaterial>,
 }
@@ -126,7 +131,9 @@ impl Plugin for TerrainTileRenderPlugin {
             (
                 initialize_gpu_world.run_if(resource_changed::<GeneratedWorld>),
                 sync_mode.run_if(resource_changed::<SurfaceSelection>.or(camera_changed)),
-                sync_relief.run_if(resource_changed::<ReliefSettings>),
+                sync_relief.run_if(
+                    resource_changed::<ReliefSettings>.and(resource_exists::<TerrainTileAssets>),
+                ),
                 update_tile_coverage.run_if(
                     resource_changed::<GeneratedWorld>
                         .or(resource_changed::<TerrainTileMode>)
@@ -165,7 +172,7 @@ fn initialize_grid_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>
 
 fn register_shaders(app: &mut App) {
     let vertex_source = format!(
-        "{MAPPING_WGSL_SOURCE}\n{}",
+        "{MAPPING_WGSL_SOURCE}\nconst TERRAIN_ELEVATION_PALETTE_STOP_COUNT: u32 = {ELEVATION_PALETTE_STOP_COUNT}u;\n{}",
         include_str!("terrain_tiles.wgsl")
     );
     let compute_source = format!(
@@ -193,7 +200,6 @@ struct TerrainWorldAssets<'w, 's> {
     grid: Res<'w, TerrainGridMesh>,
     tile_entities: ResMut<'w, TerrainTileEntities>,
     coverage: ResMut<'w, TerrainCoverageState>,
-    dispatch: ResMut<'w, TerrainTileDispatch>,
     buffers: ResMut<'w, Assets<ShaderStorageBuffer>>,
     materials: ResMut<'w, Assets<TerrainTileMaterial>>,
 }
@@ -207,8 +213,6 @@ fn initialize_gpu_world(
         assets.commands.entity(entity).despawn();
     }
     assets.coverage.addresses.clear();
-    assets.dispatch.tile_count = 0;
-    assets.dispatch.generation = assets.dispatch.generation.wrapping_add(1);
 
     let controls = pack_control_bake(&world.terrain_control_bake);
     let mut stamps = pack_stamps(&world.terrain_controls.stamps);
@@ -235,13 +239,10 @@ fn initialize_gpu_world(
         bytemuck::cast_slice(&stamps),
         RenderAssetUsages::default(),
     ));
-    let mut parameters_buffer = ShaderStorageBuffer::new(
+    let parameters = assets.buffers.add(ShaderStorageBuffer::new(
         bytemuck::bytes_of(&parameters),
         RenderAssetUsages::default(),
-    );
-    parameters_buffer.buffer_description.usage =
-        bevy::render::render_resource::BufferUsages::UNIFORM;
-    let parameters = assets.buffers.add(parameters_buffer);
+    ));
     // This placeholder keeps the binding valid until the first nonempty visible coverage upload.
     let addresses = assets.buffers.add(ShaderStorageBuffer::new(
         bytemuck::bytes_of(&[0_u32; 4]),
@@ -274,6 +275,8 @@ fn initialize_gpu_world(
         parameters,
         addresses,
         samples,
+    });
+    assets.commands.insert_resource(TerrainTileAssets {
         mesh: assets.grid.0.clone(),
         material,
     });
@@ -283,8 +286,7 @@ fn elevation_palette() -> TerrainElevationPalette {
     TerrainElevationPalette {
         stops: std::array::from_fn(|index| {
             let (value, color) = ELEVATION_COLOR_STOPS[index];
-            let linear = LinearRgba::from(Color::srgb(color.x, color.y, color.z));
-            Vec4::new(linear.red, linear.green, linear.blue, value)
+            Vec4::new(color.x, color.y, color.z, value)
         }),
     }
 }
@@ -294,20 +296,18 @@ struct TerrainCoverageAssets<'w, 's> {
     commands: Commands<'w, 's>,
     tile_entities: ResMut<'w, TerrainTileEntities>,
     resources: ResMut<'w, TerrainGpuResources>,
+    tile_assets: Res<'w, TerrainTileAssets>,
     buffers: ResMut<'w, Assets<ShaderStorageBuffer>>,
     materials: ResMut<'w, Assets<TerrainTileMaterial>>,
 }
 
 fn sync_relief(
     relief: Res<ReliefSettings>,
-    resources: Option<Res<TerrainGpuResources>>,
+    tile_assets: Res<TerrainTileAssets>,
     mut materials: ResMut<Assets<TerrainTileMaterial>>,
 ) {
-    let Some(resources) = resources else {
-        return;
-    };
     materials
-        .get_mut(&resources.material)
+        .get_mut(&tile_assets.material)
         .expect("terrain tile material must remain alive")
         .extension
         .display
@@ -333,16 +333,18 @@ fn update_tile_coverage(
         let encoded = addresses
             .iter()
             .copied()
-            .map(encode_address)
+            .map(TileAddress::gpu_words)
             .collect::<Vec<_>>();
         let address_buffer = assets.buffers.add(ShaderStorageBuffer::new(
             bytemuck::cast_slice(&encoded),
             RenderAssetUsages::default(),
         ));
+        // A new handle invalidates both the compute bind group's change gate and Bevy's
+        // prepared material binding; mutating the old asset can leave either GPU binding stale.
         assets.resources.addresses = address_buffer.clone();
         assets
             .materials
-            .get_mut(&assets.resources.material)
+            .get_mut(&assets.tile_assets.material)
             .expect("terrain tile material must remain alive")
             .extension
             .addresses = address_buffer;
@@ -351,8 +353,8 @@ fn update_tile_coverage(
     for entity in assets.tile_entities.0.drain(..) {
         assets.commands.entity(entity).despawn();
     }
-    let mesh = assets.resources.mesh.clone();
-    let material = assets.resources.material.clone();
+    let mesh = assets.tile_assets.mesh.clone();
+    let material = assets.tile_assets.material.clone();
     let entities = addresses
         .iter()
         .enumerate()
@@ -381,15 +383,6 @@ pub(super) fn terrain_tiles_active(
 ) -> bool {
     camera_distance <= TERRAIN_TILE_ZOOM_THRESHOLD
         && selected == Some(DiagnosticLayer::IsostaticElevation)
-}
-
-fn encode_address(address: TileAddress) -> [u32; 4] {
-    [
-        address.face().index() as u32,
-        u32::from(address.level()),
-        address.x(),
-        address.y(),
-    ]
 }
 
 fn tile_grid_mesh() -> Mesh {
@@ -575,13 +568,14 @@ mod tests {
             );
         app.update();
         let first = app.world().resource::<TerrainGpuResources>();
+        let first_tile_assets = app.world().resource::<TerrainTileAssets>();
         let first_ids = (
             first.controls.id(),
             first.stamps.id(),
             first.parameters.id(),
             first.addresses.id(),
             first.samples.id(),
-            first.material.id(),
+            first_tile_assets.material.id(),
         );
 
         let stale_address =
@@ -599,6 +593,7 @@ mod tests {
         app.insert_resource(fixture(64, 71));
         app.update();
         let second = app.world().resource::<TerrainGpuResources>();
+        let second_tile_assets = app.world().resource::<TerrainTileAssets>();
         assert_ne!(
             first_ids,
             (
@@ -607,7 +602,7 @@ mod tests {
                 second.parameters.id(),
                 second.addresses.id(),
                 second.samples.id(),
-                second.material.id(),
+                second_tile_assets.material.id(),
             )
         );
         assert!(

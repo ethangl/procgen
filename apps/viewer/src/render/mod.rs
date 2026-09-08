@@ -12,6 +12,7 @@ use crate::{camera::ViewerCamera, model::GeneratedWorld};
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use layers::GizmoSpec;
 use surfaces::{empty_surface_mesh, maximum_surface_radius};
+use terrain_tiles::TerrainTileMode;
 
 const SURFACE_RADIUS: f32 = 1.0;
 const DEPTH_SCALE_STEP: f32 = 0.004;
@@ -115,9 +116,11 @@ impl Plugin for DiagnosticRenderPlugin {
                             .or(resource_changed::<ReliefSettings>),
                     ),
                     sync_surface_visibility
-                        .after(rebuild_surface)
                         .after(terrain_tiles::sync_mode)
-                        .run_if(resource_changed::<terrain_tiles::TerrainTileMode>),
+                        .run_if(
+                            resource_changed::<TerrainTileMode>
+                                .or(resource_changed::<SurfaceSelection>),
+                        ),
                     sync_layer_render_state.run_if(
                         resource_changed::<SurfaceSelection>
                             .or(resource_changed::<OverlaySettings>)
@@ -224,29 +227,29 @@ fn rebuild_surface(
     selection: Res<SurfaceSelection>,
     relief: Res<ReliefSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
-    surface: Single<(&Mesh3d, &mut Visibility), With<SurfaceLayer>>,
+    surface: Single<&Mesh3d, With<SurfaceLayer>>,
 ) {
-    let (surface_mesh, mut visibility) = surface.into_inner();
     if let Some(layer) = selection.selected() {
-        *meshes.get_mut(&surface_mesh.0).unwrap() = layer
+        *meshes.get_mut(&surface.0).unwrap() = layer
             .surface()
             .expect("surface selection only stores fill layers")
             .build(&world, relief.exaggeration);
-        *visibility = Visibility::Inherited;
-    } else {
-        *visibility = Visibility::Hidden;
     }
 }
 
 fn sync_surface_visibility(
-    mode: Res<terrain_tiles::TerrainTileMode>,
+    mode: Res<TerrainTileMode>,
     selection: Res<SurfaceSelection>,
     surface: Single<&mut Visibility, With<SurfaceLayer>>,
 ) {
-    *surface.into_inner() = match (*mode, selection.selected()) {
-        (_, None) | (terrain_tiles::TerrainTileMode::Tiles, _) => Visibility::Hidden,
-        (terrain_tiles::TerrainTileMode::Coarse, Some(_)) => Visibility::Inherited,
-    };
+    *surface.into_inner() = surface_visibility(*mode, selection.selected());
+}
+
+fn surface_visibility(mode: TerrainTileMode, selected: Option<DiagnosticLayer>) -> Visibility {
+    match (mode, selected) {
+        (_, None) | (TerrainTileMode::Tiles, _) => Visibility::Hidden,
+        (TerrainTileMode::Coarse, Some(_)) => Visibility::Inherited,
+    }
 }
 
 fn sync_layer_render_state(
@@ -287,6 +290,27 @@ fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detailed_mode_keeps_the_coarse_surface_hidden_across_surface_rebuild_inputs() {
+        for selection in [
+            Some(DiagnosticLayer::IsostaticElevation),
+            Some(DiagnosticLayer::GeologicalElevation),
+            None,
+        ] {
+            assert_eq!(
+                surface_visibility(TerrainTileMode::Tiles, selection),
+                Visibility::Hidden
+            );
+        }
+        assert_eq!(
+            surface_visibility(
+                TerrainTileMode::Coarse,
+                Some(DiagnosticLayer::IsostaticElevation)
+            ),
+            Visibility::Inherited
+        );
+    }
 
     #[test]
     fn fill_gizmos_use_the_surface_slot_before_the_first_overlay() {

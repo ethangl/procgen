@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{TerrainGpuResources, TerrainTileDispatch};
 use bevy::{
@@ -15,15 +12,13 @@ use bevy::{
             BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
             CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor,
             PipelineCache, ShaderStages,
-            binding_types::{
-                storage_buffer_read_only_sized, storage_buffer_sized, uniform_buffer_sized,
-            },
+            binding_types::{storage_buffer_read_only_sized, storage_buffer_sized},
         },
         renderer::{RenderContext, RenderDevice},
         storage::GpuShaderStorageBuffer,
     },
 };
-use procgen_terrain::{TERRAIN_TILE_SAMPLE_COUNT, TerrainGpuParameters};
+use procgen_terrain::TERRAIN_TILE_SAMPLE_COUNT;
 
 pub(super) fn install(render_app: &mut SubApp) {
     render_app
@@ -49,10 +44,7 @@ fn initialize_pipeline(mut commands: Commands, pipeline_cache: Res<PipelineCache
         (
             storage_buffer_read_only_sized(false, None),
             storage_buffer_read_only_sized(false, None),
-            uniform_buffer_sized(
-                false,
-                NonZeroU64::new(size_of::<TerrainGpuParameters>() as u64),
-            ),
+            storage_buffer_read_only_sized(false, None),
             storage_buffer_read_only_sized(false, None),
             storage_buffer_sized(false, None),
         ),
