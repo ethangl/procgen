@@ -131,6 +131,7 @@ pub fn generate_terrain_tile(
     tile
 }
 
+/// Yields the tile's vertex directions in row-major order, from lower left.
 fn tile_directions(address: TileAddress) -> impl Iterator<Item = Vec3> {
     (0..TILE_VERTICES)
         .flat_map(move |y| (0..TILE_VERTICES).map(move |x| vertex_direction(address, x, y)))
@@ -172,7 +173,7 @@ mod tests {
     use crate::{
         TerrainAbyssalConfig, TerrainCellControls, TerrainCoastConfig, TerrainDetailConfig,
         TerrainHeightConfig, TerrainStampKind,
-        test_support::{constant_bake, height_inputs, tile_inputs},
+        test_support::{constant_bake, height_inputs, stamp, tile_inputs},
     };
     use procgen_cubesphere::CubeFace;
     use procgen_noise::OctaveConfig;
@@ -269,50 +270,19 @@ mod tests {
         let upper_address = TileAddress::new(CubeFace::PositiveZ, 3, 2, 6).unwrap();
         let face_left_address = TileAddress::new(CubeFace::PositiveX, 3, 0, 5).unwrap();
         let face_right_address = TileAddress::new(CubeFace::PositiveZ, 3, 7, 5).unwrap();
-        let stamps = [
-            TerrainStampInput {
-                cell: 0,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 0,
-                position: vertex_direction(left_address, TILE_QUADS, TILE_QUADS / 2),
-                strength: 0.2,
-            },
-            TerrainStampInput {
-                cell: 1,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 1,
-                position: vertex_direction(right_address, 1, TILE_QUADS / 2),
-                strength: 0.2,
-            },
-            TerrainStampInput {
-                cell: 2,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 2,
-                position: vertex_direction(left_address, TILE_QUADS / 2, TILE_QUADS),
-                strength: 0.2,
-            },
-            TerrainStampInput {
-                cell: 3,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 3,
-                position: vertex_direction(upper_address, TILE_QUADS / 2, 1),
-                strength: 0.2,
-            },
-            TerrainStampInput {
-                cell: 4,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 4,
-                position: vertex_direction(face_left_address, 0, TILE_QUADS / 2),
-                strength: 0.2,
-            },
-            TerrainStampInput {
-                cell: 5,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 5,
-                position: vertex_direction(face_right_address, TILE_QUADS - 1, TILE_QUADS / 2),
-                strength: 0.2,
-            },
+        let stamp_positions = [
+            vertex_direction(left_address, TILE_QUADS, TILE_QUADS / 2),
+            vertex_direction(right_address, 1, TILE_QUADS / 2),
+            vertex_direction(left_address, TILE_QUADS / 2, TILE_QUADS),
+            vertex_direction(upper_address, TILE_QUADS / 2, 1),
+            vertex_direction(face_left_address, 0, TILE_QUADS / 2),
+            vertex_direction(face_right_address, TILE_QUADS - 1, TILE_QUADS / 2),
         ];
+        let stamps: Vec<_> = stamp_positions
+            .into_iter()
+            .enumerate()
+            .map(|(index, position)| stamp(TerrainStampKind::Hotspot, index, position, 0.2))
+            .collect();
         let unstamped_left = generate_terrain_tile(tile_inputs(left_address, &bake, &[]), config);
         let left = generate_terrain_tile(tile_inputs(left_address, &bake, &stamps), config);
         let right = generate_terrain_tile(tile_inputs(right_address, &bake, &stamps), config);
@@ -354,27 +324,9 @@ mod tests {
         let directions: Vec<_> = tile_directions(address).collect();
         let near = directions[TERRAIN_TILE_SAMPLE_COUNT / 2];
         let stamps = [
-            TerrainStampInput {
-                cell: 0,
-                kind: TerrainStampKind::Hotspot,
-                source_index: 0,
-                position: near,
-                strength: 0.4,
-            },
-            TerrainStampInput {
-                cell: 1,
-                kind: TerrainStampKind::VolcanicArc,
-                source_index: 1,
-                position: -near,
-                strength: 0.8,
-            },
-            TerrainStampInput {
-                cell: 2,
-                kind: TerrainStampKind::OceanicSeamount,
-                source_index: 2,
-                position: near,
-                strength: 0.3,
-            },
+            stamp(TerrainStampKind::Hotspot, 0, near, 0.4),
+            stamp(TerrainStampKind::VolcanicArc, 1, -near, 0.8),
+            stamp(TerrainStampKind::OceanicSeamount, 2, near, 0.3),
         ];
         let config = config(2);
         let center = vertex_direction(address, TILE_QUADS / 2, TILE_QUADS / 2);

@@ -321,7 +321,7 @@ mod tests {
     use super::*;
     use crate::{
         TerrainCellControls, TerrainStampKind,
-        test_support::{TERRAIN_TEST_SEED, constant_bake, height_inputs},
+        test_support::{TERRAIN_TEST_SEED, constant_bake, height_inputs, stamp},
     };
     use procgen_cubesphere::{CubeFace, FaceCoordinates, face_to_direction};
     use procgen_tectonics::SEA_LEVEL;
@@ -421,13 +421,12 @@ mod tests {
             octave_gain: 0.55,
             abyssal_amplitude: 0.01,
         });
-        let stamp = TerrainStampInput {
-            cell: 0,
-            kind: TerrainStampKind::OceanicAbyssalHill,
-            source_index: 4,
-            position: Vec3::new(0.39, -0.50, 0.78).normalized(),
-            strength: 0.7,
-        };
+        let stamp = stamp(
+            TerrainStampKind::OceanicAbyssalHill,
+            4,
+            Vec3::new(0.39, -0.50, 0.78).normalized(),
+            0.7,
+        );
         let stamps = [stamp];
         let sample = terrain_height(
             height_inputs(direction(), &bake, &stamps),
@@ -569,13 +568,7 @@ mod tests {
         let config = TerrainHeightConfig::default();
         for kind in TerrainStampKind::ALL {
             let profile = config.stamps.profile(kind);
-            let center = TerrainStampInput {
-                cell: 0,
-                kind,
-                source_index: 0,
-                position: direction,
-                strength: 0.5,
-            };
+            let center = stamp(kind, 0, direction, 0.5);
             assert_eq!(
                 stamp_contribution(direction, center, profile).value,
                 profile.amplitude * 0.5
@@ -597,13 +590,7 @@ mod tests {
         let stamps: Vec<_> = TerrainStampKind::ALL
             .into_iter()
             .enumerate()
-            .map(|(source_index, kind)| TerrainStampInput {
-                cell: 0,
-                kind,
-                source_index,
-                position: direction,
-                strength: 0.1,
-            })
+            .map(|(source_index, kind)| stamp(kind, source_index, direction, 0.1))
             .collect();
         let expected = stamps.iter().fold(0.25, |height, stamp| {
             height + stamp_contribution(direction, *stamp, config.stamps.profile(stamp.kind)).value
@@ -657,13 +644,12 @@ mod tests {
             },
             ..base_config
         };
-        let stamp = TerrainStampInput {
-            cell: 0,
-            kind: TerrainStampKind::Hotspot,
-            source_index: 0,
-            position: (direction + tangent(direction, Vec3::X) * 0.005).normalized(),
-            strength: 0.2,
-        };
+        let stamp = stamp(
+            TerrainStampKind::Hotspot,
+            0,
+            (direction + tangent(direction, Vec3::X) * 0.005).normalized(),
+            0.2,
+        );
         let bake = varying_bake();
         let config = config.validate().unwrap();
         assert_directional_derivative(&bake, &[stamp], config, direction, Vec3::X, 2.5e-2);
