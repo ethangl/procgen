@@ -18,10 +18,6 @@ fn cubesphere_texel_to_face(texel: f32, resolution: u32) -> f32 {
     return 2.0 * (texel + 0.5) / f32(resolution) - 1.0;
 }
 
-fn cubesphere_texel_index(face: u32, x: u32, y: u32, resolution: u32) -> u32 {
-    return (face * resolution + y) * resolution + x;
-}
-
 fn cubesphere_nearest_texel(coordinates: CubesphereFaceCoordinates, resolution: u32) -> CubesphereFieldTexel {
     let x = u32(clamp(round(cubesphere_face_to_texel(coordinates.u, resolution)), 0.0, f32(resolution) - 1.0));
     let y = u32(clamp(round(cubesphere_face_to_texel(coordinates.v, resolution)), 0.0, f32(resolution) - 1.0));

@@ -244,11 +244,11 @@ mod tests {
         assert_eq!(
             pinned,
             [
-                [0x3F1E_2D5F, 0xBF0B_0283, 0xBEC4_DCE6, 0xBDE3_1F2C],
-                [0x3F1D_AD8E, 0x3E5B_CB41, 0x3FAC_4BB3, 0x3EEB_C509],
-                [0x3F1E_B380, 0x3EEC_9685, 0xBF7B_6F15, 0xBEB7_93AE],
-                [0x3F1D_6BC9, 0x3E1D_B017, 0x3F4E_8C33, 0x3E72_E021],
-                [0x3F1E_E819, 0xBF97_23C5, 0xBF5C_CA73, 0xBE14_D124],
+                [0x3F1E_2D56, 0xBF0A_D2F1, 0xBEC4_2B7F, 0xBDE2_33AB],
+                [0x3F1D_AD9F, 0x3E5C_E7DA, 0x3FAC_5B2F, 0x3EEB_CD06],
+                [0x3F1E_B379, 0x3EEC_7804, 0xBF7B_7397, 0xBEB7_9453],
+                [0x3F1D_6BD5, 0x3E1D_31A1, 0x3F4E_D583, 0x3E73_3F15],
+                [0x3F1E_E7FF, 0xBF97_14AC, 0xBF5C_BF04, 0xBE14_CEBB],
             ]
         );
     }

@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use super::{SURFACE_RADIUS, TERRAIN_MAX_TILE_LEVEL};
 use bevy::{camera::Projection, prelude::*};
 use procgen_core::Vec3 as ProcgenVec3;
-use procgen_cubesphere::{CubeFace, TILE_QUADS, TileAddress, TileEdge};
+use procgen_cubesphere::{CubeFace, FaceEdge, TILE_QUADS, TileAddress};
 
 const TILE_SPLIT_PROJECTED_PIXELS: f32 = 180.0;
 const TILE_MERGE_PROJECTED_PIXELS: f32 = 140.0;
@@ -94,7 +94,7 @@ impl QuadtreeSelection {
             let leaves = selected.iter().copied().collect::<HashSet<_>>();
             let mut split = BTreeSet::new();
             for &tile in selected.iter() {
-                for edge in TileEdge::ALL {
+                for edge in FaceEdge::ALL {
                     let same_level = tile.edge_neighbor(edge);
                     let Some(neighbor) =
                         std::iter::successors(Some(same_level), |address| address.parent())
@@ -264,7 +264,7 @@ mod tests {
         let selected = QuadtreeSelection::default().select(view);
         let leaves = selected.iter().copied().collect::<HashSet<_>>();
         for tile in selected {
-            for edge in TileEdge::ALL {
+            for edge in FaceEdge::ALL {
                 let same_level = tile.edge_neighbor(edge);
                 if let Some(neighbor) =
                     std::iter::successors(Some(same_level), |address| address.parent())

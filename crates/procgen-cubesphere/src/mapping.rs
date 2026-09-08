@@ -11,6 +11,27 @@ use procgen_core::Vec3;
 use std::f32::consts::FRAC_PI_4;
 use std::fmt;
 
+/// Stable cross-backend vectors for the polynomial equi-angular tangent.
+pub const EQUIANGULAR_TANGENT_TEST_VECTORS: [(f32, u32); 17] = [
+    (-1.0, 0xbf80_0000),
+    (-0.875, 0xbf52_17f1),
+    (-0.75, 0xbf2b_0db5),
+    (-0.625, 0xbf08_d5cf),
+    (-0.5, 0xbed4_13cc),
+    (-0.375, 0xbe9b_5023),
+    (-0.25, 0xbe4b_afb0),
+    (-0.125, 0xbdc9_b63c),
+    (0.0, 0x0000_0000),
+    (0.125, 0x3dc9_b63c),
+    (0.25, 0x3e4b_afb0),
+    (0.375, 0x3e9b_5023),
+    (0.5, 0x3ed4_13cc),
+    (0.625, 0x3f08_d5cf),
+    (0.75, 0x3f2b_0db5),
+    (0.875, 0x3f52_17f1),
+    (1.0, 0x3f80_0000),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CubeFace {
     PositiveX,
@@ -78,6 +99,73 @@ impl CubeFace {
     }
 }
 
+/// Fixed cube-face edge order shared by tiles, rasters, and WGSL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum FaceEdge {
+    Left = 0,
+    Right = 1,
+    Bottom = 2,
+    Top = 3,
+}
+
+impl FaceEdge {
+    pub const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Bottom, Self::Top];
+
+    pub const fn index(self) -> u32 {
+        self as u32
+    }
+
+    pub(crate) const fn along(self, x: u32, y: u32) -> u32 {
+        match self {
+            Self::Left | Self::Right => y,
+            Self::Bottom | Self::Top => x,
+        }
+    }
+}
+
+/// Maps one face-edge position to the adjacent face's coordinates.
+pub(crate) fn seam_neighbor(
+    face: CubeFace,
+    edge: FaceEdge,
+    along: u32,
+    edge_index: u32,
+) -> (CubeFace, u32, u32) {
+    let source = face.frame();
+    let (neighbor_normal, along_axis) = match edge {
+        FaceEdge::Left => (-source.u_axis, source.v_axis),
+        FaceEdge::Right => (source.u_axis, source.v_axis),
+        FaceEdge::Bottom => (-source.v_axis, source.u_axis),
+        FaceEdge::Top => (source.v_axis, source.u_axis),
+    };
+    let face = CubeFace::from_normal(neighbor_normal).expect("every cube axis has one face");
+    let neighbor = face.frame();
+    let normal_on_u = source.normal.dot(neighbor.u_axis).abs() > 0.5;
+    let (fixed_axis, running_axis) = if normal_on_u {
+        (neighbor.u_axis, neighbor.v_axis)
+    } else {
+        debug_assert!(source.normal.dot(neighbor.v_axis).abs() > 0.5);
+        (neighbor.v_axis, neighbor.u_axis)
+    };
+    let fixed = if source.normal.dot(fixed_axis) > 0.5 {
+        edge_index
+    } else {
+        0
+    };
+    let running = if along_axis.dot(running_axis) > 0.5 {
+        along
+    } else {
+        debug_assert!(along_axis.dot(running_axis) < -0.5);
+        edge_index - along
+    };
+    let (x, y) = if normal_on_u {
+        (fixed, running)
+    } else {
+        (running, fixed)
+    };
+    (face, x, y)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FaceCoordinates {
     pub face: CubeFace,
@@ -127,9 +215,27 @@ pub(crate) fn unit_direction(coordinates: FaceCoordinates) -> Vec3 {
         u_axis,
         v_axis,
     } = coordinates.face.frame();
-    let a = (coordinates.u * FRAC_PI_4).tan();
-    let b = (coordinates.v * FRAC_PI_4).tan();
+    let a = equiangular_tangent(coordinates.u);
+    let b = equiangular_tangent(coordinates.v);
     (normal + u_axis * a + v_axis * b).normalized()
+}
+
+/// Deterministically approximates `tan(PI / 4 * coordinate)` on `[-1, 1]`.
+///
+/// This is a degree-nine odd polynomial constrained to equal `-1`, `0`, and
+/// `1` at the corresponding endpoints. Its coefficients are a least-squares
+/// fit of `tan(PI / 4 * x) / x` over 200,001 uniformly spaced samples on
+/// `[0, 1]`; the maximum absolute error is below `4e-6` on `[-1, 1]`. Its fixed
+/// sequence of `f32` additions and multiplications is mirrored by
+/// `cubesphere_equiangular_tangent` in WGSL, so transcendental implementations
+/// cannot change raster directions.
+pub fn equiangular_tangent(coordinate: f32) -> f32 {
+    let squared = coordinate * coordinate;
+    let mut correction = -0.005_166_28_f32;
+    correction = correction * squared - 0.012_217_19;
+    correction = correction * squared - 0.053_305_17;
+    correction = correction * squared - 0.214_593_27;
+    coordinate * (1.0 + (1.0 - squared) * correction)
 }
 
 /// Maps a nonzero direction to its deterministic dominant face and coordinates.
@@ -249,6 +355,23 @@ mod tests {
     }
 
     #[test]
+    fn polynomial_tangent_is_odd_exact_at_endpoints_and_close_to_tangent() {
+        for (coordinate, expected_bits) in EQUIANGULAR_TANGENT_TEST_VECTORS {
+            assert_eq!(equiangular_tangent(coordinate).to_bits(), expected_bits);
+        }
+        for step in -1_000..=1_000 {
+            let coordinate = step as f32 / 1_000.0;
+            let actual = equiangular_tangent(coordinate);
+            let expected = (coordinate * FRAC_PI_4).tan();
+            assert!((actual - expected).abs() <= 4.0e-6);
+            assert_eq!(actual, -equiangular_tangent(-coordinate));
+        }
+        assert_eq!(equiangular_tangent(-1.0), -1.0);
+        assert_eq!(equiangular_tangent(0.0), 0.0);
+        assert_eq!(equiangular_tangent(1.0), 1.0);
+    }
+
+    #[test]
     fn face_indices_match_all_order() {
         for (index, face) in CubeFace::ALL.into_iter().enumerate() {
             assert_eq!(face.index(), index);
@@ -340,5 +463,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn seam_neighbors_share_the_same_geometric_border() {
+        let resolution = 8;
+        let edge_index = resolution - 1;
+        for face in CubeFace::ALL {
+            for edge in FaceEdge::ALL {
+                for along in 0..resolution {
+                    let (x, y) = boundary_texel(edge, edge_index, along);
+                    let (neighbor_face, neighbor_x, neighbor_y) =
+                        seam_neighbor(face, edge, along, edge_index);
+                    let reciprocal = FaceEdge::ALL
+                        .into_iter()
+                        .find(|candidate| {
+                            seam_neighbor(
+                                neighbor_face,
+                                *candidate,
+                                candidate.along(neighbor_x, neighbor_y),
+                                edge_index,
+                            ) == (face, x, y)
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        border_midpoint(face, edge, x, y, resolution),
+                        border_midpoint(
+                            neighbor_face,
+                            reciprocal,
+                            neighbor_x,
+                            neighbor_y,
+                            resolution,
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    const fn boundary_texel(edge: FaceEdge, edge_index: u32, along: u32) -> (u32, u32) {
+        match edge {
+            FaceEdge::Left => (0, along),
+            FaceEdge::Right => (edge_index, along),
+            FaceEdge::Bottom => (along, 0),
+            FaceEdge::Top => (along, edge_index),
+        }
+    }
+
+    fn border_midpoint(face: CubeFace, edge: FaceEdge, x: u32, y: u32, resolution: u32) -> Vec3 {
+        let resolution = resolution as f32;
+        let center_u = -1.0 + (2 * x + 1) as f32 / resolution;
+        let center_v = -1.0 + (2 * y + 1) as f32 / resolution;
+        let (u, v) = match edge {
+            FaceEdge::Left => (-1.0 + 2.0 * x as f32 / resolution, center_v),
+            FaceEdge::Right => (-1.0 + 2.0 * (x + 1) as f32 / resolution, center_v),
+            FaceEdge::Bottom => (center_u, -1.0 + 2.0 * y as f32 / resolution),
+            FaceEdge::Top => (center_u, -1.0 + 2.0 * (y + 1) as f32 / resolution),
+        };
+        unit_direction(FaceCoordinates { face, u, v })
     }
 }
