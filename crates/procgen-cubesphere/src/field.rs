@@ -4,6 +4,7 @@ use crate::mapping::{
     CubeFace, FaceCoordinates, MappingError, canonical_face_coordinates, direction_to_face,
     face_coordinate_derivatives, project_direction_onto_face, unit_direction,
 };
+use crate::raster::{MAX_RASTER_RESOLUTION, validate_resolution};
 use procgen_core::Vec3;
 use procgen_sphere_mesh::{SphereMesh, TopologyError};
 use rayon::prelude::*;
@@ -12,16 +13,6 @@ use std::f64::consts::PI;
 use std::fmt;
 
 const PARALLEL_ROW_THRESHOLD: usize = 8;
-
-/// Largest power-of-two cube-field edge whose texel count fits in `u32` arithmetic.
-pub const MAX_CUBE_FIELD_RESOLUTION: u32 = 1 << 15;
-
-const _: () = assert!(MAX_CUBE_FIELD_RESOLUTION.is_power_of_two());
-const _: () = assert!(
-    MAX_CUBE_FIELD_RESOLUTION
-        .checked_mul(MAX_CUBE_FIELD_RESOLUTION)
-        .is_some()
-);
 
 /// One typed CPU face of an interpolated multi-channel field.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,7 +88,7 @@ impl<const N: usize> CubeField<N> {
         resolution: u32,
         face_texels: [Vec<[f32; N]>; 6],
     ) -> Result<Self, BakeError> {
-        validate_resolution(resolution)?;
+        validate_resolution(resolution).map_err(|_| BakeError::InvalidResolution)?;
         let expected = (resolution * resolution) as usize;
         for (face, texels) in face_texels.iter().enumerate() {
             if texels.len() != expected {
@@ -241,7 +232,7 @@ impl fmt::Display for BakeError {
         match self {
             Self::InvalidResolution => write!(
                 formatter,
-                "cube-field resolution must be a power of two between 1 and {MAX_CUBE_FIELD_RESOLUTION}"
+                "cube-field resolution must be a power of two between 1 and {MAX_RASTER_RESOLUTION}"
             ),
             Self::UnsupportedCellCount { cell_count } => write!(
                 formatter,
@@ -285,7 +276,7 @@ pub fn control_face_resolution(cell_count: usize) -> Result<u32, BakeError> {
         return Err(BakeError::UnsupportedCellCount { cell_count });
     }
     let required = (PI * cell_count as f64).sqrt().ceil();
-    if required > f64::from(MAX_CUBE_FIELD_RESOLUTION) {
+    if required > f64::from(MAX_RASTER_RESOLUTION) {
         return Err(BakeError::UnsupportedCellCount { cell_count });
     }
     Ok((required as u32).next_power_of_two())
@@ -294,14 +285,14 @@ pub fn control_face_resolution(cell_count: usize) -> Result<u32, BakeError> {
 /// Bakes every channel at equi-angular face texel centers.
 ///
 /// `resolution` must be a nonzero power of two no greater than
-/// [`MAX_CUBE_FIELD_RESOLUTION`]. Resolution policy belongs to the caller;
+/// [`MAX_RASTER_RESOLUTION`]. Resolution policy belongs to the caller;
 /// [`control_face_resolution`] provides the terrain-control policy.
 pub fn bake_cube_field<const N: usize>(
     mesh: &SphereMesh,
     cells: &[[f32; N]],
     resolution: u32,
 ) -> Result<CubeField<N>, BakeError> {
-    validate_resolution(resolution)?;
+    validate_resolution(resolution).map_err(|_| BakeError::InvalidResolution)?;
     mesh.validate().map_err(BakeError::InvalidMesh)?;
     if cells.len() != mesh.cell_count() {
         return Err(BakeError::CellCountMismatch {
@@ -319,13 +310,6 @@ pub fn bake_cube_field<const N: usize>(
     Ok(CubeField {
         faces: CubeFace::ALL.map(|face| bake_face(mesh, cells, face, resolution)),
     })
-}
-
-fn validate_resolution(resolution: u32) -> Result<(), BakeError> {
-    if resolution == 0 || resolution > MAX_CUBE_FIELD_RESOLUTION || !resolution.is_power_of_two() {
-        return Err(BakeError::InvalidResolution);
-    }
-    Ok(())
 }
 
 fn bake_face<const N: usize>(
@@ -615,7 +599,7 @@ mod tests {
             Err(BakeError::CellCountMismatch { mesh: 16, cells: 0 })
         );
 
-        for resolution in [0, 3, MAX_CUBE_FIELD_RESOLUTION * 2] {
+        for resolution in [0, 3, MAX_RASTER_RESOLUTION * 2] {
             assert_eq!(
                 bake_cube_field(&mesh, &vec![channels(0.0); mesh.cell_count()], resolution),
                 Err(BakeError::InvalidResolution)

@@ -1,7 +1,9 @@
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{ScalarFieldSample3, Vec3};
 use procgen_cubesphere::{CubeFace, TILE_QUADS, TILE_VERTICES, TileAddress, vertex_spacing};
-use procgen_gpu_tests::{readback, request_device};
+use procgen_gpu_tests::{
+    readback, request_device, run_compute, storage_output_buffer, validate_wgsl,
+};
 use procgen_noise::OctaveConfig;
 use procgen_terrain::{
     TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE,
@@ -117,6 +119,12 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
         TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE,
     );
+}
+
+#[test]
+fn terrain_wgsl_validates_without_a_device() {
+    let address = TileAddress::new(CubeFace::PositiveZ, 4, 7, 9).unwrap();
+    validate_wgsl("terrain agreement", &terrain_shader_source(address));
 }
 
 fn fade_endpoint_config(level: u8, newest_weight: f32) -> TerrainHeightConfig {
@@ -314,15 +322,31 @@ fn dispatch_tile(
         contents: bytemuck::bytes_of(&parameters),
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let output_size = (TERRAIN_TILE_SAMPLE_COUNT * size_of::<Output>()) as u64;
-    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("terrain agreement output"),
-        size: output_size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let [face, level, x, y] = inputs.address.gpu_words();
-    let shader_source = format!(
+    let output_buffer = storage_output_buffer::<Output>(
+        device,
+        "terrain agreement output",
+        TERRAIN_TILE_SAMPLE_COUNT,
+    );
+    let shader_source = terrain_shader_source(inputs.address);
+    run_compute(
+        device,
+        queue,
+        "terrain agreement",
+        &shader_source,
+        &[
+            controls_buffer.as_entire_binding(),
+            stamps_buffer.as_entire_binding(),
+            parameters_buffer.as_entire_binding(),
+            output_buffer.as_entire_binding(),
+        ],
+        TERRAIN_TILE_SAMPLE_COUNT as u32,
+    );
+    readback(device, queue, &output_buffer, TERRAIN_TILE_SAMPLE_COUNT)
+}
+
+fn terrain_shader_source(address: TileAddress) -> String {
+    let [face, level, x, y] = address.gpu_words();
+    format!(
         r#"
 {TERRAIN_WGSL_SOURCE}
 @group(0) @binding(0) var<storage, read> control_texels: array<CubesphereFieldTexel>;
@@ -345,48 +369,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         level = level,
         x = x,
         y = y,
-    );
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("terrain agreement shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-    });
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("terrain agreement pipeline"),
-        layout: None,
-        module: &shader,
-        entry_point: Some("main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("terrain agreement bind group"),
-        layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: controls_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: stamps_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: parameters_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: output_buffer.as_entire_binding(),
-            },
-        ],
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(TERRAIN_TILE_SAMPLE_COUNT.div_ceil(64) as u32, 1, 1);
-    }
-    queue.submit([encoder.finish()]);
-    readback(device, queue, &output_buffer, TERRAIN_TILE_SAMPLE_COUNT)
+    )
 }

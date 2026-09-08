@@ -1,6 +1,6 @@
 //! Power-of-two quadtree tile addressing on cube faces.
 
-use crate::mapping::{CubeFace, FaceCoordinates, unit_direction};
+use crate::mapping::{CubeFace, FaceCoordinates, FaceEdge, seam_neighbor, unit_direction};
 use procgen_core::Vec3;
 use std::fmt;
 
@@ -121,64 +121,35 @@ impl TileAddress {
     }
 
     /// Returns the same-level tile across one edge, including cube-face seams.
-    pub fn edge_neighbor(self, edge: TileEdge) -> Self {
+    pub fn edge_neighbor(self, edge: FaceEdge) -> Self {
         let tiles_per_axis = 1_u32 << self.level;
         match edge {
-            TileEdge::Left if self.x > 0 => Self {
+            FaceEdge::Left if self.x > 0 => Self {
                 x: self.x - 1,
                 ..self
             },
-            TileEdge::Right if self.x + 1 < tiles_per_axis => Self {
+            FaceEdge::Right if self.x + 1 < tiles_per_axis => Self {
                 x: self.x + 1,
                 ..self
             },
-            TileEdge::Bottom if self.y > 0 => Self {
+            FaceEdge::Bottom if self.y > 0 => Self {
                 y: self.y - 1,
                 ..self
             },
-            TileEdge::Top if self.y + 1 < tiles_per_axis => Self {
+            FaceEdge::Top if self.y + 1 < tiles_per_axis => Self {
                 y: self.y + 1,
                 ..self
             },
-            _ => self.cross_face_neighbor(edge, tiles_per_axis),
+            _ => {
+                let (face, x, y) = seam_neighbor(
+                    self.face,
+                    edge,
+                    edge.along(self.x, self.y),
+                    tiles_per_axis - 1,
+                );
+                Self { face, x, y, ..self }
+            }
         }
-    }
-
-    fn cross_face_neighbor(self, edge: TileEdge, tiles_per_axis: u32) -> Self {
-        let frame = self.face.frame();
-        let (neighbor_normal, along_axis, along) = match edge {
-            TileEdge::Left => (-frame.u_axis, frame.v_axis, self.y),
-            TileEdge::Right => (frame.u_axis, frame.v_axis, self.y),
-            TileEdge::Bottom => (-frame.v_axis, frame.u_axis, self.x),
-            TileEdge::Top => (frame.v_axis, frame.u_axis, self.x),
-        };
-        let face = CubeFace::from_normal(neighbor_normal).expect("every cube axis has one face");
-        let neighbor = face.frame();
-        let edge_index = tiles_per_axis - 1;
-        let normal_on_u = frame.normal == neighbor.u_axis || frame.normal == -neighbor.u_axis;
-        let (fixed_axis, running_axis) = if normal_on_u {
-            (neighbor.u_axis, neighbor.v_axis)
-        } else {
-            debug_assert!(frame.normal == neighbor.v_axis || frame.normal == -neighbor.v_axis);
-            (neighbor.v_axis, neighbor.u_axis)
-        };
-        let fixed = if frame.normal == fixed_axis {
-            edge_index
-        } else {
-            0
-        };
-        let running = if along_axis == running_axis {
-            along
-        } else {
-            debug_assert_eq!(along_axis, -running_axis);
-            edge_index - along
-        };
-        let (x, y) = if normal_on_u {
-            (fixed, running)
-        } else {
-            (running, fixed)
-        };
-        Self { face, x, y, ..self }
     }
 
     pub fn is_ancestor_of(self, mut descendant: Self) -> bool {
@@ -208,18 +179,6 @@ impl TileAddress {
             y: self.y * TILE_QUADS + local_y,
         })
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TileEdge {
-    Left,
-    Right,
-    Bottom,
-    Top,
-}
-
-impl TileEdge {
-    pub const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Bottom, Self::Top];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -367,11 +326,11 @@ mod tests {
                     TileAddress::new(face, level, 0, 0).unwrap(),
                     TileAddress::new(face, level, edge, edge).unwrap(),
                 ] {
-                    for side in TileEdge::ALL {
+                    for side in FaceEdge::ALL {
                         let neighbor = tile.edge_neighbor(side);
                         assert_eq!(neighbor.level(), level);
                         assert!(
-                            TileEdge::ALL
+                            FaceEdge::ALL
                                 .into_iter()
                                 .any(|neighbor_side| neighbor.edge_neighbor(neighbor_side) == tile)
                         );
@@ -379,46 +338,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn cross_face_neighbors_share_identical_boundary_directions() {
-        for level in [0, 12, MAX_TILE_LEVEL] {
-            let edge_index = (1_u32 << level) - 1;
-            for face in CubeFace::ALL {
-                for edge in TileEdge::ALL {
-                    let (x, y) = match edge {
-                        TileEdge::Left => (0, edge_index / 2),
-                        TileEdge::Right => (edge_index, edge_index / 2),
-                        TileEdge::Bottom => (edge_index / 2, 0),
-                        TileEdge::Top => (edge_index / 2, edge_index),
-                    };
-                    let tile = TileAddress::new(face, level, x, y).unwrap();
-                    let neighbor = tile.edge_neighbor(edge);
-                    let neighbor_edge = TileEdge::ALL
-                        .into_iter()
-                        .find(|neighbor_edge| neighbor.edge_neighbor(*neighbor_edge) == tile)
-                        .unwrap();
-                    let left = edge_directions(tile, edge);
-                    let right = edge_directions(neighbor, neighbor_edge);
-                    assert!(left == right || left.iter().eq(right.iter().rev()));
-                }
-            }
-        }
-    }
-
-    fn edge_directions(tile: TileAddress, edge: TileEdge) -> Vec<Vec3> {
-        (0..TILE_VERTICES)
-            .map(|offset| {
-                let (x, y) = match edge {
-                    TileEdge::Left => (0, offset),
-                    TileEdge::Right => (TILE_QUADS, offset),
-                    TileEdge::Bottom => (offset, 0),
-                    TileEdge::Top => (offset, TILE_QUADS),
-                };
-                tile.grid_vertex(x, y).unwrap().direction()
-            })
-            .collect()
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{HASH_U32_TEST_VECTORS, ScalarFieldSample3, Vec3};
-use procgen_gpu_tests::{readback, request_device};
+use procgen_gpu_tests::{
+    readback, request_device, run_compute, storage_output_buffer, validate_wgsl,
+};
 use procgen_noise::{
     DerivativeDampedConfig, NOISE_DERIVATIVE_ANGLE_TOLERANCE, NOISE_VALUE_TOLERANCE, OctaveConfig,
     OctaveGain, RidgedMultifractalConfig, Validated, WGSL_SOURCE, derivative_damped_fbm_3d, fbm_3d,
@@ -342,6 +344,11 @@ fn wgsl_noise_agrees_with_canonical_cpu() {
     );
 }
 
+#[test]
+fn noise_wgsl_validates_without_a_device() {
+    validate_wgsl("procgen noise agreement", &noise_shader_source());
+}
+
 fn agreement_cases() -> Vec<Case> {
     let mut cases: Vec<_> = HASH_U32_TEST_VECTORS
         .iter()
@@ -447,7 +454,30 @@ fn dispatch(
     queue: &wgpu::Queue,
     inputs: &[ShaderInput],
 ) -> Vec<ShaderOutput> {
-    let harness = format!(
+    let harness = noise_shader_source();
+    let input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("procgen noise inputs"),
+        contents: bytemuck::cast_slice(inputs),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let output_buffer =
+        storage_output_buffer::<ShaderOutput>(device, "procgen noise outputs", inputs.len());
+    run_compute(
+        device,
+        queue,
+        "procgen noise agreement",
+        &harness,
+        &[
+            input_buffer.as_entire_binding(),
+            output_buffer.as_entire_binding(),
+        ],
+        inputs.len() as u32,
+    );
+    readback(device, queue, &output_buffer, inputs.len())
+}
+
+fn noise_shader_source() -> String {
+    format!(
         r#"
 {WGSL_SOURCE}
 
@@ -501,57 +531,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     outputs[id.x] = Output(hash, 0u, 0u, 0u, gradient, vec4(sample.value, sample.derivative));
 }}
 "#
-    );
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("procgen noise mirror"),
-        source: wgpu::ShaderSource::Wgsl(harness.into()),
-    });
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("procgen noise agreement pipeline"),
-        layout: None,
-        module: &shader,
-        entry_point: Some("main"),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
-        cache: None,
-    });
-    let input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("procgen noise inputs"),
-        contents: bytemuck::cast_slice(inputs),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
-    let output_size = (inputs.len() * size_of::<ShaderOutput>()) as u64;
-    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("procgen noise outputs"),
-        size: output_size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("procgen noise agreement bindings"),
-        layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: output_buffer.as_entire_binding(),
-            },
-        ],
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("procgen noise agreement encoder"),
-    });
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("procgen noise agreement pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(inputs.len().div_ceil(64) as u32, 1, 1);
-    }
-    queue.submit(Some(encoder.finish()));
-    readback(device, queue, &output_buffer, inputs.len())
+    )
 }

@@ -25,6 +25,10 @@ struct CubesphereFaceCoordinates {
     v: f32,
 }
 
+fn cubesphere_texel_index(face: u32, x: u32, y: u32, resolution: u32) -> u32 {
+    return (face * resolution + y) * resolution + x;
+}
+
 fn cubesphere_face_frame(face: u32) -> CubesphereFaceFrame {
     switch face {
         case 0u: { return CubesphereFaceFrame(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0), vec3(0.0, 1.0, 0.0)); }
@@ -36,11 +40,59 @@ fn cubesphere_face_frame(face: u32) -> CubesphereFaceFrame {
     }
 }
 
+fn cubesphere_face_for_normal(normal: vec3<f32>) -> u32 {
+    if normal.x != 0.0 { return select(1u, 0u, normal.x > 0.0); }
+    if normal.y != 0.0 { return select(3u, 2u, normal.y > 0.0); }
+    return select(5u, 4u, normal.z > 0.0);
+}
+
+fn cubesphere_seam_neighbor(face: u32, edge: u32, along: u32, edge_index: u32) -> vec3<u32> {
+    let source = cubesphere_face_frame(face);
+    var neighbor_normal: vec3<f32>;
+    var along_axis: vec3<f32>;
+    switch edge {
+        case 0u: {
+            neighbor_normal = -source.u_axis;
+            along_axis = source.v_axis;
+        }
+        case 1u: {
+            neighbor_normal = source.u_axis;
+            along_axis = source.v_axis;
+        }
+        case 2u: {
+            neighbor_normal = -source.v_axis;
+            along_axis = source.u_axis;
+        }
+        default: {
+            neighbor_normal = source.v_axis;
+            along_axis = source.u_axis;
+        }
+    }
+    let neighbor_face = cubesphere_face_for_normal(neighbor_normal);
+    let neighbor = cubesphere_face_frame(neighbor_face);
+    let normal_on_u = abs(dot(source.normal, neighbor.u_axis)) > 0.5;
+    let fixed_axis = select(neighbor.v_axis, neighbor.u_axis, normal_on_u);
+    let running_axis = select(neighbor.u_axis, neighbor.v_axis, normal_on_u);
+    let fixed = select(0u, edge_index, dot(source.normal, fixed_axis) > 0.5);
+    let running = select(edge_index - along, along, dot(along_axis, running_axis) > 0.5);
+    let coordinates = select(vec2(running, fixed), vec2(fixed, running), normal_on_u);
+    return vec3(neighbor_face, coordinates);
+}
+
 fn cubesphere_unit_direction(coordinates: CubesphereFaceCoordinates) -> vec3<f32> {
     let frame = cubesphere_face_frame(coordinates.face);
-    let a = tan(coordinates.u * CUBESPHERE_PI_OVER_FOUR);
-    let b = tan(coordinates.v * CUBESPHERE_PI_OVER_FOUR);
+    let a = cubesphere_equiangular_tangent(coordinates.u);
+    let b = cubesphere_equiangular_tangent(coordinates.v);
     return normalize(frame.normal + frame.u_axis * a + frame.v_axis * b);
+}
+
+fn cubesphere_equiangular_tangent(coordinate: f32) -> f32 {
+    let squared = coordinate * coordinate;
+    var correction = -0.00516628;
+    correction = correction * squared - 0.01221719;
+    correction = correction * squared - 0.05330517;
+    correction = correction * squared - 0.21459327;
+    return coordinate * (1.0 + (1.0 - squared) * correction);
 }
 
 fn cubesphere_dominant_face(direction: vec3<f32>) -> u32 {
