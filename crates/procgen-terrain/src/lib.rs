@@ -8,6 +8,9 @@ mod height;
 mod stamp;
 mod tile;
 
+#[cfg(test)]
+mod test_support;
+
 pub use bake::{TerrainControlBake, bake_terrain_controls};
 pub use coast::{TerrainCoastConfig, TerrainCoastError};
 pub use controls::{TerrainControlConfig, TerrainControlInputs, compose_terrain_controls};
