@@ -36,4 +36,8 @@ pub const NOISE_DERIVATIVE_ANGLE_TOLERANCE: f32 = 1.0e-3;
 /// The source is backend-neutral shader code and does not introduce a `wgpu`
 /// dependency into this crate. Its integer and floating-point agreement is
 /// exercised by the test-only `procgen-gpu-tests` workspace crate.
-pub const WGSL_SOURCE: &str = include_str!("../wgsl/noise.wgsl");
+pub const WGSL_SOURCE: &str = concat!(
+    include_str!("../../procgen-core/wgsl/hash.wgsl"),
+    "\n",
+    include_str!("../wgsl/noise.wgsl")
+);

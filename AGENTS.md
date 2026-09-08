@@ -240,11 +240,19 @@ scheduling. Slices 15 and 16, tile export, follow the pilot's evaluation.
 
 The active work is the compute-shader tectonics pilot
 (`docs/compute-shader-tectonics-pilot.md`): a GPU-only tectonics pipeline on a
-1024-texel-per-face cube-sphere raster in a new `procgen-raster-tectonics`
-crate and a new `apps/raster-viewer` application, the intended successor to
-the viewer. The current viewer is frozen while the pilot runs. The pilot's
-evaluation decides whether geology and climate follow, and the future of the
-Voronoi path.
+1024-texel-per-face cube-sphere raster in `procgen-raster-tectonics` and
+`apps/raster-viewer`, the intended successor to the viewer. Slices 1 and 2 have
+landed: cube-sphere raster addressing with chamfer links, texel-center
+directions, and the polynomial tangent in Rust and WGSL; the plate seed and
+growth kernels with their frontier relaxation; and the pilot application
+rendering six face grids coloured by ownership at a selectable face resolution.
+Evolution, bathymetry, relief, and interactivity follow. The current viewer is
+frozen while the pilot runs. The pilot's evaluation decides whether geology and
+climate follow, and the future of the Voronoi path.
+
+`procgen-core` owns the WGSL mirror of the four-word hash; `procgen-noise`,
+`procgen-terrain`, and `procgen-raster-tectonics` compose it rather than
+restating it.
 
 Crate boundaries and the per-stage conventions in "Code quality" are
 established. New stages should follow the sibling shapes rather than introduce

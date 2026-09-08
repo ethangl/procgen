@@ -3180,6 +3180,7 @@ dependencies = [
  "procgen-core",
  "procgen-cubesphere",
  "procgen-noise",
+ "procgen-raster-tectonics",
  "procgen-terrain",
  "wgpu",
 ]
@@ -3194,6 +3195,28 @@ dependencies = [
 [[package]]
 name = "procgen-planet"
 version = "0.1.0"
+
+[[package]]
+name = "procgen-raster-tectonics"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "procgen-core",
+ "procgen-cubesphere",
+ "procgen-tectonics",
+ "wgpu",
+]
+
+[[package]]
+name = "procgen-raster-viewer"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "procgen-cubesphere",
+ "procgen-raster-tectonics",
+ "procgen-tectonics",
+]
 
 [[package]]
 name = "procgen-sphere"

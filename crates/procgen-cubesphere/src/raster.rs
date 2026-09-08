@@ -1,6 +1,7 @@
 //! Integer cell addressing and adjacency for cube-sphere rasters.
 
-use crate::mapping::{CubeFace, FaceEdge, seam_neighbor};
+use crate::mapping::{CubeFace, FaceCoordinates, FaceEdge, seam_neighbor, unit_direction};
+use procgen_core::Vec3;
 use std::fmt;
 
 /// Axis-link length in the raster's integer chamfer metric.
@@ -98,6 +99,19 @@ impl FaceTexel {
     pub fn cell_count(resolution: u32) -> Result<u32, RasterError> {
         validate_resolution(resolution)?;
         Ok(6 * resolution * resolution)
+    }
+
+    /// Returns the unit direction of this texel's center.
+    ///
+    /// The equi-angular mapping spaces texel centers evenly in angle, so this
+    /// is the cell center of the raster. `cubesphere_texel_direction` mirrors
+    /// the same expression order in WGSL.
+    pub fn center_direction(self) -> Vec3 {
+        unit_direction(FaceCoordinates {
+            face: self.face,
+            u: texel_center(self.x, self.resolution),
+            v: texel_center(self.y, self.resolution),
+        })
     }
 
     /// Returns the face-major, raster-scan cell id.
@@ -209,6 +223,10 @@ impl TexelLink {
     }
 }
 
+fn texel_center(index: u32, resolution: u32) -> f32 {
+    -1.0 + (2 * index + 1) as f32 / resolution as f32
+}
+
 pub(crate) fn validate_resolution(resolution: u32) -> Result<(), RasterError> {
     if resolution == 0 || resolution > MAX_RASTER_RESOLUTION || !resolution.is_power_of_two() {
         return Err(RasterError::InvalidResolution);
@@ -268,6 +286,25 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn texel_centers_are_unit_length_and_reproject_onto_their_own_texel() {
+        let resolution = 16;
+        for cell_id in 0..FaceTexel::cell_count(resolution).unwrap() {
+            let texel = FaceTexel::from_cell_id(cell_id, resolution).unwrap();
+            let direction = texel.center_direction();
+            assert!((direction.length() - 1.0).abs() <= f32::EPSILON);
+            let coordinates = crate::direction_to_face(direction).unwrap();
+            let reprojected = FaceTexel::new(
+                coordinates.face,
+                resolution,
+                ((coordinates.u + 1.0) * 0.5 * resolution as f32) as u32,
+                ((coordinates.v + 1.0) * 0.5 * resolution as f32) as u32,
+            )
+            .unwrap();
+            assert_eq!(reprojected, texel);
         }
     }
 
