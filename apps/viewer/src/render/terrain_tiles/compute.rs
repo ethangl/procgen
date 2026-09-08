@@ -75,15 +75,9 @@ struct BindGroupResources<'w> {
 fn prepare_bind_group(
     mut commands: Commands,
     existing: Option<Res<TerrainComputeBindGroup>>,
-    dispatch: Res<TerrainTileDispatch>,
-    mut prepared_generation: Local<Option<u32>>,
     resources: BindGroupResources,
 ) {
-    // Each batch has an exact-size job buffer, so wait until Bevy has prepared its new handle.
-    if existing.is_some()
-        && !resources.resources.is_changed()
-        && *prepared_generation == Some(dispatch.generation)
-    {
+    if existing.is_some() && !resources.resources.is_changed() {
         return;
     }
     commands.remove_resource::<TerrainComputeBindGroup>();
@@ -122,7 +116,6 @@ fn prepare_bind_group(
         &entries,
     );
     commands.insert_resource(TerrainComputeBindGroup(bind_group));
-    *prepared_generation = Some(dispatch.generation);
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
@@ -139,9 +132,7 @@ impl render_graph::Node for TerrainComputeNode {
     ) -> Result<(), render_graph::NodeRunError> {
         let dispatch = world.resource::<TerrainTileDispatch>();
         let generation = dispatch.generation;
-        if dispatch.job_count == 0
-            || dispatch.completed_generation.load(Ordering::Acquire) == generation
-        {
+        if dispatch.job_count == 0 || dispatch.is_complete() {
             return Ok(());
         }
         let pipeline_cache = world.resource::<PipelineCache>();

@@ -11,7 +11,6 @@ pub(super) struct ResidentTile {
     pub slot: u32,
 }
 
-#[derive(Default)]
 pub(super) struct ResidencyUpdate {
     pub generated: Vec<ResidentTile>,
     pub displayed: Vec<ResidentTile>,

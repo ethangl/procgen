@@ -5,8 +5,8 @@ use bevy::{camera::Projection, prelude::*};
 use procgen_core::Vec3 as ProcgenVec3;
 use procgen_cubesphere::{CubeFace, TILE_QUADS, TileAddress};
 
-pub(super) const TILE_SPLIT_PROJECTED_PIXELS: f32 = 180.0;
-pub(super) const TILE_MERGE_PROJECTED_PIXELS: f32 = 140.0;
+const TILE_SPLIT_PROJECTED_PIXELS: f32 = 180.0;
+const TILE_MERGE_PROJECTED_PIXELS: f32 = 140.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CoverageView {

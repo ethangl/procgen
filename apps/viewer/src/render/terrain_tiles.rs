@@ -104,6 +104,12 @@ struct TerrainTileDispatch {
     completed_generation: Arc<AtomicU32>,
 }
 
+impl TerrainTileDispatch {
+    fn is_complete(&self) -> bool {
+        self.completed_generation.load(Ordering::Acquire) == self.generation
+    }
+}
+
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 struct TerrainTileJob {
@@ -112,7 +118,7 @@ struct TerrainTileJob {
 }
 
 #[derive(Resource, Default)]
-struct TerrainTileCoverage(Vec<(ResidentTile, Entity)>);
+struct TerrainTileCoverage(HashMap<ResidentTile, Entity>);
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum TerrainTileMode {
@@ -170,11 +176,9 @@ fn terrain_dispatch_completed(
     dispatch: Res<TerrainTileDispatch>,
     mut observed: Local<u32>,
 ) -> bool {
-    let completed = dispatch.completed_generation.load(Ordering::Acquire);
-    let changed =
-        dispatch.generation != 0 && completed == dispatch.generation && completed != *observed;
+    let changed = dispatch.is_complete() && dispatch.generation != *observed;
     if changed {
-        *observed = completed;
+        *observed = dispatch.generation;
     }
     changed
 }
@@ -234,7 +238,7 @@ fn initialize_gpu_world(
     relief: Res<ReliefSettings>,
     mut assets: TerrainWorldAssets,
 ) {
-    for (_, entity) in assets.coverage.0.drain(..) {
+    for (_, entity) in assets.coverage.0.drain() {
         assets.commands.entity(entity).despawn();
     }
     assets.selection.clear();
@@ -271,6 +275,7 @@ fn initialize_gpu_world(
         bytemuck::bytes_of(&parameters),
         RenderAssetUsages::default(),
     ));
+    // wgpu storage bindings cannot be empty; this placeholder is never dispatched.
     let jobs = assets.buffers.add(ShaderStorageBuffer::new(
         bytemuck::bytes_of(&TerrainTileJob {
             address: [0; 4],
@@ -356,10 +361,7 @@ fn update_tile_coverage(
     mode: Res<TerrainTileMode>,
     mut assets: TerrainCoverageAssets,
 ) {
-    if assets.dispatch.generation != 0
-        && assets.dispatch.completed_generation.load(Ordering::Acquire)
-            == assets.dispatch.generation
-    {
+    if assets.dispatch.is_complete() {
         assets.residency.complete_in_flight();
     }
     let targets = if *mode == TerrainTileMode::Tiles {
@@ -400,9 +402,7 @@ fn generation_jobs(generated: &[ResidentTile]) -> Vec<TerrainTileJob> {
 }
 
 fn sync_displayed_tiles(displayed: &[ResidentTile], assets: &mut TerrainCoverageAssets) {
-    let mut previous = std::mem::take(&mut assets.coverage.0)
-        .into_iter()
-        .collect::<HashMap<_, _>>();
+    let mut previous = std::mem::take(&mut assets.coverage.0);
     let mesh = assets.grid.0.clone();
     let material = assets.tile_assets.material.clone();
     assets.coverage.0 = displayed
@@ -638,13 +638,13 @@ mod tests {
         app.world_mut()
             .resource_mut::<TerrainTileCoverage>()
             .0
-            .push((
+            .insert(
                 ResidentTile {
                     address: stale_address,
                     slot: 0,
                 },
                 stale_entity,
-            ));
+            );
 
         app.insert_resource(fixture(64, 71));
         app.update();
