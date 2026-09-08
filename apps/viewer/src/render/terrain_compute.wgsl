@@ -3,8 +3,7 @@
 @group(0) @binding(2) var<storage, read> terrain_world: TerrainParameters;
 struct TerrainTileJob {
     address: vec4<u32>,
-    destination_slot: u32,
-    padding: vec3<u32>,
+    destination: vec4<u32>,
 }
 @group(0) @binding(3) var<storage, read> terrain_jobs: array<TerrainTileJob>;
 @group(0) @binding(4) var<storage, read_write> terrain_samples: array<vec4<f32>>;
@@ -27,6 +26,9 @@ fn generate_terrain_tiles(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= sample_count { return; }
     let job_index = id.x / CUBESPHERE_TILE_SAMPLE_COUNT;
     let job = terrain_jobs[job_index];
+    let destination_slot = job.destination.x;
+    let slot_count = arrayLength(&terrain_samples) / CUBESPHERE_TILE_SAMPLE_COUNT;
+    if destination_slot >= slot_count { return; }
     let local_index = id.x % CUBESPHERE_TILE_SAMPLE_COUNT;
     let local = vec2(
         local_index % CUBESPHERE_TILE_VERTICES,
@@ -34,6 +36,6 @@ fn generate_terrain_tiles(@builtin(global_invocation_id) id: vec3<u32>) {
     );
     let direction = cubesphere_tile_direction(job.address, local);
     let height = terrain_height_gpu(direction);
-    let output_index = job.destination_slot * CUBESPHERE_TILE_SAMPLE_COUNT + local_index;
+    let output_index = destination_slot * CUBESPHERE_TILE_SAMPLE_COUNT + local_index;
     terrain_samples[output_index] = vec4(height.value, height.derivative);
 }

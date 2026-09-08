@@ -368,19 +368,23 @@ fn upload_generation_jobs(
     if generated.is_empty() || !dispatch.pending.is_empty() {
         return;
     }
-    let mut encoded = vec![[0_u32; 8]; NEW_TERRAIN_TILES_PER_FRAME];
-    for (job, output) in generated.iter().zip(&mut encoded) {
-        output[..4].copy_from_slice(&job.address.gpu_words());
-        output[4] = job.slot;
-    }
     assets
         .buffers
         .get_mut(&assets.resources.jobs)
         .expect("terrain job buffer must remain alive")
-        .set_data(encoded);
+        .set_data(encode_generation_jobs(generated));
     dispatch.generation = dispatch.generation.wrapping_add(1);
     dispatch.job_count = generated.len() as u32;
     dispatch.pending.extend_from_slice(generated);
+}
+
+fn encode_generation_jobs(generated: &[TileGeneration]) -> Vec<[u32; 8]> {
+    let mut encoded = vec![[u32::MAX; 8]; NEW_TERRAIN_TILES_PER_FRAME];
+    for (job, output) in generated.iter().zip(&mut encoded) {
+        output[..4].copy_from_slice(&job.address.gpu_words());
+        output[4] = job.slot;
+    }
+    encoded
 }
 
 fn sync_displayed_tiles(displayed: &[ResidentTile], assets: &mut TerrainCoverageAssets) {
@@ -634,6 +638,24 @@ mod tests {
         assert_eq!((tag >> 12) & 0x7, u32::from(tile.address.level()));
         assert_eq!((tag >> 15) & 0xf, tile.address.x());
         assert_eq!((tag >> 19) & 0xf, tile.address.y());
+    }
+
+    #[test]
+    fn generation_jobs_match_the_two_vec4_shader_stride_and_disable_padding() {
+        let jobs = [
+            TileGeneration {
+                address: TileAddress::new(CubeFace::PositiveX, 4, 3, 5).unwrap(),
+                slot: 17,
+            },
+            TileGeneration {
+                address: TileAddress::new(CubeFace::NegativeZ, 2, 1, 2).unwrap(),
+                slot: 311,
+            },
+        ];
+        let encoded = encode_generation_jobs(&jobs);
+        assert_eq!(encoded[0], [0, 4, 3, 5, 17, u32::MAX, u32::MAX, u32::MAX]);
+        assert_eq!(encoded[1], [5, 2, 1, 2, 311, u32::MAX, u32::MAX, u32::MAX]);
+        assert_eq!(encoded[2], [u32::MAX; 8]);
     }
 
     #[test]
