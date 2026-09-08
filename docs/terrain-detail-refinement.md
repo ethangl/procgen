@@ -302,7 +302,7 @@ into the viewer.
 
 ### Quadtree split and merge, skirts, octave fading, and a closer camera limit.
 
-13. Add quadtree selection and bounded tile-generation scheduling.
+13. ~~Add quadtree selection and bounded tile-generation scheduling.~~
 14. Add skirts, relative tile origins, octave fading, and closer camera behavior.
 
 ### CPU and CUDA tile export sharing the viewer's function, with the tolerances measured and recorded.

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 use super::{TerrainGpuResources, TerrainTileDispatch};
 use bevy::{
@@ -28,7 +28,7 @@ pub(super) fn install(render_app: &mut SubApp) {
             prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
         );
     let mut graph = render_app.world_mut().resource_mut::<RenderGraph>();
-    graph.add_node(TerrainComputeLabel, TerrainComputeNode::default());
+    graph.add_node(TerrainComputeLabel, TerrainComputeNode);
     graph.add_node_edge(TerrainComputeLabel, bevy::render::graph::CameraDriverLabel);
 }
 
@@ -46,6 +46,7 @@ fn initialize_pipeline(mut commands: Commands, pipeline_cache: Res<PipelineCache
             storage_buffer_read_only_sized(false, None),
             storage_buffer_read_only_sized(false, None),
             storage_buffer_read_only_sized(false, None),
+            storage_buffer_sized(false, None),
             storage_buffer_sized(false, None),
         ),
     );
@@ -90,6 +91,9 @@ fn prepare_bind_group(
     let Some(parameters) = resources.buffers.get(&handles.parameters) else {
         return;
     };
+    let Some(jobs) = resources.buffers.get(&handles.jobs) else {
+        return;
+    };
     let Some(addresses) = resources.buffers.get(&handles.addresses) else {
         return;
     };
@@ -100,6 +104,7 @@ fn prepare_bind_group(
         controls.buffer.as_entire_buffer_binding(),
         stamps.buffer.as_entire_buffer_binding(),
         parameters.buffer.as_entire_buffer_binding(),
+        jobs.buffer.as_entire_buffer_binding(),
         addresses.buffer.as_entire_buffer_binding(),
         samples.buffer.as_entire_buffer_binding(),
     ));
@@ -116,10 +121,7 @@ fn prepare_bind_group(
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 struct TerrainComputeLabel;
 
-#[derive(Default)]
-struct TerrainComputeNode {
-    completed_generation: AtomicU64,
-}
+struct TerrainComputeNode;
 
 impl render_graph::Node for TerrainComputeNode {
     fn run(
@@ -129,10 +131,8 @@ impl render_graph::Node for TerrainComputeNode {
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
         let dispatch = world.resource::<TerrainTileDispatch>();
-        let generation = u64::from(dispatch.generation);
-        if dispatch.tile_count == 0
-            || self.completed_generation.load(Ordering::Relaxed) == generation
-        {
+        let generation = dispatch.generation;
+        if dispatch.job_count == 0 || dispatch.is_complete() {
             return Ok(());
         }
         let pipeline_cache = world.resource::<PipelineCache>();
@@ -143,7 +143,7 @@ impl render_graph::Node for TerrainComputeNode {
         let Some(bind_group) = world.get_resource::<TerrainComputeBindGroup>() else {
             return Ok(());
         };
-        let invocation_count = dispatch.tile_count as usize * TERRAIN_TILE_SAMPLE_COUNT;
+        let invocation_count = dispatch.job_count as usize * TERRAIN_TILE_SAMPLE_COUNT;
         let mut pass =
             render_context
                 .command_encoder()
@@ -154,8 +154,9 @@ impl render_graph::Node for TerrainComputeNode {
         pass.set_pipeline(compute_pipeline);
         pass.set_bind_group(0, &bind_group.0, &[]);
         pass.dispatch_workgroups(invocation_count.div_ceil(64) as u32, 1, 1);
-        self.completed_generation
-            .store(generation, Ordering::Relaxed);
+        dispatch
+            .completed_generation
+            .store(generation, Ordering::Release);
         Ok(())
     }
 }
