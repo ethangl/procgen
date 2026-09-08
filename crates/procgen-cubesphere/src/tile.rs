@@ -40,7 +40,7 @@ impl fmt::Display for TileError {
 
 impl std::error::Error for TileError {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileAddress {
     face: CubeFace,
     level: u8,
@@ -49,6 +49,15 @@ pub struct TileAddress {
 }
 
 impl TileAddress {
+    pub const fn root(face: CubeFace) -> Self {
+        Self {
+            face,
+            level: 0,
+            x: 0,
+            y: 0,
+        }
+    }
+
     pub fn new(face: CubeFace, level: u8, x: u32, y: u32) -> Result<Self, TileError> {
         if level > MAX_TILE_LEVEL {
             return Err(TileError::LevelTooLarge);
@@ -100,6 +109,21 @@ impl TileAddress {
         })
     }
 
+    pub fn children(self) -> Option<[Self; 4]> {
+        (self.level < MAX_TILE_LEVEL)
+            .then(|| TileQuadrant::ALL.map(|quadrant| self.child(quadrant).unwrap()))
+    }
+
+    pub fn is_ancestor_of(self, mut descendant: Self) -> bool {
+        if self.face != descendant.face || self.level > descendant.level {
+            return false;
+        }
+        while descendant.level > self.level {
+            descendant = descendant.parent().unwrap();
+        }
+        self == descendant
+    }
+
     /// Converts a tile-local vertex into its exact integer address on the face.
     ///
     /// Adjacent tiles therefore produce the same integer numerator for a
@@ -119,7 +143,7 @@ impl TileAddress {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TileQuadrant {
     LowerLeft,
     LowerRight,
@@ -128,6 +152,13 @@ pub enum TileQuadrant {
 }
 
 impl TileQuadrant {
+    pub const ALL: [Self; 4] = [
+        Self::LowerLeft,
+        Self::LowerRight,
+        Self::UpperLeft,
+        Self::UpperRight,
+    ];
+
     const fn offsets(self) -> (u32, u32) {
         match self {
             Self::LowerLeft => (0, 0),
@@ -188,7 +219,10 @@ mod tests {
 
     #[test]
     fn tile_addresses_validate_bounds() {
-        assert!(TileAddress::new(CubeFace::PositiveX, 0, 0, 0).is_ok());
+        assert_eq!(
+            TileAddress::root(CubeFace::PositiveX),
+            TileAddress::new(CubeFace::PositiveX, 0, 0, 0).unwrap()
+        );
         let edge = (1_u32 << MAX_TILE_LEVEL) - 1;
         assert!(TileAddress::new(CubeFace::NegativeZ, MAX_TILE_LEVEL, edge, edge).is_ok());
         assert_eq!(
@@ -236,6 +270,13 @@ mod tests {
                 .child(TileQuadrant::LowerLeft)
                 .is_none()
         );
+        assert_eq!(
+            parent.children().unwrap().map(|child| child.parent()),
+            [Some(parent); 4]
+        );
+        assert!(parent.is_ancestor_of(parent));
+        assert!(parent.is_ancestor_of(parent.children().unwrap()[3]));
+        assert!(!parent.is_ancestor_of(TileAddress::root(CubeFace::NegativeY)));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use procgen_core::Vec3;
 use std::f32::consts::FRAC_PI_4;
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CubeFace {
     PositiveX,
     NegativeX,

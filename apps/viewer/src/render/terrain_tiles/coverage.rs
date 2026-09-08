@@ -1,19 +1,12 @@
 use std::collections::HashSet;
 
 use super::{SURFACE_RADIUS, TERRAIN_MAX_TILE_LEVEL};
-use bevy::prelude::*;
+use bevy::{camera::Projection, prelude::*};
 use procgen_core::Vec3 as ProcgenVec3;
-use procgen_cubesphere::{CubeFace, TILE_QUADS, TileAddress, TileQuadrant};
+use procgen_cubesphere::{CubeFace, TILE_QUADS, TileAddress};
 
 pub(super) const TILE_SPLIT_PROJECTED_PIXELS: f32 = 180.0;
 pub(super) const TILE_MERGE_PROJECTED_PIXELS: f32 = 140.0;
-
-const QUADRANTS: [TileQuadrant; 4] = [
-    TileQuadrant::LowerLeft,
-    TileQuadrant::LowerRight,
-    TileQuadrant::UpperLeft,
-    TileQuadrant::UpperRight,
-];
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CoverageView {
@@ -26,6 +19,27 @@ pub(super) struct CoverageView {
     pub viewport_height: f32,
 }
 
+impl CoverageView {
+    pub(super) fn from_camera(
+        camera: &Camera,
+        projection: &Projection,
+        transform: &Transform,
+    ) -> Option<Self> {
+        let Projection::Perspective(projection) = projection else {
+            return None;
+        };
+        Some(Self {
+            position: transform.translation,
+            forward: *transform.forward(),
+            right: *transform.right(),
+            up: *transform.up(),
+            vertical_fov: projection.fov,
+            aspect_ratio: projection.aspect_ratio,
+            viewport_height: camera.logical_viewport_size()?.y,
+        })
+    }
+}
+
 #[derive(Resource, Default)]
 pub(super) struct QuadtreeSelection {
     split: HashSet<TileAddress>,
@@ -36,7 +50,7 @@ impl QuadtreeSelection {
         let previous = std::mem::take(&mut self.split);
         let mut selected = Vec::new();
         for face in CubeFace::ALL {
-            let root = TileAddress::new(face, 0, 0, 0).unwrap();
+            let root = TileAddress::root(face);
             self.visit(root, view, &previous, &mut selected);
         }
         selected
@@ -65,8 +79,8 @@ impl QuadtreeSelection {
         if address.level() < TERRAIN_MAX_TILE_LEVEL && bounds.projected_diameter(view) >= threshold
         {
             self.split.insert(address);
-            for quadrant in QUADRANTS {
-                self.visit(address.child(quadrant).unwrap(), view, previous, selected);
+            for child in address.children().unwrap() {
+                self.visit(child, view, previous, selected);
             }
         } else {
             selected.push(address);
@@ -218,18 +232,11 @@ mod tests {
                                 && point_in_frustum(direction, view)
                         });
                     if visibly_sampled {
-                        assert!(selected.iter().any(|tile| is_ancestor(*tile, fine)));
+                        assert!(selected.iter().any(|tile| tile.is_ancestor_of(fine)));
                     }
                 }
             }
         }
-    }
-
-    fn is_ancestor(ancestor: TileAddress, mut tile: TileAddress) -> bool {
-        while tile.level() > ancestor.level() {
-            tile = tile.parent().unwrap();
-        }
-        tile == ancestor
     }
 
     fn point_in_frustum(point: Vec3, view: CoverageView) -> bool {

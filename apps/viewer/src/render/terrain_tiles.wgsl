@@ -5,19 +5,20 @@
     view_transformations::position_world_to_clip,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage, read> terrain_samples: array<vec4<f32>>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage, read> terrain_addresses: array<vec4<u32>>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<storage, read> terrain_samples: array<vec4<f32>>;
 
 struct TerrainDisplayParameters {
     relief_exaggeration: f32,
     surface_radius: f32,
     padding: vec2<f32>,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> terrain_display: TerrainDisplayParameters;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> terrain_display: TerrainDisplayParameters;
 
 struct TerrainElevationPalette {
     stops: array<vec4<f32>, TERRAIN_ELEVATION_PALETTE_STOP_COUNT>,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> terrain_palette: TerrainElevationPalette;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> terrain_palette: TerrainElevationPalette;
 
 fn terrain_srgb_channel_to_linear(value: f32) -> f32 {
     if value <= 0.04045 {
@@ -52,18 +53,11 @@ fn terrain_elevation_color(height: f32) -> vec4<f32> {
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
-    let tag = mesh[vertex.instance_index].tag;
-    let slot = tag & 0x1ffu;
-    let address = vec4(
-        (tag >> 9u) & 0x7u,
-        (tag >> 12u) & 0x7u,
-        (tag >> 15u) & 0xfu,
-        (tag >> 19u) & 0xfu,
-    );
+    let slot = mesh[vertex.instance_index].tag;
     let local = vec2<u32>(vertex.position.xy);
     let sample_index = cubesphere_tile_sample_index(slot, local);
     let sample = terrain_samples[sample_index];
-    let direction = cubesphere_tile_direction(address, local);
+    let direction = cubesphere_tile_direction(terrain_addresses[slot], local);
     let radius = terrain_display.surface_radius
         + (sample.x - 0.5) * terrain_display.relief_exaggeration;
     let local_position = direction * radius;

@@ -47,6 +47,7 @@ fn initialize_pipeline(mut commands: Commands, pipeline_cache: Res<PipelineCache
             storage_buffer_read_only_sized(false, None),
             storage_buffer_read_only_sized(false, None),
             storage_buffer_sized(false, None),
+            storage_buffer_sized(false, None),
         ),
     );
     let layout = BindGroupLayoutDescriptor::new("terrain tile compute layout", &entries);
@@ -78,8 +79,7 @@ fn prepare_bind_group(
     mut prepared_generation: Local<Option<u32>>,
     resources: BindGroupResources,
 ) {
-    // The small job buffer is uploaded in place. Rebuilding this bind group picks up the
-    // render-world buffer that Bevy prepared for its stable asset handle.
+    // Each batch has an exact-size job buffer, so wait until Bevy has prepared its new handle.
     if existing.is_some()
         && !resources.resources.is_changed()
         && *prepared_generation == Some(dispatch.generation)
@@ -100,6 +100,9 @@ fn prepare_bind_group(
     let Some(jobs) = resources.buffers.get(&handles.jobs) else {
         return;
     };
+    let Some(addresses) = resources.buffers.get(&handles.addresses) else {
+        return;
+    };
     let Some(samples) = resources.buffers.get(&handles.samples) else {
         return;
     };
@@ -108,6 +111,7 @@ fn prepare_bind_group(
         stamps.buffer.as_entire_buffer_binding(),
         parameters.buffer.as_entire_buffer_binding(),
         jobs.buffer.as_entire_buffer_binding(),
+        addresses.buffer.as_entire_buffer_binding(),
         samples.buffer.as_entire_buffer_binding(),
     ));
     let bind_group = resources.render_device.create_bind_group(

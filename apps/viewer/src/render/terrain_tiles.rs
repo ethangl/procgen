@@ -2,13 +2,14 @@ mod compute;
 mod coverage;
 mod residency;
 
+use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicU32, Ordering},
 };
 
 use coverage::{CoverageView, QuadtreeSelection};
-use residency::{ResidentTile, TileGeneration, TileResidency};
+use residency::{ResidentTile, TileResidency};
 
 use super::{
     DiagnosticLayer, ReliefSettings, SURFACE_RADIUS, SurfaceSelection,
@@ -64,10 +65,12 @@ struct TerrainElevationPalette {
 #[derive(Asset, AsBindGroup, Clone, Debug, TypePath)]
 struct TerrainTileExtension {
     #[storage(100, read_only)]
+    addresses: Handle<ShaderStorageBuffer>,
+    #[storage(101, read_only)]
     samples: Handle<ShaderStorageBuffer>,
-    #[uniform(101)]
-    display: TerrainDisplayParameters,
     #[uniform(102)]
+    display: TerrainDisplayParameters,
+    #[uniform(103)]
     palette: TerrainElevationPalette,
 }
 
@@ -85,6 +88,7 @@ struct TerrainGpuResources {
     stamps: Handle<ShaderStorageBuffer>,
     parameters: Handle<ShaderStorageBuffer>,
     jobs: Handle<ShaderStorageBuffer>,
+    addresses: Handle<ShaderStorageBuffer>,
     samples: Handle<ShaderStorageBuffer>,
 }
 
@@ -93,23 +97,18 @@ struct TerrainTileAssets {
     material: Handle<TerrainTileMaterial>,
 }
 
-#[derive(Resource, Clone, ExtractResource)]
+#[derive(Resource, Clone, ExtractResource, Default)]
 struct TerrainTileDispatch {
     job_count: u32,
     generation: u32,
     completed_generation: Arc<AtomicU32>,
-    pending: Vec<TileGeneration>,
 }
 
-impl Default for TerrainTileDispatch {
-    fn default() -> Self {
-        Self {
-            job_count: 0,
-            generation: 0,
-            completed_generation: Arc::new(AtomicU32::new(u32::MAX)),
-            pending: Vec::new(),
-        }
-    }
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+struct TerrainTileJob {
+    address: [u32; 4],
+    destination: [u32; 4],
 }
 
 #[derive(Resource, Default)]
@@ -149,7 +148,12 @@ impl Plugin for TerrainTileRenderPlugin {
                 sync_relief.run_if(
                     resource_changed::<ReliefSettings>.and(resource_exists::<TerrainTileAssets>),
                 ),
-                update_tile_coverage,
+                update_tile_coverage.run_if(
+                    resource_changed::<GeneratedWorld>
+                        .or(resource_changed::<TerrainTileMode>)
+                        .or(camera_changed)
+                        .or(terrain_dispatch_completed),
+                ),
             )
                 .chain(),
         );
@@ -160,6 +164,19 @@ impl Plugin for TerrainTileRenderPlugin {
 
 fn camera_changed(camera: Single<Ref<Transform>, With<ViewerCamera>>) -> bool {
     camera.is_changed()
+}
+
+fn terrain_dispatch_completed(
+    dispatch: Res<TerrainTileDispatch>,
+    mut observed: Local<u32>,
+) -> bool {
+    let completed = dispatch.completed_generation.load(Ordering::Acquire);
+    let changed =
+        dispatch.generation != 0 && completed == dispatch.generation && completed != *observed;
+    if changed {
+        *observed = completed;
+    }
+    changed
 }
 
 pub(super) fn sync_mode(
@@ -222,7 +239,8 @@ fn initialize_gpu_world(
     }
     assets.selection.clear();
     *assets.residency = TileResidency::default();
-    *assets.dispatch = TerrainTileDispatch::default();
+    assets.dispatch.job_count = 0;
+    assets.dispatch.generation = assets.dispatch.generation.wrapping_add(1);
 
     let controls = pack_control_bake(&world.terrain_control_bake);
     let mut stamps = pack_stamps(&world.terrain_controls.stamps);
@@ -253,10 +271,17 @@ fn initialize_gpu_world(
         bytemuck::bytes_of(&parameters),
         RenderAssetUsages::default(),
     ));
-    let jobs = assets.buffers.add(ShaderStorageBuffer::from(vec![
-        [0_u32; 8];
-        NEW_TERRAIN_TILES_PER_FRAME
-    ]));
+    let jobs = assets.buffers.add(ShaderStorageBuffer::new(
+        bytemuck::bytes_of(&TerrainTileJob {
+            address: [0; 4],
+            destination: [0; 4],
+        }),
+        RenderAssetUsages::default(),
+    ));
+    let addresses = assets.buffers.add(ShaderStorageBuffer::with_size(
+        MAX_RESIDENT_TILES * size_of::<[u32; 4]>(),
+        RenderAssetUsages::default(),
+    ));
     let samples = assets.buffers.add(ShaderStorageBuffer::with_size(
         TERRAIN_SAMPLE_CAPACITY * size_of::<Vec4>(),
         RenderAssetUsages::default(),
@@ -268,6 +293,7 @@ fn initialize_gpu_world(
             ..default()
         },
         extension: TerrainTileExtension {
+            addresses: addresses.clone(),
             samples: samples.clone(),
             display: TerrainDisplayParameters {
                 relief_exaggeration: relief.exaggeration,
@@ -282,6 +308,7 @@ fn initialize_gpu_world(
         stamps,
         parameters,
         jobs,
+        addresses,
         samples,
     });
     assets
@@ -305,6 +332,7 @@ struct TerrainCoverageAssets<'w, 's> {
     coverage: ResMut<'w, TerrainTileCoverage>,
     selection: ResMut<'w, QuadtreeSelection>,
     residency: ResMut<'w, TileResidency>,
+    dispatch: ResMut<'w, TerrainTileDispatch>,
     resources: ResMut<'w, TerrainGpuResources>,
     tile_assets: Res<'w, TerrainTileAssets>,
     buffers: ResMut<'w, Assets<ShaderStorageBuffer>>,
@@ -326,84 +354,70 @@ fn sync_relief(
 fn update_tile_coverage(
     camera: Single<(&Camera, &Projection, &Transform), With<ViewerCamera>>,
     mode: Res<TerrainTileMode>,
-    mut dispatch: ResMut<TerrainTileDispatch>,
     mut assets: TerrainCoverageAssets,
 ) {
-    if !dispatch.pending.is_empty()
-        && dispatch.completed_generation.load(Ordering::Acquire) == dispatch.generation
+    if assets.dispatch.generation != 0
+        && assets.dispatch.completed_generation.load(Ordering::Acquire)
+            == assets.dispatch.generation
     {
-        assets.residency.complete(&dispatch.pending);
-        dispatch.pending.clear();
-        dispatch.job_count = 0;
+        assets.residency.complete_in_flight();
     }
     let targets = if *mode == TerrainTileMode::Tiles {
         let (camera, projection, transform) = *camera;
-        let Projection::Perspective(projection) = projection else {
+        let Some(view) = CoverageView::from_camera(camera, projection, transform) else {
             return;
         };
-        let viewport_height = camera.logical_viewport_size().map_or(800.0, |size| size.y);
-        assets.selection.select(CoverageView {
-            position: transform.translation,
-            forward: *transform.forward(),
-            right: *transform.right(),
-            up: *transform.up(),
-            vertical_fov: projection.fov,
-            aspect_ratio: projection.aspect_ratio,
-            viewport_height,
-        })
+        assets.selection.select(view)
     } else {
         assets.selection.clear();
         Vec::new()
     };
     let update = assets.residency.update(&targets);
-    upload_generation_jobs(&update.generated, &mut dispatch, &mut assets);
+    upload_generation_jobs(&update.generated, &mut assets);
     sync_displayed_tiles(&update.displayed, &mut assets);
 }
 
-fn upload_generation_jobs(
-    generated: &[TileGeneration],
-    dispatch: &mut TerrainTileDispatch,
-    assets: &mut TerrainCoverageAssets,
-) {
-    if generated.is_empty() || !dispatch.pending.is_empty() {
+fn upload_generation_jobs(generated: &[ResidentTile], assets: &mut TerrainCoverageAssets) {
+    if generated.is_empty() {
         return;
     }
-    assets
-        .buffers
-        .get_mut(&assets.resources.jobs)
-        .expect("terrain job buffer must remain alive")
-        .set_data(encode_generation_jobs(generated));
-    dispatch.generation = dispatch.generation.wrapping_add(1);
-    dispatch.job_count = generated.len() as u32;
-    dispatch.pending.extend_from_slice(generated);
+    assets.resources.jobs = assets.buffers.add(ShaderStorageBuffer::new(
+        bytemuck::cast_slice(&generation_jobs(generated)),
+        RenderAssetUsages::default(),
+    ));
+    assets.dispatch.generation = assets.dispatch.generation.wrapping_add(1);
+    assets.dispatch.job_count = generated.len() as u32;
 }
 
-fn encode_generation_jobs(generated: &[TileGeneration]) -> Vec<[u32; 8]> {
-    let mut encoded = vec![[u32::MAX; 8]; NEW_TERRAIN_TILES_PER_FRAME];
-    for (job, output) in generated.iter().zip(&mut encoded) {
-        output[..4].copy_from_slice(&job.address.gpu_words());
-        output[4] = job.slot;
-    }
-    encoded
+fn generation_jobs(generated: &[ResidentTile]) -> Vec<TerrainTileJob> {
+    generated
+        .iter()
+        .map(|tile| TerrainTileJob {
+            address: tile.address.gpu_words(),
+            destination: [tile.slot, 0, 0, 0],
+        })
+        .collect()
 }
 
 fn sync_displayed_tiles(displayed: &[ResidentTile], assets: &mut TerrainCoverageAssets) {
-    let mut previous = std::mem::take(&mut assets.coverage.0);
+    let mut previous = std::mem::take(&mut assets.coverage.0)
+        .into_iter()
+        .collect::<HashMap<_, _>>();
     let mesh = assets.grid.0.clone();
     let material = assets.tile_assets.material.clone();
     assets.coverage.0 = displayed
         .iter()
         .copied()
         .map(|tile| {
-            if let Some(index) = previous.iter().position(|(current, _)| *current == tile) {
-                return previous.swap_remove(index);
+            if let Some(entity) = previous.remove(&tile) {
+                return (tile, entity);
             }
             let entity = assets
                 .commands
                 .spawn((
                     Mesh3d(mesh.clone()),
                     MeshMaterial3d(material.clone()),
-                    MeshTag(pack_mesh_tag(tile)),
+                    MeshTag(tile.slot),
                     NoFrustumCulling,
                 ))
                 .id();
@@ -413,16 +427,6 @@ fn sync_displayed_tiles(displayed: &[ResidentTile], assets: &mut TerrainCoverage
     for (_, entity) in previous {
         assets.commands.entity(entity).despawn();
     }
-}
-
-fn pack_mesh_tag(tile: ResidentTile) -> u32 {
-    debug_assert!(tile.slot < MAX_RESIDENT_TILES as u32);
-    debug_assert!(tile.address.level() <= TERRAIN_MAX_TILE_LEVEL);
-    tile.slot
-        | (tile.address.face().index() as u32) << 9
-        | u32::from(tile.address.level()) << 12
-        | tile.address.x() << 15
-        | tile.address.y() << 19
 }
 
 fn terrain_tile_mode(camera_distance: f32, selected: Option<DiagnosticLayer>) -> TerrainTileMode {
@@ -491,7 +495,7 @@ mod tests {
         };
 
         for face in CubeFace::ALL {
-            let address = TileAddress::new(face, 0, 0, 0).unwrap();
+            let address = TileAddress::root(face);
             for triangle in indices.chunks_exact(3) {
                 let directions = [triangle[0], triangle[1], triangle[2]].map(|index| {
                     let [x, y, _] = positions[index as usize];
@@ -561,6 +565,41 @@ mod tests {
     }
 
     #[test]
+    fn completion_condition_runs_once_per_finished_generation() {
+        #[derive(Resource, Default)]
+        struct Runs(u32);
+
+        fn count_run(mut runs: ResMut<Runs>) {
+            runs.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.init_resource::<TerrainTileDispatch>()
+            .init_resource::<Runs>()
+            .add_systems(Update, count_run.run_if(terrain_dispatch_completed));
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 0);
+
+        let mut dispatch = app.world_mut().resource_mut::<TerrainTileDispatch>();
+        dispatch.generation = 1;
+        dispatch.completed_generation.store(1, Ordering::Release);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 1);
+
+        let mut dispatch = app.world_mut().resource_mut::<TerrainTileDispatch>();
+        dispatch.generation = 2;
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 1);
+        app.world()
+            .resource::<TerrainTileDispatch>()
+            .completed_generation
+            .store(2, Ordering::Release);
+        app.update();
+        assert_eq!(app.world().resource::<Runs>().0, 2);
+    }
+
+    #[test]
     fn world_replacement_resets_coverage_and_world_owned_gpu_resources() {
         use crate::test_support::fixture;
         use bevy::asset::{AssetApp, AssetPlugin};
@@ -588,6 +627,7 @@ mod tests {
             first.stamps.id(),
             first.parameters.id(),
             first.jobs.id(),
+            first.addresses.id(),
             first.samples.id(),
             first_tile_assets.material.id(),
         );
@@ -617,6 +657,7 @@ mod tests {
                 second.stamps.id(),
                 second.parameters.id(),
                 second.jobs.id(),
+                second.addresses.id(),
                 second.samples.id(),
                 second_tile_assets.material.id(),
             )
@@ -627,35 +668,32 @@ mod tests {
     }
 
     #[test]
-    fn mesh_tag_round_trips_the_slice_13_address_and_slot_ranges() {
-        let tile = ResidentTile {
-            address: TileAddress::new(CubeFace::NegativeY, 4, 15, 13).unwrap(),
-            slot: 511,
-        };
-        let tag = pack_mesh_tag(tile);
-        assert_eq!(tag & 0x1ff, tile.slot);
-        assert_eq!((tag >> 9) & 0x7, tile.address.face().index() as u32);
-        assert_eq!((tag >> 12) & 0x7, u32::from(tile.address.level()));
-        assert_eq!((tag >> 15) & 0xf, tile.address.x());
-        assert_eq!((tag >> 19) & 0xf, tile.address.y());
-    }
-
-    #[test]
-    fn generation_jobs_match_the_two_vec4_shader_stride_and_disable_padding() {
+    fn generation_jobs_match_the_named_two_vec4_shader_record() {
         let jobs = [
-            TileGeneration {
+            ResidentTile {
                 address: TileAddress::new(CubeFace::PositiveX, 4, 3, 5).unwrap(),
                 slot: 17,
             },
-            TileGeneration {
-                address: TileAddress::new(CubeFace::NegativeZ, 2, 1, 2).unwrap(),
+            ResidentTile {
+                address: TileAddress::new(CubeFace::NegativeZ, 12, 4_095, 3_000).unwrap(),
                 slot: 311,
             },
         ];
-        let encoded = encode_generation_jobs(&jobs);
-        assert_eq!(encoded[0], [0, 4, 3, 5, 17, u32::MAX, u32::MAX, u32::MAX]);
-        assert_eq!(encoded[1], [5, 2, 1, 2, 311, u32::MAX, u32::MAX, u32::MAX]);
-        assert_eq!(encoded[2], [u32::MAX; 8]);
+        let encoded = generation_jobs(&jobs);
+        assert_eq!(size_of::<TerrainTileJob>(), 32);
+        assert_eq!(
+            encoded,
+            [
+                TerrainTileJob {
+                    address: [0, 4, 3, 5],
+                    destination: [17, 0, 0, 0],
+                },
+                TerrainTileJob {
+                    address: [5, 12, 4_095, 3_000],
+                    destination: [311, 0, 0, 0],
+                },
+            ]
+        );
     }
 
     #[test]
