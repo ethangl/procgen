@@ -3157,6 +3157,9 @@ name = "procgen-cubesphere"
 version = "0.1.0"
 dependencies = [
  "procgen-core",
+ "procgen-sphere",
+ "procgen-sphere-mesh",
+ "rayon",
 ]
 
 [[package]]

@@ -3,14 +3,15 @@
 //! This module only derives per-cell controls and stable sparse stamp inputs. It does not
 //! interpolate, bake, evaluate noise, or mutate any upstream field.
 
-use procgen_core::Vec3;
+use crate::field::{
+    TerrainCellControls, TerrainControlError, TerrainControls, TerrainStampInput, TerrainStampKind,
+};
 use procgen_geology::{
-    CratonField, GeologyInputError, HotspotField, IsostaticAdjustment, OceanicPeakField,
-    OceanicPeakKind, SedimentaryBasinField, VolcanicArcField,
+    CratonField, HotspotField, IsostaticAdjustment, OceanicPeakField, OceanicPeakKind,
+    SedimentaryBasinField, VolcanicArcField,
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{BoundaryClass, BoundaryClassification, SeafloorAge, StageInputError};
-use std::fmt;
+use procgen_tectonics::{BoundaryClass, BoundaryClassification, SeafloorAge};
 
 /// Coefficients for converting completed coarse fields into normalized detail controls.
 ///
@@ -138,93 +139,6 @@ pub struct TerrainControlInputs<'a> {
     pub oceanic_peaks: &'a OceanicPeakField,
 }
 
-/// Per-cell controls consumed by later interpolation and height-function slices.
-///
-/// `base_elevation` is the final isostatically adjusted normalized elevation and is copied
-/// unchanged. `detail_amplitude` and `abyssal_amplitude` are normalized-elevation offsets;
-/// `ridge_weight` and `octave_gain` are unitless. All four are clamped to `[0, 1]`, and
-/// `octave_gain` is the multiplicative gain used between successive noise octaves. Composition
-/// order is fixed: baselines, cratons, volcanic arcs, convergent/divergent/transform boundaries,
-/// then basins.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TerrainCellControls {
-    pub base_elevation: f32,
-    pub detail_amplitude: f32,
-    pub ridge_weight: f32,
-    pub octave_gain: f32,
-    pub abyssal_amplitude: f32,
-}
-
-/// Stable type order used when multiple stamps overlap: hotspot, volcanic arc, seamount,
-/// then abyssal hill. Within a type, upstream source order is retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TerrainStampKind {
-    Hotspot,
-    VolcanicArc,
-    OceanicSeamount,
-    OceanicAbyssalHill,
-}
-
-/// Sparse input for a later terrain stamp evaluator.
-///
-/// `position` uses the mesh's surface-coordinate units. `strength` is unitless and clamped
-/// to `[0, 1]`. `source_index` is the stable upstream index, with volcanic-arc peaks indexed by
-/// their flattened segment/peak order.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TerrainStampInput {
-    pub cell: usize,
-    pub kind: TerrainStampKind,
-    pub source_index: usize,
-    pub position: Vec3,
-    pub strength: f32,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TerrainControls {
-    pub cells: Vec<TerrainCellControls>,
-    /// Sorted by cell, kind, then source index, defining deterministic overlap evaluation.
-    pub stamps: Vec<TerrainStampInput>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerrainControlError {
-    InvalidConfig,
-    Tectonics(StageInputError),
-    Geology(GeologyInputError),
-}
-
-impl fmt::Display for TerrainControlError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidConfig => formatter.write_str("terrain-control configuration is invalid"),
-            Self::Tectonics(error) => error.fmt(formatter),
-            Self::Geology(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for TerrainControlError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidConfig => None,
-            Self::Tectonics(error) => Some(error),
-            Self::Geology(error) => Some(error),
-        }
-    }
-}
-
-impl From<StageInputError> for TerrainControlError {
-    fn from(error: StageInputError) -> Self {
-        Self::Tectonics(error)
-    }
-}
-
-impl From<GeologyInputError> for TerrainControlError {
-    fn from(error: GeologyInputError) -> Self {
-        Self::Geology(error)
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct CellBoundaryStrengths {
     convergent: f32,
@@ -308,10 +222,12 @@ pub fn compose_terrain_controls(
         })
         .collect();
 
-    Ok(TerrainControls {
+    let controls = TerrainControls {
         cells,
         stamps: compose_stamps(mesh, inputs, config),
-    })
+    };
+    debug_assert!(controls.validate(mesh).is_ok());
+    Ok(controls)
 }
 
 fn compose_stamps(
@@ -392,6 +308,7 @@ fn validate_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use procgen_geology::GeologyInputError;
     use procgen_geology::{
         CratonDiagnostics, Hotspot, HotspotDiagnostics, IsostaticAdjustmentDiagnostics,
         OceanicPeak, OceanicPeakDiagnostics, SedimentaryBasin, SedimentaryBasinDiagnostics,
@@ -399,7 +316,7 @@ mod tests {
     };
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
-    use procgen_tectonics::SeafloorAgeDiagnostics;
+    use procgen_tectonics::{SeafloorAgeDiagnostics, StageInputError};
 
     struct Fixture {
         mesh: SphereMesh,

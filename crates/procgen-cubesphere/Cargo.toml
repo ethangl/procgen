@@ -6,3 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 procgen-core = { path = "../procgen-core" }
+procgen-sphere-mesh = { path = "../procgen-sphere-mesh" }
+rayon = "1"
+
+[dev-dependencies]
+procgen-sphere = { path = "../procgen-sphere" }
