@@ -14,3 +14,9 @@ pub use mapping::{
 pub use tile::{
     FaceGridVertex, MAX_TILE_LEVEL, TILE_QUADS, TILE_VERTICES, TileAddress, TileError, TileQuadrant,
 };
+
+/// WGSL mirror of canonical cube-sphere mapping and tile addressing.
+pub const MAPPING_WGSL_SOURCE: &str = include_str!("../wgsl/mapping.wgsl");
+
+/// WGSL mirror of canonical cross-face field sampling.
+pub const FIELD_WGSL_SOURCE: &str = include_str!("../wgsl/field.wgsl");

@@ -1,13 +1,7 @@
-use std::{
-    future::Future,
-    sync::{Arc, mpsc},
-    task::{Context, Poll, Wake, Waker},
-    thread,
-};
-
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{ScalarFieldSample3, Vec3};
 use procgen_cubesphere::{CubeFace, TILE_QUADS, TILE_VERTICES, TileAddress};
+use procgen_gpu_tests::{readback, request_device};
 use procgen_terrain::{
     TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE,
     TERRAIN_WGSL_VALUE_TOLERANCE, TerrainCellControls, TerrainControlBake, TerrainGpuParameters,
@@ -19,48 +13,6 @@ use wgpu::util::DeviceExt;
 const TEST_SEED: u64 = 0x6d2b_79f5_1234_abcd;
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct ControlTexel {
-    channels_0: [f32; 4],
-    channels_1: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Stamp {
-    position_strength: [f32; 4],
-    kind_padding: [u32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Parameters {
-    dimensions: [u32; 4],
-    noise_keys_0: [u32; 4],
-    noise_keys_1: [u32; 4],
-    detail_octaves: [u32; 4],
-    detail: [f32; 4],
-    abyssal: [f32; 4],
-    coast: [f32; 4],
-    stamp_profiles: [[f32; 4]; 4],
-}
-
-impl From<TerrainGpuParameters> for Parameters {
-    fn from(value: TerrainGpuParameters) -> Self {
-        Self {
-            dimensions: value.dimensions,
-            noise_keys_0: value.noise_keys_0,
-            noise_keys_1: value.noise_keys_1,
-            detail_octaves: value.detail_octaves,
-            detail: value.detail,
-            abyssal: value.abyssal,
-            coast: value.coast,
-            stamp_profiles: value.stamp_profiles,
-        }
-    }
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Output {
     sample: [f32; 4],
@@ -68,71 +20,42 @@ struct Output {
 
 #[test]
 fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
-    let instance = wgpu::Instance::default();
-    let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-    })) {
-        Ok(adapter) => adapter,
-        Err(error) => {
-            eprintln!("SKIPPED: no compatible GPU adapter exists: {error}");
-            return;
-        }
+    let Some((adapter_info, device, queue)) = request_device("procgen terrain agreement device")
+    else {
+        return;
     };
-    let adapter_info = adapter.get_info();
     println!(
         "GPU adapter: {} ({:?}, {:?})",
         adapter_info.name, adapter_info.backend, adapter_info.device_type
     );
-    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("procgen terrain agreement device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::MemoryUsage,
-        trace: wgpu::Trace::Off,
-    }))
-    .expect("a compatible adapter must provide a baseline compute device");
-
     let bake = varying_bake();
     let config = fixed_level_4_height_config();
     let keys = TerrainNoiseKeys::new(TEST_SEED);
     let left_address = TileAddress::new(CubeFace::PositiveZ, 4, 7, 9).unwrap();
     let right_address = TileAddress::new(CubeFace::PositiveZ, 4, 8, 9).unwrap();
     let stamps = test_stamps(left_address);
-    let left_gpu = dispatch_tile(&device, &queue, left_address, &bake, &stamps, keys, config);
-    let right_gpu = dispatch_tile(&device, &queue, right_address, &bake, &stamps, keys, config);
-    let left_cpu = generate_terrain_tile(
-        TerrainTileInputs {
-            address: left_address,
-            controls: &bake,
-            stamps: &stamps,
-            noise_keys: keys,
-        },
-        config.validate().unwrap(),
-    );
+    let left_inputs = TerrainTileInputs {
+        address: left_address,
+        controls: &bake,
+        stamps: &stamps,
+        noise_keys: keys,
+    };
+    let right_inputs = TerrainTileInputs {
+        address: right_address,
+        ..left_inputs
+    };
+    let left_gpu = dispatch_tile(&device, &queue, left_inputs, config);
+    let right_gpu = dispatch_tile(&device, &queue, right_inputs, config);
+    let left_cpu = generate_terrain_tile(left_inputs, config.validate().unwrap());
 
     let (maximum_value, maximum_angle) = assert_agreement(&left_gpu, &left_cpu.samples);
     let coast_bake = coast_bake();
-    let coast_gpu = dispatch_tile(
-        &device,
-        &queue,
-        left_address,
-        &coast_bake,
-        &stamps,
-        keys,
-        config,
-    );
-    let coast_cpu = generate_terrain_tile(
-        TerrainTileInputs {
-            address: left_address,
-            controls: &coast_bake,
-            stamps: &stamps,
-            noise_keys: keys,
-        },
-        config.validate().unwrap(),
-    );
+    let coast_inputs = TerrainTileInputs {
+        controls: &coast_bake,
+        ..left_inputs
+    };
+    let coast_gpu = dispatch_tile(&device, &queue, coast_inputs, config);
+    let coast_cpu = generate_terrain_tile(coast_inputs, config.validate().unwrap());
     let (coast_value, coast_angle) = assert_agreement(&coast_gpu, &coast_cpu.samples);
     let maximum_value = maximum_value.max(coast_value);
     let maximum_angle = maximum_angle.max(coast_angle);
@@ -260,27 +183,13 @@ fn derivative_angle(left: Vec3, right: Vec3) -> f32 {
 fn dispatch_tile(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    address: TileAddress,
-    bake: &TerrainControlBake,
-    stamps: &[TerrainStampInput],
-    keys: TerrainNoiseKeys,
+    inputs: TerrainTileInputs<'_>,
     config: TerrainHeightConfig,
 ) -> Vec<Output> {
-    let parameters = Parameters::from(TerrainGpuParameters::new(bake, stamps, keys, config));
-    let controls: Vec<_> = pack_control_bake(bake)
-        .into_iter()
-        .map(|texel| ControlTexel {
-            channels_0: texel.channels_0,
-            channels_1: texel.channels_1,
-        })
-        .collect();
-    let stamps: Vec<_> = pack_stamps(stamps)
-        .into_iter()
-        .map(|stamp| Stamp {
-            position_strength: stamp.position_strength,
-            kind_padding: stamp.kind_padding,
-        })
-        .collect();
+    let parameters =
+        TerrainGpuParameters::new(inputs.controls, inputs.stamps, inputs.noise_keys, config);
+    let controls = pack_control_bake(inputs.controls);
+    let stamps = pack_stamps(inputs.stamps);
     let controls_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("terrain agreement controls"),
         contents: bytemuck::cast_slice(&controls),
@@ -303,35 +212,29 @@ fn dispatch_tile(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("terrain agreement readback"),
-        size: output_size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
     let shader_source = format!(
         r#"
 {TERRAIN_WGSL_SOURCE}
-@group(0) @binding(0) var<storage, read> control_texels: array<TerrainControlTexel>;
+@group(0) @binding(0) var<storage, read> control_texels: array<CubesphereFieldTexel>;
 @group(0) @binding(1) var<storage, read> stamps: array<TerrainStamp>;
 @group(0) @binding(2) var<uniform> parameters: TerrainParameters;
 @group(0) @binding(3) var<storage, read_write> output: array<vec4<f32>>;
-fn terrain_load_control_texel(index: u32) -> TerrainControlTexel {{ return control_texels[index]; }}
+fn cubesphere_load_field_texel(index: u32) -> CubesphereFieldTexel {{ return control_texels[index]; }}
 fn terrain_load_stamp(index: u32) -> TerrainStamp {{ return stamps[index]; }}
 fn terrain_parameters() -> TerrainParameters {{ return parameters; }}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     if (id.x >= {TERRAIN_TILE_SAMPLE_COUNT}u) {{ return; }}
     let local = vec2(id.x % {TILE_VERTICES}u, id.x / {TILE_VERTICES}u);
-    let direction = terrain_tile_direction(vec4({face}u, {level}u, {x}u, {y}u), local);
+    let direction = cubesphere_tile_direction(vec4({face}u, {level}u, {x}u, {y}u), local);
     let height = terrain_height_gpu(direction);
     output[id.x] = vec4(height.value, height.derivative);
 }}
 "#,
-        face = address.face().index(),
-        level = address.level(),
-        x = address.x(),
-        y = address.y(),
+        face = inputs.address.face().index(),
+        level = inputs.address.level(),
+        x = inputs.address.x(),
+        y = inputs.address.y(),
     );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("terrain agreement shader"),
@@ -374,38 +277,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(TERRAIN_TILE_SAMPLE_COUNT.div_ceil(64) as u32, 1, 1);
     }
-    encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, output_size);
     queue.submit([encoder.finish()]);
-    let slice = readback.slice(..);
-    let (sender, receiver) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        sender.send(result).unwrap()
-    });
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    receiver.recv().unwrap().unwrap();
-    let mapped = slice.get_mapped_range();
-    let outputs = bytemuck::cast_slice(&mapped).to_vec();
-    drop(mapped);
-    readback.unmap();
-    outputs
-}
-
-struct ThreadWaker(thread::Thread);
-
-impl Wake for ThreadWaker {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => thread::park(),
-        }
-    }
+    readback(device, queue, &output_buffer, TERRAIN_TILE_SAMPLE_COUNT)
 }

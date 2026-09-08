@@ -112,9 +112,12 @@ impl Plugin for DiagnosticRenderPlugin {
                     rebuild_surface.run_if(
                         resource_changed::<GeneratedWorld>
                             .or(resource_changed::<SurfaceSelection>)
-                            .or(resource_changed::<ReliefSettings>)
-                            .or(terrain_tiles::camera_changed),
+                            .or(resource_changed::<ReliefSettings>),
                     ),
+                    sync_surface_visibility
+                        .after(rebuild_surface)
+                        .after(terrain_tiles::sync_mode)
+                        .run_if(resource_changed::<terrain_tiles::TerrainTileMode>),
                     sync_layer_render_state.run_if(
                         resource_changed::<SurfaceSelection>
                             .or(resource_changed::<OverlaySettings>)
@@ -220,7 +223,6 @@ fn rebuild_surface(
     world: Res<GeneratedWorld>,
     selection: Res<SurfaceSelection>,
     relief: Res<ReliefSettings>,
-    camera: Single<&Transform, With<ViewerCamera>>,
     mut meshes: ResMut<Assets<Mesh>>,
     surface: Single<(&Mesh3d, &mut Visibility), With<SurfaceLayer>>,
 ) {
@@ -230,17 +232,21 @@ fn rebuild_surface(
             .surface()
             .expect("surface selection only stores fill layers")
             .build(&world, relief.exaggeration);
-        *visibility = if terrain_tiles::terrain_tiles_active(
-            camera.translation.length(),
-            selection.selected(),
-        ) {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        };
+        *visibility = Visibility::Inherited;
     } else {
         *visibility = Visibility::Hidden;
     }
+}
+
+fn sync_surface_visibility(
+    mode: Res<terrain_tiles::TerrainTileMode>,
+    selection: Res<SurfaceSelection>,
+    surface: Single<&mut Visibility, With<SurfaceLayer>>,
+) {
+    *surface.into_inner() = match (*mode, selection.selected()) {
+        (_, None) | (terrain_tiles::TerrainTileMode::Tiles, _) => Visibility::Hidden,
+        (terrain_tiles::TerrainTileMode::Coarse, Some(_)) => Visibility::Inherited,
+    };
 }
 
 fn sync_layer_render_state(

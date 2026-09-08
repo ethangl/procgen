@@ -20,7 +20,8 @@ pub use field::{
 };
 pub use gpu::{
     TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE, TERRAIN_WGSL_VALUE_TOLERANCE,
-    TerrainGpuControlTexel, TerrainGpuParameters, TerrainGpuStamp, pack_control_bake, pack_stamps,
+    TerrainGpuControlTexel, TerrainGpuParameters, TerrainGpuStamp, TerrainGpuStampProfile,
+    pack_control_bake, pack_stamps,
 };
 pub use height::{
     TerrainAbyssalConfig, TerrainDetailConfig, TerrainHeightConfig, TerrainHeightError,

@@ -238,10 +238,12 @@ here.
   implementation, the signed lattice-coordinate wrapper, and the WGSL source
   as a checked-in asset. It carries no domain knowledge.
 - `procgen-gpu-tests` is a test-only integration crate added with the first GPU
-  mirror. It owns wgpu dispatch agreement tests and has no production API.
+  mirror. It owns wgpu dispatch agreement tests and their shared device and
+  readback harness.
 - `procgen-sphere-mesh` gains Delaunay point location. It is a mesh query.
 - `procgen-cubesphere` is new: the equi-angular mapping, tile addressing, and
-  rasterization of mesh fields into faces. The heightmap plan already names
+  rasterization of mesh fields into faces, with checked-in WGSL sources for the
+  mapping and cross-face field sampler. The heightmap plan already names
   projection as its own boundary, and both the viewer and export consume it.
 - `procgen-terrain` is new: control composition and the height function that
   consumes the controls. They are one contract, and this is the layer where

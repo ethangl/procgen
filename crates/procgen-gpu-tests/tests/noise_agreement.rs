@@ -1,12 +1,6 @@
-use std::{
-    future::Future,
-    sync::{Arc, mpsc},
-    task::{Context, Poll, Wake, Waker},
-    thread,
-};
-
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{HASH_U32_TEST_VECTORS, ScalarFieldSample3, Vec3};
+use procgen_gpu_tests::{readback, request_device};
 use procgen_noise::{
     DerivativeDampedConfig, NOISE_DERIVATIVE_ANGLE_TOLERANCE, NOISE_VALUE_TOLERANCE, OctaveConfig,
     OctaveGain, RidgedMultifractalConfig, Validated, WGSL_SOURCE, derivative_damped_fbm_3d, fbm_3d,
@@ -301,33 +295,14 @@ struct FloatMeasurement {
 
 #[test]
 fn wgsl_noise_agrees_with_canonical_cpu() {
-    let instance = wgpu::Instance::default();
-    let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-    })) {
-        Ok(adapter) => adapter,
-        Err(error) => {
-            eprintln!("SKIPPED: no compatible GPU adapter exists: {error}");
-            return;
-        }
+    let Some((adapter_info, device, queue)) = request_device("procgen noise agreement device")
+    else {
+        return;
     };
-    let adapter_info = adapter.get_info();
     println!(
         "GPU adapter: {} ({:?}, {:?})",
         adapter_info.name, adapter_info.backend, adapter_info.device_type
     );
-
-    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("procgen noise agreement device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::MemoryUsage,
-        trace: wgpu::Trace::Off,
-    }))
-    .expect("a compatible adapter must provide a baseline compute device");
 
     let cases = agreement_cases();
     let inputs: Vec<_> = cases.iter().map(Case::input).collect();
@@ -543,12 +518,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("procgen noise readback"),
-        size: output_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("procgen noise agreement bindings"),
         layout: &pipeline.get_bind_group_layout(0),
@@ -575,43 +544,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(inputs.len().div_ceil(64) as u32, 1, 1);
     }
-    encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, output_size);
     queue.submit(Some(encoder.finish()));
-
-    let slice = readback.slice(..);
-    let (sender, receiver) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        sender.send(result).unwrap()
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("GPU polling failed");
-    receiver
-        .recv()
-        .unwrap()
-        .expect("GPU readback mapping failed");
-    let mapped = slice.get_mapped_range();
-    let outputs = bytemuck::cast_slice::<u8, ShaderOutput>(&mapped).to_vec();
-    drop(mapped);
-    readback.unmap();
-    outputs
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    struct ThreadWake(thread::Thread);
-    impl Wake for ThreadWake {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => thread::park(),
-        }
-    }
+    readback(device, queue, &output_buffer, inputs.len())
 }

@@ -60,13 +60,18 @@ fn orbit_camera(
     mut orbit: ResMut<Orbit>,
     mut camera: Single<&mut Transform, With<ViewerCamera>>,
 ) {
+    let mut changed = false;
     if buttons.pressed(MouseButton::Left) {
         apply_drag(&mut orbit, motion.delta);
+        changed |= motion.delta != Vec2::ZERO;
     }
     if scroll.delta.y != 0.0 {
         apply_zoom(&mut orbit, scroll.delta.y, scroll.unit);
+        changed = true;
     }
-    **camera = camera_transform(&orbit);
+    if changed {
+        **camera = camera_transform(&orbit);
+    }
 }
 
 fn apply_drag(orbit: &mut Orbit, delta: Vec2) {

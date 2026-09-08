@@ -217,6 +217,6 @@ quadtree selection and bounded tile-generation scheduling.
 
 Crate boundaries and the per-stage conventions in "Code quality" are
 established. New stages should follow the sibling shapes rather than introduce
-new ones. No CUDA backend exists yet; the only GPU code is the WGSL noise
-mirror exercised by `procgen-gpu-tests` through wgpu, and the cross-backend
-tolerances in `procgen-noise` are provisional until CUDA calibration.
+new ones. No CUDA backend exists yet; the WGSL noise and terrain mirrors are
+exercised by `procgen-gpu-tests` through wgpu, and the cross-backend tolerances
+remain provisional until CUDA calibration.

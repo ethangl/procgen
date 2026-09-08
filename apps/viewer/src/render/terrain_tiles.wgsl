@@ -5,44 +5,32 @@
     view_transformations::position_world_to_clip,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage, read> terrain_control_texels: array<TerrainControlTexel>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<storage, read> terrain_stamps: array<TerrainStamp>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> terrain_world: TerrainParameters;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<storage, read> terrain_addresses: array<vec4<u32>>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<storage, read> terrain_samples: array<vec4<f32>>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage, read> terrain_addresses: array<vec4<u32>>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<storage, read> terrain_samples: array<vec4<f32>>;
 
 struct TerrainDisplayParameters {
     relief_exaggeration: f32,
     surface_radius: f32,
     padding: vec2<f32>,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(105) var<uniform> terrain_display: TerrainDisplayParameters;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> terrain_display: TerrainDisplayParameters;
 
-fn terrain_load_control_texel(index: u32) -> TerrainControlTexel {
-    return terrain_control_texels[index];
+struct TerrainElevationPalette {
+    stops: array<vec4<f32>, 5>,
 }
-
-fn terrain_load_stamp(index: u32) -> TerrainStamp {
-    return terrain_stamps[index];
-}
-
-fn terrain_parameters() -> TerrainParameters {
-    return terrain_world;
-}
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> terrain_palette: TerrainElevationPalette;
 
 fn terrain_elevation_color(height: f32) -> vec4<f32> {
-    let deep = vec3(0.02, 0.08, 0.3);
-    let shore = vec3(0.08, 0.65, 0.85);
-    let lowland = vec3(0.16, 0.55, 0.18);
-    let highland = vec3(0.55, 0.38, 0.16);
-    let summit = vec3(0.96, 0.96, 0.94);
-    if height <= 0.5 {
-        return vec4(deep + (shore - deep) * clamp(height / 0.5, 0.0, 1.0), 1.0);
+    let value = clamp(height, terrain_palette.stops[0].w, terrain_palette.stops[4].w);
+    for (var index = 0u; index < 4u; index++) {
+        let low = terrain_palette.stops[index];
+        let high = terrain_palette.stops[index + 1u];
+        if value < high.w {
+            let t = (value - low.w) / (high.w - low.w);
+            return vec4(low.xyz + (high.xyz - low.xyz) * t, 1.0);
+        }
     }
-    if height <= 0.75 {
-        return vec4(lowland + (highland - lowland) * ((height - 0.5) / 0.25), 1.0);
-    }
-    return vec4(highland + (summit - highland) * clamp((height - 0.75) / 0.25, 0.0, 1.0), 1.0);
+    return vec4(terrain_palette.stops[4].xyz, 1.0);
 }
 
 @vertex
@@ -50,9 +38,9 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let slot = mesh[vertex.instance_index].tag;
     let local = vec2<u32>(vertex.position.xy);
-    let sample_index = slot * 4225u + local.y * 65u + local.x;
+    let sample_index = cubesphere_tile_sample_index(slot, local);
     let sample = terrain_samples[sample_index];
-    let direction = terrain_tile_direction(terrain_addresses[slot], local);
+    let direction = cubesphere_tile_direction(terrain_addresses[slot], local);
     let radius = terrain_display.surface_radius
         + (sample.x - 0.5) * terrain_display.relief_exaggeration;
     let local_position = direction * radius;
