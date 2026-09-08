@@ -452,11 +452,11 @@ fn tile_grid_mesh() -> Mesh {
             let upper_right = upper_left + 1;
             indices.extend([
                 lower_left,
-                upper_right,
                 lower_right,
-                lower_left,
-                upper_left,
                 upper_right,
+                lower_left,
+                upper_right,
+                upper_left,
             ]);
         }
     }
@@ -645,6 +645,34 @@ impl render_graph::Node for TerrainComputeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::mesh::VertexAttributeValues;
+
+    #[test]
+    fn tile_grid_triangles_face_outward_on_every_cube_face() {
+        let mesh = tile_grid_mesh();
+        let VertexAttributeValues::Float32x3(positions) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+        else {
+            panic!("terrain tile positions must be float3");
+        };
+        let Indices::U32(indices) = mesh.indices().unwrap() else {
+            panic!("terrain tile indices must be u32");
+        };
+
+        for face in CubeFace::ALL {
+            let address = TileAddress::new(face, 0, 0, 0).unwrap();
+            for triangle in indices.chunks_exact(3) {
+                let directions = [triangle[0], triangle[1], triangle[2]].map(|index| {
+                    let [x, y, _] = positions[index as usize];
+                    tile_direction(address, x as u32, y as u32)
+                });
+                let geometric_normal =
+                    (directions[1] - directions[0]).cross(directions[2] - directions[0]);
+                let center = (directions[0] + directions[1] + directions[2]).normalize();
+                assert!(geometric_normal.dot(center) > 0.0);
+            }
+        }
+    }
 
     #[test]
     fn mode_only_replaces_final_adjusted_elevation_below_threshold() {
