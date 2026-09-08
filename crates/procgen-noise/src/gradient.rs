@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign, Mul};
+use std::ops::{Add, AddAssign, Mul, Sub};
 
 use procgen_core::{Vec3, hash_u32};
 
@@ -8,6 +8,18 @@ pub struct NoiseSample3 {
     pub value: f32,
     pub derivative: Vec3,
 }
+
+impl NoiseSample3 {
+    pub const fn constant(value: f32) -> Self {
+        Self {
+            value,
+            derivative: Vec3::ZERO,
+        }
+    }
+}
+
+/// Conservative absolute value bound for one cubic gradient-noise sample.
+pub const GRADIENT_NOISE_VALUE_BOUND: f32 = 2.0;
 
 impl Add for NoiseSample3 {
     type Output = Self;
@@ -34,6 +46,28 @@ impl Mul<f32> for NoiseSample3 {
         Self {
             value: self.value * rhs,
             derivative: self.derivative * rhs,
+        }
+    }
+}
+
+impl Sub for NoiseSample3 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            value: self.value - rhs.value,
+            derivative: self.derivative - rhs.derivative,
+        }
+    }
+}
+
+impl Mul for NoiseSample3 {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        Self {
+            value: self.value * rhs.value,
+            derivative: self.derivative * rhs.value + rhs.derivative * self.value,
         }
     }
 }
@@ -153,6 +187,33 @@ mod tests {
     use crate::test_support::{central_difference, sample_bits};
 
     const DERIVATIVE_TEST_SEED: u64 = 0xCAFE_BABE_DEAD_BEEF;
+
+    #[test]
+    fn sample_arithmetic_propagates_product_and_difference_derivatives() {
+        let left = NoiseSample3 {
+            value: 2.0,
+            derivative: Vec3::new(1.0, 2.0, 3.0),
+        };
+        let right = NoiseSample3 {
+            value: 4.0,
+            derivative: Vec3::new(-2.0, 1.0, 0.5),
+        };
+
+        assert_eq!(
+            left - right,
+            NoiseSample3 {
+                value: -2.0,
+                derivative: Vec3::new(3.0, 1.0, 2.5),
+            }
+        );
+        assert_eq!(
+            left * right,
+            NoiseSample3 {
+                value: 8.0,
+                derivative: Vec3::new(0.0, 10.0, 13.0),
+            }
+        );
+    }
 
     #[test]
     fn seed_narrowing_has_stable_vectors_and_uses_both_halves() {

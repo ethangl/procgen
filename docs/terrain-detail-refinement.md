@@ -124,9 +124,10 @@ from sea level fades the warp out and additive detail in across the coast band;
 the original, unwarped baked base controls that transition and is never used to
 derive a replacement land/ocean classification.
 
-Sparse terrain stamps are accumulated in the stable order retained from the
-terrain controls. All use chord distance on the unit sphere. Hotspots and
-abyssal hills use the smooth cubic compact-support cap
+Sparse terrain stamps are normalized to unit directions by terrain-control
+composition and accumulated in its retained stable order. All use chord
+distance on the unit sphere. The default hotspot and abyssal-hill profiles use
+the smooth cubic compact-support cap
 `(1 - r^2 / R^2)^3`; volcanic arcs and seamounts use the sharper quadratic cap
 `(1 - r^2 / R^2)^2`. Each profile and its first derivative reaches zero at its
 support radius, so spatial culling cannot introduce a height or normal seam.

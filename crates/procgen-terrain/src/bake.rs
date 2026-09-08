@@ -4,7 +4,7 @@ use crate::field::{TerrainCellControls, TerrainControls};
 use procgen_cubesphere::{BakeError, CubeField, bake_cube_field, control_face_resolution};
 use procgen_sphere_mesh::SphereMesh;
 
-pub type TerrainControlBake = CubeField<{ TerrainCellControls::CHANNELS }>;
+pub type TerrainControlBake = CubeField<{ TerrainCellControls::<f32>::CHANNELS }>;
 
 /// Bakes all terrain-control channels at the mesh-derived policy resolution.
 pub fn bake_terrain_controls(

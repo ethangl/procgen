@@ -158,6 +158,27 @@ pub(crate) fn project_direction_onto_face(direction: Vec3, face: CubeFace) -> Fa
     }
 }
 
+/// Derivatives of a face projection's `u` and `v` coordinates with respect to
+/// the input direction. Kept beside [`project_direction_onto_face`] so the
+/// equi-angular mapping and its Jacobian share one expression contract.
+pub(crate) fn face_coordinate_derivatives(direction: Vec3, face: CubeFace) -> [Vec3; 2] {
+    let FaceFrame {
+        normal,
+        u_axis,
+        v_axis,
+    } = face.frame();
+    let depth = direction.dot(normal);
+    let side_u = direction.dot(u_axis);
+    let side_v = direction.dot(v_axis);
+    let inverse_depth_squared = (depth * depth).recip();
+    let derivative = |axis: Vec3, side: f32| {
+        let ratio = side / depth;
+        (axis * depth - normal * side)
+            * (inverse_depth_squared / (FRAC_PI_4 * (1.0 + ratio * ratio)))
+    };
+    [derivative(u_axis, side_u), derivative(v_axis, side_v)]
+}
+
 fn dominant_face(direction: Vec3) -> CubeFace {
     let Vec3 { x, y, z } = direction;
     if x.abs() >= y.abs() && x.abs() >= z.abs() {

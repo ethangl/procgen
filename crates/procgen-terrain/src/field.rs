@@ -6,6 +6,9 @@ use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::StageInputError;
 use std::fmt;
 
+pub(crate) const UNIT_DIRECTION_TOLERANCE: f32 = 2.0e-5;
+const TERRAIN_CONTROL_CHANNELS: usize = 5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerrainControlError {
     InvalidConfig,
@@ -60,18 +63,18 @@ impl From<GeologyInputError> for TerrainControlError {
 /// order is fixed: baselines, cratons, volcanic arcs, convergent/divergent/transform boundaries,
 /// then basins.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TerrainCellControls {
-    pub base_elevation: f32,
-    pub detail_amplitude: f32,
-    pub ridge_weight: f32,
-    pub octave_gain: f32,
-    pub abyssal_amplitude: f32,
+pub struct TerrainCellControls<T = f32> {
+    pub base_elevation: T,
+    pub detail_amplitude: T,
+    pub ridge_weight: T,
+    pub octave_gain: T,
+    pub abyssal_amplitude: T,
 }
 
-impl TerrainCellControls {
-    pub const CHANNELS: usize = 5;
+impl<T> TerrainCellControls<T> {
+    pub const CHANNELS: usize = TERRAIN_CONTROL_CHANNELS;
 
-    pub fn to_channels(self) -> [f32; Self::CHANNELS] {
+    pub fn to_channels(self) -> [T; TERRAIN_CONTROL_CHANNELS] {
         [
             self.base_elevation,
             self.detail_amplitude,
@@ -81,7 +84,7 @@ impl TerrainCellControls {
         ]
     }
 
-    pub fn from_channels(channels: [f32; Self::CHANNELS]) -> Self {
+    pub fn from_channels(channels: [T; TERRAIN_CONTROL_CHANNELS]) -> Self {
         let [
             base_elevation,
             detail_amplitude,
@@ -109,11 +112,20 @@ pub enum TerrainStampKind {
     OceanicAbyssalHill,
 }
 
+impl TerrainStampKind {
+    pub const ALL: [Self; 4] = [
+        Self::Hotspot,
+        Self::VolcanicArc,
+        Self::OceanicSeamount,
+        Self::OceanicAbyssalHill,
+    ];
+}
+
 /// Sparse input for a later terrain stamp evaluator.
 ///
-/// `position` uses the mesh's surface-coordinate units. `strength` is unitless and clamped
-/// to `[0, 1]`. `source_index` is the stable upstream index, with volcanic-arc peaks indexed by
-/// their flattened segment/peak order.
+/// `position` is a unit direction. `strength` is unitless and clamped to `[0, 1]`.
+/// `source_index` is the stable upstream index, with volcanic-arc peaks indexed by their
+/// flattened segment/peak order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainStampInput {
     pub cell: usize,
@@ -144,7 +156,7 @@ impl TerrainControls {
         if self.stamps.iter().any(|stamp| {
             stamp.cell >= mesh.cell_count()
                 || !stamp.position.is_finite()
-                || stamp.position == Vec3::ZERO
+                || (stamp.position.length_squared() - 1.0).abs() > UNIT_DIRECTION_TOLERANCE
                 || !stamp.strength.is_finite()
                 || !(0.0..=1.0).contains(&stamp.strength)
         }) || !self
@@ -206,6 +218,13 @@ mod tests {
             position: Vec3::X,
             strength: 1.0,
         });
+        assert_eq!(
+            controls.validate(&mesh),
+            Err(TerrainControlError::InvalidStamps)
+        );
+
+        controls.stamps[0].cell = 0;
+        controls.stamps[0].position = Vec3::X * 2.0;
         assert_eq!(
             controls.validate(&mesh),
             Err(TerrainControlError::InvalidStamps)

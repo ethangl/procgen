@@ -1,14 +1,13 @@
 //! Typed CPU cube-field baking and seamless direction-based sampling.
 
 use crate::mapping::{
-    CubeFace, FaceCoordinates, FaceFrame, MappingError, canonical_face_coordinates,
-    direction_to_face, project_direction_onto_face, unit_direction,
+    CubeFace, FaceCoordinates, MappingError, canonical_face_coordinates, direction_to_face,
+    face_coordinate_derivatives, project_direction_onto_face, unit_direction,
 };
 use procgen_core::Vec3;
 use procgen_sphere_mesh::{SphereMesh, TopologyError};
 use rayon::prelude::*;
 use std::array;
-use std::f32::consts::FRAC_PI_4;
 use std::f64::consts::PI;
 use std::fmt;
 
@@ -63,6 +62,35 @@ pub struct CubeFieldSample<const N: usize> {
     pub derivatives: [Vec3; N],
 }
 
+struct BilinearFilter<const N: usize> {
+    lower_left: [f32; N],
+    lower_right: [f32; N],
+    upper_left: [f32; N],
+    upper_right: [f32; N],
+    tx: f32,
+    ty: f32,
+}
+
+impl<const N: usize> BilinearFilter<N> {
+    fn value(&self) -> [f32; N] {
+        lerp(
+            lerp(self.lower_left, self.lower_right, self.tx),
+            lerp(self.upper_left, self.upper_right, self.tx),
+            self.ty,
+        )
+    }
+
+    fn gradient(&self, tx_derivative: Vec3, ty_derivative: Vec3) -> [Vec3; N] {
+        array::from_fn(|channel| {
+            let along_x = (self.lower_right[channel] - self.lower_left[channel]) * (1.0 - self.ty)
+                + (self.upper_right[channel] - self.upper_left[channel]) * self.ty;
+            let along_y = (self.upper_left[channel] - self.lower_left[channel]) * (1.0 - self.tx)
+                + (self.upper_right[channel] - self.lower_right[channel]) * self.tx;
+            tx_derivative * along_x + ty_derivative * along_y
+        })
+    }
+}
+
 impl<const N: usize> CubeField<N> {
     /// Reconstructs a cached field after validating its face dimensions and data.
     pub fn from_face_texels(
@@ -113,55 +141,25 @@ impl<const N: usize> CubeField<N> {
         direction: Vec3,
     ) -> Result<CubeFieldSample<N>, MappingError> {
         let coordinates = direction_to_face(direction)?;
-        let resolution = self.resolution();
-        let x = face_to_texel(coordinates.u, resolution);
-        let y = face_to_texel(coordinates.v, resolution);
-        let x0 = x.floor() as i64;
-        let y0 = y.floor() as i64;
-        let tx = x - x.floor();
-        let ty = y - y.floor();
-
-        let lower_left = self.tap(coordinates.face, x0, y0);
-        let lower_right = self.tap(coordinates.face, x0 + 1, y0);
-        let upper_left = self.tap(coordinates.face, x0, y0 + 1);
-        let upper_right = self.tap(coordinates.face, x0 + 1, y0 + 1);
-        let values = lerp(
-            lerp(lower_left, lower_right, tx),
-            lerp(upper_left, upper_right, tx),
-            ty,
+        let filter = self.bilinear_filter(coordinates);
+        let face_derivatives = face_coordinate_derivatives(direction, coordinates.face);
+        let texel_scale = self.resolution() as f32 * 0.5;
+        let derivatives = filter.gradient(
+            face_derivatives[0] * texel_scale,
+            face_derivatives[1] * texel_scale,
         );
 
-        let FaceFrame {
-            normal,
-            u_axis,
-            v_axis,
-        } = coordinates.face.frame();
-        let depth = direction.dot(normal);
-        let side_u = direction.dot(u_axis);
-        let side_v = direction.dot(v_axis);
-        let ratio_u = side_u / depth;
-        let ratio_v = side_v / depth;
-        let coordinate_scale = (resolution as f32 * 0.5) / FRAC_PI_4;
-        let inverse_depth_squared = (depth * depth).recip();
-        let tx_derivative = (u_axis * depth - normal * side_u)
-            * (inverse_depth_squared * coordinate_scale / (1.0 + ratio_u * ratio_u));
-        let ty_derivative = (v_axis * depth - normal * side_v)
-            * (inverse_depth_squared * coordinate_scale / (1.0 + ratio_v * ratio_v));
-        let derivatives = array::from_fn(|channel| {
-            let along_x = (lower_right[channel] - lower_left[channel]) * (1.0 - ty)
-                + (upper_right[channel] - upper_left[channel]) * ty;
-            let along_y = (upper_left[channel] - lower_left[channel]) * (1.0 - tx)
-                + (upper_right[channel] - lower_right[channel]) * tx;
-            tx_derivative * along_x + ty_derivative * along_y
-        });
-
         Ok(CubeFieldSample {
-            values,
+            values: filter.value(),
             derivatives,
         })
     }
 
     fn sample_face_coordinates(&self, coordinates: FaceCoordinates) -> [f32; N] {
+        self.bilinear_filter(coordinates).value()
+    }
+
+    fn bilinear_filter(&self, coordinates: FaceCoordinates) -> BilinearFilter<N> {
         let resolution = self.resolution();
         let x = face_to_texel(coordinates.u, resolution);
         let y = face_to_texel(coordinates.v, resolution);
@@ -170,15 +168,14 @@ impl<const N: usize> CubeField<N> {
         let tx = x - x.floor();
         let ty = y - y.floor();
 
-        let lower_left = self.tap(coordinates.face, x0, y0);
-        let lower_right = self.tap(coordinates.face, x0 + 1, y0);
-        let upper_left = self.tap(coordinates.face, x0, y0 + 1);
-        let upper_right = self.tap(coordinates.face, x0 + 1, y0 + 1);
-        lerp(
-            lerp(lower_left, lower_right, tx),
-            lerp(upper_left, upper_right, tx),
+        BilinearFilter {
+            lower_left: self.tap(coordinates.face, x0, y0),
+            lower_right: self.tap(coordinates.face, x0 + 1, y0),
+            upper_left: self.tap(coordinates.face, x0, y0 + 1),
+            upper_right: self.tap(coordinates.face, x0 + 1, y0 + 1),
+            tx,
             ty,
-        )
+        }
     }
 
     fn tap(&self, source_face: CubeFace, x: i64, y: i64) -> [f32; N] {

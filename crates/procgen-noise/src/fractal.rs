@@ -199,9 +199,10 @@ pub fn amplitude_sum(config: Validated<OctaveConfig>, gain: OctaveGain) -> f32 {
 /// Accumulates plain fractional Brownian motion from [`gradient_noise_3d`].
 ///
 /// Values are an unnormalized amplitude-weighted sum. Cubic gradient noise is
-/// conservatively bounded by `[-2, 2]`, so this result is bounded by twice
-/// [`amplitude_sum`]. Each octave sample includes the
-/// chain-rule frequency factor in its spatial derivative before accumulation.
+/// conservatively bounded by plus or minus [`crate::GRADIENT_NOISE_VALUE_BOUND`], so
+/// this result is bounded by that value times [`amplitude_sum`]. Each octave
+/// sample includes the chain-rule frequency factor in its spatial derivative
+/// before accumulation.
 /// Octave zero has unit amplitude; callers apply a spatially varying overall
 /// amplitude by multiplying the returned sample, scaling value and derivative
 /// together.

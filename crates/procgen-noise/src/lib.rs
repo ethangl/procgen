@@ -11,7 +11,10 @@ pub use fractal::{
     RidgedMultifractalConfig, Validated, amplitude_sum, derivative_damped_fbm_3d, fbm_3d,
     ridged_multifractal_3d,
 };
-pub use gradient::{NoiseSample3, fold_seed_u64_to_u32, gradient_noise_3d, lattice_gradient_3d};
+pub use gradient::{
+    GRADIENT_NOISE_VALUE_BOUND, NoiseSample3, fold_seed_u64_to_u32, gradient_noise_3d,
+    lattice_gradient_3d,
+};
 
 /// Absolute CPU/backend tolerance for noise values in normalized units.
 ///
