@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use super::{SURFACE_RADIUS, TERRAIN_MAX_TILE_LEVEL};
 use bevy::{camera::Projection, prelude::*};
 use procgen_core::Vec3 as ProcgenVec3;
-use procgen_cubesphere::{CubeFace, FaceCoordinates, TILE_QUADS, TileAddress, direction_to_face};
+use procgen_cubesphere::{CubeFace, TILE_QUADS, TileAddress, TileEdge};
 
 const TILE_SPLIT_PROJECTED_PIXELS: f32 = 180.0;
 const TILE_MERGE_PROJECTED_PIXELS: f32 = 140.0;
@@ -92,15 +92,13 @@ impl QuadtreeSelection {
     fn balance_neighbor_levels(&mut self, selected: &mut Vec<TileAddress>) {
         loop {
             let leaves = selected.iter().copied().collect::<HashSet<_>>();
-            let Some(maximum_level) = selected.iter().map(|tile| tile.level()).max() else {
-                return;
-            };
             let mut split = BTreeSet::new();
             for &tile in selected.iter() {
-                for direction in outside_edge_directions(tile) {
-                    let coordinates = direction_to_face(direction)
-                        .expect("an edge probe is a finite nonzero direction");
-                    let Some(neighbor) = containing_leaf(&leaves, coordinates, maximum_level)
+                for edge in TileEdge::ALL {
+                    let same_level = tile.edge_neighbor(edge);
+                    let Some(neighbor) =
+                        std::iter::successors(Some(same_level), |address| address.parent())
+                            .find(|address| leaves.contains(address))
                     else {
                         continue;
                     };
@@ -184,44 +182,6 @@ impl TileBounds {
     }
 }
 
-fn outside_edge_directions(address: TileAddress) -> [ProcgenVec3; 4] {
-    let center = address
-        .grid_vertex(TILE_QUADS / 2, TILE_QUADS / 2)
-        .unwrap()
-        .direction();
-    [
-        address.grid_vertex(0, TILE_QUADS / 2).unwrap().direction(),
-        address
-            .grid_vertex(TILE_QUADS, TILE_QUADS / 2)
-            .unwrap()
-            .direction(),
-        address.grid_vertex(TILE_QUADS / 2, 0).unwrap().direction(),
-        address
-            .grid_vertex(TILE_QUADS / 2, TILE_QUADS)
-            .unwrap()
-            .direction(),
-    ]
-    .map(|edge| (edge + (edge - center) * 0.001).normalized())
-}
-
-fn containing_leaf(
-    leaves: &HashSet<TileAddress>,
-    coordinates: FaceCoordinates,
-    maximum_level: u8,
-) -> Option<TileAddress> {
-    (0..=maximum_level).find_map(|level| {
-        let tiles_per_axis = (1_u32 << level) as f32;
-        let x = ((coordinates.u + 1.0) * 0.5 * tiles_per_axis)
-            .floor()
-            .clamp(0.0, tiles_per_axis - 1.0) as u32;
-        let y = ((coordinates.v + 1.0) * 0.5 * tiles_per_axis)
-            .floor()
-            .clamp(0.0, tiles_per_axis - 1.0) as u32;
-        let address = TileAddress::new(coordinates.face, level, x, y).unwrap();
-        leaves.contains(&address).then_some(address)
-    })
-}
-
 pub(super) fn tile_direction(address: TileAddress, x: u32, y: u32) -> Vec3 {
     let ProcgenVec3 { x, y, z } = address.grid_vertex(x, y).unwrap().direction();
     Vec3::new(x, y, z)
@@ -303,14 +263,13 @@ mod tests {
         let view = view(Vec3::new(1.0, 0.8, 0.9).normalize() * 1.03, 900.0);
         let selected = QuadtreeSelection::default().select(view);
         let leaves = selected.iter().copied().collect::<HashSet<_>>();
-        let maximum_level = selected.iter().map(|tile| tile.level()).max().unwrap();
         for tile in selected {
-            for direction in outside_edge_directions(tile) {
-                if let Some(neighbor) = containing_leaf(
-                    &leaves,
-                    direction_to_face(direction).unwrap(),
-                    maximum_level,
-                ) {
+            for edge in TileEdge::ALL {
+                let same_level = tile.edge_neighbor(edge);
+                if let Some(neighbor) =
+                    std::iter::successors(Some(same_level), |address| address.parent())
+                        .find(|address| leaves.contains(address))
+                {
                     assert!(tile.level().abs_diff(neighbor.level()) <= 1);
                 }
             }

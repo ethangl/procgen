@@ -142,16 +142,36 @@ fn fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, l
     return result;
 }
 
-fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32) -> ScalarFieldSample3 {
-    return ridged_multifractal_3d_faded(key, position, octaves, initial_frequency, lacunarity, gain, ridge_offset, ridge_gain, 1.0);
+struct OctaveBand {
+    octaves: u32,
+    newest_weight: f32,
 }
 
-fn ridged_multifractal_3d_faded(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32, newest_octave_weight: f32) -> ScalarFieldSample3 {
+fn noise_full_octave_band(octaves: u32) -> OctaveBand {
+    return OctaveBand(octaves, 1.0);
+}
+
+fn noise_octave_band_for_minimum_wavelength(maximum_octaves: u32, initial_frequency: f32, lacunarity: f32, minimum_wavelength: f32) -> OctaveBand {
+    var frequency = initial_frequency;
+    var octaves = 0u;
+    var newest_weight = 0.0;
+    while octaves < maximum_octaves {
+        // A cubic-gradient lattice feature spans roughly two lattice cells.
+        let wavelength = 2.0 / frequency;
+        if wavelength < minimum_wavelength { break; }
+        octaves += 1u;
+        newest_weight = clamp(wavelength / minimum_wavelength - 1.0, 0.0, 1.0);
+        frequency *= lacunarity;
+    }
+    return OctaveBand(octaves, newest_weight);
+}
+
+fn ridged_multifractal_3d(key: u32, position: vec3<f32>, band: OctaveBand, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32) -> ScalarFieldSample3 {
     var result = ScalarFieldSample3(0.0, vec3(0.0));
     var weight = ScalarFieldSample3(1.0, vec3(0.0));
     var frequency = initial_frequency;
     var amplitude = 1.0;
-    for (var octave = 0u; octave < octaves; octave++) {
+    for (var octave = 0u; octave < band.octaves; octave++) {
         let sample = octave_sample(key, position, frequency);
         var absolute_derivative = vec3(0.0);
         if (sample.value > 0.0) {
@@ -165,7 +185,7 @@ fn ridged_multifractal_3d_faded(key: u32, position: vec3<f32>, octaves: u32, ini
             signal.value * weight.value,
             signal.derivative * weight.value + weight.derivative * signal.value,
         );
-        let fade = select(1.0, newest_octave_weight, octave + 1u == octaves);
+        let fade = select(1.0, band.newest_weight, octave + 1u == band.octaves);
         result = add_sample(result, scale_sample(weighted, amplitude * fade));
 
         let next_weight = scale_sample(weighted, ridge_gain);
@@ -180,15 +200,11 @@ fn ridged_multifractal_3d_faded(key: u32, position: vec3<f32>, octaves: u32, ini
     return result;
 }
 
-fn derivative_damped_fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32) -> ScalarFieldSample3 {
-    return derivative_damped_fbm_3d_faded(key, position, octaves, initial_frequency, lacunarity, gain, damping, 1.0);
-}
-
-fn derivative_damped_fbm_3d_faded(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32, newest_octave_weight: f32) -> ScalarFieldSample3 {
+fn derivative_damped_fbm_3d(key: u32, position: vec3<f32>, band: OctaveBand, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32) -> ScalarFieldSample3 {
     var result = ScalarFieldSample3(0.0, vec3(0.0));
     var frequency = initial_frequency;
     var amplitude = 1.0;
-    for (var octave = 0u; octave < octaves; octave++) {
+    for (var octave = 0u; octave < band.octaves; octave++) {
         // As above, preserve Rust's scalar expression order instead of using
         // length() or dot(), whose lowering may contract differently.
         let slope = result.derivative * (1.0 / initial_frequency);
@@ -196,7 +212,7 @@ fn derivative_damped_fbm_3d_faded(key: u32, position: vec3<f32>, octaves: u32, i
             + slope.y * slope.y
             + slope.z * slope.z;
         let attenuation = 1.0 / (1.0 + damping * slope_squared);
-        let fade = select(1.0, newest_octave_weight, octave + 1u == octaves);
+        let fade = select(1.0, band.newest_weight, octave + 1u == band.octaves);
         result = add_sample(result, scale_sample(octave_sample(key, position, frequency), amplitude * attenuation * fade));
         frequency *= lacunarity;
         amplitude *= gain;

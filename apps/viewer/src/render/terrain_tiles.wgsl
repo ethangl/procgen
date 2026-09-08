@@ -83,8 +83,9 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     let direction = cubesphere_tile_direction(address, local);
     let radius = terrain_display.surface_radius
         + (sample.x - 0.5) * terrain_display.relief_exaggeration
-        - vertex.position.z * TERRAIN_SKIRT_DEPTH_SPACINGS * 1.5707963267948966
-            / f32(CUBESPHERE_TILE_QUADS << address.y) * terrain_display.surface_radius;
+        - vertex.position.z * TERRAIN_SKIRT_DEPTH_SPACINGS
+            * cubesphere_vertex_spacing(cubesphere_tile_level(address))
+            * terrain_display.surface_radius;
     let local_normal = normalize(direction - sample.yzw * terrain_display.relief_exaggeration / radius);
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     let tile_origin = world_from_local[3].xyz;

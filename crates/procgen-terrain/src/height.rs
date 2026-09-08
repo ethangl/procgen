@@ -10,9 +10,9 @@ use procgen_core::{
     },
 };
 use procgen_noise::{
-    DerivativeDampedConfig, FractalParameterError, NewestOctaveWeight, OctaveConfig, OctaveGain,
-    RidgedMultifractalConfig, Validated, derivative_damped_fbm_3d_faded, fold_seed_u64_to_u32,
-    ridged_multifractal_3d_faded,
+    DerivativeDampedConfig, FractalParameterError, OctaveBand, OctaveConfig, OctaveGain,
+    RidgedMultifractalConfig, Validated, derivative_damped_fbm_3d, fold_seed_u64_to_u32,
+    ridged_multifractal_3d,
 };
 
 use crate::{
@@ -158,53 +158,17 @@ pub struct ValidatedTerrainHeightConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TerrainHeightLod {
-    pub detail_octaves: u32,
-    pub detail_fade: NewestOctaveWeight,
-    pub abyssal_octaves: u32,
-    pub abyssal_fade: NewestOctaveWeight,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct OctaveBand {
-    octaves: u32,
-    newest_weight: NewestOctaveWeight,
+    pub detail: OctaveBand,
+    pub abyssal: OctaveBand,
 }
 
 impl ValidatedTerrainHeightConfig {
-    pub(crate) fn lod_for_tile_level(self, level: u8) -> TerrainHeightLod {
-        let detail = octave_band(self.detail.octave_config(), level);
-        let abyssal = octave_band(self.abyssal.octave_config(), level);
-        TerrainHeightLod {
-            detail_octaves: detail.octaves,
-            detail_fade: detail.newest_weight,
-            abyssal_octaves: abyssal.octaves,
-            abyssal_fade: abyssal.newest_weight,
-        }
+    pub(crate) const fn detail_octaves(self) -> Validated<OctaveConfig> {
+        self.detail.octave_config()
     }
-}
 
-fn octave_band(config: OctaveConfig, level: u8) -> OctaveBand {
-    let vertex_spacing =
-        std::f32::consts::FRAC_PI_2 / (procgen_cubesphere::TILE_QUADS << level) as f32;
-    let minimum_wavelength = 2.0 * vertex_spacing;
-    let mut frequency = config.frequency;
-    let mut octaves = 0;
-    let mut newest_weight = NewestOctaveWeight::ZERO;
-    while octaves < config.octaves {
-        // A cubic-gradient lattice feature spans roughly two lattice cells.
-        let wavelength = 2.0 / frequency;
-        if wavelength < minimum_wavelength {
-            break;
-        }
-        octaves += 1;
-        newest_weight =
-            NewestOctaveWeight::new((wavelength / minimum_wavelength - 1.0).clamp(0.0, 1.0))
-                .expect("the clamped octave split factor is valid");
-        frequency *= config.lacunarity;
-    }
-    OctaveBand {
-        octaves,
-        newest_weight,
+    pub(crate) const fn abyssal_octaves(self) -> Validated<OctaveConfig> {
+        self.abyssal.octave_config()
     }
 }
 
@@ -286,10 +250,8 @@ pub fn terrain_height(
         inputs,
         config,
         TerrainHeightLod {
-            detail_octaves: config.detail.octave_config().octaves,
-            detail_fade: NewestOctaveWeight::FULL,
-            abyssal_octaves: config.abyssal.octave_config().octaves,
-            abyssal_fade: NewestOctaveWeight::FULL,
+            detail: config.detail_octaves().full_band(),
+            abyssal: config.abyssal_octaves().full_band(),
         },
     )
 }
@@ -323,28 +285,28 @@ pub(crate) fn terrain_height_with_lod(
     let gain = OctaveGain::new(controls.octave_gain.value)
         .expect("a terrain-control bake must preserve octave gain in [0, 1]");
 
-    let fbm = warp.pullback(derivative_damped_fbm_3d_faded(
+    let fbm = warp.pullback(derivative_damped_fbm_3d(
         noise_keys.detail,
         warp.direction,
-        config.detail.with_octave_count(lod.detail_octaves),
+        config.detail,
         gain,
-        lod.detail_fade,
+        lod.detail,
     ));
-    let ridged = warp.pullback(ridged_multifractal_3d_faded(
+    let ridged = warp.pullback(ridged_multifractal_3d(
         noise_keys.detail,
         warp.direction,
-        config.ridged.with_octave_count(lod.detail_octaves),
+        config.ridged,
         gain,
-        lod.detail_fade,
+        lod.detail,
     ));
     let blended = fbm + (ridged - fbm) * controls.ridge_weight;
 
-    let abyssal = warp.pullback(derivative_damped_fbm_3d_faded(
+    let abyssal = warp.pullback(derivative_damped_fbm_3d(
         noise_keys.abyssal,
         warp.direction,
-        config.abyssal.with_octave_count(lod.abyssal_octaves),
+        config.abyssal,
         gain,
-        lod.abyssal_fade,
+        lod.abyssal,
     ));
     let additive = controls.detail_amplitude * blended + controls.abyssal_amplitude * abyssal;
     let mut height = controls.base_elevation + coast_taper * additive;
@@ -574,8 +536,20 @@ mod tests {
         let direction = direction();
         let gain = OctaveGain::new(0.5).unwrap();
         let key = TerrainNoiseKeys::new(TERRAIN_TEST_SEED).detail;
-        let fbm = derivative_damped_fbm_3d(key, direction, validated.detail, gain);
-        let ridged = ridged_multifractal_3d(key, direction, validated.ridged, gain);
+        let fbm = derivative_damped_fbm_3d(
+            key,
+            direction,
+            validated.detail,
+            gain,
+            validated.detail.octave_config().full_band(),
+        );
+        let ridged = ridged_multifractal_3d(
+            key,
+            direction,
+            validated.ridged,
+            gain,
+            validated.ridged.octave_config().full_band(),
+        );
         for (weight, expected) in [(0.0, fbm.value), (1.0, ridged.value)] {
             let bake = constant_bake(TerrainCellControls {
                 base_elevation: 0.7,

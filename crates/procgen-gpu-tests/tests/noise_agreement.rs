@@ -128,12 +128,20 @@ impl NoiseKind {
         match self {
             Self::Basis => gradient_noise_3d(key, position),
             Self::Fbm => fbm_3d(key, position, parameters.fbm(), parameters.gain()),
-            Self::Ridged => {
-                ridged_multifractal_3d(key, position, parameters.ridged(), parameters.gain())
-            }
-            Self::Damped => {
-                derivative_damped_fbm_3d(key, position, parameters.damped(), parameters.gain())
-            }
+            Self::Ridged => ridged_multifractal_3d(
+                key,
+                position,
+                parameters.ridged(),
+                parameters.gain(),
+                parameters.fbm().full_band(),
+            ),
+            Self::Damped => derivative_damped_fbm_3d(
+                key,
+                position,
+                parameters.damped(),
+                parameters.gain(),
+                parameters.fbm().full_band(),
+            ),
         }
     }
 }
@@ -486,9 +494,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     }} else if (input.mode == {MODE_FBM}u) {{
         sample = fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain);
     }} else if (input.mode == {MODE_RIDGED}u) {{
-        sample = ridged_multifractal_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.ridge_offset, input.ridge_gain);
+        sample = ridged_multifractal_3d(input.key, input.position.xyz, noise_full_octave_band(input.octaves), input.frequency, input.lacunarity, input.gain, input.ridge_offset, input.ridge_gain);
     }} else if (input.mode == {MODE_DAMPED}u) {{
-        sample = derivative_damped_fbm_3d(input.key, input.position.xyz, input.octaves, input.frequency, input.lacunarity, input.gain, input.damping);
+        sample = derivative_damped_fbm_3d(input.key, input.position.xyz, noise_full_octave_band(input.octaves), input.frequency, input.lacunarity, input.gain, input.damping);
     }}
     outputs[id.x] = Output(hash, 0u, 0u, 0u, gradient, vec4(sample.value, sample.derivative));
 }}

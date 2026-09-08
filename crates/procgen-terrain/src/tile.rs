@@ -3,12 +3,13 @@
 use std::{error::Error, fmt};
 
 use procgen_core::{ScalarFieldSample3, Vec3};
-use procgen_cubesphere::{TILE_QUADS, TILE_VERTICES, TileAddress};
+use procgen_cubesphere::{TILE_QUADS, TILE_VERTICES, TileAddress, vertex_spacing};
 use rayon::prelude::*;
 
 use crate::{
     TerrainControlBake, TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput,
-    TerrainStampProfiles, ValidatedTerrainHeightConfig, height::terrain_height_with_lod,
+    TerrainStampProfiles, ValidatedTerrainHeightConfig,
+    height::{TerrainHeightLod, terrain_height_with_lod},
 };
 
 /// Number of core samples in one 65 by 65 terrain tile.
@@ -101,7 +102,7 @@ pub fn generate_terrain_tile(
     inputs: TerrainTileInputs<'_>,
     config: ValidatedTerrainHeightConfig,
 ) -> TerrainTile {
-    let lod = config.lod_for_tile_level(inputs.address.level());
+    let lod = lod_for_tile_level(config, inputs.address.level());
     let directions: Vec<_> = tile_directions(inputs.address).collect();
     let center = vertex_direction(inputs.address, TILE_QUADS / 2, TILE_QUADS / 2);
     let stamps = cull_stamps(center, &directions, inputs.stamps, config.stamps);
@@ -124,6 +125,20 @@ pub fn generate_terrain_tile(
     let tile = TerrainTile { samples };
     debug_assert_eq!(tile.validate(inputs.address), Ok(()));
     tile
+}
+
+fn lod_for_tile_level(config: ValidatedTerrainHeightConfig, level: u8) -> TerrainHeightLod {
+    let minimum_wavelength = 2.0 * vertex_spacing(level);
+    TerrainHeightLod {
+        detail: config
+            .detail_octaves()
+            .band_for_minimum_wavelength(minimum_wavelength)
+            .expect("cube-sphere vertex spacing is positive"),
+        abyssal: config
+            .abyssal_octaves()
+            .band_for_minimum_wavelength(minimum_wavelength)
+            .expect("cube-sphere vertex spacing is positive"),
+    }
 }
 
 /// Yields the tile's vertex directions in row-major order, from lower left.
@@ -241,33 +256,44 @@ mod tests {
     #[test]
     fn tile_levels_select_supported_octaves_and_fade_parent_child_transitions() {
         let config = TerrainHeightConfig::default().validate().unwrap();
-        let level_one = config.lod_for_tile_level(1);
-        let level_four = config.lod_for_tile_level(4);
-        let level_twelve = config.lod_for_tile_level(12);
+        let level_one = lod_for_tile_level(config, 1);
+        let level_four = lod_for_tile_level(config, 4);
+        let level_twelve = lod_for_tile_level(config, 12);
         assert_eq!(
-            (level_one.detail_octaves, level_one.abyssal_octaves),
+            (
+                level_one.detail.octave_count(),
+                level_one.abyssal.octave_count()
+            ),
             (1, 0)
         );
         assert_eq!(
-            (level_four.detail_octaves, level_four.abyssal_octaves),
+            (
+                level_four.detail.octave_count(),
+                level_four.abyssal.octave_count()
+            ),
             (4, 3)
         );
         assert_eq!(
-            (level_twelve.detail_octaves, level_twelve.abyssal_octaves),
+            (
+                level_twelve.detail.octave_count(),
+                level_twelve.abyssal.octave_count()
+            ),
             (11, 6)
         );
-        assert_eq!(level_one.detail_fade, level_four.detail_fade);
-        assert!(level_four.detail_fade != procgen_noise::NewestOctaveWeight::ZERO);
-        assert!(level_four.detail_fade != procgen_noise::NewestOctaveWeight::FULL);
         assert_eq!(
-            level_twelve.detail_fade,
-            procgen_noise::NewestOctaveWeight::FULL
+            level_one.detail.newest_weight(),
+            level_four.detail.newest_weight()
         );
+        assert!((0.0..1.0).contains(&level_four.detail.newest_weight()));
+        assert_eq!(level_twelve.detail.newest_weight(), 1.0);
         for child_level in 2..=10 {
-            let parent = config.lod_for_tile_level(child_level - 1);
-            let child = config.lod_for_tile_level(child_level);
-            assert_eq!(child.detail_octaves, parent.detail_octaves + 1);
-            assert_eq!(child.detail_fade, parent.detail_fade);
+            let parent = lod_for_tile_level(config, child_level - 1);
+            let child = lod_for_tile_level(config, child_level);
+            assert_eq!(
+                child.detail.octave_count(),
+                parent.detail.octave_count() + 1
+            );
+            assert_eq!(child.detail.newest_weight(), parent.detail.newest_weight());
         }
     }
 

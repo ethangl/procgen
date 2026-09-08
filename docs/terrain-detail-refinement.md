@@ -157,8 +157,8 @@ bit-exact, float results agree within a documented tolerance. The CPU
 implementation is the canonical result. With integer hashing, no
 transcendental functions, and Rust's default of no FMA contraction, it is
 bit-exact across x86 and ARM, so an export that must be reproducible anywhere
-runs on the CPU. GPU paths exist for speed and must agree with the CPU within
-named value and derivative-angle tolerances.
+  runs on the CPU. GPU paths exist for speed and must agree with the CPU within
+  named value and conditioned derivative tolerances.
 
 - Lattice hashing is integer-only. Noise samplers accept the same `u32` field
   keys used by WGSL and CUDA. `procgen-noise` owns one named host conversion
@@ -181,13 +181,17 @@ named value and derivative-angle tolerances.
   tile coordinates in f32 using the same expression order, so coordinate
   quantization is shared rather than a source of disagreement.
 - The tolerances are set at ten times the measured maximum divergence and the
-  measurements are recorded beside the constants. The slice-14 Metal sweep
-  across levels 1, 4, 8, and 12 plus fade endpoints measured `2.503395081e-6`
-  normalized height and `1.637477577e-1` radians for the default rendered
-  normal. The corresponding provisional bounds are `3e-5` and `1.7` radians;
-  the normal drift is concentrated at the finest octave because CPU and Metal
-  cube-sphere transcendental results diverge before high-frequency sampling.
-  CUDA calibration and any cross-backend mapping refinement remain slice 16.
+  measurements are recorded beside the constants. Derivatives are multiplied
+  by nominal vertex spacing before comparison, making them normalized-height
+  change across one resolved grid interval rather than a display-relief
+  preference. Above a `1e-2` magnitude floor they compare by angle; below it
+  they compare by absolute difference. The slice-14 Metal sweep across levels
+  1, 4, 8, and 12 plus fade endpoints measured `2.503395081e-6` normalized
+  height, `3.288236912e-4` radians above the floor, and `3.0357654e-3` below it.
+  The corresponding provisional bounds are `3e-5`, `4e-3`, and `4e-2`. The
+  level-1 absolute maximum records the known CPU/Metal cube-map `tan`/`atan`
+  phase divergence without weakening the angular contract. CUDA calibration
+  and any cross-backend mapping refinement remain slice 16.
 
 Two invariants get tests independent of backend:
 
@@ -215,7 +219,9 @@ wavelength is at least twice its vertex spacing, and the last octave fades in
 with the spacing split factor. During refinement, child samples are blended
 from bilinearly reconstructed parent samples to their own samples as the
 parent's projected size moves from the split threshold to twice that size.
-Visible neighbors are balanced to a one-level difference, and skirts hide the
+Same-level edge neighbors, including cross-face wrapping, are resolved exactly
+by `procgen-cubesphere` tile-address arithmetic. Visible neighbors are balanced
+to a one-level difference, and skirts hide the
 remaining mixed-level cracks; index stitching remains out of scope. Nodes split
 and merge on conservative nearest-depth projected size with a per-frame budget
 for new tiles. Tile positions are stored relative to the tile origin so f32

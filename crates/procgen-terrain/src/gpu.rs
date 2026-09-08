@@ -15,15 +15,27 @@ use crate::{
 /// via Metal. The tolerance is ten times that maximum, rounded upward.
 pub const TERRAIN_WGSL_VALUE_TOLERANCE: f32 = 3.0e-5;
 
-/// CPU/WGSL rendered-normal tolerance in radians.
+/// Minimum derivative magnitude for angular CPU/WGSL comparison.
 ///
-/// On 2026-09-08, the same dispatch measured a maximum `1.637477577e-1`
-/// radians using the agreement test's explicit `0.036` display relief.
-/// Divergence is concentrated at the finest octave because CPU and Metal
-/// transcendental cube-sphere mapping differ before high-frequency sampling.
-/// The tolerance is ten times that maximum, rounded upward, and remains
-/// provisional until the mapping and CUDA path are calibrated.
-pub const TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE: f32 = 1.7;
+/// Derivatives are scaled by the tile's nominal vertex spacing, so this is a
+/// normalized-height change across one resolved grid interval rather than a
+/// rendering preference.
+pub const TERRAIN_WGSL_DERIVATIVE_MAGNITUDE_FLOOR: f32 = 1.0e-2;
+
+/// CPU/WGSL angular tolerance for derivatives above the magnitude floor.
+///
+/// On 2026-09-08, the terrain agreement dispatch measured `3.288236912e-4`
+/// radians across 29,575 representative Metal samples. This ten-times bound
+/// is rounded upward and remains provisional until CUDA calibration.
+pub const TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE: f32 = 4.0e-3;
+
+/// Absolute CPU/WGSL tolerance below the derivative magnitude floor.
+///
+/// The comparison uses derivatives scaled by nominal vertex spacing. The same
+/// Metal dispatch measured `3.0357654e-3`; this ten-times bound is rounded
+/// upward. The level-1 maximum tracks the known CPU/Metal cube-map `tan`/`atan`
+/// phase divergence without turning the angular contract into a vacuous bound.
+pub const TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE: f32 = 4.0e-2;
 
 /// Checked-in WGSL mirror of canonical terrain height and tile evaluation.
 ///
@@ -151,7 +163,7 @@ pub fn pack_control_bake(controls: &TerrainControlBake) -> Vec<[f32; 5]> {
 }
 
 pub fn pack_stamps(stamps: &[TerrainStampInput]) -> Vec<TerrainGpuStamp> {
-    stamps
+    let mut packed: Vec<_> = stamps
         .iter()
         .map(|stamp| {
             let Vec3 { x, y, z } = stamp.position;
@@ -162,5 +174,20 @@ pub fn pack_stamps(stamps: &[TerrainStampInput]) -> Vec<TerrainGpuStamp> {
                 padding: [0; 3],
             }
         })
-        .collect()
+        .collect();
+    // wgpu storage bindings cannot be empty; stamp_count remains the shader's authority.
+    if packed.is_empty() {
+        packed.push(TerrainGpuStamp::zeroed());
+    }
+    packed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_stamp_input_still_produces_a_bindable_buffer() {
+        assert_eq!(pack_stamps(&[]), vec![TerrainGpuStamp::zeroed()]);
+    }
 }

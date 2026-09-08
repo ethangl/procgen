@@ -65,27 +65,6 @@ struct TerrainDomainWarp {
     jacobian_transpose_2: vec3<f32>,
 }
 
-struct TerrainOctaveBand {
-    octaves: u32,
-    newest_weight: f32,
-}
-
-fn terrain_octave_band(maximum_octaves: u32, initial_frequency: f32, lacunarity: f32, tile_level: u32) -> TerrainOctaveBand {
-    let vertex_spacing = 1.5707963267948966 / f32(CUBESPHERE_TILE_QUADS << tile_level);
-    let minimum_wavelength = 2.0 * vertex_spacing;
-    var frequency = initial_frequency;
-    var octaves = 0u;
-    var newest_weight = 0.0;
-    while octaves < maximum_octaves {
-        let wavelength = 2.0 / frequency;
-        if wavelength < minimum_wavelength { break; }
-        octaves += 1u;
-        newest_weight = clamp(wavelength / minimum_wavelength - 1.0, 0.0, 1.0);
-        frequency *= lacunarity;
-    }
-    return TerrainOctaveBand(octaves, newest_weight);
-}
-
 fn terrain_sample_controls(direction: vec3<f32>) -> TerrainControlSample {
     let sample = cubesphere_sample_field(direction, terrain_parameters().control_resolution);
     return TerrainControlSample(
@@ -174,39 +153,38 @@ fn terrain_stamp_contribution(direction: vec3<f32>, stamp: TerrainStamp, profile
 
 fn terrain_height_gpu(direction: vec3<f32>, tile_level: u32) -> ScalarFieldSample3 {
     let parameters = terrain_parameters();
-    let detail_lod = terrain_octave_band(
+    let minimum_wavelength = 2.0 * cubesphere_vertex_spacing(tile_level);
+    let detail_lod = noise_octave_band_for_minimum_wavelength(
         parameters.detail_octaves,
         parameters.detail_frequency,
         parameters.detail_lacunarity,
-        tile_level,
+        minimum_wavelength,
     );
-    let abyssal_lod = terrain_octave_band(
+    let abyssal_lod = noise_octave_band_for_minimum_wavelength(
         parameters.abyssal_octaves,
         parameters.abyssal_frequency,
         parameters.abyssal_lacunarity,
-        tile_level,
+        minimum_wavelength,
     );
     let original = terrain_sample_controls(direction);
     let taper = terrain_coast_taper(original.base_elevation, parameters.coast_half_width);
     let warp = terrain_coast_warp(direction, sub_sample(ScalarFieldSample3(1.0, vec3(0.0)), taper));
     let controls = terrain_pullback_controls(warp, terrain_sample_controls(warp.direction));
     let gain = controls.octave_gain.value;
-    let fbm = terrain_pullback(warp, derivative_damped_fbm_3d_faded(
-        parameters.detail_key, warp.direction, detail_lod.octaves,
+    let fbm = terrain_pullback(warp, derivative_damped_fbm_3d(
+        parameters.detail_key, warp.direction, detail_lod,
         parameters.detail_frequency, parameters.detail_lacunarity, gain, parameters.detail_derivative_damping,
-        detail_lod.newest_weight,
     ));
-    let ridged = terrain_pullback(warp, ridged_multifractal_3d_faded(
-        parameters.detail_key, warp.direction, detail_lod.octaves,
+    let ridged = terrain_pullback(warp, ridged_multifractal_3d(
+        parameters.detail_key, warp.direction, detail_lod,
         parameters.detail_frequency, parameters.detail_lacunarity, gain,
-        parameters.detail_ridge_offset, parameters.detail_ridge_gain, detail_lod.newest_weight,
+        parameters.detail_ridge_offset, parameters.detail_ridge_gain,
     ));
     let blended = add_sample(fbm, mul_sample(sub_sample(ridged, fbm), controls.ridge_weight));
-    let abyssal = terrain_pullback(warp, derivative_damped_fbm_3d_faded(
-        parameters.abyssal_key, warp.direction, abyssal_lod.octaves,
+    let abyssal = terrain_pullback(warp, derivative_damped_fbm_3d(
+        parameters.abyssal_key, warp.direction, abyssal_lod,
         parameters.abyssal_frequency, parameters.abyssal_lacunarity, gain,
         parameters.abyssal_derivative_damping,
-        abyssal_lod.newest_weight,
     ));
     let additive = add_sample(
         mul_sample(controls.detail_amplitude, blended),

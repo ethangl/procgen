@@ -1,5 +1,6 @@
 mod compute;
 mod coverage;
+mod mesh;
 mod residency;
 
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use std::sync::{
 };
 
 use coverage::{CoverageView, QuadtreeSelection, tile_morph_factor};
+use mesh::{tile_grid_mesh, tile_origin};
 use residency::{ResidentTile, TileResidency};
 
 use super::{
@@ -20,7 +22,7 @@ use bevy::{
     asset::{RenderAssetUsages, uuid_handle},
     camera::{Camera, Projection, visibility::NoFrustumCulling},
     ecs::system::SystemParam,
-    mesh::{Indices, MeshTag, PrimitiveTopology},
+    mesh::MeshTag,
     pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
     render::{
@@ -31,10 +33,10 @@ use bevy::{
     },
     shader::{Shader, ShaderRef},
 };
-use procgen_cubesphere::{MAPPING_WGSL_SOURCE, TILE_QUADS, TILE_VERTICES};
+use procgen_cubesphere::MAPPING_WGSL_SOURCE;
 use procgen_terrain::{
-    TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_SOURCE, TerrainGpuParameters, TerrainGpuStamp,
-    TerrainHeightConfig, TerrainNoiseKeys, pack_control_bake, pack_stamps,
+    TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_SOURCE, TerrainGpuParameters, TerrainHeightConfig,
+    TerrainNoiseKeys, pack_control_bake, pack_stamps,
 };
 
 /// Camera distance at or below which adjusted elevation uses GPU terrain tiles.
@@ -208,14 +210,24 @@ fn initialize_grid_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>
 }
 
 fn register_shaders(app: &mut App) {
-    let vertex_source = format!(
-        "{MAPPING_WGSL_SOURCE}\nconst TERRAIN_ELEVATION_PALETTE_STOP_COUNT: u32 = {ELEVATION_PALETTE_STOP_COUNT}u;\nconst TERRAIN_SKIRT_DEPTH_SPACINGS: f32 = {TERRAIN_SKIRT_DEPTH_SPACINGS};\nconst TERRAIN_SLOT_BITS: u32 = {TERRAIN_SLOT_BITS}u;\nconst TERRAIN_SLOT_MASK: u32 = {TERRAIN_SLOT_MASK}u;\nconst TERRAIN_MORPH_MAX: u32 = {TERRAIN_MORPH_MAX}u;\n{}",
-        include_str!("terrain_tiles.wgsl")
+    let vertex_constants = format!(
+        "const TERRAIN_ELEVATION_PALETTE_STOP_COUNT: u32 = {ELEVATION_PALETTE_STOP_COUNT}u;\n\
+         const TERRAIN_SKIRT_DEPTH_SPACINGS: f32 = {TERRAIN_SKIRT_DEPTH_SPACINGS};\n\
+         const TERRAIN_SLOT_BITS: u32 = {TERRAIN_SLOT_BITS}u;\n\
+         const TERRAIN_SLOT_MASK: u32 = {TERRAIN_SLOT_MASK}u;\n\
+         const TERRAIN_MORPH_MAX: u32 = {TERRAIN_MORPH_MAX}u;"
     );
-    let compute_source = format!(
-        "{TERRAIN_WGSL_SOURCE}\n{}",
-        include_str!("terrain_compute.wgsl")
-    );
+    let vertex_source = [
+        MAPPING_WGSL_SOURCE.to_owned(),
+        vertex_constants,
+        include_str!("terrain_tiles.wgsl").to_owned(),
+    ]
+    .join("\n");
+    let compute_source = [
+        TERRAIN_WGSL_SOURCE.to_owned(),
+        include_str!("terrain_compute.wgsl").to_owned(),
+    ]
+    .join("\n");
     let mut shaders = app.world_mut().resource_mut::<Assets<Shader>>();
     shaders
         .insert(
@@ -256,16 +268,7 @@ fn initialize_gpu_world(
     assets.dispatch.generation = assets.dispatch.generation.wrapping_add(1);
 
     let controls = pack_control_bake(&world.terrain_control_bake);
-    let mut stamps = pack_stamps(&world.terrain_controls.stamps);
-    // wgpu storage bindings cannot be empty; the shader reads no stamps when stamp_count is zero.
-    if stamps.is_empty() {
-        stamps.push(TerrainGpuStamp {
-            position: [0.0; 3],
-            strength: 0.0,
-            kind: 0,
-            padding: [0; 3],
-        });
-    }
+    let stamps = pack_stamps(&world.terrain_controls.stamps);
     let parameters = TerrainGpuParameters::new(
         &world.terrain_control_bake,
         &world.terrain_controls.stamps,
@@ -373,24 +376,28 @@ fn update_tile_coverage(
     if assets.dispatch.is_complete() {
         assets.residency.complete_in_flight();
     }
-    let view = if *mode == TerrainTileMode::Tiles {
-        let (camera, projection, transform) = *camera;
-        let Some(view) = CoverageView::from_camera(camera, projection, transform) else {
-            return;
-        };
-        Some(view)
-    } else {
-        None
-    };
-    let targets = if let Some(view) = view {
-        assets.selection.select(view)
-    } else {
+    if *mode == TerrainTileMode::Coarse {
         assets.selection.clear();
-        Vec::new()
+        let update = assets.residency.update(&[]);
+        upload_generation_jobs(&update.generated, &mut assets);
+        clear_displayed_tiles(&mut assets);
+        return;
+    }
+
+    let (camera, projection, transform) = *camera;
+    let Some(view) = CoverageView::from_camera(camera, projection, transform) else {
+        return;
     };
+    let targets = assets.selection.select(view);
     let update = assets.residency.update(&targets);
     upload_generation_jobs(&update.generated, &mut assets);
     sync_displayed_tiles(&update.displayed, view, &mut assets);
+}
+
+fn clear_displayed_tiles(assets: &mut TerrainCoverageAssets<'_, '_>) {
+    for (_, entity) in assets.coverage.0.drain() {
+        assets.commands.entity(entity).despawn();
+    }
 }
 
 fn upload_generation_jobs(generated: &[ResidentTile], assets: &mut TerrainCoverageAssets) {
@@ -417,7 +424,7 @@ fn generation_jobs(generated: &[ResidentTile]) -> Vec<TerrainTileJob> {
 
 fn sync_displayed_tiles(
     displayed: &[ResidentTile],
-    view: Option<CoverageView>,
+    view: CoverageView,
     assets: &mut TerrainCoverageAssets,
 ) {
     let mut previous = std::mem::take(&mut assets.coverage.0);
@@ -427,12 +434,10 @@ fn sync_displayed_tiles(
         .iter()
         .copied()
         .map(|tile| {
-            let (parent_slot, morph) = match (assets.residency.ready_parent_slot(tile), view) {
-                (Some(parent_slot), Some(view)) => {
-                    (parent_slot, tile_morph_factor(tile.address, view))
-                }
-                (Some(parent_slot), None) => (parent_slot, 1.0),
-                (None, _) => (tile.slot, 1.0),
+            let (parent_slot, morph) = match assets.residency.ready_parent_slot(tile) {
+                Some(parent_slot) => (parent_slot, tile_morph_factor(tile.address, view)),
+                // Root tiles and merge fallbacks have no ready parent to sample.
+                None => (tile.slot, 1.0),
             };
             let tag = terrain_mesh_tag(tile, parent_slot, morph);
             if let Some(entity) = previous.remove(&tile) {
@@ -475,180 +480,10 @@ fn terrain_tile_mode(camera_distance: f32, selected: Option<DiagnosticLayer>) ->
     }
 }
 
-fn tile_grid_mesh() -> Mesh {
-    // Integer grid coordinates are decoded by the custom vertex shader; normals and colors are
-    // present only to select Bevy's lit, vertex-color mesh pipeline layout.
-    let mut positions = (0..TILE_VERTICES)
-        .flat_map(|y| (0..TILE_VERTICES).map(move |x| [x as f32, y as f32, 0.0]))
-        .collect::<Vec<_>>();
-    let mut indices = Vec::with_capacity(((TILE_QUADS * TILE_QUADS + 4 * TILE_QUADS) * 6) as usize);
-    for y in 0..TILE_QUADS {
-        for x in 0..TILE_QUADS {
-            let lower_left = y * TILE_VERTICES + x;
-            let lower_right = lower_left + 1;
-            let upper_left = lower_left + TILE_VERTICES;
-            let upper_right = upper_left + 1;
-            indices.extend([
-                lower_left,
-                lower_right,
-                upper_right,
-                lower_left,
-                upper_right,
-                upper_left,
-            ]);
-        }
-    }
-    append_skirt_edge(
-        &mut positions,
-        &mut indices,
-        (0..TILE_VERTICES).map(|x| (x, 0)),
-        false,
-    );
-    append_skirt_edge(
-        &mut positions,
-        &mut indices,
-        (0..TILE_VERTICES).map(|y| (TILE_QUADS, y)),
-        false,
-    );
-    append_skirt_edge(
-        &mut positions,
-        &mut indices,
-        (0..TILE_VERTICES).map(|x| (x, TILE_QUADS)),
-        true,
-    );
-    append_skirt_edge(
-        &mut positions,
-        &mut indices,
-        (0..TILE_VERTICES).map(|y| (0, y)),
-        true,
-    );
-    let normals = vec![[0.0, 0.0, 1.0]; positions.len()];
-    let colors = vec![[1.0, 1.0, 1.0, 1.0]; positions.len()];
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-    .with_inserted_indices(Indices::U32(indices))
-}
-
-fn append_skirt_edge(
-    positions: &mut Vec<[f32; 3]>,
-    indices: &mut Vec<u32>,
-    edge: impl Iterator<Item = (u32, u32)>,
-    reverse_winding: bool,
-) {
-    let edge = edge.collect::<Vec<_>>();
-    let skirt_start = positions.len() as u32;
-    positions.extend(edge.iter().map(|&(x, y)| [x as f32, y as f32, 1.0]));
-    for (offset, pair) in edge.windows(2).enumerate() {
-        let core = [
-            pair[0].1 * TILE_VERTICES + pair[0].0,
-            pair[1].1 * TILE_VERTICES + pair[1].0,
-        ];
-        let skirt = [skirt_start + offset as u32, skirt_start + offset as u32 + 1];
-        if reverse_winding {
-            indices.extend([core[0], core[1], skirt[1], core[0], skirt[1], skirt[0]]);
-        } else {
-            indices.extend([core[0], skirt[1], core[1], core[0], skirt[0], skirt[1]]);
-        }
-    }
-}
-
-fn tile_origin(address: procgen_cubesphere::TileAddress) -> Vec3 {
-    coverage::tile_direction(address, TILE_QUADS / 2, TILE_QUADS / 2) * SURFACE_RADIUS
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::mesh::VertexAttributeValues;
     use procgen_cubesphere::{CubeFace, TileAddress};
-
-    use super::coverage::tile_direction;
-
-    #[test]
-    fn tile_grid_triangles_face_outward_on_every_cube_face() {
-        let mesh = tile_grid_mesh();
-        let VertexAttributeValues::Float32x3(positions) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
-        else {
-            panic!("terrain tile positions must be float3");
-        };
-        let Indices::U32(indices) = mesh.indices().unwrap() else {
-            panic!("terrain tile indices must be u32");
-        };
-
-        for face in CubeFace::ALL {
-            let address = TileAddress::root(face);
-            for triangle in indices[..(TILE_QUADS * TILE_QUADS * 6) as usize].chunks_exact(3) {
-                let directions = [triangle[0], triangle[1], triangle[2]].map(|index| {
-                    let [x, y, _] = positions[index as usize];
-                    tile_direction(address, x as u32, y as u32)
-                });
-                let geometric_normal =
-                    (directions[1] - directions[0]).cross(directions[2] - directions[0]);
-                let center = (directions[0] + directions[1] + directions[2]).normalize();
-                assert!(geometric_normal.dot(center) > 0.0);
-            }
-        }
-    }
-
-    #[test]
-    fn skirt_is_one_quad_deep_uses_edge_samples_and_winds_outward() {
-        let mesh = tile_grid_mesh();
-        let VertexAttributeValues::Float32x3(positions) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
-        else {
-            panic!("terrain tile positions must be float3");
-        };
-        let Indices::U32(indices) = mesh.indices().unwrap() else {
-            panic!("terrain tile indices must be u32");
-        };
-        assert_eq!(
-            positions.len(),
-            (TILE_VERTICES * TILE_VERTICES + 4 * TILE_VERTICES) as usize
-        );
-        assert_eq!(
-            indices.len(),
-            ((TILE_QUADS * TILE_QUADS + 4 * TILE_QUADS) * 6) as usize
-        );
-        let core_indices = (TILE_QUADS * TILE_QUADS * 6) as usize;
-        let address = TileAddress::root(CubeFace::PositiveZ);
-        let center = tile_origin(address);
-        let skirt_depth = TERRAIN_SKIRT_DEPTH_SPACINGS * std::f32::consts::FRAC_PI_2
-            / (TILE_QUADS << address.level()) as f32;
-        for triangle in indices[core_indices..].chunks_exact(3) {
-            let world = [triangle[0], triangle[1], triangle[2]].map(|index| {
-                let [x, y, skirt] = positions[index as usize];
-                tile_direction(address, x as u32, y as u32) * (1.0 - skirt * skirt_depth)
-            });
-            let normal = (world[1] - world[0]).cross(world[2] - world[0]);
-            let edge_direction = (world[0] + world[1] + world[2]).normalize();
-            let away_from_center = edge_direction - center;
-            assert!(normal.dot(away_from_center) > 0.0);
-            let skirt_vertices = triangle
-                .iter()
-                .filter(|&&index| positions[index as usize][2] == 1.0)
-                .count();
-            assert!((1..=2).contains(&skirt_vertices));
-        }
-    }
-
-    #[test]
-    fn level_twelve_relative_positions_reconstruct_world_positions() {
-        let address = TileAddress::new(CubeFace::NegativeY, 12, 1_913, 2_077).unwrap();
-        let origin = tile_origin(address);
-        for (x, y) in [(0, 0), (32, 32), (64, 64)] {
-            let world = tile_direction(address, x, y) * SURFACE_RADIUS;
-            let relative = world - origin;
-            let reconstructed = origin + relative;
-            assert!(reconstructed.distance(world) <= f32::EPSILON);
-            assert!(relative.length() < 0.001);
-        }
-    }
 
     #[test]
     fn mode_only_replaces_final_adjusted_elevation_below_threshold() {
