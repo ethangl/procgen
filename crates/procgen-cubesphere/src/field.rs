@@ -55,12 +55,48 @@ pub struct CubeField<const N: usize> {
 }
 
 impl<const N: usize> CubeField<N> {
+    /// Reconstructs a cached field after validating its face dimensions and data.
+    pub fn from_face_texels(
+        resolution: u32,
+        face_texels: [Vec<[f32; N]>; 6],
+    ) -> Result<Self, BakeError> {
+        validate_resolution(resolution)?;
+        let expected = (resolution * resolution) as usize;
+        let faces = face_texels.map(|texels| FaceField { resolution, texels });
+        let field = Self { faces };
+        field.validate_face_data(expected)?;
+        Ok(field)
+    }
+
     pub fn resolution(&self) -> u32 {
         self.faces[0].resolution()
     }
 
     pub fn face(&self, face: CubeFace) -> &FaceField<N> {
         &self.faces[face.index()]
+    }
+
+    /// Validates the dimensions and finiteness owned by the baked field.
+    pub fn validate(&self) -> Result<(), BakeError> {
+        let resolution = self.resolution();
+        validate_resolution(resolution)?;
+        self.validate_face_data((resolution * resolution) as usize)
+    }
+
+    fn validate_face_data(&self, expected: usize) -> Result<(), BakeError> {
+        for (face, field) in self.faces.iter().enumerate() {
+            if field.resolution != self.resolution() || field.texels.len() != expected {
+                return Err(BakeError::InvalidFaceDimensions { face });
+            }
+            if field
+                .texels
+                .iter()
+                .any(|texel| !texel.iter().all(|value| value.is_finite()))
+            {
+                return Err(BakeError::NonFiniteFaceData { face });
+            }
+        }
+        Ok(())
     }
 
     /// Bilinearly samples a direction, remapping taps outside the selected face
@@ -140,6 +176,8 @@ impl<const N: usize> CubeField<N> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum BakeError {
     InvalidResolution,
+    InvalidFaceDimensions { face: usize },
+    NonFiniteFaceData { face: usize },
     InvalidMesh(TopologyError),
     CellCountMismatch { mesh: usize, cells: usize },
     NonFiniteCell { cell: usize },
@@ -152,6 +190,12 @@ impl fmt::Display for BakeError {
                 formatter,
                 "cube-field resolution must be a power of two between 1 and {MAX_CUBE_FIELD_RESOLUTION}"
             ),
+            Self::InvalidFaceDimensions { face } => {
+                write!(formatter, "cube-field face {face} has invalid dimensions")
+            }
+            Self::NonFiniteFaceData { face } => {
+                write!(formatter, "cube-field face {face} contains non-finite data")
+            }
             Self::InvalidMesh(error) => write!(formatter, "invalid sphere mesh: {error}"),
             Self::CellCountMismatch { mesh, cells } => {
                 write!(formatter, "mesh has {mesh} cells but field has {cells}")
@@ -200,9 +244,7 @@ pub fn bake_cube_field<const N: usize>(
     cells: &[[f32; N]],
     resolution: u32,
 ) -> Result<CubeField<N>, BakeError> {
-    if resolution == 0 || resolution > MAX_CUBE_FIELD_RESOLUTION || !resolution.is_power_of_two() {
-        return Err(BakeError::InvalidResolution);
-    }
+    validate_resolution(resolution)?;
     mesh.validate().map_err(BakeError::InvalidMesh)?;
     if cells.len() != mesh.cell_count() {
         return Err(BakeError::CellCountMismatch {
@@ -220,6 +262,13 @@ pub fn bake_cube_field<const N: usize>(
     Ok(CubeField {
         faces: CubeFace::ALL.map(|face| bake_face(mesh, cells, face, resolution)),
     })
+}
+
+fn validate_resolution(resolution: u32) -> Result<(), BakeError> {
+    if resolution == 0 || resolution > MAX_CUBE_FIELD_RESOLUTION || !resolution.is_power_of_two() {
+        return Err(BakeError::InvalidResolution);
+    }
+    Ok(())
 }
 
 fn bake_face<const N: usize>(
@@ -431,6 +480,27 @@ mod tests {
         for direction in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(1.0, 2.0, 3.0)] {
             assert_eq!(first.sample(direction), second.sample(direction));
         }
+    }
+
+    #[test]
+    fn cached_face_reconstruction_validates_dimensions_and_data() {
+        let faces = array::from_fn(|_| vec![channels(0.25); 16]);
+        let field = CubeField::from_face_texels(4, faces.clone()).unwrap();
+        assert_eq!(field.validate(), Ok(()));
+
+        let mut invalid_dimensions = faces.clone();
+        invalid_dimensions[2].pop();
+        assert_eq!(
+            CubeField::from_face_texels(4, invalid_dimensions),
+            Err(BakeError::InvalidFaceDimensions { face: 2 })
+        );
+
+        let mut invalid_data = faces;
+        invalid_data[3][7][1] = f32::NAN;
+        assert_eq!(
+            CubeField::from_face_texels(4, invalid_data),
+            Err(BakeError::NonFiniteFaceData { face: 3 })
+        );
     }
 
     #[test]

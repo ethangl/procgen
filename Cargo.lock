@@ -3238,11 +3238,13 @@ dependencies = [
  "bevy_egui",
  "procgen-climate",
  "procgen-core",
+ "procgen-cubesphere",
  "procgen-geology",
  "procgen-planet",
  "procgen-sphere",
  "procgen-sphere-mesh",
  "procgen-tectonics",
+ "procgen-terrain",
 ]
 
 [[package]]

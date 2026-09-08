@@ -4,11 +4,15 @@ use crate::model::{GeneratedWorld, GenerationSettings, GenerationTimings};
 use bevy::prelude::Resource;
 use procgen_climate::*;
 use procgen_core::Vec3;
+use procgen_cubesphere::{CubeFace, CubeField};
 use procgen_geology::*;
 use procgen_planet::{Orbit, Planet, Star};
 use procgen_sphere::FibonacciConfig;
 use procgen_sphere_mesh::{CellCorner, SphereMesh, VoronoiEdge};
 use procgen_tectonics::*;
+use procgen_terrain::{
+    TerrainCellControls, TerrainControlConfig, TerrainControls, TerrainStampInput, TerrainStampKind,
+};
 use std::{
     env, fmt,
     fs::{self, File, OpenOptions},
@@ -90,6 +94,9 @@ impl WorldCache {
 
     pub fn store(&self, world: &GeneratedWorld) -> Result<(), CacheError> {
         let bytes = encode_snapshot(world);
+        if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+            return Err(CacheError::invalid("snapshot exceeds the size limit"));
+        }
         atomic_replace(&self.path, &bytes)
     }
 
@@ -174,6 +181,9 @@ fn encode_snapshot(world: &GeneratedWorld) -> Vec<u8> {
 }
 
 fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
+    if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return Err(CacheError::invalid("snapshot exceeds the size limit"));
+    }
     let mut decoder = Decoder { bytes, offset: 0 };
     if decoder.read_exact(MAGIC.len())? != MAGIC {
         return Err(CacheError::invalid("snapshot magic does not match"));
@@ -247,10 +257,7 @@ impl CacheCodec for usize {
 
 impl<T: CacheCodec> CacheCodec for Vec<T> {
     fn encode(&self, encoder: &mut Encoder) {
-        self.len().encode(encoder);
-        for value in self {
-            value.encode(encoder);
-        }
+        encode_slice(self, encoder);
     }
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
         let length = usize::decode(decoder)?;
@@ -258,6 +265,13 @@ impl<T: CacheCodec> CacheCodec for Vec<T> {
             return Err(CacheError::invalid("snapshot collection is too large"));
         }
         (0..length).map(|_| T::decode(decoder)).collect()
+    }
+}
+
+fn encode_slice<T: CacheCodec>(values: &[T], encoder: &mut Encoder) {
+    values.len().encode(encoder);
+    for value in values {
+        value.encode(encoder);
     }
 }
 
@@ -376,6 +390,7 @@ struct_codec! {
     SedimentaryBasinFieldConfig { maximum_elevation, minimum_cell_count, maximum_ocean_perimeter_fraction }
     GeologicalElevationConfig { hotspot_uplift, volcanic_arc_uplift, craton_flattening, basin_flattening }
     IsostaticAdjustmentConfig { adjustment_strength, continental_support, convergent_support_bonus, divergent_support_penalty, craton_support_bonus, maximum_boundary_distance }
+    TerrainControlConfig { base_detail_amplitude, craton_amplitude_delta, volcanic_arc_amplitude, convergent_boundary_amplitude, divergent_boundary_amplitude, transform_boundary_amplitude, basin_amplitude_delta, boundary_strength_saturation, base_ridge_weight, convergent_ridge_weight, volcanic_arc_ridge_weight, base_octave_gain, craton_octave_gain_delta, basin_octave_gain_delta, maximum_abyssal_amplitude, abyssal_age_saturation, hotspot_stamp_strength, volcanic_arc_stamp_scale, oceanic_peak_stamp_scale }
     SolarForcingConfig { orbital_phase, annual_sample_count }
     ClimateAlbedoConfig { land, ocean, snow, ice }
     RadiativeEquilibriumConfig { emissivity }
@@ -384,7 +399,7 @@ struct_codec! {
     MoistureTransportConfig { step_count, step_seconds, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
     CryosphereConfig { maximum_iterations, closure_tolerance, snowfall_temperature_kelvin, melt_temperature_kelvin, full_snow_cover_kg_per_m2, seasonal_snow_capacity_kg_per_m2, snow_melt_kg_per_m2_per_kelvin_day, land_ice_melt_kg_per_m2_per_kelvin_day, sea_ice_growth_fraction_per_kelvin_day, sea_ice_melt_fraction_per_kelvin_day }
     ClimateCouplingConfig { maximum_iterations, under_relaxation, albedo_tolerance, temperature_tolerance_kelvin, precipitation_tolerance_kg_per_m2_per_day, cover_fraction_tolerance, albedo, radiative_equilibrium, seasonal_thermal, atmospheric_circulation, moisture_transport, cryosphere }
-    GenerationSettings { fibonacci, plates, crust, kinematics, evolution, seafloor_age, base_elevation, deformation, elevation, hotspots, oceanic_peaks, volcanic_arcs, cratons, basins, geological_elevation, isostasy, planet, solar_forcing, climate_coupling }
+    GenerationSettings { fibonacci, plates, crust, kinematics, evolution, seafloor_age, base_elevation, deformation, elevation, hotspots, oceanic_peaks, volcanic_arcs, cratons, basins, geological_elevation, isostasy, terrain_controls, planet, solar_forcing, climate_coupling }
 
     VoronoiEdge { vertices, cells }
     CellCorner { vertex, neighbor, edge }
@@ -439,6 +454,8 @@ struct_codec! {
     CryosphereDiagnostics { selected_snowfall_kg_per_m2_per_day, selected_melt_kg_per_m2_per_day, selected_snow_cover_fraction, land_ice_cover_fraction, selected_sea_ice_cover_fraction, annual_snowfall_kg_per_m2, annual_snow_melt_kg_per_m2, annual_land_ice_accumulation_kg_per_m2, annual_land_ice_ablation_kg_per_m2, annual_sea_ice_growth_fraction, annual_sea_ice_melt_fraction, land_cell_count, ocean_cell_count, snow_covered_cell_count, land_ice_cell_count, sea_ice_cell_count, maximum_iterations_used, maximum_snow_closure_error_kg_per_m2, maximum_sea_ice_closure_error, snow_mass_balance_error_kg_per_m2, land_ice_mass_balance_kg_per_m2, sea_ice_cover_balance_error }
     Cryosphere { cell_snowfall_kg_per_m2_per_day, cell_melt_kg_per_m2_per_day, cell_snow_cover_fraction, cell_land_ice_cover_fraction, cell_sea_ice_cover_fraction, diagnostics }
     ClimateCouplingDiagnostics { iterations, albedo_residual_rms, temperature_change_rms_kelvin, precipitation_change_rms_kg_per_m2_per_day, cover_fraction_change_rms }
+    TerrainCellControls { base_elevation, detail_amplitude, ridge_weight, octave_gain, abyssal_amplitude }
+    TerrainStampInput { cell, kind, source_index, position, strength }
 }
 
 macro_rules! enum_codec {
@@ -469,6 +486,60 @@ enum_codec!(OceanicPeakKind {
     OceanicPeakKind::Seamount = 0,
     OceanicPeakKind::AbyssalHill = 1,
 });
+enum_codec!(TerrainStampKind {
+    TerrainStampKind::Hotspot = 0,
+    TerrainStampKind::VolcanicArc = 1,
+    TerrainStampKind::OceanicSeamount = 2,
+    TerrainStampKind::OceanicAbyssalHill = 3,
+});
+
+impl<const N: usize> CacheCodec for CubeField<N> {
+    fn encode(&self, encoder: &mut Encoder) {
+        self.resolution().encode(encoder);
+        for face in CubeFace::ALL {
+            encode_slice(self.face(face).texels(), encoder);
+        }
+    }
+
+    fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
+        let resolution = u32::decode(decoder)?;
+        let texel_count = resolution
+            .checked_mul(resolution)
+            .map(|count| count as usize)
+            .ok_or_else(|| CacheError::invalid("cube-field dimensions overflow"))?;
+        let faces: Vec<_> = (0..CubeFace::ALL.len())
+            .map(|_| decode_exact_vec(decoder, texel_count))
+            .collect::<Result<_, _>>()?;
+        CubeField::from_face_texels(
+            resolution,
+            faces
+                .try_into()
+                .map_err(|_| CacheError::invalid("cube-field face count is invalid"))?,
+        )
+        .map_err(CacheError::invalid)
+    }
+}
+
+fn decode_exact_vec<T: CacheCodec>(
+    decoder: &mut Decoder<'_>,
+    expected: usize,
+) -> Result<Vec<T>, CacheError> {
+    let length = usize::decode(decoder)?;
+    if length != expected || length > MAX_COLLECTION_ITEMS {
+        return Err(CacheError::invalid(
+            "snapshot collection has invalid dimensions",
+        ));
+    }
+    (0..length).map(|_| T::decode(decoder)).collect()
+}
+
+fn decode_terrain_controls(
+    decoder: &mut Decoder<'_>,
+    mesh: &SphereMesh,
+) -> Result<TerrainControls, CacheError> {
+    TerrainControls::from_parts(mesh, Vec::decode(decoder)?, Vec::decode(decoder)?)
+        .map_err(CacheError::invalid)
+}
 
 impl CacheCodec for GeneratedWorld {
     fn encode(&self, encoder: &mut Encoder) {
@@ -490,6 +561,9 @@ impl CacheCodec for GeneratedWorld {
         self.basins.encode(encoder);
         self.geological_elevation.encode(encoder);
         self.isostasy.encode(encoder);
+        self.terrain_controls.cells.encode(encoder);
+        self.terrain_controls.stamps.encode(encoder);
+        self.terrain_control_bake.encode(encoder);
         self.solar_forcing.encode(encoder);
         self.radiative_equilibrium.encode(encoder);
         self.seasonal_thermal.encode(encoder);
@@ -501,25 +575,47 @@ impl CacheCodec for GeneratedWorld {
     }
 
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
+        let config = CacheCodec::decode(decoder)?;
+        let voronoi = CacheCodec::decode(decoder)?;
+        let plates = CacheCodec::decode(decoder)?;
+        let crust = CacheCodec::decode(decoder)?;
+        let kinematics = CacheCodec::decode(decoder)?;
+        let boundaries = CacheCodec::decode(decoder)?;
+        let evolution = CacheCodec::decode(decoder)?;
+        let seafloor_age = CacheCodec::decode(decoder)?;
+        let base_elevation = CacheCodec::decode(decoder)?;
+        let deformation = CacheCodec::decode(decoder)?;
+        let elevation = CacheCodec::decode(decoder)?;
+        let hotspots = CacheCodec::decode(decoder)?;
+        let oceanic_peaks = CacheCodec::decode(decoder)?;
+        let volcanic_arcs = CacheCodec::decode(decoder)?;
+        let cratons = CacheCodec::decode(decoder)?;
+        let basins = CacheCodec::decode(decoder)?;
+        let geological_elevation = CacheCodec::decode(decoder)?;
+        let isostasy = CacheCodec::decode(decoder)?;
+        let terrain_controls = decode_terrain_controls(decoder, &voronoi)?;
+        let terrain_control_bake = CacheCodec::decode(decoder)?;
         Ok(Self {
-            config: CacheCodec::decode(decoder)?,
-            voronoi: CacheCodec::decode(decoder)?,
-            plates: CacheCodec::decode(decoder)?,
-            crust: CacheCodec::decode(decoder)?,
-            kinematics: CacheCodec::decode(decoder)?,
-            boundaries: CacheCodec::decode(decoder)?,
-            evolution: CacheCodec::decode(decoder)?,
-            seafloor_age: CacheCodec::decode(decoder)?,
-            base_elevation: CacheCodec::decode(decoder)?,
-            deformation: CacheCodec::decode(decoder)?,
-            elevation: CacheCodec::decode(decoder)?,
-            hotspots: CacheCodec::decode(decoder)?,
-            oceanic_peaks: CacheCodec::decode(decoder)?,
-            volcanic_arcs: CacheCodec::decode(decoder)?,
-            cratons: CacheCodec::decode(decoder)?,
-            basins: CacheCodec::decode(decoder)?,
-            geological_elevation: CacheCodec::decode(decoder)?,
-            isostasy: CacheCodec::decode(decoder)?,
+            config,
+            voronoi,
+            plates,
+            crust,
+            kinematics,
+            boundaries,
+            evolution,
+            seafloor_age,
+            base_elevation,
+            deformation,
+            elevation,
+            hotspots,
+            oceanic_peaks,
+            volcanic_arcs,
+            cratons,
+            basins,
+            geological_elevation,
+            isostasy,
+            terrain_controls,
+            terrain_control_bake,
             solar_forcing: CacheCodec::decode(decoder)?,
             radiative_equilibrium: CacheCodec::decode(decoder)?,
             seasonal_thermal: CacheCodec::decode(decoder)?,
@@ -550,7 +646,62 @@ mod tests {
         assert_eq!(loaded.plates, world.plates);
         assert_eq!(loaded.isostasy, world.isostasy);
         assert_eq!(loaded.cryosphere, world.cryosphere);
+        assert_eq!(loaded.terrain_controls, world.terrain_controls);
+        assert_eq!(loaded.terrain_control_bake, world.terrain_control_bake);
         assert!(loaded.timings.stages().is_empty());
+    }
+
+    fn bake_offset(world: &GeneratedWorld, snapshot: &[u8]) -> usize {
+        let mut encoder = Encoder::default();
+        world.terrain_control_bake.encode(&mut encoder);
+        snapshot
+            .windows(encoder.bytes.len())
+            .position(|window| window == encoder.bytes)
+            .unwrap()
+    }
+
+    #[test]
+    fn corrupt_bake_dimensions_are_rejected_before_allocation() {
+        let world = fixture(32, 22);
+        let mut bytes = encode_snapshot(&world);
+        let offset = bake_offset(&world, &bytes);
+        bytes[offset..offset + size_of::<u32>()].copy_from_slice(&3_u32.to_le_bytes());
+
+        assert!(decode_snapshot(&bytes).is_err());
+    }
+
+    #[test]
+    fn corrupt_bake_data_is_rejected() {
+        let world = fixture(32, 23);
+        let mut bytes = encode_snapshot(&world);
+        let offset = bake_offset(&world, &bytes) + size_of::<u32>() + size_of::<u64>();
+        bytes[offset..offset + size_of::<f32>()].copy_from_slice(&f32::NAN.to_le_bytes());
+
+        assert!(decode_snapshot(&bytes).is_err());
+    }
+
+    #[test]
+    fn loaded_snapshot_reuses_cached_bake_data() {
+        let (cache_dir, cache) = test_cache("reuse-bake");
+        let world = fixture(32, 24);
+        let mut bytes = encode_snapshot(&world);
+        let offset = bake_offset(&world, &bytes) + size_of::<u32>() + size_of::<u64>();
+        let cached_value = 123.25_f32;
+        bytes[offset..offset + size_of::<f32>()].copy_from_slice(&cached_value.to_le_bytes());
+        fs::create_dir_all(cache.path.parent().unwrap()).unwrap();
+        fs::write(&cache.path, bytes).unwrap();
+
+        let loaded = cache.load().unwrap();
+        assert_eq!(
+            loaded
+                .terrain_control_bake
+                .face(CubeFace::PositiveX)
+                .texels()[0][0],
+            cached_value
+        );
+        assert_ne!(loaded.terrain_control_bake, world.terrain_control_bake);
+
+        fs::remove_dir_all(cache_dir).unwrap();
     }
 
     #[test]

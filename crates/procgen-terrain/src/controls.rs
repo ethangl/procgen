@@ -222,12 +222,7 @@ pub fn compose_terrain_controls(
         })
         .collect();
 
-    let controls = TerrainControls {
-        cells,
-        stamps: compose_stamps(mesh, inputs, config),
-    };
-    debug_assert!(controls.validate(mesh).is_ok());
-    Ok(controls)
+    TerrainControls::from_parts(mesh, cells, compose_stamps(mesh, inputs, config))
 }
 
 fn compose_stamps(
