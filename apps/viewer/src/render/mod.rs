@@ -3,6 +3,7 @@ mod layers;
 mod lighting;
 mod palette;
 mod surfaces;
+mod terrain_tiles;
 
 pub use layers::{DiagnosticLayer, OverlayKind};
 pub use lighting::LightingSettings;
@@ -98,7 +99,8 @@ pub struct DiagnosticRenderPlugin;
 
 impl Plugin for DiagnosticRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SurfaceSelection>()
+        app.add_plugins(terrain_tiles::TerrainTileRenderPlugin)
+            .init_resource::<SurfaceSelection>()
             .init_resource::<OverlaySettings>()
             .init_resource::<ReliefSettings>()
             .init_resource::<LightingSettings>()
@@ -110,7 +112,8 @@ impl Plugin for DiagnosticRenderPlugin {
                     rebuild_surface.run_if(
                         resource_changed::<GeneratedWorld>
                             .or(resource_changed::<SurfaceSelection>)
-                            .or(resource_changed::<ReliefSettings>),
+                            .or(resource_changed::<ReliefSettings>)
+                            .or(terrain_tiles::camera_changed),
                     ),
                     sync_layer_render_state.run_if(
                         resource_changed::<SurfaceSelection>
@@ -217,6 +220,7 @@ fn rebuild_surface(
     world: Res<GeneratedWorld>,
     selection: Res<SurfaceSelection>,
     relief: Res<ReliefSettings>,
+    camera: Single<&Transform, With<ViewerCamera>>,
     mut meshes: ResMut<Assets<Mesh>>,
     surface: Single<(&Mesh3d, &mut Visibility), With<SurfaceLayer>>,
 ) {
@@ -226,7 +230,14 @@ fn rebuild_surface(
             .surface()
             .expect("surface selection only stores fill layers")
             .build(&world, relief.exaggeration);
-        *visibility = Visibility::Inherited;
+        *visibility = if terrain_tiles::terrain_tiles_active(
+            camera.translation.length(),
+            selection.selected(),
+        ) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
     } else {
         *visibility = Visibility::Hidden;
     }

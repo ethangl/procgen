@@ -3178,7 +3178,9 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "procgen-core",
+ "procgen-cubesphere",
  "procgen-noise",
+ "procgen-terrain",
  "wgpu",
 ]
 

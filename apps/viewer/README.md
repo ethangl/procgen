@@ -97,6 +97,12 @@ adjusted elevation. Shared corner heights are the deterministic mean of their
 three incident cells, keeping adjacent fans watertight. Relief exaggeration and
 directional-light azimuth, elevation, illuminance, and ambient fill are display
 controls only; they do not alter generation, solar forcing, or climate.
+At camera distances at or below 1.75 radii, only the adjusted-elevation surface
+switches to camera-visible level-4 terrain tiles. A WGSL compute pass generates
+65-by-65 height-and-derivative grids after each coverage or world change and
+keeps them GPU-resident; the coarse fan returns above the threshold. Diagnostic
+fills and overlays retain their existing paths, and the camera floor remains
+1.25 radii.
 Plate interiors use stable per-plate colors.
 Crust is blue for oceanic and amber for continental. Seafloor age runs from
 cyan ridge cells to dark blue old crust, with

@@ -8,7 +8,9 @@ publish = false
 [dev-dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
 procgen-core = { path = "../procgen-core" }
+procgen-cubesphere = { path = "../procgen-cubesphere" }
 procgen-noise = { path = "../procgen-noise" }
+procgen-terrain = { path = "../procgen-terrain" }
 wgpu = { version = "27.0.1", default-features = false, features = [
     "dx12",
     "metal",

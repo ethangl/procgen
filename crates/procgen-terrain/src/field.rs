@@ -113,6 +113,7 @@ impl<T> TerrainCellControls<T> {
 /// Stable type order used when multiple stamps overlap: hotspot, volcanic arc, seamount,
 /// then abyssal hill. Within a type, upstream source order is retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u32)]
 pub enum TerrainStampKind {
     Hotspot,
     VolcanicArc,
