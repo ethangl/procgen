@@ -3,7 +3,7 @@
 //! This module only derives per-cell controls and stable sparse stamp inputs. It does not
 //! interpolate, bake, evaluate noise, or mutate any upstream field.
 
-use procgen_core::Vec3;
+use crate::field::{TerrainCellControls, TerrainControls, TerrainStampInput, TerrainStampKind};
 use procgen_geology::{
     CratonField, GeologyInputError, HotspotField, IsostaticAdjustment, OceanicPeakField,
     OceanicPeakKind, SedimentaryBasinField, VolcanicArcField,
@@ -138,142 +138,25 @@ pub struct TerrainControlInputs<'a> {
     pub oceanic_peaks: &'a OceanicPeakField,
 }
 
-/// Per-cell controls consumed by later interpolation and height-function slices.
-///
-/// `base_elevation` is the final isostatically adjusted normalized elevation and is copied
-/// unchanged. `detail_amplitude` and `abyssal_amplitude` are normalized-elevation offsets;
-/// `ridge_weight` and `octave_gain` are unitless. All four are clamped to `[0, 1]`, and
-/// `octave_gain` is the multiplicative gain used between successive noise octaves. Composition
-/// order is fixed: baselines, cratons, volcanic arcs, convergent/divergent/transform boundaries,
-/// then basins.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TerrainCellControls {
-    pub base_elevation: f32,
-    pub detail_amplitude: f32,
-    pub ridge_weight: f32,
-    pub octave_gain: f32,
-    pub abyssal_amplitude: f32,
-}
-
-pub const TERRAIN_CONTROL_CHANNELS: usize = 5;
-
-impl TerrainCellControls {
-    pub fn to_channels(self) -> [f32; TERRAIN_CONTROL_CHANNELS] {
-        [
-            self.base_elevation,
-            self.detail_amplitude,
-            self.ridge_weight,
-            self.octave_gain,
-            self.abyssal_amplitude,
-        ]
-    }
-
-    pub fn from_channels(channels: [f32; TERRAIN_CONTROL_CHANNELS]) -> Self {
-        let [
-            base_elevation,
-            detail_amplitude,
-            ridge_weight,
-            octave_gain,
-            abyssal_amplitude,
-        ] = channels;
-        Self {
-            base_elevation,
-            detail_amplitude,
-            ridge_weight,
-            octave_gain,
-            abyssal_amplitude,
-        }
-    }
-}
-
-/// Stable type order used when multiple stamps overlap: hotspot, volcanic arc, seamount,
-/// then abyssal hill. Within a type, upstream source order is retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TerrainStampKind {
-    Hotspot,
-    VolcanicArc,
-    OceanicSeamount,
-    OceanicAbyssalHill,
-}
-
-/// Sparse input for a later terrain stamp evaluator.
-///
-/// `position` uses the mesh's surface-coordinate units. `strength` is unitless and clamped
-/// to `[0, 1]`. `source_index` is the stable upstream index, with volcanic-arc peaks indexed by
-/// their flattened segment/peak order.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TerrainStampInput {
-    pub cell: usize,
-    pub kind: TerrainStampKind,
-    pub source_index: usize,
-    pub position: Vec3,
-    pub strength: f32,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TerrainControls {
-    pub cells: Vec<TerrainCellControls>,
-    /// Sorted by cell, kind, then source index, defining deterministic overlap evaluation.
-    pub stamps: Vec<TerrainStampInput>,
-}
-
-impl TerrainControls {
-    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), TerrainControlsError> {
-        if self.cells.len() != mesh.cell_count()
-            || self
-                .cells
-                .iter()
-                .flat_map(|controls| controls.to_channels())
-                .any(|value| !value.is_finite())
-        {
-            return Err(TerrainControlsError::Cells);
-        }
-        if self.stamps.iter().any(|stamp| {
-            stamp.cell >= mesh.cell_count()
-                || !stamp.position.is_finite()
-                || !stamp.strength.is_finite()
-                || !(0.0..=1.0).contains(&stamp.strength)
-        }) {
-            return Err(TerrainControlsError::Stamps);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerrainControlsError {
-    Cells,
-    Stamps,
-}
-
-impl fmt::Display for TerrainControlsError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cells => {
-                formatter.write_str("terrain-control cells are inconsistent with the mesh")
-            }
-            Self::Stamps => formatter.write_str("terrain-control stamps are invalid"),
-        }
-    }
-}
-
-impl std::error::Error for TerrainControlsError {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerrainControlError {
     InvalidConfig,
+    InvalidCells,
+    InvalidStamps,
     Tectonics(StageInputError),
     Geology(GeologyInputError),
-    Controls(TerrainControlsError),
 }
 
 impl fmt::Display for TerrainControlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig => formatter.write_str("terrain-control configuration is invalid"),
+            Self::InvalidCells => {
+                formatter.write_str("terrain-control cells are inconsistent with the mesh")
+            }
+            Self::InvalidStamps => formatter.write_str("terrain-control stamps are invalid"),
             Self::Tectonics(error) => error.fmt(formatter),
             Self::Geology(error) => error.fmt(formatter),
-            Self::Controls(error) => error.fmt(formatter),
         }
     }
 }
@@ -281,10 +164,9 @@ impl fmt::Display for TerrainControlError {
 impl std::error::Error for TerrainControlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InvalidConfig => None,
+            Self::InvalidConfig | Self::InvalidCells | Self::InvalidStamps => None,
             Self::Tectonics(error) => Some(error),
             Self::Geology(error) => Some(error),
-            Self::Controls(error) => Some(error),
         }
     }
 }
@@ -298,12 +180,6 @@ impl From<StageInputError> for TerrainControlError {
 impl From<GeologyInputError> for TerrainControlError {
     fn from(error: GeologyInputError) -> Self {
         Self::Geology(error)
-    }
-}
-
-impl From<TerrainControlsError> for TerrainControlError {
-    fn from(error: TerrainControlsError) -> Self {
-        Self::Controls(error)
     }
 }
 
@@ -394,7 +270,7 @@ pub fn compose_terrain_controls(
         cells,
         stamps: compose_stamps(mesh, inputs, config),
     };
-    controls.validate(mesh)?;
+    debug_assert!(controls.validate(mesh).is_ok());
     Ok(controls)
 }
 
@@ -845,48 +721,6 @@ mod tests {
         assert_eq!(
             reference.compose(),
             Err(TerrainControlError::Geology(GeologyInputError::Basins))
-        );
-    }
-
-    #[test]
-    fn channel_conversion_has_one_stable_round_trip() {
-        let controls = TerrainCellControls {
-            base_elevation: 0.1,
-            detail_amplitude: 0.2,
-            ridge_weight: 0.3,
-            octave_gain: 0.4,
-            abyssal_amplitude: 0.5,
-        };
-        assert_eq!(controls.to_channels(), [0.1, 0.2, 0.3, 0.4, 0.5]);
-        assert_eq!(
-            TerrainCellControls::from_channels(controls.to_channels()),
-            controls
-        );
-    }
-
-    #[test]
-    fn aggregate_validation_owns_cell_and_stamp_invariants() {
-        let fixture = Fixture::new();
-        let mut controls = fixture.compose().unwrap();
-        assert_eq!(controls.validate(&fixture.mesh), Ok(()));
-
-        controls.cells[0].ridge_weight = f32::NAN;
-        assert_eq!(
-            controls.validate(&fixture.mesh),
-            Err(TerrainControlsError::Cells)
-        );
-
-        let mut controls = fixture.compose().unwrap();
-        controls.stamps.push(TerrainStampInput {
-            cell: fixture.mesh.cell_count(),
-            kind: TerrainStampKind::Hotspot,
-            source_index: 0,
-            position: Vec3::X,
-            strength: 1.0,
-        });
-        assert_eq!(
-            controls.validate(&fixture.mesh),
-            Err(TerrainControlsError::Stamps)
         );
     }
 }

@@ -1,9 +1,9 @@
 //! Terrain-detail control composition and, in later slices, height evaluation.
 
 mod controls;
+mod field;
 
 pub use controls::{
-    TERRAIN_CONTROL_CHANNELS, TerrainCellControls, TerrainControlConfig, TerrainControlError,
-    TerrainControlInputs, TerrainControls, TerrainControlsError, TerrainStampInput,
-    TerrainStampKind, compose_terrain_controls,
+    TerrainControlConfig, TerrainControlError, TerrainControlInputs, compose_terrain_controls,
 };
+pub use field::{TerrainCellControls, TerrainControls, TerrainStampInput, TerrainStampKind};

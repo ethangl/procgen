@@ -16,6 +16,7 @@ const PARALLEL_ROW_THRESHOLD: usize = 8;
 /// Largest power-of-two face edge whose texel count fits in `u32` arithmetic.
 pub const MAX_CONTROL_FACE_RESOLUTION: u32 = 1 << 15;
 
+const _: () = assert!(MAX_CONTROL_FACE_RESOLUTION.is_power_of_two());
 const _: () = assert!(
     MAX_CONTROL_FACE_RESOLUTION
         .checked_mul(MAX_CONTROL_FACE_RESOLUTION)
@@ -30,12 +31,13 @@ const _: () = assert!(
 /// One typed CPU face of an interpolated multi-channel field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaceField<const N: usize> {
+    resolution: u32,
     texels: Vec<[f32; N]>,
 }
 
 impl<const N: usize> FaceField<N> {
-    pub fn resolution(&self) -> u32 {
-        self.texels.len().isqrt() as u32
+    pub const fn resolution(&self) -> u32 {
+        self.resolution
     }
 
     pub fn texels(&self) -> &[[f32; N]] {
@@ -153,7 +155,7 @@ impl fmt::Display for BakeError {
         match self {
             Self::InvalidCellCount => write!(
                 formatter,
-                "cell count must derive a control-face resolution between 1 and {MAX_CONTROL_FACE_RESOLUTION}"
+                "cell count must derive a control-face resolution between 4 and {MAX_CONTROL_FACE_RESOLUTION}"
             ),
             Self::InvalidMesh(error) => write!(formatter, "invalid sphere mesh: {error}"),
             Self::CellCountMismatch { mesh, cells } => {
@@ -188,10 +190,7 @@ pub fn control_face_resolution(cell_count: usize) -> Result<u32, BakeError> {
     if required > f64::from(MAX_CONTROL_FACE_RESOLUTION) {
         return Err(BakeError::InvalidCellCount);
     }
-    (required as u32)
-        .checked_next_power_of_two()
-        .filter(|resolution| *resolution <= MAX_CONTROL_FACE_RESOLUTION)
-        .ok_or(BakeError::InvalidCellCount)
+    Ok((required as u32).next_power_of_two())
 }
 
 /// Bakes every channel at equi-angular face texel centers.
@@ -225,24 +224,20 @@ fn bake_face<const N: usize>(
     face: CubeFace,
     resolution: u32,
 ) -> FaceField<N> {
-    let rows: Vec<Vec<_>> = (0..resolution)
+    let texels = (0..resolution)
         .into_par_iter()
         .with_min_len(PARALLEL_ROW_THRESHOLD)
-        .map(|y| {
+        .flat_map_iter(|y| {
             let mut hint = 0;
-            (0..resolution)
-                .map(|x| {
-                    let direction = unit_direction(texel_center(face, x, y, resolution));
-                    let location = mesh.locate_delaunay(direction, hint);
-                    hint = location.triangle;
-                    weighted(location.cells.map(|cell| cells[cell]), location.weights)
-                })
-                .collect()
+            (0..resolution).map(move |x| {
+                let direction = unit_direction(texel_center(face, x, y, resolution));
+                let location = mesh.locate_delaunay(direction, hint);
+                hint = location.triangle;
+                weighted(location.cells.map(|cell| cells[cell]), location.weights)
+            })
         })
         .collect();
-    FaceField {
-        texels: rows.into_iter().flatten().collect(),
-    }
+    FaceField { resolution, texels }
 }
 
 fn texel_center(face: CubeFace, x: u32, y: u32, resolution: u32) -> FaceCoordinates {
@@ -263,9 +258,9 @@ fn face_to_texel(coordinate: f32, resolution: u32) -> f32 {
 
 fn weighted<const N: usize>(cells: [[f32; N]; 3], weights: [f32; 3]) -> [f32; N] {
     array::from_fn(|channel| {
-        cells[0][channel] * weights[0]
-            + cells[1][channel] * weights[1]
-            + cells[2][channel] * weights[2]
+        // Barycentric weights sum to one, so the first weight is implied.
+        let first = cells[0][channel];
+        first + (cells[1][channel] - first) * weights[1] + (cells[2][channel] - first) * weights[2]
     })
 }
 
@@ -320,7 +315,7 @@ mod tests {
         let bake = bake_cube_field(&mesh, &vec![expected; mesh.cell_count()]).unwrap();
         for face in CubeFace::ALL {
             for texel in bake.face(face).texels() {
-                assert_channels_close(*texel, expected, 4.0 * f32::EPSILON);
+                assert_eq!(*texel, expected);
             }
         }
     }
@@ -364,6 +359,7 @@ mod tests {
     fn direction_filter_is_continuous_across_edges_and_corners() {
         let resolution = 64;
         let faces = CubeFace::ALL.map(|face| FaceField {
+            resolution,
             texels: (0..resolution)
                 .flat_map(|y| {
                     (0..resolution).map(move |x| {
