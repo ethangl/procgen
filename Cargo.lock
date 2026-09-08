@@ -3226,6 +3226,7 @@ dependencies = [
  "procgen-core",
  "procgen-cubesphere",
  "procgen-geology",
+ "procgen-noise",
  "procgen-sphere",
  "procgen-sphere-mesh",
  "procgen-tectonics",

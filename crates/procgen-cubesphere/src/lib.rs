@@ -5,7 +5,7 @@ mod mapping;
 mod tile;
 
 pub use field::{
-    BakeError, CubeField, FaceField, MAX_CUBE_FIELD_RESOLUTION, bake_cube_field,
+    BakeError, CubeField, CubeFieldSample, FaceField, MAX_CUBE_FIELD_RESOLUTION, bake_cube_field,
     control_face_resolution,
 };
 pub use mapping::{

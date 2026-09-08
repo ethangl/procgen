@@ -1,13 +1,14 @@
 //! Typed CPU cube-field baking and seamless direction-based sampling.
 
 use crate::mapping::{
-    CubeFace, FaceCoordinates, MappingError, canonical_face_coordinates, direction_to_face,
-    project_direction_onto_face, unit_direction,
+    CubeFace, FaceCoordinates, FaceFrame, MappingError, canonical_face_coordinates,
+    direction_to_face, project_direction_onto_face, unit_direction,
 };
 use procgen_core::Vec3;
 use procgen_sphere_mesh::{SphereMesh, TopologyError};
 use rayon::prelude::*;
 use std::array;
+use std::f32::consts::FRAC_PI_4;
 use std::f64::consts::PI;
 use std::fmt;
 
@@ -54,6 +55,14 @@ pub struct CubeField<const N: usize> {
     faces: [FaceField<N>; 6],
 }
 
+/// A filtered cube-field sample and each channel's derivative with respect to
+/// the input direction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CubeFieldSample<const N: usize> {
+    pub values: [f32; N],
+    pub derivatives: [Vec3; N],
+}
+
 impl<const N: usize> CubeField<N> {
     /// Reconstructs a cached field after validating its face dimensions and data.
     pub fn from_face_texels(
@@ -91,6 +100,65 @@ impl<const N: usize> CubeField<N> {
     /// incident face texels are averaged, matching seamless cube filtering.
     pub fn sample(&self, direction: Vec3) -> Result<[f32; N], MappingError> {
         Ok(self.sample_face_coordinates(direction_to_face(direction)?))
+    }
+
+    /// Bilinearly samples a direction and differentiates the selected face's
+    /// filter with respect to that direction.
+    ///
+    /// The derivative is piecewise analytic. Like hardware cube filtering, it
+    /// is undefined exactly where the dominant face or a texel interval changes;
+    /// the deterministic selected side is returned at those locations.
+    pub fn sample_with_derivatives(
+        &self,
+        direction: Vec3,
+    ) -> Result<CubeFieldSample<N>, MappingError> {
+        let coordinates = direction_to_face(direction)?;
+        let resolution = self.resolution();
+        let x = face_to_texel(coordinates.u, resolution);
+        let y = face_to_texel(coordinates.v, resolution);
+        let x0 = x.floor() as i64;
+        let y0 = y.floor() as i64;
+        let tx = x - x.floor();
+        let ty = y - y.floor();
+
+        let lower_left = self.tap(coordinates.face, x0, y0);
+        let lower_right = self.tap(coordinates.face, x0 + 1, y0);
+        let upper_left = self.tap(coordinates.face, x0, y0 + 1);
+        let upper_right = self.tap(coordinates.face, x0 + 1, y0 + 1);
+        let values = lerp(
+            lerp(lower_left, lower_right, tx),
+            lerp(upper_left, upper_right, tx),
+            ty,
+        );
+
+        let FaceFrame {
+            normal,
+            u_axis,
+            v_axis,
+        } = coordinates.face.frame();
+        let depth = direction.dot(normal);
+        let side_u = direction.dot(u_axis);
+        let side_v = direction.dot(v_axis);
+        let ratio_u = side_u / depth;
+        let ratio_v = side_v / depth;
+        let coordinate_scale = (resolution as f32 * 0.5) / FRAC_PI_4;
+        let inverse_depth_squared = (depth * depth).recip();
+        let tx_derivative = (u_axis * depth - normal * side_u)
+            * (inverse_depth_squared * coordinate_scale / (1.0 + ratio_u * ratio_u));
+        let ty_derivative = (v_axis * depth - normal * side_v)
+            * (inverse_depth_squared * coordinate_scale / (1.0 + ratio_v * ratio_v));
+        let derivatives = array::from_fn(|channel| {
+            let along_x = (lower_right[channel] - lower_left[channel]) * (1.0 - ty)
+                + (upper_right[channel] - upper_left[channel]) * ty;
+            let along_y = (upper_left[channel] - lower_left[channel]) * (1.0 - tx)
+                + (upper_right[channel] - lower_right[channel]) * tx;
+            tx_derivative * along_x + ty_derivative * along_y
+        });
+
+        Ok(CubeFieldSample {
+            values,
+            derivatives,
+        })
     }
 
     fn sample_face_coordinates(&self, coordinates: FaceCoordinates) -> [f32; N] {
@@ -316,6 +384,7 @@ fn lerp<const N: usize>(left: [f32; N], right: [f32; N], amount: f32) -> [f32; N
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::face_to_direction;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
 
@@ -408,6 +477,42 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn filtered_derivatives_match_finite_differences_inside_one_texel_interval() {
+        const STEP: f32 = 1.0e-4;
+        const TOLERANCE: f32 = 2.0e-3;
+        let resolution = 8;
+        let faces = CubeFace::ALL.map(|face| {
+            (0..resolution)
+                .flat_map(|y| {
+                    (0..resolution).map(move |x| {
+                        let coordinates = texel_center(face, x, y, resolution);
+                        [coordinates.u * 0.3 + coordinates.v * 0.7]
+                    })
+                })
+                .collect()
+        });
+        let field = CubeField::from_face_texels(resolution, faces).unwrap();
+        let direction = face_to_direction(FaceCoordinates {
+            face: CubeFace::PositiveZ,
+            u: 0.13,
+            v: -0.27,
+        })
+        .unwrap();
+        let sample = field.sample_with_derivatives(direction).unwrap();
+
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            let before = field.sample(direction - axis * STEP).unwrap()[0];
+            let after = field.sample(direction + axis * STEP).unwrap()[0];
+            let finite_difference = (after - before) / (2.0 * STEP);
+            assert!(
+                (sample.derivatives[0].dot(axis) - finite_difference).abs() < TOLERANCE,
+                "axis={axis:?}, analytic={}, finite={finite_difference}",
+                sample.derivatives[0].dot(axis)
+            );
         }
     }
 

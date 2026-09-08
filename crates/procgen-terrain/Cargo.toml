@@ -8,6 +8,7 @@ rust-version.workspace = true
 procgen-core = { path = "../procgen-core" }
 procgen-cubesphere = { path = "../procgen-cubesphere" }
 procgen-geology = { path = "../procgen-geology" }
+procgen-noise = { path = "../procgen-noise" }
 procgen-sphere-mesh = { path = "../procgen-sphere-mesh" }
 procgen-tectonics = { path = "../procgen-tectonics" }
 

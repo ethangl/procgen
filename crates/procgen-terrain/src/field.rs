@@ -144,6 +144,7 @@ impl TerrainControls {
         if self.stamps.iter().any(|stamp| {
             stamp.cell >= mesh.cell_count()
                 || !stamp.position.is_finite()
+                || stamp.position == Vec3::ZERO
                 || !stamp.strength.is_finite()
                 || !(0.0..=1.0).contains(&stamp.strength)
         }) || !self
