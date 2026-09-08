@@ -7,9 +7,10 @@ use procgen_core::{ScalarFieldSample3, Vec3};
 use crate::{TerrainStampInput, TerrainStampKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
 pub enum StampCap {
-    Quadratic,
-    Cubic,
+    Quadratic = 2,
+    Cubic = 3,
 }
 
 impl StampCap {

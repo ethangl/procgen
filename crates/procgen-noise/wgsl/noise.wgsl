@@ -109,6 +109,21 @@ fn add_sample(left: ScalarFieldSample3, right: ScalarFieldSample3) -> ScalarFiel
     return ScalarFieldSample3(left.value + right.value, left.derivative + right.derivative);
 }
 
+fn sub_sample(left: ScalarFieldSample3, right: ScalarFieldSample3) -> ScalarFieldSample3 {
+    return ScalarFieldSample3(left.value - right.value, left.derivative - right.derivative);
+}
+
+fn mul_sample(left: ScalarFieldSample3, right: ScalarFieldSample3) -> ScalarFieldSample3 {
+    return ScalarFieldSample3(
+        left.value * right.value,
+        left.derivative * right.value + right.derivative * left.value,
+    );
+}
+
+fn neg_sample(sample: ScalarFieldSample3) -> ScalarFieldSample3 {
+    return ScalarFieldSample3(-sample.value, -sample.derivative);
+}
+
 fn octave_sample(key: u32, position: vec3<f32>, frequency: f32) -> ScalarFieldSample3 {
     var sample = gradient_noise_3d(key, position * frequency);
     sample.derivative *= frequency;

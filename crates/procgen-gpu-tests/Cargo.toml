@@ -5,10 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-[dev-dependencies]
+[dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
-procgen-core = { path = "../procgen-core" }
-procgen-noise = { path = "../procgen-noise" }
 wgpu = { version = "27.0.1", default-features = false, features = [
     "dx12",
     "metal",
@@ -16,3 +14,9 @@ wgpu = { version = "27.0.1", default-features = false, features = [
     "vulkan",
     "wgsl",
 ] }
+
+[dev-dependencies]
+procgen-core = { path = "../procgen-core" }
+procgen-cubesphere = { path = "../procgen-cubesphere" }
+procgen-noise = { path = "../procgen-noise" }
+procgen-terrain = { path = "../procgen-terrain" }

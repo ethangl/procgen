@@ -3178,7 +3178,9 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "procgen-core",
+ "procgen-cubesphere",
  "procgen-noise",
+ "procgen-terrain",
  "wgpu",
 ]
 
@@ -3223,6 +3225,7 @@ dependencies = [
 name = "procgen-terrain"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "procgen-core",
  "procgen-cubesphere",
  "procgen-geology",
@@ -3239,6 +3242,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "bytemuck",
  "procgen-climate",
  "procgen-core",
  "procgen-cubesphere",

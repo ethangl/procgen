@@ -7,15 +7,43 @@ use procgen_cubesphere::{TILE_QUADS, TILE_VERTICES, TileAddress};
 use rayon::prelude::*;
 
 use crate::{
-    TerrainControlBake, TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput,
-    TerrainStampProfiles, ValidatedTerrainHeightConfig, terrain_height,
+    TerrainAbyssalConfig, TerrainControlBake, TerrainDetailConfig, TerrainHeightConfig,
+    TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput, TerrainStampProfiles,
+    ValidatedTerrainHeightConfig, terrain_height,
 };
+use procgen_noise::OctaveConfig;
 
 /// Number of core samples in one 65 by 65 terrain tile.
 pub const TERRAIN_TILE_SAMPLE_COUNT: usize = (TILE_VERTICES * TILE_VERTICES) as usize;
 
 const TANGENT_RELATIVE_TOLERANCE: f32 = 2.0e-5;
 const CULL_ROUNDING_MARGIN: f32 = 16.0 * f32::EPSILON;
+
+/// Explicit height configuration for the slice-12 fixed level-4 consumer.
+///
+/// Four detail octaves and three abyssal octaves stop at wavelengths supported
+/// by the roughly 10 km level-4 vertex spacing. This is fixed policy, not the
+/// octave fading or dynamic LOD selection introduced by later slices.
+pub fn fixed_level_4_height_config() -> TerrainHeightConfig {
+    let default = TerrainHeightConfig::default();
+    TerrainHeightConfig {
+        detail: TerrainDetailConfig {
+            octaves: OctaveConfig {
+                octaves: 4,
+                ..default.detail.octaves
+            },
+            ..default.detail
+        },
+        abyssal: TerrainAbyssalConfig {
+            octaves: OctaveConfig {
+                octaves: 3,
+                ..default.abyssal.octaves
+            },
+            ..default.abyssal
+        },
+        ..default
+    }
+}
 
 /// Borrowed inputs for one canonical CPU terrain tile.
 ///

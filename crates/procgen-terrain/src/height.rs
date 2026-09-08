@@ -295,9 +295,9 @@ pub fn terrain_height(
 /// Noise keys derived once from the explicit terrain seed for repeated sampling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerrainNoiseKeys {
-    detail: u32,
-    abyssal: u32,
-    coast_warp: [u32; 3],
+    pub(crate) detail: u32,
+    pub(crate) abyssal: u32,
+    pub(crate) coast_warp: [u32; 3],
 }
 
 impl TerrainNoiseKeys {

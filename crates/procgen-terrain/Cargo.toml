@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bytemuck = { version = "1.24", features = ["derive"] }
 procgen-core = { path = "../procgen-core" }
 procgen-cubesphere = { path = "../procgen-cubesphere" }
 procgen-geology = { path = "../procgen-geology" }
