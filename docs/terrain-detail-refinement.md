@@ -17,13 +17,15 @@ porting guidance not to preserve the reference decomposition.
 
 ## Current state
 
-The viewer draws one triangle fan per Voronoi cell and radially displaces fan
-centers from sea level by final adjusted elevation, with shared corner heights
-averaged across their three incident cells. Relief exaggeration and lighting
-are display controls. The orbit camera stops at 1.25 sphere radii, about
-1,600 km above the surface at Earth scale, so nothing yet consumes detail
-below the mesh. Generated worlds are cached as snapshots keyed on generator
-build identity, so an expensive coarse run is paid once per build and settings.
+The viewer draws the coarse world as one triangle fan per Voronoi cell and
+switches adjusted elevation to adaptive GPU terrain tiles inside 1.75 sphere
+radii. The quadtree reaches level 12, retains deterministic resident tiles,
+and generates no more than eight new tiles per frame. Each tile renders from a
+deterministic relative origin and carries a one-quad radial skirt. The orbit
+camera reaches 0.001 sphere radii above the nominal surface (6.371 km at Earth
+scale) with a 0.00001-radius near plane (63.71 m at Earth scale). Generated
+worlds are cached as snapshots keyed on generator build identity, so an
+expensive coarse run is paid once per build and settings.
 
 There is no noise primitive, no sphere projection, and no tiling anywhere in
 the workspace. Those are the pieces this stage adds.
@@ -168,12 +170,14 @@ named value and derivative-angle tolerances.
 - Every backend derives the sample direction from integer face, level, and
   tile coordinates in f32 using the same expression order, so coordinate
   quantization is shared rather than a source of disagreement.
-- The tolerances are set at ten times the measured maximum divergence over a
-  large sample on both Metal and CUDA, and the measurements are recorded beside
-  the constants. The provisional value tolerance is an absolute height
-  difference of 1e-5 in normalized units, about 10 cm at the Earth preset,
-  with normals within 1e-3 radians. Expected drift is dominated by the finest
-  octave's sensitivity to direction rounding and should land well under that.
+- The tolerances are set at ten times the measured maximum divergence and the
+  measurements are recorded beside the constants. The slice-14 Metal sweep
+  across levels 1, 4, 8, and 12 plus fade endpoints measured `2.503395081e-6`
+  normalized height and `1.641079038e-1` radians for the default rendered
+  normal. The corresponding provisional bounds are `3e-5` and `1.7` radians;
+  the normal drift is concentrated at the finest octave because CPU and Metal
+  cube-sphere transcendental results diverge before high-frequency sampling.
+  CUDA calibration and any cross-backend mapping refinement remain slice 16.
 
 Two invariants get tests independent of backend:
 
@@ -303,7 +307,7 @@ into the viewer.
 ### Quadtree split and merge, skirts, octave fading, and a closer camera limit.
 
 13. ~~Add quadtree selection and bounded tile-generation scheduling.~~
-14. Add skirts, relative tile origins, octave fading, and closer camera behavior.
+14. ~~Add skirts, relative tile origins, octave fading, and closer camera behavior.~~
 
 ### CPU and CUDA tile export sharing the viewer's function, with the tolerances measured and recorded.
 

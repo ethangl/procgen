@@ -143,6 +143,10 @@ fn fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, l
 }
 
 fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32) -> ScalarFieldSample3 {
+    return ridged_multifractal_3d_faded(key, position, octaves, initial_frequency, lacunarity, gain, ridge_offset, ridge_gain, 1.0);
+}
+
+fn ridged_multifractal_3d_faded(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32, newest_octave_weight: f32) -> ScalarFieldSample3 {
     var result = ScalarFieldSample3(0.0, vec3(0.0));
     var weight = ScalarFieldSample3(1.0, vec3(0.0));
     var frequency = initial_frequency;
@@ -161,7 +165,8 @@ fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_f
             signal.value * weight.value,
             signal.derivative * weight.value + weight.derivative * signal.value,
         );
-        result = add_sample(result, scale_sample(weighted, amplitude));
+        let fade = select(1.0, newest_octave_weight, octave + 1u == octaves);
+        result = add_sample(result, scale_sample(weighted, amplitude * fade));
 
         let next_weight = scale_sample(weighted, ridge_gain);
         if (next_weight.value > 0.0 && next_weight.value < 1.0) {
@@ -176,6 +181,10 @@ fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_f
 }
 
 fn derivative_damped_fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32) -> ScalarFieldSample3 {
+    return derivative_damped_fbm_3d_faded(key, position, octaves, initial_frequency, lacunarity, gain, damping, 1.0);
+}
+
+fn derivative_damped_fbm_3d_faded(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32, newest_octave_weight: f32) -> ScalarFieldSample3 {
     var result = ScalarFieldSample3(0.0, vec3(0.0));
     var frequency = initial_frequency;
     var amplitude = 1.0;
@@ -186,7 +195,8 @@ fn derivative_damped_fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial
             + result.derivative.y * result.derivative.y
             + result.derivative.z * result.derivative.z;
         let attenuation = 1.0 / (1.0 + damping * slope_squared);
-        result = add_sample(result, scale_sample(octave_sample(key, position, frequency), amplitude * attenuation));
+        let fade = select(1.0, newest_octave_weight, octave + 1u == octaves);
+        result = add_sample(result, scale_sample(octave_sample(key, position, frequency), amplitude * attenuation * fade));
         frequency *= lacunarity;
         amplitude *= gain;
     }

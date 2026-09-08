@@ -57,12 +57,16 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     let local = vec2<u32>(vertex.position.xy);
     let sample_index = cubesphere_tile_sample_index(slot, local);
     let sample = terrain_samples[sample_index];
-    let direction = cubesphere_tile_direction(terrain_addresses[slot], local);
+    let address = terrain_addresses[slot];
+    let direction = cubesphere_tile_direction(address, local);
     let radius = terrain_display.surface_radius
-        + (sample.x - 0.5) * terrain_display.relief_exaggeration;
-    let local_position = direction * radius;
+        + (sample.x - 0.5) * terrain_display.relief_exaggeration
+        - vertex.position.z * TERRAIN_SKIRT_DEPTH_SPACINGS * 1.5707963267948966
+            / f32(CUBESPHERE_TILE_QUADS << address.y) * terrain_display.surface_radius;
     let local_normal = normalize(direction - sample.yzw * terrain_display.relief_exaggeration / radius);
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let tile_origin = world_from_local[3].xyz;
+    let local_position = direction * radius - tile_origin;
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4(local_position, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);

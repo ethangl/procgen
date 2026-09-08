@@ -2,11 +2,13 @@ use bytemuck::{Pod, Zeroable};
 use procgen_core::{ScalarFieldSample3, Vec3};
 use procgen_cubesphere::{CubeFace, TILE_QUADS, TILE_VERTICES, TileAddress};
 use procgen_gpu_tests::{readback, request_device};
+use procgen_noise::OctaveConfig;
 use procgen_terrain::{
-    TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE,
-    TERRAIN_WGSL_VALUE_TOLERANCE, TerrainCellControls, TerrainControlBake, TerrainGpuParameters,
-    TerrainHeightConfig, TerrainNoiseKeys, TerrainStampInput, TerrainStampKind, TerrainTileInputs,
-    fixed_level_4_height_config, generate_terrain_tile, pack_control_bake, pack_stamps,
+    TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE,
+    TERRAIN_WGSL_VALUE_TOLERANCE, TerrainAbyssalConfig, TerrainCellControls, TerrainControlBake,
+    TerrainDetailConfig, TerrainGpuParameters, TerrainHeightConfig, TerrainNoiseKeys,
+    TerrainStampInput, TerrainStampKind, TerrainTileInputs, generate_terrain_tile,
+    pack_control_bake, pack_stamps,
 };
 use wgpu::util::DeviceExt;
 
@@ -29,7 +31,7 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         adapter_info.name, adapter_info.backend, adapter_info.device_type
     );
     let bake = varying_bake();
-    let config = fixed_level_4_height_config();
+    let config = TerrainHeightConfig::default();
     let keys = TerrainNoiseKeys::new(TEST_SEED);
     let left_address = TileAddress::new(CubeFace::PositiveZ, 4, 7, 9).unwrap();
     let right_address = TileAddress::new(CubeFace::PositiveZ, 4, 8, 9).unwrap();
@@ -47,8 +49,9 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
     let left_gpu = dispatch_tile(&device, &queue, left_inputs, config);
     let right_gpu = dispatch_tile(&device, &queue, right_inputs, config);
     let left_cpu = generate_terrain_tile(left_inputs, config.validate().unwrap());
-
-    let (maximum_value, maximum_angle) = assert_agreement(&left_gpu, &left_cpu.samples);
+    let (mut maximum_value, mut maximum_angle) =
+        assert_agreement(&left_gpu, &left_cpu.samples, left_address);
+    let mut compared_samples = TERRAIN_TILE_SAMPLE_COUNT;
     let coast_bake = coast_bake();
     let coast_inputs = TerrainTileInputs {
         controls: &coast_bake,
@@ -56,9 +59,44 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
     };
     let coast_gpu = dispatch_tile(&device, &queue, coast_inputs, config);
     let coast_cpu = generate_terrain_tile(coast_inputs, config.validate().unwrap());
-    let (coast_value, coast_angle) = assert_agreement(&coast_gpu, &coast_cpu.samples);
-    let maximum_value = maximum_value.max(coast_value);
-    let maximum_angle = maximum_angle.max(coast_angle);
+    let (coast_value, coast_angle) = assert_agreement(&coast_gpu, &coast_cpu.samples, left_address);
+    maximum_value = maximum_value.max(coast_value);
+    maximum_angle = maximum_angle.max(coast_angle);
+    compared_samples += TERRAIN_TILE_SAMPLE_COUNT;
+
+    for address in [
+        TileAddress::new(CubeFace::PositiveX, 1, 1, 0).unwrap(),
+        TileAddress::new(CubeFace::NegativeY, 8, 173, 91).unwrap(),
+        TileAddress::new(CubeFace::NegativeZ, 12, 3_071, 2_019).unwrap(),
+    ] {
+        let inputs = TerrainTileInputs {
+            address,
+            ..left_inputs
+        };
+        let gpu = dispatch_tile(&device, &queue, inputs, config);
+        let cpu = generate_terrain_tile(inputs, config.validate().unwrap());
+        let (value, angle) = assert_agreement(&gpu, &cpu.samples, address);
+        maximum_value = maximum_value.max(value);
+        maximum_angle = maximum_angle.max(angle);
+        compared_samples += TERRAIN_TILE_SAMPLE_COUNT;
+    }
+
+    for fade in [0.0, 1.0] {
+        let address = TileAddress::new(CubeFace::PositiveZ, 4, 7, 9).unwrap();
+        let endpoint_config = fade_endpoint_config(address.level(), fade);
+        let inputs = TerrainTileInputs {
+            address,
+            controls: &bake,
+            stamps: &[],
+            noise_keys: keys,
+        };
+        let gpu = dispatch_tile(&device, &queue, inputs, endpoint_config);
+        let cpu = generate_terrain_tile(inputs, endpoint_config.validate().unwrap());
+        let (value, angle) = assert_agreement(&gpu, &cpu.samples, address);
+        maximum_value = maximum_value.max(value);
+        maximum_angle = maximum_angle.max(angle);
+        compared_samples += TERRAIN_TILE_SAMPLE_COUNT;
+    }
 
     for y in 0..TILE_VERTICES as usize {
         assert_eq!(
@@ -68,20 +106,51 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         );
     }
     println!(
-        "terrain agreement: {} samples, maximum value difference {maximum_value:.9e}, maximum derivative angle {maximum_angle:.9e} radians; tolerances {:.1e} and {:.1e}",
-        TERRAIN_TILE_SAMPLE_COUNT * 2,
-        TERRAIN_WGSL_VALUE_TOLERANCE,
-        TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
+        "terrain agreement: {} samples, maximum value difference {maximum_value:.9e}, maximum rendered-normal angle {maximum_angle:.9e} radians; tolerances {:.1e} and {:.1e}",
+        compared_samples, TERRAIN_WGSL_VALUE_TOLERANCE, TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE,
     );
 }
 
-fn assert_agreement(actual: &[Output], expected: &[ScalarFieldSample3]) -> (f32, f32) {
+fn fade_endpoint_config(level: u8, newest_weight: f32) -> TerrainHeightConfig {
+    let default = TerrainHeightConfig::default();
+    let minimum_wavelength = std::f32::consts::PI / (TILE_QUADS << level) as f32;
+    TerrainHeightConfig {
+        detail: TerrainDetailConfig {
+            octaves: OctaveConfig {
+                octaves: 1,
+                frequency: 2.0 / (minimum_wavelength * (1.0 + newest_weight)),
+                lacunarity: 2.0,
+            },
+            ..default.detail
+        },
+        abyssal: TerrainAbyssalConfig {
+            octaves: OctaveConfig {
+                octaves: 0,
+                ..default.abyssal.octaves
+            },
+            ..default.abyssal
+        },
+        ..default
+    }
+}
+
+fn assert_agreement(
+    actual: &[Output],
+    expected: &[ScalarFieldSample3],
+    address: TileAddress,
+) -> (f32, f32) {
     let mut maximum_value = 0.0_f32;
     let mut maximum_angle = 0.0_f32;
     for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
         let actual = sample(*actual);
         let value_difference = (actual.value - expected.value).abs();
-        let derivative_angle = derivative_angle(actual.derivative, expected.derivative);
+        let local_x = index as u32 % TILE_VERTICES;
+        let local_y = index as u32 / TILE_VERTICES;
+        let direction = address.grid_vertex(local_x, local_y).unwrap().direction();
+        let derivative_angle = derivative_angle(
+            rendered_normal(direction, actual),
+            rendered_normal(direction, *expected),
+        );
         maximum_value = maximum_value.max(value_difference);
         maximum_angle = maximum_angle.max(derivative_angle);
         assert!(
@@ -90,12 +159,18 @@ fn assert_agreement(actual: &[Output], expected: &[ScalarFieldSample3]) -> (f32,
             TERRAIN_WGSL_VALUE_TOLERANCE,
         );
         assert!(
-            derivative_angle <= TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
-            "sample {index} derivative angle {derivative_angle:e} exceeds {}: GPU={actual:?}, CPU={expected:?}",
-            TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
+            derivative_angle <= TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE,
+            "sample {index} rendered-normal angle {derivative_angle:e} exceeds {}: GPU={actual:?}, CPU={expected:?}",
+            TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE,
         );
     }
     (maximum_value, maximum_angle)
+}
+
+fn rendered_normal(direction: Vec3, sample: ScalarFieldSample3) -> Vec3 {
+    const RELIEF_EXAGGERATION: f32 = 0.036;
+    let radius = 1.0 + (sample.value - 0.5) * RELIEF_EXAGGERATION;
+    (direction - sample.derivative * (RELIEF_EXAGGERATION / radius)).normalized()
 }
 
 fn varying_bake() -> TerrainControlBake {
@@ -189,7 +264,15 @@ fn dispatch_tile(
     let parameters =
         TerrainGpuParameters::new(inputs.controls, inputs.stamps, inputs.noise_keys, config);
     let controls = pack_control_bake(inputs.controls);
-    let stamps = pack_stamps(inputs.stamps);
+    let mut stamps = pack_stamps(inputs.stamps);
+    if stamps.is_empty() {
+        stamps.push(procgen_terrain::TerrainGpuStamp {
+            position: [0.0; 3],
+            strength: 0.0,
+            kind: 0,
+            padding: [0; 3],
+        });
+    }
     let controls_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("terrain agreement controls"),
         contents: bytemuck::cast_slice(&controls),
@@ -228,7 +311,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     if (id.x >= {TERRAIN_TILE_SAMPLE_COUNT}u) {{ return; }}
     let local = vec2(id.x % {TILE_VERTICES}u, id.x / {TILE_VERTICES}u);
     let direction = cubesphere_tile_direction(vec4({face}u, {level}u, {x}u, {y}u), local);
-    let height = terrain_height_gpu(direction);
+    let height = terrain_height_gpu(direction, {level}u);
     output[id.x] = vec4(height.value, height.derivative);
 }}
 "#,

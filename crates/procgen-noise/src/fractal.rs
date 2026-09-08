@@ -60,6 +60,28 @@ impl OctaveConfig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Validated<T>(T);
 
+impl Validated<DerivativeDampedConfig> {
+    /// Retains a prefix of an already validated octave progression.
+    pub fn with_octave_count(mut self, octaves: u32) -> Self {
+        assert!(octaves <= self.0.octaves.octaves);
+        self.0.octaves.octaves = octaves;
+        self
+    }
+
+    pub const fn octave_config(self) -> OctaveConfig {
+        self.0.octaves
+    }
+}
+
+impl Validated<RidgedMultifractalConfig> {
+    /// Retains a prefix of an already validated octave progression.
+    pub fn with_octave_count(mut self, octaves: u32) -> Self {
+        assert!(octaves <= self.0.octaves.octaves);
+        self.0.octaves.octaves = octaves;
+        self
+    }
+}
+
 /// A validated per-sample amplitude gain for successive octaves.
 ///
 /// Keeping gain separate from [`OctaveConfig`] lets a roughness field vary it
@@ -74,6 +96,29 @@ impl OctaveGain {
         } else {
             Err(FractalParameterError::InvalidParameter {
                 name: "gain",
+                requirement: "must be finite and in [0, 1]",
+            })
+        }
+    }
+}
+
+/// Validated weight for the newest octave in an accumulation.
+///
+/// A weight of zero evaluates no contribution from that octave, while one
+/// preserves the ordinary full-octave result. Earlier octaves are unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NewestOctaveWeight(f32);
+
+impl NewestOctaveWeight {
+    pub const ZERO: Self = Self(0.0);
+    pub const FULL: Self = Self(1.0);
+
+    pub fn new(value: f32) -> Result<Self, FractalParameterError> {
+        if value.is_finite() && (0.0..=1.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(FractalParameterError::InvalidParameter {
+                name: "newest octave weight",
                 requirement: "must be finite and in [0, 1]",
             })
         }
@@ -236,6 +281,17 @@ pub fn ridged_multifractal_3d(
     config: Validated<RidgedMultifractalConfig>,
     gain: OctaveGain,
 ) -> ScalarFieldSample3 {
+    ridged_multifractal_3d_faded(key, position, config, gain, NewestOctaveWeight::FULL)
+}
+
+/// Accumulates ridged multifractal noise while weighting only the newest octave.
+pub fn ridged_multifractal_3d_faded(
+    key: u32,
+    position: Vec3,
+    config: Validated<RidgedMultifractalConfig>,
+    gain: OctaveGain,
+    newest_octave_weight: NewestOctaveWeight,
+) -> ScalarFieldSample3 {
     let config = config.0;
     let mut result = ScalarFieldSample3::default();
     let mut weight = ScalarFieldSample3 {
@@ -243,7 +299,8 @@ pub fn ridged_multifractal_3d(
         derivative: Vec3::ZERO,
     };
 
-    for octave in config.octaves.octaves(gain) {
+    let octave_count = config.octaves.octaves;
+    for (index, octave) in config.octaves.octaves(gain).enumerate() {
         let sample = octave.sample(key, position);
         let absolute_derivative = if sample.value > 0.0 {
             sample.derivative
@@ -262,7 +319,12 @@ pub fn ridged_multifractal_3d(
             value: signal.value * weight.value,
             derivative: signal.derivative * weight.value + weight.derivative * signal.value,
         };
-        result += weighted * octave.amplitude;
+        let fade = if index as u32 + 1 == octave_count {
+            newest_octave_weight.0
+        } else {
+            1.0
+        };
+        result += weighted * (octave.amplitude * fade);
 
         let next_weight = weighted * config.ridge_gain;
         weight = if next_weight.value > 0.0 && next_weight.value < 1.0 {
@@ -295,11 +357,28 @@ pub fn derivative_damped_fbm_3d(
     config: Validated<DerivativeDampedConfig>,
     gain: OctaveGain,
 ) -> ScalarFieldSample3 {
+    derivative_damped_fbm_3d_faded(key, position, config, gain, NewestOctaveWeight::FULL)
+}
+
+/// Accumulates derivative-damped fbm while weighting only the newest octave.
+pub fn derivative_damped_fbm_3d_faded(
+    key: u32,
+    position: Vec3,
+    config: Validated<DerivativeDampedConfig>,
+    gain: OctaveGain,
+    newest_octave_weight: NewestOctaveWeight,
+) -> ScalarFieldSample3 {
     let config = config.0;
     let mut result = ScalarFieldSample3::default();
-    for octave in config.octaves.octaves(gain) {
+    let octave_count = config.octaves.octaves;
+    for (index, octave) in config.octaves.octaves(gain).enumerate() {
         let attenuation = (1.0 + config.damping * result.derivative.length_squared()).recip();
-        result += octave.sample(key, position) * (octave.amplitude * attenuation);
+        let fade = if index as u32 + 1 == octave_count {
+            newest_octave_weight.0
+        } else {
+            1.0
+        };
+        result += octave.sample(key, position) * (octave.amplitude * attenuation * fade);
     }
     result
 }
@@ -456,6 +535,55 @@ mod tests {
         assert_eq!(
             five_sample.derivative,
             four_sample.derivative + fifth_basis.derivative * fifth_frequency * fifth_amplitude
+        );
+    }
+
+    #[test]
+    fn newest_octave_fade_has_exact_cutoff_endpoints() {
+        let four_damped = valid_damped(4, 0.75);
+        let five_damped = valid_damped(5, 0.75);
+        assert_eq!(
+            derivative_damped_fbm_3d_faded(
+                KEY,
+                POSITION,
+                five_damped,
+                gain(),
+                NewestOctaveWeight::ZERO,
+            ),
+            derivative_damped_fbm_3d(KEY, POSITION, four_damped, gain())
+        );
+        assert_eq!(
+            derivative_damped_fbm_3d_faded(
+                KEY,
+                POSITION,
+                five_damped,
+                gain(),
+                NewestOctaveWeight::FULL,
+            ),
+            derivative_damped_fbm_3d(KEY, POSITION, five_damped, gain())
+        );
+
+        let four_ridged = valid_ridged(4, 2.0);
+        let five_ridged = valid_ridged(5, 2.0);
+        assert_eq!(
+            ridged_multifractal_3d_faded(
+                KEY,
+                POSITION,
+                five_ridged,
+                gain(),
+                NewestOctaveWeight::ZERO,
+            ),
+            ridged_multifractal_3d(KEY, POSITION, four_ridged, gain())
+        );
+        assert_eq!(
+            ridged_multifractal_3d_faded(
+                KEY,
+                POSITION,
+                five_ridged,
+                gain(),
+                NewestOctaveWeight::FULL,
+            ),
+            ridged_multifractal_3d(KEY, POSITION, five_ridged, gain())
         );
     }
 

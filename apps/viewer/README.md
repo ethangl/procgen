@@ -98,11 +98,16 @@ three incident cells, keeping adjacent fans watertight. Relief exaggeration and
 directional-light azimuth, elevation, illuminance, and ambient fill are display
 controls only; they do not alter generation, solar forcing, or climate.
 At camera distances at or below 1.75 radii, only the adjusted-elevation surface
-switches to camera-visible level-4 terrain tiles. A WGSL compute pass generates
-65-by-65 height-and-derivative grids after each coverage or world change and
-keeps them GPU-resident; the coarse fan returns above the threshold. Diagnostic
-fills and overlays retain their existing paths, and the camera floor remains
-1.25 radii.
+switches to camera-visible adaptive terrain tiles through level 12. A WGSL
+compute pass generates at most eight 65-by-65 core height-and-derivative grids
+per frame and keeps them GPU-resident in 1,024 reusable slots. Each level
+evaluates only wavelengths at least twice its nominal vertex spacing and fades
+the newest octave by that spacing split factor. One-quad radial skirts hide
+mixed-level cracks, while deterministic tile-relative origins preserve close
+position precision. The coarse fan returns above the threshold; diagnostic
+fills and overlays retain their existing paths. The camera stops 0.001 radius
+above the nominal surface with a 0.00001-radius near plane—about 6.371 km and
+63.71 m respectively at Earth scale.
 Plate interiors use stable per-plate colors.
 Crust is blue for oceanic and amber for continental. Seafloor age runs from
 cyan ridge cells to dark blue old crust, with

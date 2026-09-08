@@ -19,7 +19,7 @@ pub use field::{
     TerrainCellControls, TerrainControlError, TerrainControls, TerrainStampInput, TerrainStampKind,
 };
 pub use gpu::{
-    TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE, TERRAIN_WGSL_VALUE_TOLERANCE,
+    TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE, TERRAIN_WGSL_VALUE_TOLERANCE,
     TerrainGpuParameters, TerrainGpuStamp, TerrainGpuStampProfile, pack_control_bake, pack_stamps,
 };
 pub use height::{
@@ -29,5 +29,5 @@ pub use height::{
 pub use stamp::{StampCap, TerrainStampError, TerrainStampProfile, TerrainStampProfiles};
 pub use tile::{
     TERRAIN_TILE_SAMPLE_COUNT, TerrainTile, TerrainTileError, TerrainTileInputs,
-    fixed_level_4_height_config, generate_terrain_tile,
+    generate_terrain_tile,
 };

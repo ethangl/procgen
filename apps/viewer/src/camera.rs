@@ -1,4 +1,5 @@
 use bevy::{
+    camera::PerspectiveProjection,
     camera::visibility::RenderLayers,
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
@@ -19,6 +20,11 @@ struct Orbit {
 const DRAG_SENSITIVITY: f32 = 0.006;
 const LINE_ZOOM_SENSITIVITY: f32 = 0.08;
 const PIXEL_ZOOM_SENSITIVITY: f32 = 0.0025;
+/// Closest orbit altitude above the unit surface: 6.371 km at Earth scale.
+pub(crate) const MIN_CAMERA_ALTITUDE: f32 = 0.001;
+/// Perspective near plane: 63.71 m at Earth scale.
+pub(crate) const CAMERA_NEAR_PLANE: f32 = 0.000_01;
+const MAX_CAMERA_DISTANCE: f32 = 12.0;
 
 impl Default for Orbit {
     fn default() -> Self {
@@ -46,6 +52,10 @@ impl Plugin for OrbitCameraPlugin {
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
     commands.spawn((
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            near: CAMERA_NEAR_PLANE,
+            ..default()
+        }),
         Tonemapping::None,
         camera_transform(&orbit),
         RenderLayers::layer(0),
@@ -84,7 +94,8 @@ fn apply_zoom(orbit: &mut Orbit, delta: f32, unit: MouseScrollUnit) {
         MouseScrollUnit::Line => LINE_ZOOM_SENSITIVITY,
         MouseScrollUnit::Pixel => PIXEL_ZOOM_SENSITIVITY,
     };
-    orbit.distance = (orbit.distance * (-delta * sensitivity).exp()).clamp(1.25, 12.0);
+    orbit.distance = (orbit.distance * (-delta * sensitivity).exp())
+        .clamp(1.0 + MIN_CAMERA_ALTITUDE, MAX_CAMERA_DISTANCE);
 }
 
 fn camera_transform(orbit: &Orbit) -> Transform {
@@ -116,5 +127,12 @@ mod tests {
         apply_zoom(&mut pixels, 10.0, MouseScrollUnit::Pixel);
         apply_zoom(&mut lines, 1.0, MouseScrollUnit::Line);
         assert!(pixels.distance > lines.distance);
+    }
+
+    #[test]
+    fn zoom_stops_at_the_named_close_camera_limit() {
+        let mut orbit = Orbit::default();
+        apply_zoom(&mut orbit, 10_000.0, MouseScrollUnit::Line);
+        assert_eq!(orbit.distance, 1.0 + MIN_CAMERA_ALTITUDE);
     }
 }

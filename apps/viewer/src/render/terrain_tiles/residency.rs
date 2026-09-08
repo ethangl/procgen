@@ -318,7 +318,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut maximum_generated = 0;
-        for _ in 0..100 {
+        for _ in 0..MAX_RESIDENT_TILES.div_ceil(NEW_TERRAIN_TILES_PER_FRAME) + 1 {
             let update = residency.update(&targets);
             maximum_generated = maximum_generated.max(update.generated.len());
             assert!(update.generated.len() <= NEW_TERRAIN_TILES_PER_FRAME);
@@ -342,10 +342,13 @@ mod tests {
         let mut second = TileResidency::default();
         let fill = (0..MAX_RESIDENT_TILES)
             .map(|index| {
-                let face = [CubeFace::PositiveZ, CubeFace::NegativeZ][index / 256];
-                let face_index = index % 256;
-                TileAddress::new(face, 4, (face_index % 16) as u32, (face_index / 16) as u32)
-                    .unwrap()
+                TileAddress::new(
+                    CubeFace::PositiveZ,
+                    5,
+                    (index % 32) as u32,
+                    (index / 32) as u32,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
         for (index, &address) in fill.iter().enumerate() {

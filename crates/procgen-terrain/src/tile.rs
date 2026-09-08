@@ -7,11 +7,9 @@ use procgen_cubesphere::{TILE_QUADS, TILE_VERTICES, TileAddress};
 use rayon::prelude::*;
 
 use crate::{
-    TerrainAbyssalConfig, TerrainControlBake, TerrainDetailConfig, TerrainHeightConfig,
-    TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput, TerrainStampProfiles,
-    ValidatedTerrainHeightConfig, terrain_height,
+    TerrainControlBake, TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput,
+    TerrainStampProfiles, ValidatedTerrainHeightConfig, height::terrain_height_with_lod,
 };
-use procgen_noise::OctaveConfig;
 
 /// Number of core samples in one 65 by 65 terrain tile.
 pub const TERRAIN_TILE_SAMPLE_COUNT: usize = (TILE_VERTICES * TILE_VERTICES) as usize;
@@ -19,36 +17,10 @@ pub const TERRAIN_TILE_SAMPLE_COUNT: usize = (TILE_VERTICES * TILE_VERTICES) as 
 const TANGENT_RELATIVE_TOLERANCE: f32 = 2.0e-5;
 const CULL_ROUNDING_MARGIN: f32 = 16.0 * f32::EPSILON;
 
-/// Explicit height configuration for the slice-12 fixed level-4 consumer.
-///
-/// Four detail octaves and three abyssal octaves stop at wavelengths supported
-/// by the roughly 10 km level-4 vertex spacing. This is fixed policy, not the
-/// octave fading or dynamic LOD selection introduced by later slices.
-pub fn fixed_level_4_height_config() -> TerrainHeightConfig {
-    let default = TerrainHeightConfig::default();
-    TerrainHeightConfig {
-        detail: TerrainDetailConfig {
-            octaves: OctaveConfig {
-                octaves: 4,
-                ..default.detail.octaves
-            },
-            ..default.detail
-        },
-        abyssal: TerrainAbyssalConfig {
-            octaves: OctaveConfig {
-                octaves: 3,
-                ..default.abyssal.octaves
-            },
-            ..default.abyssal
-        },
-        ..default
-    }
-}
-
 /// Borrowed inputs for one canonical CPU terrain tile.
 ///
-/// Octave selection is explicit in `config`; this stage does not infer an
-/// octave count from the address or fade octaves between levels.
+/// Octave selection and the newest-octave fade are derived from the address's
+/// level and the validated height configuration.
 #[derive(Clone, Copy, Debug)]
 pub struct TerrainTileInputs<'a> {
     pub address: TileAddress,
@@ -136,6 +108,7 @@ pub fn generate_terrain_tile(
     inputs: TerrainTileInputs<'_>,
     config: ValidatedTerrainHeightConfig,
 ) -> TerrainTile {
+    let lod = config.lod_for_tile_level(inputs.address.level());
     let directions: Vec<_> = tile_directions(inputs.address).collect();
     let center = vertex_direction(inputs.address, TILE_QUADS / 2, TILE_QUADS / 2);
     let stamps = cull_stamps(center, &directions, inputs.stamps, config.stamps);
@@ -143,7 +116,7 @@ pub fn generate_terrain_tile(
         .par_iter()
         .with_min_len(TILE_VERTICES as usize)
         .map(|&direction| {
-            terrain_height(
+            terrain_height_with_lod(
                 TerrainHeightInputs {
                     direction,
                     controls: inputs.controls,
@@ -151,6 +124,7 @@ pub fn generate_terrain_tile(
                     noise_keys: inputs.noise_keys,
                 },
                 config,
+                lod,
             )
         })
         .collect();
@@ -200,7 +174,7 @@ mod tests {
     use super::*;
     use crate::{
         TerrainAbyssalConfig, TerrainCellControls, TerrainCoastConfig, TerrainDetailConfig,
-        TerrainHeightConfig, TerrainStampKind,
+        TerrainHeightConfig, TerrainStampKind, terrain_height,
         test_support::{constant_bake, height_inputs, stamp, tile_inputs},
     };
     use procgen_cubesphere::CubeFace;
@@ -269,6 +243,39 @@ mod tests {
                 [0x3F1E_EAFF, 0xBF83_169D, 0xBD8A_4FBF, 0x3DA4_9EF0],
             ]
         );
+    }
+
+    #[test]
+    fn tile_levels_select_supported_octaves_and_fade_parent_child_transitions() {
+        let config = TerrainHeightConfig::default().validate().unwrap();
+        let level_one = config.lod_for_tile_level(1);
+        let level_four = config.lod_for_tile_level(4);
+        let level_twelve = config.lod_for_tile_level(12);
+        assert_eq!(
+            (level_one.detail_octaves, level_one.abyssal_octaves),
+            (1, 0)
+        );
+        assert_eq!(
+            (level_four.detail_octaves, level_four.abyssal_octaves),
+            (4, 3)
+        );
+        assert_eq!(
+            (level_twelve.detail_octaves, level_twelve.abyssal_octaves),
+            (11, 6)
+        );
+        assert_eq!(level_one.detail_fade, level_four.detail_fade);
+        assert!(level_four.detail_fade != procgen_noise::NewestOctaveWeight::ZERO);
+        assert!(level_four.detail_fade != procgen_noise::NewestOctaveWeight::FULL);
+        assert_eq!(
+            level_twelve.detail_fade,
+            procgen_noise::NewestOctaveWeight::FULL
+        );
+        for child_level in 2..=10 {
+            let parent = config.lod_for_tile_level(child_level - 1);
+            let child = config.lod_for_tile_level(child_level);
+            assert_eq!(child.detail_octaves, parent.detail_octaves + 1);
+            assert_eq!(child.detail_fade, parent.detail_fade);
+        }
     }
 
     #[test]

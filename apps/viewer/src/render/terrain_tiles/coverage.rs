@@ -173,10 +173,18 @@ mod tests {
                 .iter()
                 .all(|tile| tile.level() <= TERRAIN_MAX_TILE_LEVEL)
         );
+        assert!(first.iter().any(|tile| tile.level() > 0));
+    }
+
+    #[test]
+    fn close_camera_reaches_level_twelve_without_exceeding_it() {
+        let distance = SURFACE_RADIUS + crate::camera::MIN_CAMERA_ALTITUDE;
+        let selected = QuadtreeSelection::default().select(view(Vec3::Z * distance, 800.0));
+        assert_eq!(selected.iter().map(|tile| tile.level()).max(), Some(12));
         assert!(
-            first
+            selected
                 .iter()
-                .any(|tile| tile.level() == TERRAIN_MAX_TILE_LEVEL)
+                .all(|tile| tile.level() <= TERRAIN_MAX_TILE_LEVEL)
         );
     }
 
@@ -216,10 +224,11 @@ mod tests {
         let selected = QuadtreeSelection::default().select(view);
         let horizon = SURFACE_RADIUS / view.position.length();
         let camera_direction = view.position.normalize();
+        const AUDIT_LEVEL: u8 = 5;
         for face in CubeFace::ALL {
-            for y in 0..1_u32 << TERRAIN_MAX_TILE_LEVEL {
-                for x in 0..1_u32 << TERRAIN_MAX_TILE_LEVEL {
-                    let fine = TileAddress::new(face, TERRAIN_MAX_TILE_LEVEL, x, y).unwrap();
+            for y in 0..1_u32 << AUDIT_LEVEL {
+                for x in 0..1_u32 << AUDIT_LEVEL {
+                    let fine = TileAddress::new(face, AUDIT_LEVEL, x, y).unwrap();
                     let visibly_sampled = (0..=TILE_QUADS)
                         .step_by((TILE_QUADS / 4) as usize)
                         .flat_map(|local_y| {

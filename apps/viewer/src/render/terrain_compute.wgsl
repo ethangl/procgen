@@ -34,7 +34,7 @@ fn generate_terrain_tiles(@builtin(global_invocation_id) id: vec3<u32>) {
         local_index / CUBESPHERE_TILE_VERTICES,
     );
     let direction = cubesphere_tile_direction(job.address, local);
-    let height = terrain_height_gpu(direction);
+    let height = terrain_height_gpu(direction, job.address.y);
     if local_index == 0u {
         terrain_addresses[destination_slot] = job.address;
     }
