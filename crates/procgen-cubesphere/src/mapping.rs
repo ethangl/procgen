@@ -53,6 +53,12 @@ impl CubeFace {
         }
     }
 
+    pub(crate) fn from_normal(normal: Vec3) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|face| face.frame().normal == normal)
+    }
+
     /// The single definition of every face's `(normal, +u, +v)` frame.
     pub fn frame(self) -> FaceFrame {
         let (x, y, z) = (Vec3::X, Vec3::Y, Vec3::Z);

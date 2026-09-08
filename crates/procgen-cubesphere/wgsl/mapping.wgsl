@@ -5,6 +5,14 @@ const CUBESPHERE_TILE_QUADS: u32 = 64u;
 const CUBESPHERE_TILE_VERTICES: u32 = 65u;
 const CUBESPHERE_TILE_SAMPLE_COUNT: u32 = 4225u;
 
+fn cubesphere_tile_level(address: vec4<u32>) -> u32 {
+    return address.y;
+}
+
+fn cubesphere_vertex_spacing(level: u32) -> f32 {
+    return 2.0 * CUBESPHERE_PI_OVER_FOUR / f32(CUBESPHERE_TILE_QUADS << level);
+}
+
 struct CubesphereFaceFrame {
     normal: vec3<f32>,
     u_axis: vec3<f32>,
@@ -56,7 +64,7 @@ fn cubesphere_project_direction(direction: vec3<f32>, face: u32) -> CubesphereFa
 }
 
 fn cubesphere_tile_direction(address: vec4<u32>, local: vec2<u32>) -> vec3<f32> {
-    let quads_per_axis = CUBESPHERE_TILE_QUADS << address.y;
+    let quads_per_axis = CUBESPHERE_TILE_QUADS << cubesphere_tile_level(address);
     let grid_x = address.z * CUBESPHERE_TILE_QUADS + local.x;
     let grid_y = address.w * CUBESPHERE_TILE_QUADS + local.y;
     let u = -1.0 + 2.0 * f32(grid_x) / f32(quads_per_axis);

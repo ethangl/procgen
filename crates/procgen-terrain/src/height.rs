@@ -10,7 +10,7 @@ use procgen_core::{
     },
 };
 use procgen_noise::{
-    DerivativeDampedConfig, FractalParameterError, OctaveConfig, OctaveGain,
+    DerivativeDampedConfig, FractalParameterError, OctaveBand, OctaveConfig, OctaveGain,
     RidgedMultifractalConfig, Validated, derivative_damped_fbm_3d, fold_seed_u64_to_u32,
     ridged_multifractal_3d,
 };
@@ -156,6 +156,22 @@ pub struct ValidatedTerrainHeightConfig {
     pub(crate) stamps: TerrainStampProfiles,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TerrainHeightLod {
+    pub detail: OctaveBand,
+    pub abyssal: OctaveBand,
+}
+
+impl ValidatedTerrainHeightConfig {
+    pub(crate) const fn detail_octaves(self) -> Validated<OctaveConfig> {
+        self.detail.octave_config()
+    }
+
+    pub(crate) const fn abyssal_octaves(self) -> Validated<OctaveConfig> {
+        self.abyssal.octave_config()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerrainHeightError {
     Coast(TerrainCoastError),
@@ -223,11 +239,27 @@ pub struct TerrainHeightInputs<'a> {
 /// The unwarped baked base controls coast proximity. It remains the authority
 /// used to decide where warping and taper apply; this function does not return
 /// or mutate a land/ocean classification.
-/// The returned sample's `value` is normalized elevation and its derivative is
-/// tangent to the unit sphere for later normal construction.
+/// The returned sample's `value` uses the normalized coarse-elevation scale but
+/// may extend beyond `[0, 1]` after detail and stamps are added. Its derivative
+/// is tangent to the unit sphere for later normal construction.
 pub fn terrain_height(
     inputs: TerrainHeightInputs<'_>,
     config: ValidatedTerrainHeightConfig,
+) -> ScalarFieldSample3 {
+    terrain_height_with_lod(
+        inputs,
+        config,
+        TerrainHeightLod {
+            detail: config.detail_octaves().full_band(),
+            abyssal: config.abyssal_octaves().full_band(),
+        },
+    )
+}
+
+pub(crate) fn terrain_height_with_lod(
+    inputs: TerrainHeightInputs<'_>,
+    config: ValidatedTerrainHeightConfig,
+    lod: TerrainHeightLod,
 ) -> ScalarFieldSample3 {
     let TerrainHeightInputs {
         direction,
@@ -258,12 +290,14 @@ pub fn terrain_height(
         warp.direction,
         config.detail,
         gain,
+        lod.detail,
     ));
     let ridged = warp.pullback(ridged_multifractal_3d(
         noise_keys.detail,
         warp.direction,
         config.ridged,
         gain,
+        lod.detail,
     ));
     let blended = fbm + (ridged - fbm) * controls.ridge_weight;
 
@@ -272,6 +306,7 @@ pub fn terrain_height(
         warp.direction,
         config.abyssal,
         gain,
+        lod.abyssal,
     ));
     let additive = controls.detail_amplitude * blended + controls.abyssal_amplitude * abyssal;
     let mut height = controls.base_elevation + coast_taper * additive;
@@ -279,16 +314,9 @@ pub fn terrain_height(
         height += stamp_contribution(direction, *stamp, config.stamps.profile(stamp.kind));
     }
 
-    if height.value <= 0.0 || height.value >= 1.0 {
-        ScalarFieldSample3 {
-            value: height.value.clamp(0.0, 1.0),
-            derivative: Vec3::ZERO,
-        }
-    } else {
-        ScalarFieldSample3 {
-            value: height.value,
-            derivative: height.derivative - direction * height.derivative.dot(direction),
-        }
+    ScalarFieldSample3 {
+        value: height.value,
+        derivative: height.derivative - direction * height.derivative.dot(direction),
     }
 }
 
@@ -324,6 +352,7 @@ mod tests {
         test_support::{TERRAIN_TEST_SEED, constant_bake, height_inputs, stamp},
     };
     use procgen_cubesphere::{CubeFace, FaceCoordinates, face_to_direction};
+    use procgen_noise::{derivative_damped_fbm_3d, ridged_multifractal_3d};
     use procgen_tectonics::SEA_LEVEL;
 
     fn varying_bake() -> TerrainControlBake {
@@ -439,7 +468,7 @@ mod tests {
                 sample.derivative.y.to_bits(),
                 sample.derivative.z.to_bits(),
             ],
-            [0x3F24_A404, 0x3F96_1AFF, 0x3F4F_8F1D, 0xBCA8_EEA7]
+            [0x3F25_0645, 0x3F05_D406, 0x4001_D8D6, 0x3F8D_F0F4]
         );
         assert!(sample.derivative.dot(direction()).abs() < 2.0e-6);
         assert_eq!(
@@ -479,14 +508,48 @@ mod tests {
     }
 
     #[test]
+    fn detail_can_extend_beyond_the_coarse_normalized_range_without_flattening() {
+        let direction = Vec3::Z;
+        let bake = constant_bake(TerrainCellControls {
+            base_elevation: 0.99,
+            ..TerrainCellControls::default()
+        });
+        let stamp = stamp(
+            TerrainStampKind::Hotspot,
+            0,
+            Vec3::new(0.004, 0.0, 1.0).normalized(),
+            1.0,
+        );
+        let sample = terrain_height(
+            height_inputs(direction, &bake, &[stamp]),
+            TerrainHeightConfig::default().validate().unwrap(),
+        );
+        assert!(sample.value > 1.0);
+        assert_ne!(sample.derivative, Vec3::ZERO);
+        assert!(sample.derivative.dot(direction).abs() < 2.0e-6);
+    }
+
+    #[test]
     fn ridge_endpoints_select_the_corresponding_noise_basis() {
         let config = one_octave_config();
         let validated = config.validate().unwrap();
         let direction = direction();
         let gain = OctaveGain::new(0.5).unwrap();
         let key = TerrainNoiseKeys::new(TERRAIN_TEST_SEED).detail;
-        let fbm = derivative_damped_fbm_3d(key, direction, validated.detail, gain);
-        let ridged = ridged_multifractal_3d(key, direction, validated.ridged, gain);
+        let fbm = derivative_damped_fbm_3d(
+            key,
+            direction,
+            validated.detail,
+            gain,
+            validated.detail.octave_config().full_band(),
+        );
+        let ridged = ridged_multifractal_3d(
+            key,
+            direction,
+            validated.ridged,
+            gain,
+            validated.ridged.octave_config().full_band(),
+        );
         for (weight, expected) in [(0.0, fbm.value), (1.0, ridged.value)] {
             let bake = constant_bake(TerrainCellControls {
                 base_elevation: 0.7,

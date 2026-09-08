@@ -111,6 +111,13 @@ impl TileResidency {
         self.slots.iter().flatten().count()
     }
 
+    pub(super) fn ready_parent_slot(&self, tile: ResidentTile) -> Option<u32> {
+        tile.address
+            .parent()
+            .and_then(|parent| self.find_ready(parent))
+            .map(|slot| slot as u32)
+    }
+
     pub(super) fn complete_in_flight(&mut self) {
         for slot in self.slots.iter_mut().flatten() {
             slot.ready = true;
@@ -285,6 +292,12 @@ mod tests {
         let slot = residency.find(root).unwrap();
         residency.slots[slot] = None;
         let update = residency.update(&[root]);
+        assert!(
+            update
+                .displayed
+                .iter()
+                .all(|&tile| residency.ready_parent_slot(tile).is_none())
+        );
         assert_eq!(
             update.generated,
             vec![ResidentTile {
@@ -318,7 +331,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut maximum_generated = 0;
-        for _ in 0..100 {
+        for _ in 0..MAX_RESIDENT_TILES.div_ceil(NEW_TERRAIN_TILES_PER_FRAME) + 1 {
             let update = residency.update(&targets);
             maximum_generated = maximum_generated.max(update.generated.len());
             assert!(update.generated.len() <= NEW_TERRAIN_TILES_PER_FRAME);
@@ -342,10 +355,13 @@ mod tests {
         let mut second = TileResidency::default();
         let fill = (0..MAX_RESIDENT_TILES)
             .map(|index| {
-                let face = [CubeFace::PositiveZ, CubeFace::NegativeZ][index / 256];
-                let face_index = index % 256;
-                TileAddress::new(face, 4, (face_index % 16) as u32, (face_index / 16) as u32)
-                    .unwrap()
+                TileAddress::new(
+                    CubeFace::PositiveZ,
+                    5,
+                    (index % 32) as u32,
+                    (index / 32) as u32,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
         for (index, &address) in fill.iter().enumerate() {

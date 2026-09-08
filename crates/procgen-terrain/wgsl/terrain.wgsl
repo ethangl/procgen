@@ -151,25 +151,38 @@ fn terrain_stamp_contribution(direction: vec3<f32>, stamp: TerrainStamp, profile
     return scale_sample(capped, profile.amplitude * stamp.strength);
 }
 
-fn terrain_height_gpu(direction: vec3<f32>) -> ScalarFieldSample3 {
+fn terrain_height_gpu(direction: vec3<f32>, tile_level: u32) -> ScalarFieldSample3 {
     let parameters = terrain_parameters();
+    let minimum_wavelength = 2.0 * cubesphere_vertex_spacing(tile_level);
+    let detail_lod = noise_octave_band_for_minimum_wavelength(
+        parameters.detail_octaves,
+        parameters.detail_frequency,
+        parameters.detail_lacunarity,
+        minimum_wavelength,
+    );
+    let abyssal_lod = noise_octave_band_for_minimum_wavelength(
+        parameters.abyssal_octaves,
+        parameters.abyssal_frequency,
+        parameters.abyssal_lacunarity,
+        minimum_wavelength,
+    );
     let original = terrain_sample_controls(direction);
     let taper = terrain_coast_taper(original.base_elevation, parameters.coast_half_width);
     let warp = terrain_coast_warp(direction, sub_sample(ScalarFieldSample3(1.0, vec3(0.0)), taper));
     let controls = terrain_pullback_controls(warp, terrain_sample_controls(warp.direction));
     let gain = controls.octave_gain.value;
     let fbm = terrain_pullback(warp, derivative_damped_fbm_3d(
-        parameters.detail_key, warp.direction, parameters.detail_octaves,
+        parameters.detail_key, warp.direction, detail_lod,
         parameters.detail_frequency, parameters.detail_lacunarity, gain, parameters.detail_derivative_damping,
     ));
     let ridged = terrain_pullback(warp, ridged_multifractal_3d(
-        parameters.detail_key, warp.direction, parameters.detail_octaves,
+        parameters.detail_key, warp.direction, detail_lod,
         parameters.detail_frequency, parameters.detail_lacunarity, gain,
         parameters.detail_ridge_offset, parameters.detail_ridge_gain,
     ));
     let blended = add_sample(fbm, mul_sample(sub_sample(ridged, fbm), controls.ridge_weight));
     let abyssal = terrain_pullback(warp, derivative_damped_fbm_3d(
-        parameters.abyssal_key, warp.direction, parameters.abyssal_octaves,
+        parameters.abyssal_key, warp.direction, abyssal_lod,
         parameters.abyssal_frequency, parameters.abyssal_lacunarity, gain,
         parameters.abyssal_derivative_damping,
     ));
@@ -181,9 +194,6 @@ fn terrain_height_gpu(direction: vec3<f32>) -> ScalarFieldSample3 {
     for (var index = 0u; index < parameters.stamp_count; index++) {
         let stamp = terrain_load_stamp(index);
         height = add_sample(height, terrain_stamp_contribution(direction, stamp, parameters.stamp_profiles[stamp.kind]));
-    }
-    if height.value <= 0.0 || height.value >= 1.0 {
-        return ScalarFieldSample3(clamp(height.value, 0.0, 1.0), vec3(0.0));
     }
     return ScalarFieldSample3(height.value, height.derivative - direction * dot(height.derivative, direction));
 }

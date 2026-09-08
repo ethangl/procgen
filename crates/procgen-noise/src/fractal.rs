@@ -56,9 +56,72 @@ impl OctaveConfig {
     }
 }
 
+/// Active prefix of an octave progression and its newest-octave weight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OctaveBand {
+    octaves: u32,
+    newest_weight: f32,
+}
+
+impl OctaveBand {
+    pub const fn octave_count(self) -> u32 {
+        self.octaves
+    }
+
+    pub const fn newest_weight(self) -> f32 {
+        self.newest_weight
+    }
+}
+
 /// A configuration validated for repeated sampling.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Validated<T>(T);
+
+impl Validated<OctaveConfig> {
+    pub const fn full_band(self) -> OctaveBand {
+        OctaveBand {
+            octaves: self.0.octaves,
+            newest_weight: 1.0,
+        }
+    }
+
+    /// Selects wavelengths no shorter than `minimum_wavelength`.
+    pub fn band_for_minimum_wavelength(
+        self,
+        minimum_wavelength: f32,
+    ) -> Result<OctaveBand, FractalParameterError> {
+        validate_positive("minimum wavelength", minimum_wavelength)?;
+        let mut frequency = self.0.frequency;
+        let mut octaves = 0;
+        let mut newest_weight = 0.0;
+        while octaves < self.0.octaves {
+            // A cubic-gradient lattice feature spans roughly two lattice cells.
+            let wavelength = 2.0 / frequency;
+            if wavelength < minimum_wavelength {
+                break;
+            }
+            octaves += 1;
+            newest_weight = (wavelength / minimum_wavelength - 1.0).clamp(0.0, 1.0);
+            frequency *= self.0.lacunarity;
+        }
+        Ok(OctaveBand {
+            octaves,
+            newest_weight,
+        })
+    }
+}
+
+impl Validated<DerivativeDampedConfig> {
+    pub const fn octave_config(self) -> Validated<OctaveConfig> {
+        Validated(self.0.octaves)
+    }
+}
+
+impl Validated<RidgedMultifractalConfig> {
+    pub const fn octave_config(self) -> Validated<OctaveConfig> {
+        Validated(self.0.octaves)
+    }
+}
 
 /// A validated per-sample amplitude gain for successive octaves.
 ///
@@ -104,7 +167,7 @@ impl RidgedMultifractalConfig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DerivativeDampedConfig {
     pub octaves: OctaveConfig,
-    /// Strength of attenuation from accumulated squared slope.
+    /// Strength of attenuation from accumulated squared dimensionless slope.
     pub damping: f32,
 }
 
@@ -235,15 +298,22 @@ pub fn ridged_multifractal_3d(
     position: Vec3,
     config: Validated<RidgedMultifractalConfig>,
     gain: OctaveGain,
+    band: OctaveBand,
 ) -> ScalarFieldSample3 {
     let config = config.0;
+    assert!(band.octaves <= config.octaves.octaves);
     let mut result = ScalarFieldSample3::default();
     let mut weight = ScalarFieldSample3 {
         value: 1.0,
         derivative: Vec3::ZERO,
     };
 
-    for octave in config.octaves.octaves(gain) {
+    for (index, octave) in config
+        .octaves
+        .octaves(gain)
+        .take(band.octaves as usize)
+        .enumerate()
+    {
         let sample = octave.sample(key, position);
         let absolute_derivative = if sample.value > 0.0 {
             sample.derivative
@@ -262,7 +332,12 @@ pub fn ridged_multifractal_3d(
             value: signal.value * weight.value,
             derivative: signal.derivative * weight.value + weight.derivative * signal.value,
         };
-        result += weighted * octave.amplitude;
+        let newest_weight = if index as u32 + 1 == band.octaves {
+            band.newest_weight
+        } else {
+            1.0
+        };
+        result += weighted * (octave.amplitude * newest_weight);
 
         let next_weight = weighted * config.ridge_gain;
         weight = if next_weight.value > 0.0 && next_weight.value < 1.0 {
@@ -281,9 +356,12 @@ pub fn ridged_multifractal_3d(
 /// Accumulates fbm while damping higher octaves as accumulated slope grows.
 ///
 /// Before each octave, its amplitude is divided by
-/// `1 + damping * accumulated_slope_squared`. The first octave is therefore
-/// unchanged. Values remain an unnormalized weighted sum, and damping never
-/// increases the amplitude of an individual octave relative to plain fbm.
+/// `1 + damping * accumulated_dimensionless_slope_squared`. The accumulated
+/// derivative is divided by octave zero's frequency before attenuation, so a
+/// caller can change the sampled spatial scale without unintentionally
+/// changing the damping response. The first octave is therefore unchanged.
+/// Values remain an unnormalized weighted sum, and damping never increases the
+/// amplitude of an individual octave relative to plain fbm.
 /// The conservative value bound is twice the octave amplitude sum. The
 /// returned derivative is the accumulated slope used by the damping recurrence;
 /// as is conventional for derivative-damped fbm, the spatial derivative of the
@@ -294,12 +372,25 @@ pub fn derivative_damped_fbm_3d(
     position: Vec3,
     config: Validated<DerivativeDampedConfig>,
     gain: OctaveGain,
+    band: OctaveBand,
 ) -> ScalarFieldSample3 {
     let config = config.0;
+    assert!(band.octaves <= config.octaves.octaves);
     let mut result = ScalarFieldSample3::default();
-    for octave in config.octaves.octaves(gain) {
-        let attenuation = (1.0 + config.damping * result.derivative.length_squared()).recip();
-        result += octave.sample(key, position) * (octave.amplitude * attenuation);
+    for (index, octave) in config
+        .octaves
+        .octaves(gain)
+        .take(band.octaves as usize)
+        .enumerate()
+    {
+        let dimensionless_slope = result.derivative * config.octaves.frequency.recip();
+        let attenuation = (1.0 + config.damping * dimensionless_slope.length_squared()).recip();
+        let newest_weight = if index as u32 + 1 == band.octaves {
+            band.newest_weight
+        } else {
+            1.0
+        };
+        result += octave.sample(key, position) * (octave.amplitude * attenuation * newest_weight);
     }
     result
 }
@@ -371,11 +462,17 @@ mod tests {
         .unwrap()
     }
 
+    fn full_band(octaves: u32) -> OctaveBand {
+        valid_octaves(octaves).full_band()
+    }
+
     #[test]
     fn stable_vectors() {
         let fbm = fbm_3d(KEY, POSITION, valid_octaves(5), gain());
-        let ridged = ridged_multifractal_3d(KEY, POSITION, valid_ridged(5, 2.0), gain());
-        let damped = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.75), gain());
+        let ridged =
+            ridged_multifractal_3d(KEY, POSITION, valid_ridged(5, 2.0), gain(), full_band(5));
+        let damped =
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.75), gain(), full_band(5));
 
         assert_eq!(
             sample_bits(fbm),
@@ -387,8 +484,27 @@ mod tests {
         );
         assert_eq!(
             sample_bits(damped),
-            [0x3E7C_0C6E, 0xBF3D_220F, 0x3FC2_824C, 0xBFBB_CC53]
+            [0x3E81_B146, 0xBF23_17CF, 0x3FD2_5601, 0xBFD1_AE85]
         );
+    }
+
+    #[test]
+    fn damping_response_is_independent_of_base_frequency_units() {
+        let low =
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.75), gain(), full_band(5));
+        let high_config = DerivativeDampedConfig {
+            octaves: OctaveConfig {
+                frequency: octave_config(5).frequency * 8.0,
+                ..octave_config(5)
+            },
+            damping: 0.75,
+        }
+        .validate()
+        .unwrap();
+        let high =
+            derivative_damped_fbm_3d(KEY, POSITION * 0.125, high_config, gain(), full_band(5));
+        assert_eq!(high.value, low.value);
+        assert_eq!(high.derivative * 0.125, low.derivative);
     }
 
     #[test]
@@ -400,11 +516,11 @@ mod tests {
             ScalarFieldSample3::default()
         );
         assert_eq!(
-            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(0, 100.0), gain()),
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(0, 100.0), gain(), full_band(0),),
             ScalarFieldSample3::default()
         );
         assert_eq!(
-            ridged_multifractal_3d(KEY, POSITION, valid_ridged(0, 2.0), gain()),
+            ridged_multifractal_3d(KEY, POSITION, valid_ridged(0, 2.0), gain(), full_band(0),),
             ScalarFieldSample3::default()
         );
 
@@ -419,7 +535,7 @@ mod tests {
             expected_fbm
         );
         assert_eq!(
-            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(1, 100.0), gain()),
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(1, 100.0), gain(), full_band(1),),
             expected_fbm
         );
     }
@@ -460,6 +576,26 @@ mod tests {
     }
 
     #[test]
+    fn newest_octave_fade_has_exact_cutoff_endpoints() {
+        let four_damped = valid_damped(4, 0.75);
+        let five_damped = valid_damped(5, 0.75);
+        let fifth_wavelength = 2.0 / (octave_config(5).frequency * 2.0_f32.powi(4));
+        let cutoff_band = valid_octaves(5)
+            .band_for_minimum_wavelength(fifth_wavelength)
+            .unwrap();
+        assert_eq!(
+            derivative_damped_fbm_3d(KEY, POSITION, five_damped, gain(), cutoff_band),
+            derivative_damped_fbm_3d(KEY, POSITION, four_damped, gain(), full_band(4))
+        );
+        let four_ridged = valid_ridged(4, 2.0);
+        let five_ridged = valid_ridged(5, 2.0);
+        assert_eq!(
+            ridged_multifractal_3d(KEY, POSITION, five_ridged, gain(), cutoff_band),
+            ridged_multifractal_3d(KEY, POSITION, four_ridged, gain(), full_band(4))
+        );
+    }
+
+    #[test]
     fn fbm_and_ridged_derivatives_match_central_difference() {
         const STEP: f32 = 5.0e-4;
         const TOLERANCE: f32 = 8.0e-3;
@@ -470,18 +606,20 @@ mod tests {
             fbm_3d(KEY, position, octaves, gain())
         });
         assert_derivative_matches(STEP, TOLERANCE, |position| {
-            ridged_multifractal_3d(KEY, position, ridged, gain())
+            ridged_multifractal_3d(KEY, position, ridged, gain(), full_band(4))
         });
     }
 
     #[test]
     fn zero_damping_matches_fbm_and_positive_damping_suppresses_later_octaves() {
         let plain = fbm_3d(KEY, POSITION, valid_octaves(5), gain());
-        let undamped = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.0), gain());
+        let undamped =
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.0), gain(), full_band(5));
         assert_eq!(undamped, plain);
 
         let first = fbm_3d(KEY, POSITION, valid_octaves(1), gain());
-        let damped = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 4.0), gain());
+        let damped =
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 4.0), gain(), full_band(5));
         assert!((damped.value - first.value).abs() < (plain.value - first.value).abs());
         assert!(
             (damped.derivative - first.derivative).length()
@@ -591,17 +729,41 @@ mod tests {
         for position in positions {
             let samples = [
                 fbm_3d(KEY, position, octaves, gain),
-                ridged_multifractal_3d(KEY, position, ridged, gain),
-                derivative_damped_fbm_3d(KEY, position, damped, gain),
+                ridged_multifractal_3d(
+                    KEY,
+                    position,
+                    ridged,
+                    gain,
+                    ridged.octave_config().full_band(),
+                ),
+                derivative_damped_fbm_3d(
+                    KEY,
+                    position,
+                    damped,
+                    gain,
+                    damped.octave_config().full_band(),
+                ),
             ];
             assert_eq!(samples[0], fbm_3d(KEY, position, octaves, gain));
             assert_eq!(
                 samples[1],
-                ridged_multifractal_3d(KEY, position, ridged, gain)
+                ridged_multifractal_3d(
+                    KEY,
+                    position,
+                    ridged,
+                    gain,
+                    ridged.octave_config().full_band(),
+                )
             );
             assert_eq!(
                 samples[2],
-                derivative_damped_fbm_3d(KEY, position, damped, gain)
+                derivative_damped_fbm_3d(
+                    KEY,
+                    position,
+                    damped,
+                    gain,
+                    damped.octave_config().full_band(),
+                )
             );
 
             for sample in samples {

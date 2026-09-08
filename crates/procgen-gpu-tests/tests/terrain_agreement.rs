@@ -1,12 +1,15 @@
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{ScalarFieldSample3, Vec3};
-use procgen_cubesphere::{CubeFace, TILE_QUADS, TILE_VERTICES, TileAddress};
+use procgen_cubesphere::{CubeFace, TILE_QUADS, TILE_VERTICES, TileAddress, vertex_spacing};
 use procgen_gpu_tests::{readback, request_device};
+use procgen_noise::OctaveConfig;
 use procgen_terrain::{
-    TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE, TERRAIN_WGSL_SOURCE,
-    TERRAIN_WGSL_VALUE_TOLERANCE, TerrainCellControls, TerrainControlBake, TerrainGpuParameters,
-    TerrainHeightConfig, TerrainNoiseKeys, TerrainStampInput, TerrainStampKind, TerrainTileInputs,
-    fixed_level_4_height_config, generate_terrain_tile, pack_control_bake, pack_stamps,
+    TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE,
+    TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE, TERRAIN_WGSL_DERIVATIVE_MAGNITUDE_FLOOR,
+    TERRAIN_WGSL_SOURCE, TERRAIN_WGSL_VALUE_TOLERANCE, TerrainAbyssalConfig, TerrainCellControls,
+    TerrainControlBake, TerrainDetailConfig, TerrainGpuParameters, TerrainHeightConfig,
+    TerrainNoiseKeys, TerrainStampInput, TerrainStampKind, TerrainTileInputs,
+    generate_terrain_tile, pack_control_bake, pack_stamps,
 };
 use wgpu::util::DeviceExt;
 
@@ -16,6 +19,23 @@ const TEST_SEED: u64 = 0x6d2b_79f5_1234_abcd;
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Output {
     sample: [f32; 4],
+}
+
+#[derive(Clone, Copy, Default)]
+struct Divergence {
+    value: f32,
+    derivative_angle: f32,
+    derivative_absolute: f32,
+    samples: usize,
+}
+
+impl Divergence {
+    fn include(&mut self, other: Self) {
+        self.value = self.value.max(other.value);
+        self.derivative_angle = self.derivative_angle.max(other.derivative_angle);
+        self.derivative_absolute = self.derivative_absolute.max(other.derivative_absolute);
+        self.samples += other.samples;
+    }
 }
 
 #[test]
@@ -29,7 +49,7 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         adapter_info.name, adapter_info.backend, adapter_info.device_type
     );
     let bake = varying_bake();
-    let config = fixed_level_4_height_config();
+    let config = TerrainHeightConfig::default();
     let keys = TerrainNoiseKeys::new(TEST_SEED);
     let left_address = TileAddress::new(CubeFace::PositiveZ, 4, 7, 9).unwrap();
     let right_address = TileAddress::new(CubeFace::PositiveZ, 4, 8, 9).unwrap();
@@ -44,21 +64,41 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         address: right_address,
         ..left_inputs
     };
-    let left_gpu = dispatch_tile(&device, &queue, left_inputs, config);
+    let (left_gpu, mut maximum) = compare_tile(&device, &queue, left_inputs, config);
     let right_gpu = dispatch_tile(&device, &queue, right_inputs, config);
-    let left_cpu = generate_terrain_tile(left_inputs, config.validate().unwrap());
-
-    let (maximum_value, maximum_angle) = assert_agreement(&left_gpu, &left_cpu.samples);
     let coast_bake = coast_bake();
     let coast_inputs = TerrainTileInputs {
         controls: &coast_bake,
         ..left_inputs
     };
-    let coast_gpu = dispatch_tile(&device, &queue, coast_inputs, config);
-    let coast_cpu = generate_terrain_tile(coast_inputs, config.validate().unwrap());
-    let (coast_value, coast_angle) = assert_agreement(&coast_gpu, &coast_cpu.samples);
-    let maximum_value = maximum_value.max(coast_value);
-    let maximum_angle = maximum_angle.max(coast_angle);
+    let (_, coast_divergence) = compare_tile(&device, &queue, coast_inputs, config);
+    maximum.include(coast_divergence);
+
+    for address in [
+        TileAddress::new(CubeFace::PositiveX, 1, 1, 0).unwrap(),
+        TileAddress::new(CubeFace::NegativeY, 8, 173, 91).unwrap(),
+        TileAddress::new(CubeFace::NegativeZ, 12, 3_071, 2_019).unwrap(),
+    ] {
+        let inputs = TerrainTileInputs {
+            address,
+            ..left_inputs
+        };
+        let (_, divergence) = compare_tile(&device, &queue, inputs, config);
+        maximum.include(divergence);
+    }
+
+    for fade in [0.0, 1.0] {
+        let address = TileAddress::new(CubeFace::PositiveZ, 4, 7, 9).unwrap();
+        let endpoint_config = fade_endpoint_config(address.level(), fade);
+        let inputs = TerrainTileInputs {
+            address,
+            controls: &bake,
+            stamps: &[],
+            noise_keys: keys,
+        };
+        let (_, divergence) = compare_tile(&device, &queue, inputs, endpoint_config);
+        maximum.include(divergence);
+    }
 
     for y in 0..TILE_VERTICES as usize {
         assert_eq!(
@@ -68,34 +108,103 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         );
     }
     println!(
-        "terrain agreement: {} samples, maximum value difference {maximum_value:.9e}, maximum derivative angle {maximum_angle:.9e} radians; tolerances {:.1e} and {:.1e}",
-        TERRAIN_TILE_SAMPLE_COUNT * 2,
+        "terrain agreement: {} samples, maximum value difference {:.9e}, maximum above-floor derivative angle {:.9e} radians, maximum below-floor vertex-span derivative difference {:.9e}; tolerances {:.1e}, {:.1e}, and {:.1e}",
+        maximum.samples,
+        maximum.value,
+        maximum.derivative_angle,
+        maximum.derivative_absolute,
         TERRAIN_WGSL_VALUE_TOLERANCE,
         TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
+        TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE,
     );
 }
 
-fn assert_agreement(actual: &[Output], expected: &[ScalarFieldSample3]) -> (f32, f32) {
-    let mut maximum_value = 0.0_f32;
-    let mut maximum_angle = 0.0_f32;
+fn fade_endpoint_config(level: u8, newest_weight: f32) -> TerrainHeightConfig {
+    let default = TerrainHeightConfig::default();
+    let minimum_wavelength = 2.0 * vertex_spacing(level);
+    let detail_octaves = OctaveConfig {
+        octaves: 1,
+        frequency: 2.0 / (minimum_wavelength * (1.0 + newest_weight)),
+        lacunarity: 2.0,
+    };
+    let band = detail_octaves
+        .validate()
+        .unwrap()
+        .band_for_minimum_wavelength(minimum_wavelength)
+        .unwrap();
+    assert_eq!(band.octave_count(), 1);
+    assert_eq!(band.newest_weight(), newest_weight);
+    TerrainHeightConfig {
+        detail: TerrainDetailConfig {
+            octaves: detail_octaves,
+            ..default.detail
+        },
+        abyssal: TerrainAbyssalConfig {
+            octaves: OctaveConfig {
+                octaves: 0,
+                ..default.abyssal.octaves
+            },
+            ..default.abyssal
+        },
+        ..default
+    }
+}
+
+fn compare_tile(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    inputs: TerrainTileInputs<'_>,
+    config: TerrainHeightConfig,
+) -> (Vec<Output>, Divergence) {
+    let gpu = dispatch_tile(device, queue, inputs, config);
+    let cpu = generate_terrain_tile(inputs, config.validate().unwrap());
+    let divergence = assert_agreement(&gpu, &cpu.samples, inputs.address);
+    (gpu, divergence)
+}
+
+fn assert_agreement(
+    actual: &[Output],
+    expected: &[ScalarFieldSample3],
+    address: TileAddress,
+) -> Divergence {
+    let mut maximum = Divergence {
+        samples: actual.len(),
+        ..Divergence::default()
+    };
+    let spacing = vertex_spacing(address.level());
     for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
         let actual = sample(*actual);
         let value_difference = (actual.value - expected.value).abs();
-        let derivative_angle = derivative_angle(actual.derivative, expected.derivative);
-        maximum_value = maximum_value.max(value_difference);
-        maximum_angle = maximum_angle.max(derivative_angle);
+        let actual_derivative = actual.derivative * spacing;
+        let expected_derivative = expected.derivative * spacing;
+        let derivative_angle = derivative_angle(actual_derivative, expected_derivative);
+        let derivative_absolute = (actual_derivative - expected_derivative).length();
+        let minimum_magnitude = actual_derivative.length().min(expected_derivative.length());
+        maximum.value = maximum.value.max(value_difference);
+        if minimum_magnitude >= TERRAIN_WGSL_DERIVATIVE_MAGNITUDE_FLOOR {
+            maximum.derivative_angle = maximum.derivative_angle.max(derivative_angle);
+            assert!(
+                derivative_angle <= TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
+                "sample {index} derivative angle {derivative_angle:e} exceeds {} above the {} magnitude floor: GPU={actual:?}, CPU={expected:?}",
+                TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
+                TERRAIN_WGSL_DERIVATIVE_MAGNITUDE_FLOOR,
+            );
+        } else {
+            maximum.derivative_absolute = maximum.derivative_absolute.max(derivative_absolute);
+            assert!(
+                derivative_absolute <= TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE,
+                "sample {index} vertex-span derivative difference {derivative_absolute:e} exceeds {} below the {} magnitude floor: GPU={actual:?}, CPU={expected:?}",
+                TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE,
+                TERRAIN_WGSL_DERIVATIVE_MAGNITUDE_FLOOR,
+            );
+        }
         assert!(
             value_difference <= TERRAIN_WGSL_VALUE_TOLERANCE,
             "sample {index} value difference {value_difference:e} exceeds {}: GPU={actual:?}, CPU={expected:?}",
             TERRAIN_WGSL_VALUE_TOLERANCE,
         );
-        assert!(
-            derivative_angle <= TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
-            "sample {index} derivative angle {derivative_angle:e} exceeds {}: GPU={actual:?}, CPU={expected:?}",
-            TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE,
-        );
     }
-    (maximum_value, maximum_angle)
+    maximum
 }
 
 fn varying_bake() -> TerrainControlBake {
@@ -228,7 +337,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     if (id.x >= {TERRAIN_TILE_SAMPLE_COUNT}u) {{ return; }}
     let local = vec2(id.x % {TILE_VERTICES}u, id.x / {TILE_VERTICES}u);
     let direction = cubesphere_tile_direction(vec4({face}u, {level}u, {x}u, {y}u), local);
-    let height = terrain_height_gpu(direction);
+    let height = terrain_height_gpu(direction, {level}u);
     output[id.x] = vec4(height.value, height.derivative);
 }}
 "#,

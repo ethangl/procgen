@@ -3,15 +3,14 @@
 use std::{error::Error, fmt};
 
 use procgen_core::{ScalarFieldSample3, Vec3};
-use procgen_cubesphere::{TILE_QUADS, TILE_VERTICES, TileAddress};
+use procgen_cubesphere::{TILE_QUADS, TILE_VERTICES, TileAddress, vertex_spacing};
 use rayon::prelude::*;
 
 use crate::{
-    TerrainAbyssalConfig, TerrainControlBake, TerrainDetailConfig, TerrainHeightConfig,
-    TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput, TerrainStampProfiles,
-    ValidatedTerrainHeightConfig, terrain_height,
+    TerrainControlBake, TerrainHeightInputs, TerrainNoiseKeys, TerrainStampInput,
+    TerrainStampProfiles, ValidatedTerrainHeightConfig,
+    height::{TerrainHeightLod, terrain_height_with_lod},
 };
-use procgen_noise::OctaveConfig;
 
 /// Number of core samples in one 65 by 65 terrain tile.
 pub const TERRAIN_TILE_SAMPLE_COUNT: usize = (TILE_VERTICES * TILE_VERTICES) as usize;
@@ -19,36 +18,10 @@ pub const TERRAIN_TILE_SAMPLE_COUNT: usize = (TILE_VERTICES * TILE_VERTICES) as 
 const TANGENT_RELATIVE_TOLERANCE: f32 = 2.0e-5;
 const CULL_ROUNDING_MARGIN: f32 = 16.0 * f32::EPSILON;
 
-/// Explicit height configuration for the slice-12 fixed level-4 consumer.
-///
-/// Four detail octaves and three abyssal octaves stop at wavelengths supported
-/// by the roughly 10 km level-4 vertex spacing. This is fixed policy, not the
-/// octave fading or dynamic LOD selection introduced by later slices.
-pub fn fixed_level_4_height_config() -> TerrainHeightConfig {
-    let default = TerrainHeightConfig::default();
-    TerrainHeightConfig {
-        detail: TerrainDetailConfig {
-            octaves: OctaveConfig {
-                octaves: 4,
-                ..default.detail.octaves
-            },
-            ..default.detail
-        },
-        abyssal: TerrainAbyssalConfig {
-            octaves: OctaveConfig {
-                octaves: 3,
-                ..default.abyssal.octaves
-            },
-            ..default.abyssal
-        },
-        ..default
-    }
-}
-
 /// Borrowed inputs for one canonical CPU terrain tile.
 ///
-/// Octave selection is explicit in `config`; this stage does not infer an
-/// octave count from the address or fade octaves between levels.
+/// Octave selection and the newest-octave fade are derived from the address's
+/// level and the validated height configuration.
 #[derive(Clone, Copy, Debug)]
 pub struct TerrainTileInputs<'a> {
     pub address: TileAddress,
@@ -75,7 +48,7 @@ impl TerrainTile {
         self.samples.get((y * TILE_VERTICES + x) as usize).copied()
     }
 
-    /// Checks the shape, normalized finite heights, and tangent derivatives.
+    /// Checks the shape, finite heights, and tangent derivatives.
     pub fn validate(&self, address: TileAddress) -> Result<(), TerrainTileError> {
         if self.samples.len() != TERRAIN_TILE_SAMPLE_COUNT {
             return Err(TerrainTileError::InvalidShape);
@@ -83,9 +56,6 @@ impl TerrainTile {
         for (sample, direction) in self.samples.iter().zip(tile_directions(address)) {
             if !sample.value.is_finite() || !sample.derivative.is_finite() {
                 return Err(TerrainTileError::NonFiniteSample);
-            }
-            if !(0.0..=1.0).contains(&sample.value) {
-                return Err(TerrainTileError::HeightOutOfRange);
             }
             let tangent_error = sample.derivative.dot(direction).abs();
             let allowed = TANGENT_RELATIVE_TOLERANCE * (1.0 + sample.derivative.length());
@@ -101,7 +71,6 @@ impl TerrainTile {
 pub enum TerrainTileError {
     InvalidShape,
     NonFiniteSample,
-    HeightOutOfRange,
     NonTangentDerivative,
 }
 
@@ -115,9 +84,6 @@ impl fmt::Display for TerrainTileError {
                 )
             }
             Self::NonFiniteSample => formatter.write_str("terrain tile samples must be finite"),
-            Self::HeightOutOfRange => {
-                formatter.write_str("terrain tile heights must be normalized")
-            }
             Self::NonTangentDerivative => {
                 formatter.write_str("terrain tile derivatives must be tangent to the sphere")
             }
@@ -136,6 +102,7 @@ pub fn generate_terrain_tile(
     inputs: TerrainTileInputs<'_>,
     config: ValidatedTerrainHeightConfig,
 ) -> TerrainTile {
+    let lod = lod_for_tile_level(config, inputs.address.level());
     let directions: Vec<_> = tile_directions(inputs.address).collect();
     let center = vertex_direction(inputs.address, TILE_QUADS / 2, TILE_QUADS / 2);
     let stamps = cull_stamps(center, &directions, inputs.stamps, config.stamps);
@@ -143,7 +110,7 @@ pub fn generate_terrain_tile(
         .par_iter()
         .with_min_len(TILE_VERTICES as usize)
         .map(|&direction| {
-            terrain_height(
+            terrain_height_with_lod(
                 TerrainHeightInputs {
                     direction,
                     controls: inputs.controls,
@@ -151,12 +118,27 @@ pub fn generate_terrain_tile(
                     noise_keys: inputs.noise_keys,
                 },
                 config,
+                lod,
             )
         })
         .collect();
     let tile = TerrainTile { samples };
     debug_assert_eq!(tile.validate(inputs.address), Ok(()));
     tile
+}
+
+fn lod_for_tile_level(config: ValidatedTerrainHeightConfig, level: u8) -> TerrainHeightLod {
+    let minimum_wavelength = 2.0 * vertex_spacing(level);
+    TerrainHeightLod {
+        detail: config
+            .detail_octaves()
+            .band_for_minimum_wavelength(minimum_wavelength)
+            .expect("cube-sphere vertex spacing is positive"),
+        abyssal: config
+            .abyssal_octaves()
+            .band_for_minimum_wavelength(minimum_wavelength)
+            .expect("cube-sphere vertex spacing is positive"),
+    }
 }
 
 /// Yields the tile's vertex directions in row-major order, from lower left.
@@ -200,7 +182,7 @@ mod tests {
     use super::*;
     use crate::{
         TerrainAbyssalConfig, TerrainCellControls, TerrainCoastConfig, TerrainDetailConfig,
-        TerrainHeightConfig, TerrainStampKind,
+        TerrainHeightConfig, TerrainStampKind, terrain_height,
         test_support::{constant_bake, height_inputs, stamp, tile_inputs},
     };
     use procgen_cubesphere::CubeFace;
@@ -262,13 +244,57 @@ mod tests {
         assert_eq!(
             pinned,
             [
-                [0x3F1E_53A0, 0x3F00_0318, 0xBDAD_A632, 0xBD60_E2FD],
-                [0x3F1D_D4B4, 0xBD67_EB95, 0x3F93_CA14, 0x3ED6_5FF4],
-                [0x3F1E_4F1A, 0x3E82_B1B4, 0xBF63_FFC7, 0xBEA0_4836],
-                [0x3F1D_7839, 0x3D0A_CAEC, 0x3F24_115F, 0x3E45_5F89],
-                [0x3F1E_EAFF, 0xBF83_169D, 0xBD8A_4FBF, 0x3DA4_9EF0],
+                [0x3F1E_2D5F, 0xBF0B_0283, 0xBEC4_DCE6, 0xBDE3_1F2C],
+                [0x3F1D_AD8E, 0x3E5B_CB41, 0x3FAC_4BB3, 0x3EEB_C509],
+                [0x3F1E_B380, 0x3EEC_9685, 0xBF7B_6F15, 0xBEB7_93AE],
+                [0x3F1D_6BC9, 0x3E1D_B017, 0x3F4E_8C33, 0x3E72_E021],
+                [0x3F1E_E819, 0xBF97_23C5, 0xBF5C_CA73, 0xBE14_D124],
             ]
         );
+    }
+
+    #[test]
+    fn tile_levels_select_supported_octaves_and_fade_parent_child_transitions() {
+        let config = TerrainHeightConfig::default().validate().unwrap();
+        let level_one = lod_for_tile_level(config, 1);
+        let level_four = lod_for_tile_level(config, 4);
+        let level_twelve = lod_for_tile_level(config, 12);
+        assert_eq!(
+            (
+                level_one.detail.octave_count(),
+                level_one.abyssal.octave_count()
+            ),
+            (1, 0)
+        );
+        assert_eq!(
+            (
+                level_four.detail.octave_count(),
+                level_four.abyssal.octave_count()
+            ),
+            (4, 3)
+        );
+        assert_eq!(
+            (
+                level_twelve.detail.octave_count(),
+                level_twelve.abyssal.octave_count()
+            ),
+            (11, 6)
+        );
+        assert_eq!(
+            level_one.detail.newest_weight(),
+            level_four.detail.newest_weight()
+        );
+        assert!((0.0..1.0).contains(&level_four.detail.newest_weight()));
+        assert_eq!(level_twelve.detail.newest_weight(), 1.0);
+        for child_level in 2..=10 {
+            let parent = lod_for_tile_level(config, child_level - 1);
+            let child = lod_for_tile_level(config, child_level);
+            assert_eq!(
+                child.detail.octave_count(),
+                parent.detail.octave_count() + 1
+            );
+            assert_eq!(child.detail.newest_weight(), parent.detail.newest_weight());
+        }
     }
 
     #[test]
@@ -382,11 +408,6 @@ mod tests {
         assert_eq!(
             tile.validate(address),
             Err(TerrainTileError::NonFiniteSample)
-        );
-        *tile.samples.last_mut().unwrap() = ScalarFieldSample3::constant(1.1);
-        assert_eq!(
-            tile.validate(address),
-            Err(TerrainTileError::HeightOutOfRange)
         );
         tile.samples.fill(ScalarFieldSample3::default());
         tile.samples[0].derivative = address.grid_vertex(0, 0).unwrap().direction();
