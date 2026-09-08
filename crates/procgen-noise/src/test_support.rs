@@ -1,6 +1,6 @@
 use procgen_core::Vec3;
 
-use crate::ScalarFieldSample3;
+use procgen_core::ScalarFieldSample3;
 
 pub(crate) fn central_difference(
     position: Vec3,

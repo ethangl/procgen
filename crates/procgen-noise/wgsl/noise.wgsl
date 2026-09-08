@@ -2,7 +2,7 @@
 // Keep expression order aligned with gradient.rs and fractal.rs. Agreement is
 // dispatched through wgpu by the test-only procgen-gpu-tests crate.
 
-struct NoiseSample3 {
+struct ScalarFieldSample3 {
     value: f32,
     derivative: vec3<f32>,
 }
@@ -58,7 +58,7 @@ fn axis_weights(value: f32) -> AxisWeights {
     );
 }
 
-fn gradient_noise_3d(key: u32, position: vec3<f32>) -> NoiseSample3 {
+fn gradient_noise_3d(key: u32, position: vec3<f32>) -> ScalarFieldSample3 {
     let cell = vec3<i32>(floor(position));
     let offset = position - vec3<f32>(cell);
     let wx = axis_weights(offset.x);
@@ -98,25 +98,25 @@ fn gradient_noise_3d(key: u32, position: vec3<f32>) -> NoiseSample3 {
             }
         }
     }
-    return NoiseSample3(value, derivative);
+    return ScalarFieldSample3(value, derivative);
 }
 
-fn scale_sample(sample: NoiseSample3, scale: f32) -> NoiseSample3 {
-    return NoiseSample3(sample.value * scale, sample.derivative * scale);
+fn scale_sample(sample: ScalarFieldSample3, scale: f32) -> ScalarFieldSample3 {
+    return ScalarFieldSample3(sample.value * scale, sample.derivative * scale);
 }
 
-fn add_sample(left: NoiseSample3, right: NoiseSample3) -> NoiseSample3 {
-    return NoiseSample3(left.value + right.value, left.derivative + right.derivative);
+fn add_sample(left: ScalarFieldSample3, right: ScalarFieldSample3) -> ScalarFieldSample3 {
+    return ScalarFieldSample3(left.value + right.value, left.derivative + right.derivative);
 }
 
-fn octave_sample(key: u32, position: vec3<f32>, frequency: f32) -> NoiseSample3 {
+fn octave_sample(key: u32, position: vec3<f32>, frequency: f32) -> ScalarFieldSample3 {
     var sample = gradient_noise_3d(key, position * frequency);
     sample.derivative *= frequency;
     return sample;
 }
 
-fn fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32) -> NoiseSample3 {
-    var result = NoiseSample3(0.0, vec3(0.0));
+fn fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32) -> ScalarFieldSample3 {
+    var result = ScalarFieldSample3(0.0, vec3(0.0));
     var frequency = initial_frequency;
     var amplitude = 1.0;
     for (var octave = 0u; octave < octaves; octave++) {
@@ -127,9 +127,9 @@ fn fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, l
     return result;
 }
 
-fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32) -> NoiseSample3 {
-    var result = NoiseSample3(0.0, vec3(0.0));
-    var weight = NoiseSample3(1.0, vec3(0.0));
+fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, ridge_offset: f32, ridge_gain: f32) -> ScalarFieldSample3 {
+    var result = ScalarFieldSample3(0.0, vec3(0.0));
+    var weight = ScalarFieldSample3(1.0, vec3(0.0));
     var frequency = initial_frequency;
     var amplitude = 1.0;
     for (var octave = 0u; octave < octaves; octave++) {
@@ -141,8 +141,8 @@ fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_f
             absolute_derivative = -sample.derivative;
         }
         let ridge = ridge_offset - abs(sample.value);
-        let signal = NoiseSample3(ridge * ridge, -absolute_derivative * (2.0 * ridge));
-        let weighted = NoiseSample3(
+        let signal = ScalarFieldSample3(ridge * ridge, -absolute_derivative * (2.0 * ridge));
+        let weighted = ScalarFieldSample3(
             signal.value * weight.value,
             signal.derivative * weight.value + weight.derivative * signal.value,
         );
@@ -152,7 +152,7 @@ fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_f
         if (next_weight.value > 0.0 && next_weight.value < 1.0) {
             weight = next_weight;
         } else {
-            weight = NoiseSample3(clamp(next_weight.value, 0.0, 1.0), vec3(0.0));
+            weight = ScalarFieldSample3(clamp(next_weight.value, 0.0, 1.0), vec3(0.0));
         }
         frequency *= lacunarity;
         amplitude *= gain;
@@ -160,8 +160,8 @@ fn ridged_multifractal_3d(key: u32, position: vec3<f32>, octaves: u32, initial_f
     return result;
 }
 
-fn derivative_damped_fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32) -> NoiseSample3 {
-    var result = NoiseSample3(0.0, vec3(0.0));
+fn derivative_damped_fbm_3d(key: u32, position: vec3<f32>, octaves: u32, initial_frequency: f32, lacunarity: f32, gain: f32, damping: f32) -> ScalarFieldSample3 {
+    var result = ScalarFieldSample3(0.0, vec3(0.0));
     var frequency = initial_frequency;
     var amplitude = 1.0;
     for (var octave = 0u; octave < octaves; octave++) {

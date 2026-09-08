@@ -1,9 +1,9 @@
-//! Bounded coastline domain warp and its precomputed derivative transform.
+//! Coast taper, bounded domain warp, and their derivative propagation.
 
 use std::{error::Error, fmt};
 
 use procgen_core::{ScalarFieldSample3, Vec3};
-use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, gradient_noise_3d_from_key};
+use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, gradient_noise_3d};
 use procgen_tectonics::SEA_LEVEL;
 
 const SQRT_3: f32 = 1.732_050_8;
@@ -74,8 +74,7 @@ pub(crate) fn coast_warp(
     weight: ScalarFieldSample3,
     config: TerrainCoastConfig,
 ) -> DomainWarp {
-    let samples =
-        keys.map(|key| gradient_noise_3d_from_key(key, direction * config.warp_frequency));
+    let samples = keys.map(|key| gradient_noise_3d(key, direction * config.warp_frequency));
     let raw = Vec3::new(samples[0].value, samples[1].value, samples[2].value);
     let raw_derivatives = samples.map(|sample| sample.derivative * config.warp_frequency);
     let tangent = raw - direction * raw.dot(direction);
@@ -111,11 +110,7 @@ pub(crate) fn coast_taper(base: ScalarFieldSample3, half_width: f32) -> ScalarFi
         value: base.value - SEA_LEVEL,
         derivative: base.derivative,
     };
-    let distance = if signed.value > 0.0 {
-        signed
-    } else {
-        signed * -1.0
-    };
+    let distance = if signed.value > 0.0 { signed } else { -signed };
     if distance.value >= half_width {
         return ScalarFieldSample3::constant(1.0);
     }

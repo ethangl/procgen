@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign, Mul, Sub};
+use std::ops::{Add, AddAssign, Mul, Neg, Sub};
 
 use crate::Vec3;
 
@@ -61,10 +61,22 @@ impl Mul<f32> for ScalarFieldSample3 {
 impl Mul for ScalarFieldSample3 {
     type Output = Self;
 
+    /// Multiplies scalar fields using the product rule for their derivatives.
     fn mul(self, rhs: Self) -> Self::Output {
         Self {
             value: self.value * rhs.value,
             derivative: self.derivative * rhs.value + rhs.derivative * self.value,
+        }
+    }
+}
+
+impl Neg for ScalarFieldSample3 {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            value: -self.value,
+            derivative: -self.derivative,
         }
     }
 }
@@ -96,6 +108,13 @@ mod tests {
             ScalarFieldSample3 {
                 value: -1.0,
                 derivative: Vec3::new(-3.0, -3.0, -3.0),
+            }
+        );
+        assert_eq!(
+            -left,
+            ScalarFieldSample3 {
+                value: -2.0,
+                derivative: Vec3::new(-1.0, -2.0, -3.0),
             }
         );
     }

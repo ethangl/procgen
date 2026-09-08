@@ -6,12 +6,11 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use procgen_core::{HASH_U32_TEST_VECTORS, Vec3};
+use procgen_core::{HASH_U32_TEST_VECTORS, ScalarFieldSample3, Vec3};
 use procgen_noise::{
     DerivativeDampedConfig, NOISE_DERIVATIVE_ANGLE_TOLERANCE, NOISE_VALUE_TOLERANCE, OctaveConfig,
-    OctaveGain, RidgedMultifractalConfig, ScalarFieldSample3, Validated, WGSL_SOURCE,
-    derivative_damped_fbm_3d, fbm_3d, fold_seed_u64_to_u32, gradient_noise_3d, lattice_gradient_3d,
-    ridged_multifractal_3d,
+    OctaveGain, RidgedMultifractalConfig, Validated, WGSL_SOURCE, derivative_damped_fbm_3d, fbm_3d,
+    fold_seed_u64_to_u32, gradient_noise_3d, lattice_gradient_3d, ridged_multifractal_3d,
 };
 use wgpu::util::DeviceExt;
 
@@ -128,18 +127,18 @@ impl NoiseKind {
 
     fn canonical_sample(
         self,
-        seed: u64,
+        key: u32,
         position: Vec3,
         parameters: NoiseParameters,
     ) -> ScalarFieldSample3 {
         match self {
-            Self::Basis => gradient_noise_3d(seed, position),
-            Self::Fbm => fbm_3d(seed, position, parameters.fbm(), parameters.gain()),
+            Self::Basis => gradient_noise_3d(key, position),
+            Self::Fbm => fbm_3d(key, position, parameters.fbm(), parameters.gain()),
             Self::Ridged => {
-                ridged_multifractal_3d(seed, position, parameters.ridged(), parameters.gain())
+                ridged_multifractal_3d(key, position, parameters.ridged(), parameters.gain())
             }
             Self::Damped => {
-                derivative_damped_fbm_3d(seed, position, parameters.damped(), parameters.gain())
+                derivative_damped_fbm_3d(key, position, parameters.damped(), parameters.gain())
             }
         }
     }
@@ -194,13 +193,14 @@ impl Case {
         position: Vec3,
         parameters: NoiseParameters,
     ) -> Self {
+        let key = fold_seed_u64_to_u32(seed);
         Self::Noise {
             label,
-            key: fold_seed_u64_to_u32(seed),
+            key,
             kind,
             position,
             parameters,
-            expected: kind.canonical_sample(seed, position, parameters),
+            expected: kind.canonical_sample(key, position, parameters),
         }
     }
 
@@ -501,7 +501,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     let input = inputs[id.x];
     var hash = 0u;
     var gradient = vec4(0.0);
-    var sample = NoiseSample3(0.0, vec3(0.0));
+    var sample = ScalarFieldSample3(0.0, vec3(0.0));
     if (input.mode == {MODE_CORE_HASH}u) {{
         hash = hash_u32(input.words.x, input.words.y, input.words.z, input.words.w);
     }} else if (input.mode == {MODE_LATTICE_GRADIENT}u) {{

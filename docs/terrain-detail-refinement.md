@@ -135,7 +135,7 @@ support radius, so spatial culling cannot introduce a height or normal seam.
 The CPU height evaluator returns `procgen_core::ScalarFieldSample3`, the shared
 backend-neutral scalar value and three-dimensional derivative carried through
 noise, controls, coast behavior, and stamps. Callers construct
-`TerrainNoiseSeeds` once from the explicit `u64` terrain seed and reuse its
+`TerrainNoiseKeys` once from the explicit `u64` terrain seed and reuse its
 pre-folded field keys across every vertex in a tile.
 
 ## Determinism
@@ -148,10 +148,10 @@ bit-exact across x86 and ARM, so an export that must be reproducible anywhere
 runs on the CPU. GPU paths exist for speed and must agree with the CPU within
 named value and derivative-angle tolerances.
 
-- Lattice hashing is integer-only. Workspace-facing noise APIs retain the
-  existing `u64` seed convention, while WGSL has no 64-bit integers.
-  `procgen-noise` therefore owns one named conversion that hashes both 32-bit
-  halves of the seed into a `u32` lattice key. This is deliberately a
+- Lattice hashing is integer-only. Noise samplers accept the same `u32` field
+  keys used by WGSL and CUDA. `procgen-noise` owns one named host conversion
+  that hashes both 32-bit halves of a workspace-standard `u64` seed into that
+  key. This is deliberately a
   many-to-one fold: all seed bits influence the result, but noise has a 32-bit
   field-key namespace and distinct `u64` seeds are not guaranteed to select
   distinct fields. `procgen-noise` owns the fold, and terrain derives and folds

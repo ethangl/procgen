@@ -11,8 +11,8 @@ use procgen_core::{
 };
 use procgen_noise::{
     DerivativeDampedConfig, FractalParameterError, OctaveConfig, OctaveGain,
-    RidgedMultifractalConfig, Validated, derivative_damped_fbm_3d_from_key, fold_seed_u64_to_u32,
-    ridged_multifractal_3d_from_key,
+    RidgedMultifractalConfig, Validated, derivative_damped_fbm_3d, fold_seed_u64_to_u32,
+    ridged_multifractal_3d,
 };
 
 use crate::{
@@ -103,7 +103,8 @@ impl Default for TerrainHeightConfig {
 impl TerrainHeightConfig {
     /// Validates structural parameters once before repeated point evaluation.
     pub fn validate(self) -> Result<ValidatedTerrainHeightConfig, TerrainHeightError> {
-        let (detail, ridged) = self.detail.validate()?;
+        let detail = self.detail.damped_config().validate()?;
+        let ridged = self.detail.ridged_config().validate()?;
         let abyssal = self.abyssal.validate()?;
         self.coast.validate()?;
         self.stamps.validate()?;
@@ -119,28 +120,19 @@ impl TerrainHeightConfig {
 }
 
 impl TerrainDetailConfig {
-    fn validate(
-        self,
-    ) -> Result<
-        (
-            Validated<DerivativeDampedConfig>,
-            Validated<RidgedMultifractalConfig>,
-        ),
-        FractalParameterError,
-    > {
-        Ok((
-            DerivativeDampedConfig {
-                octaves: self.octaves,
-                damping: self.derivative_damping,
-            }
-            .validate()?,
-            RidgedMultifractalConfig {
-                octaves: self.octaves,
-                ridge_offset: self.ridge_offset,
-                ridge_gain: self.ridge_gain,
-            }
-            .validate()?,
-        ))
+    fn damped_config(self) -> DerivativeDampedConfig {
+        DerivativeDampedConfig {
+            octaves: self.octaves,
+            damping: self.derivative_damping,
+        }
+    }
+
+    fn ridged_config(self) -> RidgedMultifractalConfig {
+        RidgedMultifractalConfig {
+            octaves: self.octaves,
+            ridge_offset: self.ridge_offset,
+            ridge_gain: self.ridge_gain,
+        }
     }
 }
 
@@ -216,7 +208,7 @@ pub struct TerrainHeightInputs<'a> {
     pub direction: Vec3,
     pub controls: &'a TerrainControlBake,
     pub stamps: &'a [TerrainStampInput],
-    pub noise_seeds: TerrainNoiseSeeds,
+    pub noise_keys: TerrainNoiseKeys,
 }
 
 /// Evaluates canonical CPU terrain detail at one unit direction.
@@ -241,7 +233,7 @@ pub fn terrain_height(
         direction,
         controls,
         stamps,
-        noise_seeds,
+        noise_keys,
     } = inputs;
     assert!(direction.is_finite(), "terrain direction must be finite");
     assert!(
@@ -253,7 +245,7 @@ pub fn terrain_height(
     let coast_taper = coast_taper(original.base_elevation, config.coast.half_width);
     let warp = coast_warp(
         direction,
-        noise_seeds.coast_warp,
+        noise_keys.coast_warp,
         ScalarFieldSample3::constant(1.0) - coast_taper,
         config.coast,
     );
@@ -261,22 +253,22 @@ pub fn terrain_height(
     let gain = OctaveGain::new(controls.octave_gain.value)
         .expect("a terrain-control bake must preserve octave gain in [0, 1]");
 
-    let fbm = warp.pullback(derivative_damped_fbm_3d_from_key(
-        noise_seeds.detail,
+    let fbm = warp.pullback(derivative_damped_fbm_3d(
+        noise_keys.detail,
         warp.direction,
         config.detail,
         gain,
     ));
-    let ridged = warp.pullback(ridged_multifractal_3d_from_key(
-        noise_seeds.detail,
+    let ridged = warp.pullback(ridged_multifractal_3d(
+        noise_keys.detail,
         warp.direction,
         config.ridged,
         gain,
     ));
     let blended = fbm + (ridged - fbm) * controls.ridge_weight;
 
-    let abyssal = warp.pullback(derivative_damped_fbm_3d_from_key(
-        noise_seeds.abyssal,
+    let abyssal = warp.pullback(derivative_damped_fbm_3d(
+        noise_keys.abyssal,
         warp.direction,
         config.abyssal,
         gain,
@@ -302,13 +294,13 @@ pub fn terrain_height(
 
 /// Noise keys derived once from the explicit terrain seed for repeated sampling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerrainNoiseSeeds {
+pub struct TerrainNoiseKeys {
     detail: u32,
     abyssal: u32,
     coast_warp: [u32; 3],
 }
 
-impl TerrainNoiseSeeds {
+impl TerrainNoiseKeys {
     pub fn new(seed: u64) -> Self {
         let derive =
             |stream| fold_seed_u64_to_u32(RandomStream::new(seed, stream).sample_u64(0, 0));
@@ -406,7 +398,7 @@ mod tests {
             direction,
             controls,
             stamps,
-            noise_seeds: TerrainNoiseSeeds::new(SEED),
+            noise_keys: TerrainNoiseKeys::new(SEED),
         }
     }
 
@@ -479,7 +471,7 @@ mod tests {
             sample,
             terrain_height(
                 TerrainHeightInputs {
-                    noise_seeds: TerrainNoiseSeeds::new(SEED + 1),
+                    noise_keys: TerrainNoiseKeys::new(SEED + 1),
                     ..inputs(direction(), &bake, &stamps)
                 },
                 TerrainHeightConfig::default().validate().unwrap(),
@@ -510,9 +502,9 @@ mod tests {
         let validated = config.validate().unwrap();
         let direction = direction();
         let gain = OctaveGain::new(0.5).unwrap();
-        let seed = TerrainNoiseSeeds::new(SEED).detail;
-        let fbm = derivative_damped_fbm_3d_from_key(seed, direction, validated.detail, gain);
-        let ridged = ridged_multifractal_3d_from_key(seed, direction, validated.ridged, gain);
+        let key = TerrainNoiseKeys::new(SEED).detail;
+        let fbm = derivative_damped_fbm_3d(key, direction, validated.detail, gain);
+        let ridged = ridged_multifractal_3d(key, direction, validated.ridged, gain);
         for (weight, expected) in [(0.0, fbm.value), (1.0, ridged.value)] {
             let bake = constant_bake(TerrainCellControls {
                 base_elevation: 0.7,
@@ -579,7 +571,7 @@ mod tests {
         ] {
             let warp = coast_warp(
                 direction,
-                TerrainNoiseSeeds::new(SEED).coast_warp,
+                TerrainNoiseKeys::new(SEED).coast_warp,
                 ScalarFieldSample3::constant(1.0),
                 config.coast,
             );
@@ -619,22 +611,17 @@ mod tests {
             base_elevation: 0.25,
             ..TerrainCellControls::default()
         });
-        let stamps: Vec<_> = [
-            TerrainStampKind::Hotspot,
-            TerrainStampKind::VolcanicArc,
-            TerrainStampKind::OceanicSeamount,
-            TerrainStampKind::OceanicAbyssalHill,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(source_index, kind)| TerrainStampInput {
-            cell: 0,
-            kind,
-            source_index,
-            position: direction,
-            strength: 0.1,
-        })
-        .collect();
+        let stamps: Vec<_> = TerrainStampKind::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(source_index, kind)| TerrainStampInput {
+                cell: 0,
+                kind,
+                source_index,
+                position: direction,
+                strength: 0.1,
+            })
+            .collect();
         let expected = stamps.iter().fold(0.25, |height, stamp| {
             height + stamp_contribution(direction, *stamp, config.stamps.profile(stamp.kind)).value
         });

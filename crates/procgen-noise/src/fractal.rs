@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
-use procgen_core::Vec3;
+use procgen_core::{ScalarFieldSample3, Vec3};
 
-use crate::{ScalarFieldSample3, fold_seed_u64_to_u32, gradient::gradient_noise_3d_from_key};
+use crate::gradient::gradient_noise_3d;
 
 /// Maximum supported octave count for CPU fractal accumulation.
 pub const MAX_OCTAVES: u32 = 32;
@@ -151,7 +151,7 @@ struct Octave {
 
 impl Octave {
     fn sample(self, key: u32, position: Vec3) -> ScalarFieldSample3 {
-        let mut sample = gradient_noise_3d_from_key(key, position * self.frequency);
+        let mut sample = gradient_noise_3d(key, position * self.frequency);
         sample.derivative = sample.derivative * self.frequency;
         sample
     }
@@ -207,16 +207,6 @@ pub fn amplitude_sum(config: Validated<OctaveConfig>, gain: OctaveGain) -> f32 {
 /// amplitude by multiplying the returned sample, scaling value and derivative
 /// together.
 pub fn fbm_3d(
-    seed: u64,
-    position: Vec3,
-    config: Validated<OctaveConfig>,
-    gain: OctaveGain,
-) -> ScalarFieldSample3 {
-    fbm_3d_from_key(fold_seed_u64_to_u32(seed), position, config, gain)
-}
-
-/// Key-based form of [`fbm_3d`] for callers that precompute backend keys.
-pub fn fbm_3d_from_key(
     key: u32,
     position: Vec3,
     config: Validated<OctaveConfig>,
@@ -241,16 +231,6 @@ pub fn fbm_3d_from_key(
 /// of `abs` is defined as zero at exactly zero. Callers apply overall amplitude
 /// to the returned sample.
 pub fn ridged_multifractal_3d(
-    seed: u64,
-    position: Vec3,
-    config: Validated<RidgedMultifractalConfig>,
-    gain: OctaveGain,
-) -> ScalarFieldSample3 {
-    ridged_multifractal_3d_from_key(fold_seed_u64_to_u32(seed), position, config, gain)
-}
-
-/// Key-based form of [`ridged_multifractal_3d`] for repeated sampling.
-pub fn ridged_multifractal_3d_from_key(
     key: u32,
     position: Vec3,
     config: Validated<RidgedMultifractalConfig>,
@@ -310,16 +290,6 @@ pub fn ridged_multifractal_3d_from_key(
 /// adaptive damping weight itself is not included.
 /// Callers apply overall amplitude to the returned sample.
 pub fn derivative_damped_fbm_3d(
-    seed: u64,
-    position: Vec3,
-    config: Validated<DerivativeDampedConfig>,
-    gain: OctaveGain,
-) -> ScalarFieldSample3 {
-    derivative_damped_fbm_3d_from_key(fold_seed_u64_to_u32(seed), position, config, gain)
-}
-
-/// Key-based form of [`derivative_damped_fbm_3d`] for repeated sampling.
-pub fn derivative_damped_fbm_3d_from_key(
     key: u32,
     position: Vec3,
     config: Validated<DerivativeDampedConfig>,
@@ -359,10 +329,11 @@ fn validate_non_negative(name: &'static str, value: f32) -> Result<(), FractalPa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gradient_noise_3d;
     use crate::test_support::{central_difference, sample_bits};
+    use crate::{fold_seed_u64_to_u32, gradient_noise_3d};
 
     const SEED: u64 = 0x0123_4567_89AB_CDEF;
+    const KEY: u32 = fold_seed_u64_to_u32(SEED);
     const POSITION: Vec3 = Vec3::new(0.371, -1.117, 2.053);
 
     fn octave_config(octaves: u32) -> OctaveConfig {
@@ -402,9 +373,9 @@ mod tests {
 
     #[test]
     fn stable_vectors() {
-        let fbm = fbm_3d(SEED, POSITION, valid_octaves(5), gain());
-        let ridged = ridged_multifractal_3d(SEED, POSITION, valid_ridged(5, 2.0), gain());
-        let damped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 0.75), gain());
+        let fbm = fbm_3d(KEY, POSITION, valid_octaves(5), gain());
+        let ridged = ridged_multifractal_3d(KEY, POSITION, valid_ridged(5, 2.0), gain());
+        let damped = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.75), gain());
 
         assert_eq!(
             sample_bits(fbm),
@@ -425,30 +396,30 @@ mod tests {
         let zero = valid_octaves(0);
         assert_eq!(amplitude_sum(zero, gain()).to_bits(), 0.0_f32.to_bits());
         assert_eq!(
-            fbm_3d(SEED, POSITION, zero, gain()),
+            fbm_3d(KEY, POSITION, zero, gain()),
             ScalarFieldSample3::default()
         );
         assert_eq!(
-            derivative_damped_fbm_3d(SEED, POSITION, valid_damped(0, 100.0), gain()),
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(0, 100.0), gain()),
             ScalarFieldSample3::default()
         );
         assert_eq!(
-            ridged_multifractal_3d(SEED, POSITION, valid_ridged(0, 2.0), gain()),
+            ridged_multifractal_3d(KEY, POSITION, valid_ridged(0, 2.0), gain()),
             ScalarFieldSample3::default()
         );
 
         let config = octave_config(1);
-        let basis = gradient_noise_3d(SEED, POSITION * config.frequency);
+        let basis = gradient_noise_3d(KEY, POSITION * config.frequency);
         let expected_fbm = ScalarFieldSample3 {
             value: basis.value,
             derivative: basis.derivative * config.frequency,
         };
         assert_eq!(
-            fbm_3d(SEED, POSITION, config.validate().unwrap(), gain()),
+            fbm_3d(KEY, POSITION, config.validate().unwrap(), gain()),
             expected_fbm
         );
         assert_eq!(
-            derivative_damped_fbm_3d(SEED, POSITION, valid_damped(1, 100.0), gain()),
+            derivative_damped_fbm_3d(KEY, POSITION, valid_damped(1, 100.0), gain()),
             expected_fbm
         );
     }
@@ -460,23 +431,23 @@ mod tests {
         let rough = OctaveGain::new(0.75).unwrap();
 
         assert_ne!(
-            fbm_3d(SEED, POSITION, config, smooth),
-            fbm_3d(SEED, POSITION, config, rough)
+            fbm_3d(KEY, POSITION, config, smooth),
+            fbm_3d(KEY, POSITION, config, rough)
         );
         assert_eq!(
-            fbm_3d(SEED, POSITION, valid_octaves(1), smooth),
-            fbm_3d(SEED, POSITION, valid_octaves(1), rough)
+            fbm_3d(KEY, POSITION, valid_octaves(1), smooth),
+            fbm_3d(KEY, POSITION, valid_octaves(1), rough)
         );
     }
 
     #[test]
     fn increasing_fbm_cutoff_adds_exactly_one_octave() {
         let config = octave_config(5);
-        let four_sample = fbm_3d(SEED, POSITION, valid_octaves(4), gain());
-        let five_sample = fbm_3d(SEED, POSITION, config.validate().unwrap(), gain());
+        let four_sample = fbm_3d(KEY, POSITION, valid_octaves(4), gain());
+        let five_sample = fbm_3d(KEY, POSITION, config.validate().unwrap(), gain());
         let fifth_frequency = config.frequency * config.lacunarity.powi(4);
         let fifth_amplitude = 0.5_f32.powi(4);
-        let fifth_basis = gradient_noise_3d(SEED, POSITION * fifth_frequency);
+        let fifth_basis = gradient_noise_3d(KEY, POSITION * fifth_frequency);
 
         assert_eq!(
             five_sample.value.to_bits(),
@@ -496,21 +467,21 @@ mod tests {
         let ridged = valid_ridged(4, 1.4);
 
         assert_derivative_matches(STEP, TOLERANCE, |position| {
-            fbm_3d(SEED, position, octaves, gain())
+            fbm_3d(KEY, position, octaves, gain())
         });
         assert_derivative_matches(STEP, TOLERANCE, |position| {
-            ridged_multifractal_3d(SEED, position, ridged, gain())
+            ridged_multifractal_3d(KEY, position, ridged, gain())
         });
     }
 
     #[test]
     fn zero_damping_matches_fbm_and_positive_damping_suppresses_later_octaves() {
-        let plain = fbm_3d(SEED, POSITION, valid_octaves(5), gain());
-        let undamped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 0.0), gain());
+        let plain = fbm_3d(KEY, POSITION, valid_octaves(5), gain());
+        let undamped = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.0), gain());
         assert_eq!(undamped, plain);
 
-        let first = fbm_3d(SEED, POSITION, valid_octaves(1), gain());
-        let damped = derivative_damped_fbm_3d(SEED, POSITION, valid_damped(5, 4.0), gain());
+        let first = fbm_3d(KEY, POSITION, valid_octaves(1), gain());
+        let damped = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 4.0), gain());
         assert!((damped.value - first.value).abs() < (plain.value - first.value).abs());
         assert!(
             (damped.derivative - first.derivative).length()
@@ -613,24 +584,24 @@ mod tests {
             Vec3::new(8.25, -13.5, 21.75),
         ];
         assert_ne!(
-            fbm_3d(SEED, POSITION, octaves, gain),
-            fbm_3d(SEED + 1, POSITION, octaves, gain)
+            fbm_3d(KEY, POSITION, octaves, gain),
+            fbm_3d(fold_seed_u64_to_u32(SEED + 1), POSITION, octaves, gain)
         );
 
         for position in positions {
             let samples = [
-                fbm_3d(SEED, position, octaves, gain),
-                ridged_multifractal_3d(SEED, position, ridged, gain),
-                derivative_damped_fbm_3d(SEED, position, damped, gain),
+                fbm_3d(KEY, position, octaves, gain),
+                ridged_multifractal_3d(KEY, position, ridged, gain),
+                derivative_damped_fbm_3d(KEY, position, damped, gain),
             ];
-            assert_eq!(samples[0], fbm_3d(SEED, position, octaves, gain));
+            assert_eq!(samples[0], fbm_3d(KEY, position, octaves, gain));
             assert_eq!(
                 samples[1],
-                ridged_multifractal_3d(SEED, position, ridged, gain)
+                ridged_multifractal_3d(KEY, position, ridged, gain)
             );
             assert_eq!(
                 samples[2],
-                derivative_damped_fbm_3d(SEED, position, damped, gain)
+                derivative_damped_fbm_3d(KEY, position, damped, gain)
             );
 
             for sample in samples {

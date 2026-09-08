@@ -15,6 +15,6 @@ pub use field::{
 };
 pub use height::{
     TerrainAbyssalConfig, TerrainDetailConfig, TerrainHeightConfig, TerrainHeightError,
-    TerrainHeightInputs, TerrainNoiseSeeds, ValidatedTerrainHeightConfig, terrain_height,
+    TerrainHeightInputs, TerrainNoiseKeys, ValidatedTerrainHeightConfig, terrain_height,
 };
 pub use stamp::{StampCap, TerrainStampError, TerrainStampProfile, TerrainStampProfiles};
