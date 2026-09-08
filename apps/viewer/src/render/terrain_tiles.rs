@@ -30,8 +30,8 @@ use procgen_terrain::{
 };
 
 /// Camera distance at or below which adjusted elevation uses fixed-level GPU tiles.
-pub const TERRAIN_TILE_ZOOM_THRESHOLD: f32 = 1.75;
-pub const TERRAIN_TILE_LEVEL: u8 = 4;
+const TERRAIN_TILE_ZOOM_THRESHOLD: f32 = 1.75;
+const TERRAIN_TILE_LEVEL: u8 = 4;
 
 const MAX_VISIBLE_TILES: usize = 512;
 const TERRAIN_SAMPLE_CAPACITY: usize = MAX_VISIBLE_TILES * TERRAIN_TILE_SAMPLE_COUNT;
@@ -83,7 +83,6 @@ struct TerrainGpuResources {
 
 #[derive(Resource)]
 struct TerrainTileAssets {
-    mesh: Handle<Mesh>,
     material: Handle<TerrainTileMaterial>,
 }
 
@@ -94,12 +93,7 @@ struct TerrainTileDispatch {
 }
 
 #[derive(Resource, Default)]
-struct TerrainTileEntities(Vec<Entity>);
-
-#[derive(Resource, Default)]
-struct TerrainCoverageState {
-    addresses: Vec<TileAddress>,
-}
+struct TerrainTileCoverage(Vec<(TileAddress, Entity)>);
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum TerrainTileMode {
@@ -121,8 +115,7 @@ impl Plugin for TerrainTileRenderPlugin {
             ExtractResourcePlugin::<TerrainGpuResources>::default(),
             ExtractResourcePlugin::<TerrainTileDispatch>::default(),
         ))
-        .init_resource::<TerrainTileEntities>()
-        .init_resource::<TerrainCoverageState>()
+        .init_resource::<TerrainTileCoverage>()
         .init_resource::<TerrainTileDispatch>()
         .init_resource::<TerrainTileMode>()
         .add_systems(Startup, initialize_grid_mesh)
@@ -156,14 +149,10 @@ pub(super) fn sync_mode(
     selection: Res<SurfaceSelection>,
     mut mode: ResMut<TerrainTileMode>,
 ) {
-    let next = if terrain_tiles_active(camera.translation.length(), selection.selected()) {
-        TerrainTileMode::Tiles
-    } else {
-        TerrainTileMode::Coarse
-    };
-    if *mode != next {
-        *mode = next;
-    }
+    mode.set_if_neq(terrain_tile_mode(
+        camera.translation.length(),
+        selection.selected(),
+    ));
 }
 
 fn initialize_grid_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
@@ -197,9 +186,7 @@ fn register_shaders(app: &mut App) {
 #[derive(SystemParam)]
 struct TerrainWorldAssets<'w, 's> {
     commands: Commands<'w, 's>,
-    grid: Res<'w, TerrainGridMesh>,
-    tile_entities: ResMut<'w, TerrainTileEntities>,
-    coverage: ResMut<'w, TerrainCoverageState>,
+    coverage: ResMut<'w, TerrainTileCoverage>,
     buffers: ResMut<'w, Assets<ShaderStorageBuffer>>,
     materials: ResMut<'w, Assets<TerrainTileMaterial>>,
 }
@@ -209,10 +196,9 @@ fn initialize_gpu_world(
     relief: Res<ReliefSettings>,
     mut assets: TerrainWorldAssets,
 ) {
-    for entity in assets.tile_entities.0.drain(..) {
+    for (_, entity) in assets.coverage.0.drain(..) {
         assets.commands.entity(entity).despawn();
     }
-    assets.coverage.addresses.clear();
 
     let controls = pack_control_bake(&world.terrain_control_bake);
     let mut stamps = pack_stamps(&world.terrain_controls.stamps);
@@ -276,10 +262,9 @@ fn initialize_gpu_world(
         addresses,
         samples,
     });
-    assets.commands.insert_resource(TerrainTileAssets {
-        mesh: assets.grid.0.clone(),
-        material,
-    });
+    assets
+        .commands
+        .insert_resource(TerrainTileAssets { material });
 }
 
 fn elevation_palette() -> TerrainElevationPalette {
@@ -294,7 +279,8 @@ fn elevation_palette() -> TerrainElevationPalette {
 #[derive(SystemParam)]
 struct TerrainCoverageAssets<'w, 's> {
     commands: Commands<'w, 's>,
-    tile_entities: ResMut<'w, TerrainTileEntities>,
+    grid: Res<'w, TerrainGridMesh>,
+    coverage: ResMut<'w, TerrainTileCoverage>,
     resources: ResMut<'w, TerrainGpuResources>,
     tile_assets: Res<'w, TerrainTileAssets>,
     buffers: ResMut<'w, Assets<ShaderStorageBuffer>>,
@@ -318,7 +304,6 @@ fn update_tile_coverage(
     camera: Single<&Transform, With<ViewerCamera>>,
     mode: Res<TerrainTileMode>,
     mut dispatch: ResMut<TerrainTileDispatch>,
-    mut coverage: ResMut<TerrainCoverageState>,
     mut assets: TerrainCoverageAssets,
 ) {
     let addresses = if *mode == TerrainTileMode::Tiles {
@@ -326,7 +311,14 @@ fn update_tile_coverage(
     } else {
         Vec::new()
     };
-    if coverage.addresses == addresses {
+    if assets.coverage.0.len() == addresses.len()
+        && assets
+            .coverage
+            .0
+            .iter()
+            .zip(&addresses)
+            .all(|((current, _), next)| current == next)
+    {
         return;
     }
     if !addresses.is_empty() {
@@ -350,16 +342,16 @@ fn update_tile_coverage(
             .addresses = address_buffer;
     }
 
-    for entity in assets.tile_entities.0.drain(..) {
+    for (_, entity) in assets.coverage.0.drain(..) {
         assets.commands.entity(entity).despawn();
     }
-    let mesh = assets.tile_assets.mesh.clone();
+    let mesh = assets.grid.0.clone();
     let material = assets.tile_assets.material.clone();
-    let entities = addresses
-        .iter()
+    let coverage = addresses
+        .into_iter()
         .enumerate()
-        .map(|(slot, _)| {
-            assets
+        .map(|(slot, address)| {
+            let entity = assets
                 .commands
                 .spawn((
                     Mesh3d(mesh.clone()),
@@ -367,22 +359,24 @@ fn update_tile_coverage(
                     MeshTag(slot as u32),
                     NoFrustumCulling,
                 ))
-                .id()
+                .id();
+            (address, entity)
         })
-        .collect();
-    assets.tile_entities.0 = entities;
-    let tile_count = addresses.len() as u32;
-    coverage.addresses = addresses;
+        .collect::<Vec<_>>();
+    let tile_count = coverage.len() as u32;
+    assets.coverage.0 = coverage;
     dispatch.tile_count = tile_count;
     dispatch.generation = dispatch.generation.wrapping_add(1);
 }
 
-pub(super) fn terrain_tiles_active(
-    camera_distance: f32,
-    selected: Option<DiagnosticLayer>,
-) -> bool {
-    camera_distance <= TERRAIN_TILE_ZOOM_THRESHOLD
+fn terrain_tile_mode(camera_distance: f32, selected: Option<DiagnosticLayer>) -> TerrainTileMode {
+    if camera_distance <= TERRAIN_TILE_ZOOM_THRESHOLD
         && selected == Some(DiagnosticLayer::IsostaticElevation)
+    {
+        TerrainTileMode::Tiles
+    } else {
+        TerrainTileMode::Coarse
+    }
 }
 
 fn tile_grid_mesh() -> Mesh {
@@ -457,19 +451,25 @@ mod tests {
 
     #[test]
     fn mode_only_replaces_final_adjusted_elevation_below_threshold() {
-        assert!(terrain_tiles_active(
-            TERRAIN_TILE_ZOOM_THRESHOLD,
-            Some(DiagnosticLayer::IsostaticElevation)
-        ));
-        assert!(!terrain_tiles_active(
-            TERRAIN_TILE_ZOOM_THRESHOLD + f32::EPSILON,
-            Some(DiagnosticLayer::IsostaticElevation)
-        ));
-        assert!(!terrain_tiles_active(
-            1.25,
-            Some(DiagnosticLayer::GeologicalElevation)
-        ));
-        assert!(!terrain_tiles_active(1.25, None));
+        assert_eq!(
+            terrain_tile_mode(
+                TERRAIN_TILE_ZOOM_THRESHOLD,
+                Some(DiagnosticLayer::IsostaticElevation)
+            ),
+            TerrainTileMode::Tiles
+        );
+        assert_eq!(
+            terrain_tile_mode(
+                TERRAIN_TILE_ZOOM_THRESHOLD + f32::EPSILON,
+                Some(DiagnosticLayer::IsostaticElevation)
+            ),
+            TerrainTileMode::Coarse
+        );
+        assert_eq!(
+            terrain_tile_mode(1.25, Some(DiagnosticLayer::GeologicalElevation)),
+            TerrainTileMode::Coarse
+        );
+        assert_eq!(terrain_tile_mode(1.25, None), TerrainTileMode::Coarse);
     }
 
     #[test]
@@ -557,8 +557,7 @@ mod tests {
             .init_asset::<ShaderStorageBuffer>()
             .init_asset::<TerrainTileMaterial>()
             .insert_resource(ReliefSettings::default())
-            .insert_resource(TerrainTileEntities::default())
-            .insert_resource(TerrainCoverageState::default())
+            .insert_resource(TerrainTileCoverage::default())
             .insert_resource(TerrainTileDispatch::default())
             .insert_resource(TerrainGridMesh(Handle::default()))
             .insert_resource(fixture(64, 70))
@@ -580,15 +579,11 @@ mod tests {
 
         let stale_address =
             TileAddress::new(CubeFace::PositiveZ, TERRAIN_TILE_LEVEL, 0, 0).unwrap();
-        app.world_mut()
-            .resource_mut::<TerrainCoverageState>()
-            .addresses
-            .push(stale_address);
         let stale_entity = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .resource_mut::<TerrainTileEntities>()
+            .resource_mut::<TerrainTileCoverage>()
             .0
-            .push(stale_entity);
+            .push((stale_address, stale_entity));
 
         app.insert_resource(fixture(64, 71));
         app.update();
@@ -605,12 +600,7 @@ mod tests {
                 second_tile_assets.material.id(),
             )
         );
-        assert!(
-            app.world()
-                .resource::<TerrainCoverageState>()
-                .addresses
-                .is_empty()
-        );
+        assert!(app.world().resource::<TerrainTileCoverage>().0.is_empty());
         assert!(app.world().get_entity(stale_entity).is_err());
     }
 }
