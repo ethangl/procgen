@@ -399,7 +399,7 @@ impl GeneratedWorld {
                 .segments
                 .iter()
                 .any(|segment| segment.overriding_plate >= self.plates.plate_count)
-            || Some(self.terrain_control_bake.resolution()) != control_face_resolution(cells)
+            || self.terrain_control_bake.resolution() != control_face_resolution(cells)?
         {
             return Err("generated world fields are internally inconsistent".into());
         }

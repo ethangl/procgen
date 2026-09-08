@@ -11,8 +11,7 @@ pub fn bake_terrain_controls(
     mesh: &SphereMesh,
     controls: &TerrainControls,
 ) -> Result<TerrainControlBake, BakeError> {
-    let resolution =
-        control_face_resolution(mesh.cell_count()).ok_or(BakeError::InvalidResolution)?;
+    let resolution = control_face_resolution(mesh.cell_count())?;
     let cells: Vec<_> = controls
         .cells
         .iter()
