@@ -1,11 +1,13 @@
 //! Bounded coastline domain warp and its precomputed derivative transform.
 
-use procgen_core::Vec3;
-use procgen_cubesphere::CubeFieldSample;
-use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, NoiseSample3, gradient_noise_3d};
+use std::{error::Error, fmt};
+
+use procgen_core::{ScalarFieldSample3, Vec3};
+use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, gradient_noise_3d_from_key};
 use procgen_tectonics::SEA_LEVEL;
 
-use crate::TerrainCellControls;
+const SQRT_3: f32 = 1.732_050_8;
+const GRADIENT_NOISE_VECTOR_BOUND: f32 = SQRT_3 * GRADIENT_NOISE_VALUE_BOUND;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainCoastConfig {
@@ -17,6 +19,40 @@ pub struct TerrainCoastConfig {
     pub maximum_warp: f32,
 }
 
+impl TerrainCoastConfig {
+    pub(crate) fn validate(self) -> Result<(), TerrainCoastError> {
+        if !self.half_width.is_finite() || self.half_width <= 0.0 {
+            return Err(TerrainCoastError::InvalidHalfWidth);
+        }
+        if !self.warp_frequency.is_finite() || self.warp_frequency <= 0.0 {
+            return Err(TerrainCoastError::InvalidWarpFrequency);
+        }
+        if !self.maximum_warp.is_finite() || !(0.0..=0.25).contains(&self.maximum_warp) {
+            return Err(TerrainCoastError::InvalidMaximumWarp);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerrainCoastError {
+    InvalidHalfWidth,
+    InvalidWarpFrequency,
+    InvalidMaximumWarp,
+}
+
+impl fmt::Display for TerrainCoastError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidHalfWidth => "terrain coast half-width is invalid",
+            Self::InvalidWarpFrequency => "terrain coast warp frequency is invalid",
+            Self::InvalidMaximumWarp => "terrain maximum coast warp is invalid",
+        })
+    }
+}
+
+impl Error for TerrainCoastError {}
+
 #[derive(Clone, Copy)]
 pub(crate) struct DomainWarp {
     pub(crate) direction: Vec3,
@@ -24,49 +60,26 @@ pub(crate) struct DomainWarp {
 }
 
 impl DomainWarp {
-    pub(crate) fn pullback(self, sample: NoiseSample3) -> NoiseSample3 {
-        NoiseSample3 {
+    pub(crate) fn pullback(self, sample: ScalarFieldSample3) -> ScalarFieldSample3 {
+        ScalarFieldSample3 {
             value: sample.value,
             derivative: transpose_product(self.jacobian_transpose, sample.derivative),
         }
-    }
-
-    pub(crate) fn pullback_controls(
-        self,
-        sample: CubeFieldSample<{ TerrainCellControls::<f32>::CHANNELS }>,
-    ) -> TerrainCellControls<NoiseSample3> {
-        TerrainCellControls::from_channels(std::array::from_fn(|channel| {
-            self.pullback(NoiseSample3 {
-                value: sample.values[channel],
-                derivative: sample.derivatives[channel],
-            })
-        }))
-    }
-}
-
-impl TerrainCellControls<NoiseSample3> {
-    pub(crate) fn from_cube_sample(
-        sample: CubeFieldSample<{ TerrainCellControls::<f32>::CHANNELS }>,
-    ) -> Self {
-        Self::from_channels(std::array::from_fn(|channel| NoiseSample3 {
-            value: sample.values[channel],
-            derivative: sample.derivatives[channel],
-        }))
     }
 }
 
 pub(crate) fn coast_warp(
     direction: Vec3,
-    seeds: [u64; 3],
-    weight: NoiseSample3,
+    keys: [u32; 3],
+    weight: ScalarFieldSample3,
     config: TerrainCoastConfig,
 ) -> DomainWarp {
-    let samples = seeds.map(|seed| gradient_noise_3d(seed, direction * config.warp_frequency));
+    let samples =
+        keys.map(|key| gradient_noise_3d_from_key(key, direction * config.warp_frequency));
     let raw = Vec3::new(samples[0].value, samples[1].value, samples[2].value);
     let raw_derivatives = samples.map(|sample| sample.derivative * config.warp_frequency);
     let tangent = raw - direction * raw.dot(direction);
-    let vector_bound = 3.0_f32.sqrt() * GRADIENT_NOISE_VALUE_BOUND;
-    let maximum_scale = config.maximum_warp / vector_bound;
+    let maximum_scale = config.maximum_warp / GRADIENT_NOISE_VECTOR_BOUND;
     let scale = maximum_scale * weight.value;
     let scale_derivative = weight.derivative * maximum_scale;
     let displaced = direction + tangent * scale;
@@ -74,9 +87,8 @@ pub(crate) fn coast_warp(
     let warped_direction = displaced * inverse_length;
     let raw_dot_source = raw.dot(direction);
     let projection_derivative = transpose_product(raw_derivatives, direction) + raw;
-    let jacobian_transpose = [Vec3::X, Vec3::Y, Vec3::Z].map(|derivative| {
-        let normalized =
-            (derivative - warped_direction * derivative.dot(warped_direction)) * inverse_length;
+    let jacobian_transpose = [Vec3::X, Vec3::Y, Vec3::Z].map(|axis| {
+        let normalized = (axis - warped_direction * axis.dot(warped_direction)) * inverse_length;
         normalized
             + scale_derivative * normalized.dot(tangent)
             + (transpose_product(raw_derivatives, normalized)
@@ -94,8 +106,8 @@ fn transpose_product(rows: [Vec3; 3], vector: Vec3) -> Vec3 {
     rows[0] * vector.x + rows[1] * vector.y + rows[2] * vector.z
 }
 
-pub(crate) fn coast_taper(base: NoiseSample3, half_width: f32) -> NoiseSample3 {
-    let signed = NoiseSample3 {
+pub(crate) fn coast_taper(base: ScalarFieldSample3, half_width: f32) -> ScalarFieldSample3 {
+    let signed = ScalarFieldSample3 {
         value: base.value - SEA_LEVEL,
         derivative: base.derivative,
     };
@@ -105,8 +117,8 @@ pub(crate) fn coast_taper(base: NoiseSample3, half_width: f32) -> NoiseSample3 {
         signed * -1.0
     };
     if distance.value >= half_width {
-        return NoiseSample3::constant(1.0);
+        return ScalarFieldSample3::constant(1.0);
     }
     let t = distance * half_width.recip();
-    t * t * (NoiseSample3::constant(3.0) - t * 2.0)
+    t * t * (ScalarFieldSample3::constant(3.0) - t * 2.0)
 }

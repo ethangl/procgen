@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use procgen_core::Vec3;
 
-use crate::{NoiseSample3, fold_seed_u64_to_u32, gradient::gradient_noise_3d_from_key};
+use crate::{ScalarFieldSample3, fold_seed_u64_to_u32, gradient::gradient_noise_3d_from_key};
 
 /// Maximum supported octave count for CPU fractal accumulation.
 pub const MAX_OCTAVES: u32 = 32;
@@ -150,7 +150,7 @@ struct Octave {
 }
 
 impl Octave {
-    fn sample(self, key: u32, position: Vec3) -> NoiseSample3 {
+    fn sample(self, key: u32, position: Vec3) -> ScalarFieldSample3 {
         let mut sample = gradient_noise_3d_from_key(key, position * self.frequency);
         sample.derivative = sample.derivative * self.frequency;
         sample
@@ -211,12 +211,21 @@ pub fn fbm_3d(
     position: Vec3,
     config: Validated<OctaveConfig>,
     gain: OctaveGain,
-) -> NoiseSample3 {
-    let key = fold_seed_u64_to_u32(seed);
+) -> ScalarFieldSample3 {
+    fbm_3d_from_key(fold_seed_u64_to_u32(seed), position, config, gain)
+}
+
+/// Key-based form of [`fbm_3d`] for callers that precompute backend keys.
+pub fn fbm_3d_from_key(
+    key: u32,
+    position: Vec3,
+    config: Validated<OctaveConfig>,
+    gain: OctaveGain,
+) -> ScalarFieldSample3 {
     config
         .0
         .octaves(gain)
-        .fold(NoiseSample3::default(), |sum, octave| {
+        .fold(ScalarFieldSample3::default(), |sum, octave| {
             sum + octave.sample(key, position) * octave.amplitude
         })
 }
@@ -236,11 +245,20 @@ pub fn ridged_multifractal_3d(
     position: Vec3,
     config: Validated<RidgedMultifractalConfig>,
     gain: OctaveGain,
-) -> NoiseSample3 {
+) -> ScalarFieldSample3 {
+    ridged_multifractal_3d_from_key(fold_seed_u64_to_u32(seed), position, config, gain)
+}
+
+/// Key-based form of [`ridged_multifractal_3d`] for repeated sampling.
+pub fn ridged_multifractal_3d_from_key(
+    key: u32,
+    position: Vec3,
+    config: Validated<RidgedMultifractalConfig>,
+    gain: OctaveGain,
+) -> ScalarFieldSample3 {
     let config = config.0;
-    let key = fold_seed_u64_to_u32(seed);
-    let mut result = NoiseSample3::default();
-    let mut weight = NoiseSample3 {
+    let mut result = ScalarFieldSample3::default();
+    let mut weight = ScalarFieldSample3 {
         value: 1.0,
         derivative: Vec3::ZERO,
     };
@@ -256,11 +274,11 @@ pub fn ridged_multifractal_3d(
         };
         let ridge = config.ridge_offset - sample.value.abs();
         let ridge_derivative = -absolute_derivative;
-        let signal = NoiseSample3 {
+        let signal = ScalarFieldSample3 {
             value: ridge * ridge,
             derivative: ridge_derivative * (2.0 * ridge),
         };
-        let weighted = NoiseSample3 {
+        let weighted = ScalarFieldSample3 {
             value: signal.value * weight.value,
             derivative: signal.derivative * weight.value + weight.derivative * signal.value,
         };
@@ -270,7 +288,7 @@ pub fn ridged_multifractal_3d(
         weight = if next_weight.value > 0.0 && next_weight.value < 1.0 {
             next_weight
         } else {
-            NoiseSample3 {
+            ScalarFieldSample3 {
                 value: next_weight.value.clamp(0.0, 1.0),
                 derivative: Vec3::ZERO,
             }
@@ -296,10 +314,19 @@ pub fn derivative_damped_fbm_3d(
     position: Vec3,
     config: Validated<DerivativeDampedConfig>,
     gain: OctaveGain,
-) -> NoiseSample3 {
+) -> ScalarFieldSample3 {
+    derivative_damped_fbm_3d_from_key(fold_seed_u64_to_u32(seed), position, config, gain)
+}
+
+/// Key-based form of [`derivative_damped_fbm_3d`] for repeated sampling.
+pub fn derivative_damped_fbm_3d_from_key(
+    key: u32,
+    position: Vec3,
+    config: Validated<DerivativeDampedConfig>,
+    gain: OctaveGain,
+) -> ScalarFieldSample3 {
     let config = config.0;
-    let key = fold_seed_u64_to_u32(seed);
-    let mut result = NoiseSample3::default();
+    let mut result = ScalarFieldSample3::default();
     for octave in config.octaves.octaves(gain) {
         let attenuation = (1.0 + config.damping * result.derivative.length_squared()).recip();
         result += octave.sample(key, position) * (octave.amplitude * attenuation);
@@ -399,20 +426,20 @@ mod tests {
         assert_eq!(amplitude_sum(zero, gain()).to_bits(), 0.0_f32.to_bits());
         assert_eq!(
             fbm_3d(SEED, POSITION, zero, gain()),
-            NoiseSample3::default()
+            ScalarFieldSample3::default()
         );
         assert_eq!(
             derivative_damped_fbm_3d(SEED, POSITION, valid_damped(0, 100.0), gain()),
-            NoiseSample3::default()
+            ScalarFieldSample3::default()
         );
         assert_eq!(
             ridged_multifractal_3d(SEED, POSITION, valid_ridged(0, 2.0), gain()),
-            NoiseSample3::default()
+            ScalarFieldSample3::default()
         );
 
         let config = octave_config(1);
         let basis = gradient_noise_3d(SEED, POSITION * config.frequency);
-        let expected_fbm = NoiseSample3 {
+        let expected_fbm = ScalarFieldSample3 {
             value: basis.value,
             derivative: basis.derivative * config.frequency,
         };
@@ -622,7 +649,7 @@ mod tests {
     fn assert_derivative_matches(
         step: f32,
         tolerance: f32,
-        sample: impl Copy + Fn(Vec3) -> NoiseSample3,
+        sample: impl Copy + Fn(Vec3) -> ScalarFieldSample3,
     ) {
         let analytic = sample(POSITION).derivative;
         let finite_difference = Vec3::new(

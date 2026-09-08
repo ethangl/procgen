@@ -7,7 +7,7 @@ use procgen_tectonics::StageInputError;
 use std::fmt;
 
 pub(crate) const UNIT_DIRECTION_TOLERANCE: f32 = 2.0e-5;
-const TERRAIN_CONTROL_CHANNELS: usize = 5;
+pub(crate) const TERRAIN_CONTROL_CHANNELS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerrainControlError {
@@ -54,7 +54,7 @@ impl From<GeologyInputError> for TerrainControlError {
     }
 }
 
-/// Per-cell controls consumed by later interpolation and height-function slices.
+/// Per-cell controls consumed by terrain-control interpolation and height evaluation.
 ///
 /// `base_elevation` is the final isostatically adjusted normalized elevation and is copied
 /// unchanged. `detail_amplitude` and `abyssal_amplitude` are normalized-elevation offsets;
@@ -72,8 +72,6 @@ pub struct TerrainCellControls<T = f32> {
 }
 
 impl<T> TerrainCellControls<T> {
-    pub const CHANNELS: usize = TERRAIN_CONTROL_CHANNELS;
-
     pub fn to_channels(self) -> [T; TERRAIN_CONTROL_CHANNELS] {
         [
             self.base_elevation,
@@ -100,6 +98,16 @@ impl<T> TerrainCellControls<T> {
             abyssal_amplitude,
         }
     }
+
+    pub fn map<U>(self, mut map: impl FnMut(T) -> U) -> TerrainCellControls<U> {
+        TerrainCellControls {
+            base_elevation: map(self.base_elevation),
+            detail_amplitude: map(self.detail_amplitude),
+            ridge_weight: map(self.ridge_weight),
+            octave_gain: map(self.octave_gain),
+            abyssal_amplitude: map(self.abyssal_amplitude),
+        }
+    }
 }
 
 /// Stable type order used when multiple stamps overlap: hotspot, volcanic arc, seamount,
@@ -121,7 +129,7 @@ impl TerrainStampKind {
     ];
 }
 
-/// Sparse input for a later terrain stamp evaluator.
+/// Sparse input for terrain stamp evaluation.
 ///
 /// `position` is a unit direction. `strength` is unitless and clamped to `[0, 1]`.
 /// `source_index` is the stable upstream index, with volcanic-arc peaks indexed by their

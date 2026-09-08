@@ -145,8 +145,8 @@ impl<const N: usize> CubeField<N> {
         let face_derivatives = face_coordinate_derivatives(direction, coordinates.face);
         let texel_scale = self.resolution() as f32 * 0.5;
         let derivatives = filter.gradient(
-            face_derivatives[0] * texel_scale,
-            face_derivatives[1] * texel_scale,
+            face_derivatives.u * texel_scale,
+            face_derivatives.v * texel_scale,
         );
 
         Ok(CubeFieldSample {

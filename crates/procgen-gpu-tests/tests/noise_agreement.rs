@@ -8,8 +8,8 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use procgen_core::{HASH_U32_TEST_VECTORS, Vec3};
 use procgen_noise::{
-    DerivativeDampedConfig, NOISE_DERIVATIVE_ANGLE_TOLERANCE, NOISE_VALUE_TOLERANCE, NoiseSample3,
-    OctaveConfig, OctaveGain, RidgedMultifractalConfig, Validated, WGSL_SOURCE,
+    DerivativeDampedConfig, NOISE_DERIVATIVE_ANGLE_TOLERANCE, NOISE_VALUE_TOLERANCE, OctaveConfig,
+    OctaveGain, RidgedMultifractalConfig, ScalarFieldSample3, Validated, WGSL_SOURCE,
     derivative_damped_fbm_3d, fbm_3d, fold_seed_u64_to_u32, gradient_noise_3d, lattice_gradient_3d,
     ridged_multifractal_3d,
 };
@@ -131,7 +131,7 @@ impl NoiseKind {
         seed: u64,
         position: Vec3,
         parameters: NoiseParameters,
-    ) -> NoiseSample3 {
+    ) -> ScalarFieldSample3 {
         match self {
             Self::Basis => gradient_noise_3d(seed, position),
             Self::Fbm => fbm_3d(seed, position, parameters.fbm(), parameters.gain()),
@@ -162,7 +162,7 @@ enum Case {
         kind: NoiseKind,
         position: Vec3,
         parameters: NoiseParameters,
-        expected: NoiseSample3,
+        expected: ScalarFieldSample3,
     },
 }
 
@@ -263,7 +263,7 @@ impl Case {
             Self::Noise {
                 label, expected, ..
             } => {
-                let actual = NoiseSample3 {
+                let actual = ScalarFieldSample3 {
                     value: output.sample[0],
                     derivative: Vec3::new(output.sample[1], output.sample[2], output.sample[3]),
                 };

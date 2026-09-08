@@ -132,6 +132,12 @@ the smooth cubic compact-support cap
 `(1 - r^2 / R^2)^2`. Each profile and its first derivative reaches zero at its
 support radius, so spatial culling cannot introduce a height or normal seam.
 
+The CPU height evaluator returns `procgen_core::ScalarFieldSample3`, the shared
+backend-neutral scalar value and three-dimensional derivative carried through
+noise, controls, coast behavior, and stamps. Callers construct
+`TerrainNoiseSeeds` once from the explicit `u64` terrain seed and reuse its
+pre-folded field keys across every vertex in a tile.
+
 ## Determinism
 
 Cross-backend agreement follows the workspace rule: integer results are
@@ -148,8 +154,10 @@ named value and derivative-angle tolerances.
   halves of the seed into a `u32` lattice key. This is deliberately a
   many-to-one fold: all seed bits influence the result, but noise has a 32-bit
   field-key namespace and distinct `u64` seeds are not guaranteed to select
-  distinct fields. `procgen-noise` folds the seed once on the host; WGSL and
-  CUDA receive that key rather than reimplementing or repeating the conversion.
+  distinct fields. `procgen-noise` owns the fold, and terrain derives and folds
+  its registered detail and coast streams once before point evaluation; WGSL
+  and CUDA receive those keys rather than reimplementing or repeating the
+  conversion.
   The lattice wrapper combines the key with three `i32` coordinates,
   reinterpreting each signed coordinate's bits as `u32`. Backend tests reproduce
   the core hash vectors and selected lattice gradients bit-exactly in a compute

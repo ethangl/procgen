@@ -8,13 +8,15 @@ mod test_support;
 
 pub use fractal::{
     DerivativeDampedConfig, FractalParameterError, MAX_OCTAVES, OctaveConfig, OctaveGain,
-    RidgedMultifractalConfig, Validated, amplitude_sum, derivative_damped_fbm_3d, fbm_3d,
-    ridged_multifractal_3d,
+    RidgedMultifractalConfig, Validated, amplitude_sum, derivative_damped_fbm_3d,
+    derivative_damped_fbm_3d_from_key, fbm_3d, fbm_3d_from_key, ridged_multifractal_3d,
+    ridged_multifractal_3d_from_key,
 };
 pub use gradient::{
-    GRADIENT_NOISE_VALUE_BOUND, NoiseSample3, fold_seed_u64_to_u32, gradient_noise_3d,
-    lattice_gradient_3d,
+    GRADIENT_NOISE_VALUE_BOUND, fold_seed_u64_to_u32, gradient_noise_3d,
+    gradient_noise_3d_from_key, lattice_gradient_3d,
 };
+pub use procgen_core::ScalarFieldSample3;
 
 /// Absolute CPU/backend tolerance for noise values in normalized units.
 ///
