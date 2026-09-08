@@ -6,7 +6,7 @@ use procgen_climate::{
     SeasonalThermalResponse, SolarForcing, SolarForcingConfig, derive_coupled_climate,
     derive_solar_forcing,
 };
-use procgen_cubesphere::{BakeError, CubeField, bake_cube_field, control_face_resolution};
+use procgen_cubesphere::control_face_resolution;
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
     GeologicalElevationInputs, HotspotField, HotspotFieldConfig, IsostaticAdjustment,
@@ -29,8 +29,8 @@ use procgen_tectonics::{
     generate_plate_kinematics, partition_plates,
 };
 use procgen_terrain::{
-    TerrainCellControls, TerrainControlConfig, TerrainControlInputs, TerrainControls,
-    compose_terrain_controls,
+    TerrainControlBake, TerrainControlConfig, TerrainControlInputs, TerrainControls,
+    bake_terrain_controls, compose_terrain_controls,
 };
 use std::{
     error::Error,
@@ -204,7 +204,7 @@ pub struct GeneratedWorld {
     pub geological_elevation: GeologicalElevation,
     pub isostasy: IsostaticAdjustment,
     pub terrain_controls: TerrainControls,
-    pub terrain_control_bake: CubeField<{ TerrainCellControls::CHANNELS }>,
+    pub terrain_control_bake: TerrainControlBake,
     pub solar_forcing: SolarForcing,
     pub radiative_equilibrium: RadiativeEquilibriumTemperature,
     pub seasonal_thermal: SeasonalThermalResponse,
@@ -320,15 +320,7 @@ impl GeneratedWorld {
             )
         })?;
         let terrain_control_bake = timings.record("Terrain control bake", || {
-            let resolution = control_face_resolution(voronoi.cell_count())
-                .ok_or(BakeError::InvalidResolution)?;
-            let cells: Vec<_> = terrain_controls
-                .cells
-                .iter()
-                .copied()
-                .map(TerrainCellControls::to_channels)
-                .collect();
-            bake_cube_field(&voronoi, &cells, resolution)
+            bake_terrain_controls(&voronoi, &terrain_controls)
         })?;
         let solar_forcing = timings.record("Solar forcing", || {
             derive_solar_forcing(&voronoi, config.planet, config.solar_forcing)
@@ -407,6 +399,7 @@ impl GeneratedWorld {
                 .segments
                 .iter()
                 .any(|segment| segment.overriding_plate >= self.plates.plate_count)
+            || Some(self.terrain_control_bake.resolution()) != control_face_resolution(cells)
         {
             return Err("generated world fields are internally inconsistent".into());
         }
@@ -427,12 +420,7 @@ impl GeneratedWorld {
         self.basins.validate(mesh)?;
         self.geological_elevation.validate(mesh)?;
         self.isostasy.validate(mesh)?;
-        self.config.terrain_controls.validate()?;
         self.terrain_controls.validate(mesh)?;
-        self.terrain_control_bake.validate()?;
-        if Some(self.terrain_control_bake.resolution()) != control_face_resolution(cells) {
-            return Err("terrain-control bake resolution does not match mesh policy".into());
-        }
         self.solar_forcing.validate(mesh)?;
         self.radiative_equilibrium.validate(mesh)?;
         self.seasonal_thermal.validate(mesh)?;

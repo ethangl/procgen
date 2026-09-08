@@ -62,10 +62,20 @@ impl<const N: usize> CubeField<N> {
     ) -> Result<Self, BakeError> {
         validate_resolution(resolution)?;
         let expected = (resolution * resolution) as usize;
-        let faces = face_texels.map(|texels| FaceField { resolution, texels });
-        let field = Self { faces };
-        field.validate_face_data(expected)?;
-        Ok(field)
+        for (face, texels) in face_texels.iter().enumerate() {
+            if texels.len() != expected {
+                return Err(BakeError::InvalidFaceDimensions { face });
+            }
+            if texels
+                .iter()
+                .any(|texel| !texel.iter().all(|value| value.is_finite()))
+            {
+                return Err(BakeError::NonFiniteFaceData { face });
+            }
+        }
+        Ok(Self {
+            faces: face_texels.map(|texels| FaceField { resolution, texels }),
+        })
     }
 
     pub fn resolution(&self) -> u32 {
@@ -74,29 +84,6 @@ impl<const N: usize> CubeField<N> {
 
     pub fn face(&self, face: CubeFace) -> &FaceField<N> {
         &self.faces[face.index()]
-    }
-
-    /// Validates the dimensions and finiteness owned by the baked field.
-    pub fn validate(&self) -> Result<(), BakeError> {
-        let resolution = self.resolution();
-        validate_resolution(resolution)?;
-        self.validate_face_data((resolution * resolution) as usize)
-    }
-
-    fn validate_face_data(&self, expected: usize) -> Result<(), BakeError> {
-        for (face, field) in self.faces.iter().enumerate() {
-            if field.resolution != self.resolution() || field.texels.len() != expected {
-                return Err(BakeError::InvalidFaceDimensions { face });
-            }
-            if field
-                .texels
-                .iter()
-                .any(|texel| !texel.iter().all(|value| value.is_finite()))
-            {
-                return Err(BakeError::NonFiniteFaceData { face });
-            }
-        }
-        Ok(())
     }
 
     /// Bilinearly samples a direction, remapping taps outside the selected face
@@ -485,8 +472,7 @@ mod tests {
     #[test]
     fn cached_face_reconstruction_validates_dimensions_and_data() {
         let faces = array::from_fn(|_| vec![channels(0.25); 16]);
-        let field = CubeField::from_face_texels(4, faces.clone()).unwrap();
-        assert_eq!(field.validate(), Ok(()));
+        CubeField::from_face_texels(4, faces.clone()).unwrap();
 
         let mut invalid_dimensions = faces.clone();
         invalid_dimensions[2].pop();

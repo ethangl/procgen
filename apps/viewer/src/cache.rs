@@ -181,9 +181,6 @@ fn encode_snapshot(world: &GeneratedWorld) -> Vec<u8> {
 }
 
 fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
-    if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
-        return Err(CacheError::invalid("snapshot exceeds the size limit"));
-    }
     let mut decoder = Decoder { bytes, offset: 0 };
     if decoder.read_exact(MAGIC.len())? != MAGIC {
         return Err(CacheError::invalid("snapshot magic does not match"));
@@ -456,6 +453,7 @@ struct_codec! {
     ClimateCouplingDiagnostics { iterations, albedo_residual_rms, temperature_change_rms_kelvin, precipitation_change_rms_kg_per_m2_per_day, cover_fraction_change_rms }
     TerrainCellControls { base_elevation, detail_amplitude, ridge_weight, octave_gain, abyssal_amplitude }
     TerrainStampInput { cell, kind, source_index, position, strength }
+    TerrainControls { cells, stamps }
 }
 
 macro_rules! enum_codec {
@@ -503,42 +501,9 @@ impl<const N: usize> CacheCodec for CubeField<N> {
 
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
         let resolution = u32::decode(decoder)?;
-        let texel_count = resolution
-            .checked_mul(resolution)
-            .map(|count| count as usize)
-            .ok_or_else(|| CacheError::invalid("cube-field dimensions overflow"))?;
-        let faces: Vec<_> = (0..CubeFace::ALL.len())
-            .map(|_| decode_exact_vec(decoder, texel_count))
-            .collect::<Result<_, _>>()?;
-        CubeField::from_face_texels(
-            resolution,
-            faces
-                .try_into()
-                .map_err(|_| CacheError::invalid("cube-field face count is invalid"))?,
-        )
-        .map_err(CacheError::invalid)
+        CubeField::from_face_texels(resolution, CacheCodec::decode(decoder)?)
+            .map_err(CacheError::invalid)
     }
-}
-
-fn decode_exact_vec<T: CacheCodec>(
-    decoder: &mut Decoder<'_>,
-    expected: usize,
-) -> Result<Vec<T>, CacheError> {
-    let length = usize::decode(decoder)?;
-    if length != expected || length > MAX_COLLECTION_ITEMS {
-        return Err(CacheError::invalid(
-            "snapshot collection has invalid dimensions",
-        ));
-    }
-    (0..length).map(|_| T::decode(decoder)).collect()
-}
-
-fn decode_terrain_controls(
-    decoder: &mut Decoder<'_>,
-    mesh: &SphereMesh,
-) -> Result<TerrainControls, CacheError> {
-    TerrainControls::from_parts(mesh, Vec::decode(decoder)?, Vec::decode(decoder)?)
-        .map_err(CacheError::invalid)
 }
 
 impl CacheCodec for GeneratedWorld {
@@ -561,8 +526,7 @@ impl CacheCodec for GeneratedWorld {
         self.basins.encode(encoder);
         self.geological_elevation.encode(encoder);
         self.isostasy.encode(encoder);
-        self.terrain_controls.cells.encode(encoder);
-        self.terrain_controls.stamps.encode(encoder);
+        self.terrain_controls.encode(encoder);
         self.terrain_control_bake.encode(encoder);
         self.solar_forcing.encode(encoder);
         self.radiative_equilibrium.encode(encoder);
@@ -575,47 +539,27 @@ impl CacheCodec for GeneratedWorld {
     }
 
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
-        let config = CacheCodec::decode(decoder)?;
-        let voronoi = CacheCodec::decode(decoder)?;
-        let plates = CacheCodec::decode(decoder)?;
-        let crust = CacheCodec::decode(decoder)?;
-        let kinematics = CacheCodec::decode(decoder)?;
-        let boundaries = CacheCodec::decode(decoder)?;
-        let evolution = CacheCodec::decode(decoder)?;
-        let seafloor_age = CacheCodec::decode(decoder)?;
-        let base_elevation = CacheCodec::decode(decoder)?;
-        let deformation = CacheCodec::decode(decoder)?;
-        let elevation = CacheCodec::decode(decoder)?;
-        let hotspots = CacheCodec::decode(decoder)?;
-        let oceanic_peaks = CacheCodec::decode(decoder)?;
-        let volcanic_arcs = CacheCodec::decode(decoder)?;
-        let cratons = CacheCodec::decode(decoder)?;
-        let basins = CacheCodec::decode(decoder)?;
-        let geological_elevation = CacheCodec::decode(decoder)?;
-        let isostasy = CacheCodec::decode(decoder)?;
-        let terrain_controls = decode_terrain_controls(decoder, &voronoi)?;
-        let terrain_control_bake = CacheCodec::decode(decoder)?;
         Ok(Self {
-            config,
-            voronoi,
-            plates,
-            crust,
-            kinematics,
-            boundaries,
-            evolution,
-            seafloor_age,
-            base_elevation,
-            deformation,
-            elevation,
-            hotspots,
-            oceanic_peaks,
-            volcanic_arcs,
-            cratons,
-            basins,
-            geological_elevation,
-            isostasy,
-            terrain_controls,
-            terrain_control_bake,
+            config: CacheCodec::decode(decoder)?,
+            voronoi: CacheCodec::decode(decoder)?,
+            plates: CacheCodec::decode(decoder)?,
+            crust: CacheCodec::decode(decoder)?,
+            kinematics: CacheCodec::decode(decoder)?,
+            boundaries: CacheCodec::decode(decoder)?,
+            evolution: CacheCodec::decode(decoder)?,
+            seafloor_age: CacheCodec::decode(decoder)?,
+            base_elevation: CacheCodec::decode(decoder)?,
+            deformation: CacheCodec::decode(decoder)?,
+            elevation: CacheCodec::decode(decoder)?,
+            hotspots: CacheCodec::decode(decoder)?,
+            oceanic_peaks: CacheCodec::decode(decoder)?,
+            volcanic_arcs: CacheCodec::decode(decoder)?,
+            cratons: CacheCodec::decode(decoder)?,
+            basins: CacheCodec::decode(decoder)?,
+            geological_elevation: CacheCodec::decode(decoder)?,
+            isostasy: CacheCodec::decode(decoder)?,
+            terrain_controls: CacheCodec::decode(decoder)?,
+            terrain_control_bake: CacheCodec::decode(decoder)?,
             solar_forcing: CacheCodec::decode(decoder)?,
             radiative_equilibrium: CacheCodec::decode(decoder)?,
             seasonal_thermal: CacheCodec::decode(decoder)?,
@@ -661,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_bake_dimensions_are_rejected_before_allocation() {
+    fn corrupt_bake_dimensions_are_rejected() {
         let world = fixture(32, 22);
         let mut bytes = encode_snapshot(&world);
         let offset = bake_offset(&world, &bytes);

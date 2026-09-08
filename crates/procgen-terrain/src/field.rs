@@ -131,17 +131,6 @@ pub struct TerrainControls {
 }
 
 impl TerrainControls {
-    /// Reconstructs cached controls after validating their mesh-owned shape.
-    pub fn from_parts(
-        mesh: &SphereMesh,
-        cells: Vec<TerrainCellControls>,
-        stamps: Vec<TerrainStampInput>,
-    ) -> Result<Self, TerrainControlError> {
-        let controls = Self { cells, stamps };
-        controls.validate(mesh)?;
-        Ok(controls)
-    }
-
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), TerrainControlError> {
         if self.cells.len() != mesh.cell_count()
             || self
@@ -239,7 +228,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            TerrainControls::from_parts(&mesh, cells, stamps),
+            TerrainControls { cells, stamps }.validate(&mesh),
             Err(TerrainControlError::InvalidStamps)
         );
     }

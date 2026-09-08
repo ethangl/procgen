@@ -3224,6 +3224,7 @@ name = "procgen-terrain"
 version = "0.1.0"
 dependencies = [
  "procgen-core",
+ "procgen-cubesphere",
  "procgen-geology",
  "procgen-sphere",
  "procgen-sphere-mesh",
