@@ -152,50 +152,31 @@ impl TileAddress {
             TileEdge::Bottom => (-frame.v_axis, frame.u_axis, self.x),
             TileEdge::Top => (frame.v_axis, frame.u_axis, self.x),
         };
-        let face = CubeFace::ALL
-            .into_iter()
-            .find(|face| face.frame().normal == neighbor_normal)
-            .expect("every cube axis has one face");
+        let face = CubeFace::from_normal(neighbor_normal).expect("every cube axis has one face");
         let neighbor = face.frame();
         let edge_index = tiles_per_axis - 1;
-        let reversed = edge_index - along;
-        let (x, y) = if frame.normal == -neighbor.u_axis {
-            (
-                0,
-                if along_axis == neighbor.v_axis {
-                    along
-                } else {
-                    reversed
-                },
-            )
-        } else if frame.normal == neighbor.u_axis {
-            (
-                edge_index,
-                if along_axis == neighbor.v_axis {
-                    along
-                } else {
-                    reversed
-                },
-            )
-        } else if frame.normal == -neighbor.v_axis {
-            (
-                if along_axis == neighbor.u_axis {
-                    along
-                } else {
-                    reversed
-                },
-                0,
-            )
+        let normal_on_u = frame.normal == neighbor.u_axis || frame.normal == -neighbor.u_axis;
+        let (fixed_axis, running_axis) = if normal_on_u {
+            (neighbor.u_axis, neighbor.v_axis)
         } else {
-            debug_assert_eq!(frame.normal, neighbor.v_axis);
-            (
-                if along_axis == neighbor.u_axis {
-                    along
-                } else {
-                    reversed
-                },
-                edge_index,
-            )
+            debug_assert!(frame.normal == neighbor.v_axis || frame.normal == -neighbor.v_axis);
+            (neighbor.v_axis, neighbor.u_axis)
+        };
+        let fixed = if frame.normal == fixed_axis {
+            edge_index
+        } else {
+            0
+        };
+        let running = if along_axis == running_axis {
+            along
+        } else {
+            debug_assert_eq!(along_axis, -running_axis);
+            edge_index - along
+        };
+        let (x, y) = if normal_on_u {
+            (fixed, running)
+        } else {
+            (running, fixed)
         };
         Self { face, x, y, ..self }
     }

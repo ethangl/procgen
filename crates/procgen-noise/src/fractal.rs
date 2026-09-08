@@ -587,20 +587,11 @@ mod tests {
             derivative_damped_fbm_3d(KEY, POSITION, five_damped, gain(), cutoff_band),
             derivative_damped_fbm_3d(KEY, POSITION, four_damped, gain(), full_band(4))
         );
-        assert_eq!(
-            derivative_damped_fbm_3d(KEY, POSITION, five_damped, gain(), full_band(5)),
-            derivative_damped_fbm_3d(KEY, POSITION, five_damped, gain(), full_band(5))
-        );
-
         let four_ridged = valid_ridged(4, 2.0);
         let five_ridged = valid_ridged(5, 2.0);
         assert_eq!(
             ridged_multifractal_3d(KEY, POSITION, five_ridged, gain(), cutoff_band),
             ridged_multifractal_3d(KEY, POSITION, four_ridged, gain(), full_band(4))
-        );
-        assert_eq!(
-            ridged_multifractal_3d(KEY, POSITION, five_ridged, gain(), full_band(5)),
-            ridged_multifractal_3d(KEY, POSITION, five_ridged, gain(), full_band(5))
         );
     }
 

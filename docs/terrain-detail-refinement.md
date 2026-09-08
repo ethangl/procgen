@@ -157,8 +157,8 @@ bit-exact, float results agree within a documented tolerance. The CPU
 implementation is the canonical result. With integer hashing, no
 transcendental functions, and Rust's default of no FMA contraction, it is
 bit-exact across x86 and ARM, so an export that must be reproducible anywhere
-  runs on the CPU. GPU paths exist for speed and must agree with the CPU within
-  named value and conditioned derivative tolerances.
+runs on the CPU. GPU paths exist for speed and must agree with the CPU within
+named value and conditioned derivative tolerances.
 
 - Lattice hashing is integer-only. Noise samplers accept the same `u32` field
   keys used by WGSL and CUDA. `procgen-noise` owns one named host conversion

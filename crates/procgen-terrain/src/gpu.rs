@@ -35,6 +35,9 @@ pub const TERRAIN_WGSL_DERIVATIVE_ANGLE_TOLERANCE: f32 = 4.0e-3;
 /// Metal dispatch measured `3.0357654e-3`; this ten-times bound is rounded
 /// upward. The level-1 maximum tracks the known CPU/Metal cube-map `tan`/`atan`
 /// phase divergence without turning the angular contract into a vacuous bound.
+/// Consequently this absolute bound exceeds the conditioning floor: it bounds
+/// low-magnitude disagreement, but does not require both backends to call the
+/// same sample flat.
 pub const TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE: f32 = 4.0e-2;
 
 /// Checked-in WGSL mirror of canonical terrain height and tile evaluation.
