@@ -3230,6 +3230,7 @@ dependencies = [
  "procgen-sphere",
  "procgen-sphere-mesh",
  "procgen-tectonics",
+ "rayon",
 ]
 
 [[package]]

@@ -153,7 +153,7 @@ pub struct ValidatedTerrainHeightConfig {
     ridged: Validated<RidgedMultifractalConfig>,
     abyssal: Validated<DerivativeDampedConfig>,
     coast: TerrainCoastConfig,
-    stamps: TerrainStampProfiles,
+    pub(crate) stamps: TerrainStampProfiles,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
