@@ -146,7 +146,10 @@ impl TerrainControls {
                 || !stamp.position.is_finite()
                 || !stamp.strength.is_finite()
                 || !(0.0..=1.0).contains(&stamp.strength)
-        }) {
+        }) || !self
+            .stamps
+            .is_sorted_by_key(|stamp| (stamp.cell, stamp.kind, stamp.source_index))
+        {
             return Err(TerrainControlError::InvalidStamps);
         }
         Ok(())
@@ -204,6 +207,28 @@ mod tests {
         });
         assert_eq!(
             controls.validate(&mesh),
+            Err(TerrainControlError::InvalidStamps)
+        );
+
+        let cells = vec![TerrainCellControls::default(); mesh.cell_count()];
+        let stamps = vec![
+            TerrainStampInput {
+                cell: 1,
+                kind: TerrainStampKind::Hotspot,
+                source_index: 0,
+                position: Vec3::X,
+                strength: 1.0,
+            },
+            TerrainStampInput {
+                cell: 0,
+                kind: TerrainStampKind::Hotspot,
+                source_index: 0,
+                position: Vec3::Y,
+                strength: 1.0,
+            },
+        ];
+        assert_eq!(
+            TerrainControls { cells, stamps }.validate(&mesh),
             Err(TerrainControlError::InvalidStamps)
         );
     }

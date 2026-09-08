@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 procgen-core = { path = "../procgen-core" }
+procgen-cubesphere = { path = "../procgen-cubesphere" }
 procgen-geology = { path = "../procgen-geology" }
 procgen-sphere-mesh = { path = "../procgen-sphere-mesh" }
 procgen-tectonics = { path = "../procgen-tectonics" }

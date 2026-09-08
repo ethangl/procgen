@@ -10,8 +10,9 @@ Startup reuses the last successfully generated world from the operating
 system's per-user cache directory when the generator build identity, mesh
 topology, and field lengths still match. Otherwise it
 regenerates normally; cache read and write failures remain nonfatal. The cached
-snapshot contains generation settings and domain data only, so render assets
-are rebuilt and generation timings are not restored. **Regenerate** always runs
+snapshot contains generation settings, domain data, terrain controls and their
+five-channel CPU control bake, so render assets are rebuilt and generation
+timings are not restored. **Regenerate** always runs
 the complete pipeline before atomically replacing the snapshot, and **Clear
 cache** removes it without changing the active world.
 
@@ -40,6 +41,10 @@ Finally, deterministic isostatic support combines current-owner continental
 crust, final convergent and divergent boundary proximity, craton strength, and
 basin membership, then nudges a separate clamped elevation field toward that
 support. Oceanic cells and sedimentary-basin floors remain unchanged.
+The final adjusted elevation and geological modifiers are then composed into
+terrain-detail controls and projected into a mesh-derived, power-of-two
+cube-sphere bake. The dense controls, their sparse stamps, and the bake
+are retained on the generated world and restored directly from snapshots.
 An independent solar-forcing stage then derives top-of-atmosphere daily-mean
 insolation for the selected orbital phase and a bounded-sample annual mean from
 the spherical mesh. A second independent stage derives daily and annual

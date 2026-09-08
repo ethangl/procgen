@@ -6,6 +6,7 @@ use procgen_climate::{
     SeasonalThermalResponse, SolarForcing, SolarForcingConfig, derive_coupled_climate,
     derive_solar_forcing,
 };
+use procgen_cubesphere::control_face_resolution;
 use procgen_geology::{
     CratonField, CratonFieldConfig, GeologicalElevation, GeologicalElevationConfig,
     GeologicalElevationInputs, HotspotField, HotspotFieldConfig, IsostaticAdjustment,
@@ -26,6 +27,10 @@ use procgen_tectonics::{
     SeafloorAgeConfig, classify_crust, compose_coarse_elevation, derive_base_elevation,
     derive_boundary_deformation, derive_seafloor_age, evolve_plate_ownership,
     generate_plate_kinematics, partition_plates,
+};
+use procgen_terrain::{
+    TerrainControlBake, TerrainControlConfig, TerrainControlInputs, TerrainControls,
+    bake_terrain_controls, compose_terrain_controls,
 };
 use std::{
     error::Error,
@@ -52,6 +57,7 @@ pub struct GenerationSettings {
     pub basins: SedimentaryBasinFieldConfig,
     pub geological_elevation: GeologicalElevationConfig,
     pub isostasy: IsostaticAdjustmentConfig,
+    pub terrain_controls: TerrainControlConfig,
     /// Earth-like defaults are explicit and caller-editable.
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
@@ -93,6 +99,7 @@ impl Default for GenerationSettings {
             basins: SedimentaryBasinFieldConfig::default(),
             geological_elevation: GeologicalElevationConfig::default(),
             isostasy: IsostaticAdjustmentConfig::default(),
+            terrain_controls: TerrainControlConfig::default(),
             planet: Planet::EARTH,
             solar_forcing: SolarForcingConfig::default(),
             climate_coupling: ClimateCouplingConfig::EARTHLIKE,
@@ -196,6 +203,8 @@ pub struct GeneratedWorld {
     pub basins: SedimentaryBasinField,
     pub geological_elevation: GeologicalElevation,
     pub isostasy: IsostaticAdjustment,
+    pub terrain_controls: TerrainControls,
+    pub terrain_control_bake: TerrainControlBake,
     pub solar_forcing: SolarForcing,
     pub radiative_equilibrium: RadiativeEquilibriumTemperature,
     pub seasonal_thermal: SeasonalThermalResponse,
@@ -294,6 +303,25 @@ impl GeneratedWorld {
                 config.isostasy,
             )
         })?;
+        let terrain_controls = timings.record("Terrain controls", || {
+            compose_terrain_controls(
+                &voronoi,
+                TerrainControlInputs {
+                    isostasy: &isostasy,
+                    cratons: &cratons,
+                    volcanic_arcs: &volcanic_arcs,
+                    boundaries: &boundaries,
+                    basins: &basins,
+                    seafloor_age: &seafloor_age,
+                    hotspots: &hotspots,
+                    oceanic_peaks: &oceanic_peaks,
+                },
+                config.terrain_controls,
+            )
+        })?;
+        let terrain_control_bake = timings.record("Terrain control bake", || {
+            bake_terrain_controls(&voronoi, &terrain_controls)
+        })?;
         let solar_forcing = timings.record("Solar forcing", || {
             derive_solar_forcing(&voronoi, config.planet, config.solar_forcing)
         })?;
@@ -337,6 +365,8 @@ impl GeneratedWorld {
             basins,
             geological_elevation,
             isostasy,
+            terrain_controls,
+            terrain_control_bake,
             solar_forcing,
             radiative_equilibrium,
             seasonal_thermal,
@@ -369,6 +399,7 @@ impl GeneratedWorld {
                 .segments
                 .iter()
                 .any(|segment| segment.overriding_plate >= self.plates.plate_count)
+            || self.terrain_control_bake.resolution() != control_face_resolution(cells)?
         {
             return Err("generated world fields are internally inconsistent".into());
         }
@@ -389,6 +420,7 @@ impl GeneratedWorld {
         self.basins.validate(mesh)?;
         self.geological_elevation.validate(mesh)?;
         self.isostasy.validate(mesh)?;
+        self.terrain_controls.validate(mesh)?;
         self.solar_forcing.validate(mesh)?;
         self.radiative_equilibrium.validate(mesh)?;
         self.seasonal_thermal.validate(mesh)?;
@@ -523,6 +555,28 @@ mod tests {
                 .mass_balance_error_kg_per_m2
                 .abs()
                 <= 1.0e-10
+        );
+        assert_eq!(
+            world.terrain_controls.cells.len(),
+            world.voronoi.cell_count()
+        );
+        assert_eq!(
+            world.terrain_control_bake.resolution(),
+            control_face_resolution(world.voronoi.cell_count()).unwrap()
+        );
+        assert!(
+            world
+                .timings
+                .stages()
+                .iter()
+                .any(|stage| stage.label == "Terrain controls")
+        );
+        assert!(
+            world
+                .timings
+                .stages()
+                .iter()
+                .any(|stage| stage.label == "Terrain control bake")
         );
     }
 
@@ -662,6 +716,10 @@ mod tests {
                 maximum_boundary_distance: 6,
                 ..Default::default()
             },
+            terrain_controls: TerrainControlConfig {
+                base_detail_amplitude: 0.1,
+                ..Default::default()
+            },
             planet: Planet::EARTH,
             solar_forcing: SolarForcingConfig {
                 orbital_phase: 0.25,
@@ -703,6 +761,7 @@ mod tests {
             requested.geological_elevation
         );
         assert_eq!(world.config.isostasy, requested.isostasy);
+        assert_eq!(world.config.terrain_controls, requested.terrain_controls);
         assert_eq!(world.config.planet, requested.planet);
         assert_eq!(world.config.solar_forcing, requested.solar_forcing);
         assert_eq!(world.config.climate_coupling, requested.climate_coupling);
@@ -711,6 +770,11 @@ mod tests {
         let cached_world = cache.load().unwrap();
         assert_eq!(cached_world.config, requested);
         assert_eq!(cached_world.voronoi.cell_count(), requested.fibonacci.count);
+        assert_eq!(cached_world.terrain_controls, world.terrain_controls);
+        assert_eq!(
+            cached_world.terrain_control_bake,
+            world.terrain_control_bake
+        );
         assert!(matches!(
             app.world().resource::<GenerationStatus>(),
             GenerationStatus::Generated { .. }

@@ -55,6 +55,29 @@ pub struct CubeField<const N: usize> {
 }
 
 impl<const N: usize> CubeField<N> {
+    /// Reconstructs a cached field after validating its face dimensions and data.
+    pub fn from_face_texels(
+        resolution: u32,
+        face_texels: [Vec<[f32; N]>; 6],
+    ) -> Result<Self, BakeError> {
+        validate_resolution(resolution)?;
+        let expected = (resolution * resolution) as usize;
+        for (face, texels) in face_texels.iter().enumerate() {
+            if texels.len() != expected {
+                return Err(BakeError::InvalidFaceDimensions { face });
+            }
+            if texels
+                .iter()
+                .any(|texel| !texel.iter().all(|value| value.is_finite()))
+            {
+                return Err(BakeError::NonFiniteFaceData { face });
+            }
+        }
+        Ok(Self {
+            faces: face_texels.map(|texels| FaceField { resolution, texels }),
+        })
+    }
+
     pub fn resolution(&self) -> u32 {
         self.faces[0].resolution()
     }
@@ -140,6 +163,9 @@ impl<const N: usize> CubeField<N> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum BakeError {
     InvalidResolution,
+    UnsupportedCellCount { cell_count: usize },
+    InvalidFaceDimensions { face: usize },
+    NonFiniteFaceData { face: usize },
     InvalidMesh(TopologyError),
     CellCountMismatch { mesh: usize, cells: usize },
     NonFiniteCell { cell: usize },
@@ -152,6 +178,16 @@ impl fmt::Display for BakeError {
                 formatter,
                 "cube-field resolution must be a power of two between 1 and {MAX_CUBE_FIELD_RESOLUTION}"
             ),
+            Self::UnsupportedCellCount { cell_count } => write!(
+                formatter,
+                "cannot derive a control-face resolution for {cell_count} mesh cells"
+            ),
+            Self::InvalidFaceDimensions { face } => {
+                write!(formatter, "cube-field face {face} has invalid dimensions")
+            }
+            Self::NonFiniteFaceData { face } => {
+                write!(formatter, "cube-field face {face} contains non-finite data")
+            }
             Self::InvalidMesh(error) => write!(formatter, "invalid sphere mesh: {error}"),
             Self::CellCountMismatch { mesh, cells } => {
                 write!(formatter, "mesh has {mesh} cells but field has {cells}")
@@ -177,17 +213,17 @@ impl std::error::Error for BakeError {
 ///
 /// A mean cell spans `sqrt(4 PI / cells)` radians while a cube face spans
 /// `PI / 2`, so the unsnapped requirement is `sqrt(PI * cells)` texels.
-/// Returns `None` when the cell count is not mesh-valid or would exceed the
-/// supported cube-field resolution.
-pub fn control_face_resolution(cell_count: usize) -> Option<u32> {
+/// Returns [`BakeError::UnsupportedCellCount`] when the cell count is not
+/// mesh-valid or would exceed the supported cube-field resolution.
+pub fn control_face_resolution(cell_count: usize) -> Result<u32, BakeError> {
     if cell_count < 4 {
-        return None;
+        return Err(BakeError::UnsupportedCellCount { cell_count });
     }
     let required = (PI * cell_count as f64).sqrt().ceil();
     if required > f64::from(MAX_CUBE_FIELD_RESOLUTION) {
-        return None;
+        return Err(BakeError::UnsupportedCellCount { cell_count });
     }
-    Some((required as u32).next_power_of_two())
+    Ok((required as u32).next_power_of_two())
 }
 
 /// Bakes every channel at equi-angular face texel centers.
@@ -200,9 +236,7 @@ pub fn bake_cube_field<const N: usize>(
     cells: &[[f32; N]],
     resolution: u32,
 ) -> Result<CubeField<N>, BakeError> {
-    if resolution == 0 || resolution > MAX_CUBE_FIELD_RESOLUTION || !resolution.is_power_of_two() {
-        return Err(BakeError::InvalidResolution);
-    }
+    validate_resolution(resolution)?;
     mesh.validate().map_err(BakeError::InvalidMesh)?;
     if cells.len() != mesh.cell_count() {
         return Err(BakeError::CellCountMismatch {
@@ -220,6 +254,13 @@ pub fn bake_cube_field<const N: usize>(
     Ok(CubeField {
         faces: CubeFace::ALL.map(|face| bake_face(mesh, cells, face, resolution)),
     })
+}
+
+fn validate_resolution(resolution: u32) -> Result<(), BakeError> {
+    if resolution == 0 || resolution > MAX_CUBE_FIELD_RESOLUTION || !resolution.is_power_of_two() {
+        return Err(BakeError::InvalidResolution);
+    }
+    Ok(())
 }
 
 fn bake_face<const N: usize>(
@@ -316,11 +357,11 @@ mod tests {
 
     #[test]
     fn derives_documented_power_of_two_resolutions() {
-        assert_eq!(control_face_resolution(16_384), Some(256));
-        assert_eq!(control_face_resolution(65_536), Some(512));
-        assert_eq!(control_face_resolution(4), Some(4));
-        assert_eq!(control_face_resolution(5), Some(4));
-        assert_eq!(control_face_resolution(6), Some(8));
+        assert_eq!(control_face_resolution(16_384), Ok(256));
+        assert_eq!(control_face_resolution(65_536), Ok(512));
+        assert_eq!(control_face_resolution(4), Ok(4));
+        assert_eq!(control_face_resolution(5), Ok(4));
+        assert_eq!(control_face_resolution(6), Ok(8));
     }
 
     #[test]
@@ -434,9 +475,37 @@ mod tests {
     }
 
     #[test]
+    fn cached_face_reconstruction_validates_dimensions_and_data() {
+        let faces = array::from_fn(|_| vec![channels(0.25); 16]);
+        CubeField::from_face_texels(4, faces.clone()).unwrap();
+
+        let mut invalid_dimensions = faces.clone();
+        invalid_dimensions[2].pop();
+        assert_eq!(
+            CubeField::from_face_texels(4, invalid_dimensions),
+            Err(BakeError::InvalidFaceDimensions { face: 2 })
+        );
+
+        let mut invalid_data = faces;
+        invalid_data[3][7][1] = f32::NAN;
+        assert_eq!(
+            CubeField::from_face_texels(4, invalid_data),
+            Err(BakeError::NonFiniteFaceData { face: 3 })
+        );
+    }
+
+    #[test]
     fn rejects_invalid_inputs() {
-        assert_eq!(control_face_resolution(0), None);
-        assert_eq!(control_face_resolution(usize::MAX), None);
+        assert_eq!(
+            control_face_resolution(0),
+            Err(BakeError::UnsupportedCellCount { cell_count: 0 })
+        );
+        assert_eq!(
+            control_face_resolution(usize::MAX),
+            Err(BakeError::UnsupportedCellCount {
+                cell_count: usize::MAX
+            })
+        );
 
         let mesh = mesh(16);
         assert_eq!(

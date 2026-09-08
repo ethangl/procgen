@@ -270,7 +270,7 @@ into the viewer.
 6. ~~Add cube-sphere mapping, integer tile addressing, and seam tests to procgen-cubesphere.~~
 7. ~~Add terrain-control composition to procgen-terrain.~~
 8. ~~Add CPU control-face baking and deterministic bilinear sampling.~~
-9. Cache the control bake with generated-world snapshots.
+9. ~~Cache the control bake with generated-world snapshots.~~
 
 ### Single-level tile generation in the viewer at a fixed level, replacing the fan mesh below a zoom threshold, with coastline domain warping.
 
