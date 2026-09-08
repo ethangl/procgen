@@ -246,7 +246,7 @@ fn compose_stamps(
                 cell: hotspot.source_cell,
                 kind: TerrainStampKind::Hotspot,
                 source_index: index,
-                position: hotspot.mantle_position,
+                position: hotspot.mantle_position.normalized(),
                 strength: config.hotspot_stamp_strength,
             }),
     );
@@ -261,7 +261,7 @@ fn compose_stamps(
                 cell,
                 kind: TerrainStampKind::VolcanicArc,
                 source_index,
-                position: mesh.cell_centers[cell],
+                position: mesh.cell_centers[cell].normalized(),
                 strength: (inputs.volcanic_arcs.cell_strengths[cell]
                     * config.volcanic_arc_stamp_scale)
                     .clamp(0.0, 1.0),
@@ -280,7 +280,7 @@ fn compose_stamps(
                     OceanicPeakKind::AbyssalHill => TerrainStampKind::OceanicAbyssalHill,
                 },
                 source_index: index,
-                position: peak.position,
+                position: peak.position.normalized(),
                 strength: (peak.strength * config.oceanic_peak_stamp_scale).clamp(0.0, 1.0),
             }),
     );
@@ -628,6 +628,13 @@ mod tests {
                 .stamps
                 .iter()
                 .all(|stamp| (0.0..=1.0).contains(&stamp.strength))
+        );
+        assert!(
+            result
+                .stamps
+                .iter()
+                .all(|stamp| (stamp.position.length_squared() - 1.0).abs()
+                    <= crate::field::UNIT_DIRECTION_TOLERANCE)
         );
         assert_eq!(
             result

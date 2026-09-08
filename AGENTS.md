@@ -207,11 +207,12 @@ build identity, and draws a displaced fan mesh with relief and lighting
 controls.
 
 Terrain-detail refinement (`docs/terrain-detail-refinement.md`) is in
-progress. Slices 1 through 9 have landed: the 32-bit hash, `procgen-noise`
+progress. Slices 1 through 10 have landed: the 32-bit hash, `procgen-noise`
 with its WGSL mirror and agreement tests, Delaunay point location, cube-sphere
 mapping and tile addressing, and terrain-control composition with CPU
-control-face baking cached in generated-world snapshots. Next are the
-backend-neutral height function and tiled generation in the viewer.
+control-face baking cached in generated-world snapshots, plus the canonical CPU
+terrain-height function and coastline domain warp. Next is fixed-level CPU tile
+generation as the canonical tiled reference.
 
 Crate boundaries and the per-stage conventions in "Code quality" are
 established. New stages should follow the sibling shapes rather than introduce

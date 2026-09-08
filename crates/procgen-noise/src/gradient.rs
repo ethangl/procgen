@@ -1,55 +1,15 @@
-use std::ops::{Add, AddAssign, Mul};
+use procgen_core::{ScalarFieldSample3, Vec3, hash_u32};
 
-use procgen_core::{Vec3, hash_u32};
-
-/// A cubic-lattice gradient-noise sample and its spatial derivative.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct NoiseSample3 {
-    pub value: f32,
-    pub derivative: Vec3,
-}
-
-impl Add for NoiseSample3 {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            value: self.value + rhs.value,
-            derivative: self.derivative + rhs.derivative,
-        }
-    }
-}
-
-impl AddAssign for NoiseSample3 {
-    fn add_assign(&mut self, rhs: Self) {
-        self.value += rhs.value;
-        self.derivative = self.derivative + rhs.derivative;
-    }
-}
-
-impl Mul<f32> for NoiseSample3 {
-    type Output = Self;
-
-    fn mul(self, rhs: f32) -> Self::Output {
-        Self {
-            value: self.value * rhs,
-            derivative: self.derivative * rhs,
-        }
-    }
-}
+/// Conservative absolute value bound for one cubic gradient-noise sample.
+pub const GRADIENT_NOISE_VALUE_BOUND: f32 = 2.0;
 
 /// Samples cubic-lattice gradient noise with a quintic interpolation curve.
 ///
-/// The workspace-standard `u64` seed is folded once into a `u32` lattice key;
-/// both halves influence that key, but the mapping is necessarily many-to-one.
+/// The caller folds its workspace-standard seed once into the `u32` field key.
 /// Positions whose floored components fit in `i32` are supported. Lattice
 /// hashing uses the signed coordinates' bit patterns, making the integer path
 /// directly reproducible in WGSL and CUDA.
-pub fn gradient_noise_3d(seed: u64, position: Vec3) -> NoiseSample3 {
-    gradient_noise_3d_from_key(fold_seed_u64_to_u32(seed), position)
-}
-
-pub(crate) fn gradient_noise_3d_from_key(key: u32, position: Vec3) -> NoiseSample3 {
+pub fn gradient_noise_3d(key: u32, position: Vec3) -> ScalarFieldSample3 {
     let cell = [
         position.x.floor() as i32,
         position.y.floor() as i32,
@@ -95,7 +55,7 @@ pub(crate) fn gradient_noise_3d_from_key(key: u32, position: Vec3) -> NoiseSampl
         }
     }
 
-    NoiseSample3 { value, derivative }
+    ScalarFieldSample3 { value, derivative }
 }
 
 /// Folds the workspace-standard `u64` seed into the noise field's `u32` key.
@@ -152,7 +112,7 @@ mod tests {
     use super::*;
     use crate::test_support::{central_difference, sample_bits};
 
-    const DERIVATIVE_TEST_SEED: u64 = 0xCAFE_BABE_DEAD_BEEF;
+    const DERIVATIVE_TEST_KEY: u32 = fold_seed_u64_to_u32(0xCAFE_BABE_DEAD_BEEF);
 
     #[test]
     fn seed_narrowing_has_stable_vectors_and_uses_both_halves() {
@@ -191,7 +151,8 @@ mod tests {
         ];
 
         for (seed, position, expected) in vectors {
-            assert_eq!(sample_bits(gradient_noise_3d(seed, position)), expected);
+            let key = fold_seed_u64_to_u32(seed);
+            assert_eq!(sample_bits(gradient_noise_3d(key, position)), expected);
         }
     }
 
@@ -206,16 +167,16 @@ mod tests {
         ];
 
         for position in positions {
-            let sample = gradient_noise_3d(DERIVATIVE_TEST_SEED, position);
+            let sample = gradient_noise_3d(DERIVATIVE_TEST_KEY, position);
             let finite_difference = Vec3::new(
                 central_difference(position, Vec3::new(STEP, 0.0, 0.0), |point| {
-                    gradient_noise_3d(DERIVATIVE_TEST_SEED, point)
+                    gradient_noise_3d(DERIVATIVE_TEST_KEY, point)
                 }),
                 central_difference(position, Vec3::new(0.0, STEP, 0.0), |point| {
-                    gradient_noise_3d(DERIVATIVE_TEST_SEED, point)
+                    gradient_noise_3d(DERIVATIVE_TEST_KEY, point)
                 }),
                 central_difference(position, Vec3::new(0.0, 0.0, STEP), |point| {
-                    gradient_noise_3d(DERIVATIVE_TEST_SEED, point)
+                    gradient_noise_3d(DERIVATIVE_TEST_KEY, point)
                 }),
             );
             assert!((sample.derivative - finite_difference).length() < TOLERANCE);
@@ -239,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn samples_are_deterministic_and_seeded() {
+    fn samples_are_deterministic_and_keyed() {
         let position = Vec3::new(-12.75, 4.5, 31.125);
         let first = gradient_noise_3d(19, position);
 
@@ -253,7 +214,7 @@ mod tests {
 
         for &x in &coordinates {
             for &y in &coordinates {
-                let sample = gradient_noise_3d(u64::MAX, Vec3::new(x, y, -x));
+                let sample = gradient_noise_3d(fold_seed_u64_to_u32(u64::MAX), Vec3::new(x, y, -x));
                 assert!(sample.value.is_finite());
                 assert!(sample.derivative.x.is_finite());
                 assert!(sample.derivative.y.is_finite());

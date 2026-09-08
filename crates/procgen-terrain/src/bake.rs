@@ -1,10 +1,22 @@
 //! Projection of composed terrain controls into a CPU cube field.
 
-use crate::field::{TerrainCellControls, TerrainControls};
+use crate::field::{TERRAIN_CONTROL_CHANNELS, TerrainCellControls, TerrainControls};
+use procgen_core::{ScalarFieldSample3, Vec3};
 use procgen_cubesphere::{BakeError, CubeField, bake_cube_field, control_face_resolution};
 use procgen_sphere_mesh::SphereMesh;
 
-pub type TerrainControlBake = CubeField<{ TerrainCellControls::CHANNELS }>;
+pub type TerrainControlBake = CubeField<TERRAIN_CONTROL_CHANNELS>;
+pub(crate) type TerrainControlSample = TerrainCellControls<ScalarFieldSample3>;
+
+pub(crate) fn sample_controls(bake: &TerrainControlBake, direction: Vec3) -> TerrainControlSample {
+    let sample = bake
+        .sample_with_derivatives(direction)
+        .expect("a finite unit direction must map to a cube face");
+    TerrainCellControls::from_channels(std::array::from_fn(|channel| ScalarFieldSample3 {
+        value: sample.values[channel],
+        derivative: sample.derivatives[channel],
+    }))
+}
 
 /// Bakes all terrain-control channels at the mesh-derived policy resolution.
 pub fn bake_terrain_controls(

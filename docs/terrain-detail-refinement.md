@@ -117,8 +117,26 @@ into lakes and islets and makes the fine ocean mask disagree with the mask
 climate used. Near sea level, warp the sampling direction instead of adding
 height, and taper amplitude toward zero at the coast. The coarse ocean mask
 stays authoritative; the fine coastline deviates by a bounded distance. Domain
-warping is deferred to the first tile slice, when coastlines first become
-visible below the mesh.
+warping uses three seeded gradient-noise fields projected into the direction's
+tangent plane. Their conservative basis bound limits the pre-normalization
+tangent displacement to the configured maximum. A cubic smoothstep of distance
+from sea level fades the warp out and additive detail in across the coast band;
+the original, unwarped baked base controls that transition and is never used to
+derive a replacement land/ocean classification.
+
+Sparse terrain stamps are normalized to unit directions by terrain-control
+composition and accumulated in its retained stable order. All use chord
+distance on the unit sphere. The default hotspot and abyssal-hill profiles use
+the smooth cubic compact-support cap
+`(1 - r^2 / R^2)^3`; volcanic arcs and seamounts use the sharper quadratic cap
+`(1 - r^2 / R^2)^2`. Each profile and its first derivative reaches zero at its
+support radius, so spatial culling cannot introduce a height or normal seam.
+
+The CPU height evaluator returns `procgen_core::ScalarFieldSample3`, the shared
+backend-neutral scalar value and three-dimensional derivative carried through
+noise, controls, coast behavior, and stamps. Callers construct
+`TerrainNoiseKeys` once from the explicit `u64` terrain seed and reuse its
+pre-folded field keys across every vertex in a tile.
 
 ## Determinism
 
@@ -130,14 +148,16 @@ bit-exact across x86 and ARM, so an export that must be reproducible anywhere
 runs on the CPU. GPU paths exist for speed and must agree with the CPU within
 named value and derivative-angle tolerances.
 
-- Lattice hashing is integer-only. Workspace-facing noise APIs retain the
-  existing `u64` seed convention, while WGSL has no 64-bit integers.
-  `procgen-noise` therefore owns one named conversion that hashes both 32-bit
-  halves of the seed into a `u32` lattice key. This is deliberately a
+- Lattice hashing is integer-only. Noise samplers accept the same `u32` field
+  keys used by WGSL and CUDA. `procgen-noise` owns one named host conversion
+  that hashes both 32-bit halves of a workspace-standard `u64` seed into that
+  key. This is deliberately a
   many-to-one fold: all seed bits influence the result, but noise has a 32-bit
   field-key namespace and distinct `u64` seeds are not guaranteed to select
-  distinct fields. `procgen-noise` folds the seed once on the host; WGSL and
-  CUDA receive that key rather than reimplementing or repeating the conversion.
+  distinct fields. `procgen-noise` owns the fold, and terrain derives and folds
+  its registered detail and coast streams once before point evaluation; WGSL
+  and CUDA receive those keys rather than reimplementing or repeating the
+  conversion.
   The lattice wrapper combines the key with three `i32` coordinates,
   reinterpreting each signed coordinate's bits as `u32`. Backend tests reproduce
   the core hash vectors and selected lattice gradients bit-exactly in a compute
@@ -274,7 +294,7 @@ into the viewer.
 
 ### Single-level tile generation in the viewer at a fixed level, replacing the fan mesh below a zoom threshold, with coastline domain warping.
 
-10. Add the backend-neutral height function and coastline domain warp.
+10. ~~Add the backend-neutral height function and coastline domain warp.~~
 11. Add fixed-level CPU tile generation as the canonical reference.
 12. Add fixed-level WGSL viewer tiles below a zoom threshold.
 
