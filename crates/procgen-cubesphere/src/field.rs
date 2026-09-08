@@ -13,19 +13,14 @@ use std::fmt;
 
 const PARALLEL_ROW_THRESHOLD: usize = 8;
 
-/// Largest power-of-two face edge whose texel count fits in `u32` arithmetic.
-pub const MAX_CONTROL_FACE_RESOLUTION: u32 = 1 << 15;
+/// Largest power-of-two cube-field edge whose texel count fits in `u32` arithmetic.
+pub const MAX_CUBE_FIELD_RESOLUTION: u32 = 1 << 15;
 
-const _: () = assert!(MAX_CONTROL_FACE_RESOLUTION.is_power_of_two());
+const _: () = assert!(MAX_CUBE_FIELD_RESOLUTION.is_power_of_two());
 const _: () = assert!(
-    MAX_CONTROL_FACE_RESOLUTION
-        .checked_mul(MAX_CONTROL_FACE_RESOLUTION)
+    MAX_CUBE_FIELD_RESOLUTION
+        .checked_mul(MAX_CUBE_FIELD_RESOLUTION)
         .is_some()
-);
-const _: () = assert!(
-    (MAX_CONTROL_FACE_RESOLUTION * 2)
-        .checked_mul(MAX_CONTROL_FACE_RESOLUTION * 2)
-        .is_none()
 );
 
 /// One typed CPU face of an interpolated multi-channel field.
@@ -144,7 +139,7 @@ impl<const N: usize> CubeField<N> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BakeError {
-    InvalidCellCount,
+    InvalidResolution,
     InvalidMesh(TopologyError),
     CellCountMismatch { mesh: usize, cells: usize },
     NonFiniteCell { cell: usize },
@@ -153,9 +148,9 @@ pub enum BakeError {
 impl fmt::Display for BakeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCellCount => write!(
+            Self::InvalidResolution => write!(
                 formatter,
-                "cell count must derive a control-face resolution between 4 and {MAX_CONTROL_FACE_RESOLUTION}"
+                "cube-field resolution must be a power of two between 1 and {MAX_CUBE_FIELD_RESOLUTION}"
             ),
             Self::InvalidMesh(error) => write!(formatter, "invalid sphere mesh: {error}"),
             Self::CellCountMismatch { mesh, cells } => {
@@ -182,22 +177,32 @@ impl std::error::Error for BakeError {
 ///
 /// A mean cell spans `sqrt(4 PI / cells)` radians while a cube face spans
 /// `PI / 2`, so the unsnapped requirement is `sqrt(PI * cells)` texels.
-pub fn control_face_resolution(cell_count: usize) -> Result<u32, BakeError> {
+/// Returns `None` when the cell count is not mesh-valid or would exceed the
+/// supported cube-field resolution.
+pub fn control_face_resolution(cell_count: usize) -> Option<u32> {
     if cell_count < 4 {
-        return Err(BakeError::InvalidCellCount);
+        return None;
     }
     let required = (PI * cell_count as f64).sqrt().ceil();
-    if required > f64::from(MAX_CONTROL_FACE_RESOLUTION) {
-        return Err(BakeError::InvalidCellCount);
+    if required > f64::from(MAX_CUBE_FIELD_RESOLUTION) {
+        return None;
     }
-    Ok((required as u32).next_power_of_two())
+    Some((required as u32).next_power_of_two())
 }
 
 /// Bakes every channel at equi-angular face texel centers.
+///
+/// `resolution` must be a nonzero power of two no greater than
+/// [`MAX_CUBE_FIELD_RESOLUTION`]. Resolution policy belongs to the caller;
+/// [`control_face_resolution`] provides the terrain-control policy.
 pub fn bake_cube_field<const N: usize>(
     mesh: &SphereMesh,
     cells: &[[f32; N]],
+    resolution: u32,
 ) -> Result<CubeField<N>, BakeError> {
+    if resolution == 0 || resolution > MAX_CUBE_FIELD_RESOLUTION || !resolution.is_power_of_two() {
+        return Err(BakeError::InvalidResolution);
+    }
     mesh.validate().map_err(BakeError::InvalidMesh)?;
     if cells.len() != mesh.cell_count() {
         return Err(BakeError::CellCountMismatch {
@@ -212,7 +217,6 @@ pub fn bake_cube_field<const N: usize>(
         return Err(BakeError::NonFiniteCell { cell });
     }
 
-    let resolution = control_face_resolution(mesh.cell_count())?;
     Ok(CubeField {
         faces: CubeFace::ALL.map(|face| bake_face(mesh, cells, face, resolution)),
     })
@@ -290,6 +294,17 @@ mod tests {
         array::from_fn(|channel| value + channel as f32)
     }
 
+    fn bake(
+        mesh: &SphereMesh,
+        cells: &[[f32; CHANNELS]],
+    ) -> Result<CubeField<CHANNELS>, BakeError> {
+        bake_cube_field(
+            mesh,
+            cells,
+            control_face_resolution(mesh.cell_count()).unwrap(),
+        )
+    }
+
     fn assert_channels_close<const N: usize>(left: [f32; N], right: [f32; N], epsilon: f32) {
         for (left, right) in left.into_iter().zip(right) {
             assert!(
@@ -301,18 +316,18 @@ mod tests {
 
     #[test]
     fn derives_documented_power_of_two_resolutions() {
-        assert_eq!(control_face_resolution(16_384), Ok(256));
-        assert_eq!(control_face_resolution(65_536), Ok(512));
-        assert_eq!(control_face_resolution(4), Ok(4));
-        assert_eq!(control_face_resolution(5), Ok(4));
-        assert_eq!(control_face_resolution(6), Ok(8));
+        assert_eq!(control_face_resolution(16_384), Some(256));
+        assert_eq!(control_face_resolution(65_536), Some(512));
+        assert_eq!(control_face_resolution(4), Some(4));
+        assert_eq!(control_face_resolution(5), Some(4));
+        assert_eq!(control_face_resolution(6), Some(8));
     }
 
     #[test]
     fn constant_fields_bake_every_channel() {
         let mesh = mesh(32);
         let expected = channels(0.25);
-        let bake = bake_cube_field(&mesh, &vec![expected; mesh.cell_count()]).unwrap();
+        let bake = bake(&mesh, &vec![expected; mesh.cell_count()]).unwrap();
         for face in CubeFace::ALL {
             for texel in bake.face(face).texels() {
                 assert_eq!(*texel, expected);
@@ -326,7 +341,7 @@ mod tests {
         let cells: Vec<_> = (0..mesh.cell_count())
             .map(|cell| channels(cell as f32 * 0.125))
             .collect();
-        let bake = bake_cube_field(&mesh, &cells).unwrap();
+        let bake = bake(&mesh, &cells).unwrap();
         let (face, x, y) = (CubeFace::PositiveZ, 3, 5);
         let direction = unit_direction(texel_center(face, x, y, bake.resolution()));
         let location = mesh.locate_delaunay(direction, 0);
@@ -340,7 +355,7 @@ mod tests {
         let cells: Vec<_> = (0..mesh.cell_count())
             .map(|cell| channels(cell as f32 * 0.03125))
             .collect();
-        let bake = bake_cube_field(&mesh, &cells).unwrap();
+        let bake = bake(&mesh, &cells).unwrap();
         for face in CubeFace::ALL {
             for y in 0..bake.resolution() {
                 for x in 0..bake.resolution() {
@@ -408,7 +423,7 @@ mod tests {
                 .num_threads(threads)
                 .build()
                 .unwrap()
-                .install(|| bake_cube_field(&mesh, &cells).unwrap())
+                .install(|| bake(&mesh, &cells).unwrap())
         };
         let first = bake_with_threads(1);
         let second = bake_with_threads(4);
@@ -420,33 +435,37 @@ mod tests {
 
     #[test]
     fn rejects_invalid_inputs() {
-        assert_eq!(control_face_resolution(0), Err(BakeError::InvalidCellCount));
-        assert_eq!(
-            control_face_resolution(usize::MAX),
-            Err(BakeError::InvalidCellCount)
-        );
+        assert_eq!(control_face_resolution(0), None);
+        assert_eq!(control_face_resolution(usize::MAX), None);
 
         let mesh = mesh(16);
         assert_eq!(
-            bake_cube_field::<CHANNELS>(&mesh, &[]),
+            bake_cube_field::<CHANNELS>(&mesh, &[], 4),
             Err(BakeError::CellCountMismatch { mesh: 16, cells: 0 })
         );
+
+        for resolution in [0, 3, MAX_CUBE_FIELD_RESOLUTION * 2] {
+            assert_eq!(
+                bake_cube_field(&mesh, &vec![channels(0.0); mesh.cell_count()], resolution),
+                Err(BakeError::InvalidResolution)
+            );
+        }
 
         let mut non_finite = vec![channels(0.0); mesh.cell_count()];
         non_finite[4][2] = f32::NAN;
         assert_eq!(
-            bake_cube_field(&mesh, &non_finite),
+            bake_cube_field(&mesh, &non_finite, 4),
             Err(BakeError::NonFiniteCell { cell: 4 })
         );
 
         let mut invalid_mesh = mesh.clone();
         invalid_mesh.cell_offsets.clear();
         assert!(matches!(
-            bake_cube_field(&invalid_mesh, &vec![channels(0.0); mesh.cell_count()]),
+            bake_cube_field(&invalid_mesh, &vec![channels(0.0); mesh.cell_count()], 4),
             Err(BakeError::InvalidMesh(TopologyError::InvalidMesh))
         ));
         assert_eq!(
-            bake_cube_field(&mesh, &vec![channels(0.0); mesh.cell_count()])
+            bake_cube_field(&mesh, &vec![channels(0.0); mesh.cell_count()], 4)
                 .unwrap()
                 .sample(Vec3::ZERO),
             Err(MappingError::ZeroDirection)

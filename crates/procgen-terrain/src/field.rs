@@ -1,8 +1,55 @@
 //! Terrain-detail control values and aggregate validation.
 
-use crate::controls::TerrainControlError;
 use procgen_core::Vec3;
+use procgen_geology::GeologyInputError;
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::StageInputError;
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerrainControlError {
+    InvalidConfig,
+    InvalidCells,
+    InvalidStamps,
+    Tectonics(StageInputError),
+    Geology(GeologyInputError),
+}
+
+impl fmt::Display for TerrainControlError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidConfig => formatter.write_str("terrain-control configuration is invalid"),
+            Self::InvalidCells => {
+                formatter.write_str("terrain-control cells are inconsistent with the mesh")
+            }
+            Self::InvalidStamps => formatter.write_str("terrain-control stamps are invalid"),
+            Self::Tectonics(error) => error.fmt(formatter),
+            Self::Geology(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for TerrainControlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidConfig | Self::InvalidCells | Self::InvalidStamps => None,
+            Self::Tectonics(error) => Some(error),
+            Self::Geology(error) => Some(error),
+        }
+    }
+}
+
+impl From<StageInputError> for TerrainControlError {
+    fn from(error: StageInputError) -> Self {
+        Self::Tectonics(error)
+    }
+}
+
+impl From<GeologyInputError> for TerrainControlError {
+    fn from(error: GeologyInputError) -> Self {
+        Self::Geology(error)
+    }
+}
 
 /// Per-cell controls consumed by later interpolation and height-function slices.
 ///

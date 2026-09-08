@@ -3,7 +3,7 @@
 mod controls;
 mod field;
 
-pub use controls::{
-    TerrainControlConfig, TerrainControlError, TerrainControlInputs, compose_terrain_controls,
+pub use controls::{TerrainControlConfig, TerrainControlInputs, compose_terrain_controls};
+pub use field::{
+    TerrainCellControls, TerrainControlError, TerrainControls, TerrainStampInput, TerrainStampKind,
 };
-pub use field::{TerrainCellControls, TerrainControls, TerrainStampInput, TerrainStampKind};

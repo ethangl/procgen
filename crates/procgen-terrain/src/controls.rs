@@ -3,14 +3,15 @@
 //! This module only derives per-cell controls and stable sparse stamp inputs. It does not
 //! interpolate, bake, evaluate noise, or mutate any upstream field.
 
-use crate::field::{TerrainCellControls, TerrainControls, TerrainStampInput, TerrainStampKind};
+use crate::field::{
+    TerrainCellControls, TerrainControlError, TerrainControls, TerrainStampInput, TerrainStampKind,
+};
 use procgen_geology::{
-    CratonField, GeologyInputError, HotspotField, IsostaticAdjustment, OceanicPeakField,
-    OceanicPeakKind, SedimentaryBasinField, VolcanicArcField,
+    CratonField, HotspotField, IsostaticAdjustment, OceanicPeakField, OceanicPeakKind,
+    SedimentaryBasinField, VolcanicArcField,
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{BoundaryClass, BoundaryClassification, SeafloorAge, StageInputError};
-use std::fmt;
+use procgen_tectonics::{BoundaryClass, BoundaryClassification, SeafloorAge};
 
 /// Coefficients for converting completed coarse fields into normalized detail controls.
 ///
@@ -136,51 +137,6 @@ pub struct TerrainControlInputs<'a> {
     pub seafloor_age: &'a SeafloorAge,
     pub hotspots: &'a HotspotField,
     pub oceanic_peaks: &'a OceanicPeakField,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerrainControlError {
-    InvalidConfig,
-    InvalidCells,
-    InvalidStamps,
-    Tectonics(StageInputError),
-    Geology(GeologyInputError),
-}
-
-impl fmt::Display for TerrainControlError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidConfig => formatter.write_str("terrain-control configuration is invalid"),
-            Self::InvalidCells => {
-                formatter.write_str("terrain-control cells are inconsistent with the mesh")
-            }
-            Self::InvalidStamps => formatter.write_str("terrain-control stamps are invalid"),
-            Self::Tectonics(error) => error.fmt(formatter),
-            Self::Geology(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for TerrainControlError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidConfig | Self::InvalidCells | Self::InvalidStamps => None,
-            Self::Tectonics(error) => Some(error),
-            Self::Geology(error) => Some(error),
-        }
-    }
-}
-
-impl From<StageInputError> for TerrainControlError {
-    fn from(error: StageInputError) -> Self {
-        Self::Tectonics(error)
-    }
-}
-
-impl From<GeologyInputError> for TerrainControlError {
-    fn from(error: GeologyInputError) -> Self {
-        Self::Geology(error)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -352,6 +308,7 @@ fn validate_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use procgen_geology::GeologyInputError;
     use procgen_geology::{
         CratonDiagnostics, Hotspot, HotspotDiagnostics, IsostaticAdjustmentDiagnostics,
         OceanicPeak, OceanicPeakDiagnostics, SedimentaryBasin, SedimentaryBasinDiagnostics,
@@ -359,7 +316,7 @@ mod tests {
     };
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
-    use procgen_tectonics::SeafloorAgeDiagnostics;
+    use procgen_tectonics::{SeafloorAgeDiagnostics, StageInputError};
 
     struct Fixture {
         mesh: SphereMesh,
