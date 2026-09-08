@@ -13,8 +13,8 @@ impl Default for LightingSettings {
         Self {
             azimuth_degrees: -30.0,
             elevation_degrees: 30.0,
-            illuminance: 8_888.0,
-            ambient_brightness: 111.0,
+            illuminance: 5_000.0,
+            ambient_brightness: 33.0,
         }
     }
 }

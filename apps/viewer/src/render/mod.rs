@@ -24,9 +24,7 @@ pub struct ReliefSettings {
 
 impl Default for ReliefSettings {
     fn default() -> Self {
-        Self {
-            exaggeration: 0.036,
-        }
+        Self { exaggeration: 0.01 }
     }
 }
 

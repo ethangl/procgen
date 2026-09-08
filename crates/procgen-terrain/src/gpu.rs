@@ -18,10 +18,11 @@ pub const TERRAIN_WGSL_VALUE_TOLERANCE: f32 = 3.0e-5;
 /// CPU/WGSL rendered-normal tolerance in radians.
 ///
 /// On 2026-09-08, the same dispatch measured a maximum `1.641079038e-1`
-/// radians. Divergence is concentrated at the finest octave because CPU and
-/// Metal transcendental cube-sphere mapping differ before high-frequency
-/// sampling. The tolerance is ten times that maximum, rounded upward, and
-/// remains provisional until the mapping and CUDA path are calibrated.
+/// radians using the agreement test's explicit `0.036` display relief.
+/// Divergence is concentrated at the finest octave because CPU and Metal
+/// transcendental cube-sphere mapping differ before high-frequency sampling.
+/// The tolerance is ten times that maximum, rounded upward, and remains
+/// provisional until the mapping and CUDA path are calibrated.
 pub const TERRAIN_WGSL_NORMAL_ANGLE_TOLERANCE: f32 = 1.7;
 
 /// Checked-in WGSL mirror of canonical terrain height and tile evaluation.
