@@ -50,14 +50,36 @@ fn terrain_elevation_color(height: f32) -> vec4<f32> {
     return vec4(terrain_srgb_to_linear(terrain_palette.stops[last].xyz), 1.0);
 }
 
+fn terrain_parent_sample(parent_slot: u32, address: vec4<u32>, local: vec2<u32>) -> vec4<f32> {
+    let parent_local = (vec2<f32>(address.zw & vec2(1u)) * f32(CUBESPHERE_TILE_QUADS)
+        + vec2<f32>(local)) * 0.5;
+    let low = vec2<u32>(floor(parent_local));
+    let high = min(low + vec2(1u), vec2(CUBESPHERE_TILE_QUADS));
+    let weight = fract(parent_local);
+    let lower = mix(
+        terrain_samples[cubesphere_tile_sample_index(parent_slot, low)],
+        terrain_samples[cubesphere_tile_sample_index(parent_slot, vec2(high.x, low.y))],
+        weight.x,
+    );
+    let upper = mix(
+        terrain_samples[cubesphere_tile_sample_index(parent_slot, vec2(low.x, high.y))],
+        terrain_samples[cubesphere_tile_sample_index(parent_slot, high)],
+        weight.x,
+    );
+    return mix(lower, upper, weight.y);
+}
+
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
-    let slot = mesh[vertex.instance_index].tag;
+    let tag = mesh[vertex.instance_index].tag;
+    let slot = tag & TERRAIN_SLOT_MASK;
+    let parent_slot = (tag >> TERRAIN_SLOT_BITS) & TERRAIN_SLOT_MASK;
+    let morph = f32(tag >> (2u * TERRAIN_SLOT_BITS)) / f32(TERRAIN_MORPH_MAX);
     let local = vec2<u32>(vertex.position.xy);
     let sample_index = cubesphere_tile_sample_index(slot, local);
-    let sample = terrain_samples[sample_index];
     let address = terrain_addresses[slot];
+    let sample = mix(terrain_parent_sample(parent_slot, address, local), terrain_samples[sample_index], morph);
     let direction = cubesphere_tile_direction(address, local);
     let radius = terrain_display.surface_radius
         + (sample.x - 0.5) * terrain_display.relief_exaggeration

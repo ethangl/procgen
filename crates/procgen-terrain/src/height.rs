@@ -275,8 +275,9 @@ pub struct TerrainHeightInputs<'a> {
 /// The unwarped baked base controls coast proximity. It remains the authority
 /// used to decide where warping and taper apply; this function does not return
 /// or mutate a land/ocean classification.
-/// The returned sample's `value` is normalized elevation and its derivative is
-/// tangent to the unit sphere for later normal construction.
+/// The returned sample's `value` uses the normalized coarse-elevation scale but
+/// may extend beyond `[0, 1]` after detail and stamps are added. Its derivative
+/// is tangent to the unit sphere for later normal construction.
 pub fn terrain_height(
     inputs: TerrainHeightInputs<'_>,
     config: ValidatedTerrainHeightConfig,
@@ -351,16 +352,9 @@ pub(crate) fn terrain_height_with_lod(
         height += stamp_contribution(direction, *stamp, config.stamps.profile(stamp.kind));
     }
 
-    if height.value <= 0.0 || height.value >= 1.0 {
-        ScalarFieldSample3 {
-            value: height.value.clamp(0.0, 1.0),
-            derivative: Vec3::ZERO,
-        }
-    } else {
-        ScalarFieldSample3 {
-            value: height.value,
-            derivative: height.derivative - direction * height.derivative.dot(direction),
-        }
+    ScalarFieldSample3 {
+        value: height.value,
+        derivative: height.derivative - direction * height.derivative.dot(direction),
     }
 }
 
@@ -512,7 +506,7 @@ mod tests {
                 sample.derivative.y.to_bits(),
                 sample.derivative.z.to_bits(),
             ],
-            [0x3F24_A404, 0x3F96_1AFF, 0x3F4F_8F1D, 0xBCA8_EEA7]
+            [0x3F25_0645, 0x3F05_D406, 0x4001_D8D6, 0x3F8D_F0F4]
         );
         assert!(sample.derivative.dot(direction()).abs() < 2.0e-6);
         assert_eq!(
@@ -549,6 +543,28 @@ mod tests {
         );
         assert_eq!(sample.value, 0.72);
         assert_eq!(sample.derivative, Vec3::ZERO);
+    }
+
+    #[test]
+    fn detail_can_extend_beyond_the_coarse_normalized_range_without_flattening() {
+        let direction = Vec3::Z;
+        let bake = constant_bake(TerrainCellControls {
+            base_elevation: 0.99,
+            ..TerrainCellControls::default()
+        });
+        let stamp = stamp(
+            TerrainStampKind::Hotspot,
+            0,
+            Vec3::new(0.004, 0.0, 1.0).normalized(),
+            1.0,
+        );
+        let sample = terrain_height(
+            height_inputs(direction, &bake, &[stamp]),
+            TerrainHeightConfig::default().validate().unwrap(),
+        );
+        assert!(sample.value > 1.0);
+        assert_ne!(sample.derivative, Vec3::ZERO);
+        assert!(sample.derivative.dot(direction).abs() < 2.0e-6);
     }
 
     #[test]

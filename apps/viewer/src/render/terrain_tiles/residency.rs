@@ -111,6 +111,13 @@ impl TileResidency {
         self.slots.iter().flatten().count()
     }
 
+    pub(super) fn ready_parent_slot(&self, tile: ResidentTile) -> Option<u32> {
+        tile.address
+            .parent()
+            .and_then(|parent| self.find_ready(parent))
+            .map(|slot| slot as u32)
+    }
+
     pub(super) fn complete_in_flight(&mut self) {
         for slot in self.slots.iter_mut().flatten() {
             slot.ready = true;
@@ -285,6 +292,12 @@ mod tests {
         let slot = residency.find(root).unwrap();
         residency.slots[slot] = None;
         let update = residency.update(&[root]);
+        assert!(
+            update
+                .displayed
+                .iter()
+                .all(|&tile| residency.ready_parent_slot(tile).is_none())
+        );
         assert_eq!(
             update.generated,
             vec![ResidentTile {

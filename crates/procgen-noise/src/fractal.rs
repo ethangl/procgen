@@ -149,7 +149,7 @@ impl RidgedMultifractalConfig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DerivativeDampedConfig {
     pub octaves: OctaveConfig,
-    /// Strength of attenuation from accumulated squared slope.
+    /// Strength of attenuation from accumulated squared dimensionless slope.
     pub damping: f32,
 }
 
@@ -343,9 +343,12 @@ pub fn ridged_multifractal_3d_faded(
 /// Accumulates fbm while damping higher octaves as accumulated slope grows.
 ///
 /// Before each octave, its amplitude is divided by
-/// `1 + damping * accumulated_slope_squared`. The first octave is therefore
-/// unchanged. Values remain an unnormalized weighted sum, and damping never
-/// increases the amplitude of an individual octave relative to plain fbm.
+/// `1 + damping * accumulated_dimensionless_slope_squared`. The accumulated
+/// derivative is divided by octave zero's frequency before attenuation, so a
+/// caller can change the sampled spatial scale without unintentionally
+/// changing the damping response. The first octave is therefore unchanged.
+/// Values remain an unnormalized weighted sum, and damping never increases the
+/// amplitude of an individual octave relative to plain fbm.
 /// The conservative value bound is twice the octave amplitude sum. The
 /// returned derivative is the accumulated slope used by the damping recurrence;
 /// as is conventional for derivative-damped fbm, the spatial derivative of the
@@ -372,7 +375,8 @@ pub fn derivative_damped_fbm_3d_faded(
     let mut result = ScalarFieldSample3::default();
     let octave_count = config.octaves.octaves;
     for (index, octave) in config.octaves.octaves(gain).enumerate() {
-        let attenuation = (1.0 + config.damping * result.derivative.length_squared()).recip();
+        let dimensionless_slope = result.derivative * config.octaves.frequency.recip();
+        let attenuation = (1.0 + config.damping * dimensionless_slope.length_squared()).recip();
         let fade = if index as u32 + 1 == octave_count {
             newest_octave_weight.0
         } else {
@@ -466,8 +470,25 @@ mod tests {
         );
         assert_eq!(
             sample_bits(damped),
-            [0x3E7C_0C6E, 0xBF3D_220F, 0x3FC2_824C, 0xBFBB_CC53]
+            [0x3E81_B146, 0xBF23_17CF, 0x3FD2_5601, 0xBFD1_AE85]
         );
+    }
+
+    #[test]
+    fn damping_response_is_independent_of_base_frequency_units() {
+        let low = derivative_damped_fbm_3d(KEY, POSITION, valid_damped(5, 0.75), gain());
+        let high_config = DerivativeDampedConfig {
+            octaves: OctaveConfig {
+                frequency: octave_config(5).frequency * 8.0,
+                ..octave_config(5)
+            },
+            damping: 0.75,
+        }
+        .validate()
+        .unwrap();
+        let high = derivative_damped_fbm_3d(KEY, POSITION * 0.125, high_config, gain());
+        assert_eq!(high.value, low.value);
+        assert_eq!(high.derivative * 0.125, low.derivative);
     }
 
     #[test]

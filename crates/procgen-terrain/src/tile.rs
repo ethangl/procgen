@@ -47,7 +47,7 @@ impl TerrainTile {
         self.samples.get((y * TILE_VERTICES + x) as usize).copied()
     }
 
-    /// Checks the shape, normalized finite heights, and tangent derivatives.
+    /// Checks the shape, finite heights, and tangent derivatives.
     pub fn validate(&self, address: TileAddress) -> Result<(), TerrainTileError> {
         if self.samples.len() != TERRAIN_TILE_SAMPLE_COUNT {
             return Err(TerrainTileError::InvalidShape);
@@ -55,9 +55,6 @@ impl TerrainTile {
         for (sample, direction) in self.samples.iter().zip(tile_directions(address)) {
             if !sample.value.is_finite() || !sample.derivative.is_finite() {
                 return Err(TerrainTileError::NonFiniteSample);
-            }
-            if !(0.0..=1.0).contains(&sample.value) {
-                return Err(TerrainTileError::HeightOutOfRange);
             }
             let tangent_error = sample.derivative.dot(direction).abs();
             let allowed = TANGENT_RELATIVE_TOLERANCE * (1.0 + sample.derivative.length());
@@ -73,7 +70,6 @@ impl TerrainTile {
 pub enum TerrainTileError {
     InvalidShape,
     NonFiniteSample,
-    HeightOutOfRange,
     NonTangentDerivative,
 }
 
@@ -87,9 +83,6 @@ impl fmt::Display for TerrainTileError {
                 )
             }
             Self::NonFiniteSample => formatter.write_str("terrain tile samples must be finite"),
-            Self::HeightOutOfRange => {
-                formatter.write_str("terrain tile heights must be normalized")
-            }
             Self::NonTangentDerivative => {
                 formatter.write_str("terrain tile derivatives must be tangent to the sphere")
             }
@@ -236,11 +229,11 @@ mod tests {
         assert_eq!(
             pinned,
             [
-                [0x3F1E_53A0, 0x3F00_0318, 0xBDAD_A632, 0xBD60_E2FD],
-                [0x3F1D_D4B4, 0xBD67_EB95, 0x3F93_CA14, 0x3ED6_5FF4],
-                [0x3F1E_4F1A, 0x3E82_B1B4, 0xBF63_FFC7, 0xBEA0_4836],
-                [0x3F1D_7839, 0x3D0A_CAEC, 0x3F24_115F, 0x3E45_5F89],
-                [0x3F1E_EAFF, 0xBF83_169D, 0xBD8A_4FBF, 0x3DA4_9EF0],
+                [0x3F1E_2D5F, 0xBF0B_0283, 0xBEC4_DCE6, 0xBDE3_1F2C],
+                [0x3F1D_AD8E, 0x3E5B_CB41, 0x3FAC_4BB3, 0x3EEB_C509],
+                [0x3F1E_B380, 0x3EEC_9685, 0xBF7B_6F15, 0xBEB7_93AE],
+                [0x3F1D_6BC9, 0x3E1D_B017, 0x3F4E_8C33, 0x3E72_E021],
+                [0x3F1E_E819, 0xBF97_23C5, 0xBF5C_CA73, 0xBE14_D124],
             ]
         );
     }
@@ -389,11 +382,6 @@ mod tests {
         assert_eq!(
             tile.validate(address),
             Err(TerrainTileError::NonFiniteSample)
-        );
-        *tile.samples.last_mut().unwrap() = ScalarFieldSample3::constant(1.1);
-        assert_eq!(
-            tile.validate(address),
-            Err(TerrainTileError::HeightOutOfRange)
         );
         tile.samples.fill(ScalarFieldSample3::default());
         tile.samples[0].derivative = address.grid_vertex(0, 0).unwrap().direction();

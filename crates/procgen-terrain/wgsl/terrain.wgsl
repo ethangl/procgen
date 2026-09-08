@@ -217,8 +217,5 @@ fn terrain_height_gpu(direction: vec3<f32>, tile_level: u32) -> ScalarFieldSampl
         let stamp = terrain_load_stamp(index);
         height = add_sample(height, terrain_stamp_contribution(direction, stamp, parameters.stamp_profiles[stamp.kind]));
     }
-    if height.value <= 0.0 || height.value >= 1.0 {
-        return ScalarFieldSample3(clamp(height.value, 0.0, 1.0), vec3(0.0));
-    }
     return ScalarFieldSample3(height.value, height.derivative - direction * dot(height.derivative, direction));
 }

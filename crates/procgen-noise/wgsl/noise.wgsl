@@ -191,9 +191,10 @@ fn derivative_damped_fbm_3d_faded(key: u32, position: vec3<f32>, octaves: u32, i
     for (var octave = 0u; octave < octaves; octave++) {
         // As above, preserve Rust's scalar expression order instead of using
         // length() or dot(), whose lowering may contract differently.
-        let slope_squared = result.derivative.x * result.derivative.x
-            + result.derivative.y * result.derivative.y
-            + result.derivative.z * result.derivative.z;
+        let slope = result.derivative * (1.0 / initial_frequency);
+        let slope_squared = slope.x * slope.x
+            + slope.y * slope.y
+            + slope.z * slope.z;
         let attenuation = 1.0 / (1.0 + damping * slope_squared);
         let fade = select(1.0, newest_octave_weight, octave + 1u == octaves);
         result = add_sample(result, scale_sample(octave_sample(key, position, frequency), amplitude * attenuation * fade));

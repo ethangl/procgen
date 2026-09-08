@@ -21,11 +21,15 @@ The viewer draws the coarse world as one triangle fan per Voronoi cell and
 switches adjusted elevation to adaptive GPU terrain tiles inside 1.75 sphere
 radii. The quadtree reaches level 12, retains deterministic resident tiles,
 and generates no more than eight new tiles per frame. Each tile renders from a
-deterministic relative origin and carries a one-quad radial skirt. The orbit
-camera reaches 0.001 sphere radii above the nominal surface (6.371 km at Earth
-scale) with a 0.00001-radius near plane (63.71 m at Earth scale). Generated
-worlds are cached as snapshots keyed on generator build identity, so an
-expensive coarse run is paid once per build and settings.
+deterministic relative origin and carries a one-quad radial skirt. Visible
+neighbors are balanced to a one-level difference, and child vertices and
+normals morph from their resident parent while crossing the split band. Tile
+screen size uses the conservative nearest depth, preventing oblique near edges
+from remaining coarse. The orbit camera reaches 0.001 sphere radii above the
+nominal surface (6.371 km at Earth scale) with a 0.00001-radius near plane
+(63.71 m at Earth scale). Generated worlds are cached as snapshots keyed on
+generator build identity, so an expensive coarse run is paid once per build
+and settings.
 
 There is no noise primitive, no sphere projection, and no tiling anywhere in
 the workspace. Those are the pieces this stage adds.
@@ -110,9 +114,12 @@ basis interface is extracted only if a second implementation proves the
 boundary. Its grid artifacts are mostly hidden by the ridge and roughness
 controls. Derivatives give tile normals without finite differences and enable
 derivative-damped accumulation, which suppresses high octaves on steep slopes
-and reads as erosion rather than static. Ridged multifractal handles mountain
-belts. Plain fbm, ridged, and derivative-damped accumulation ship together,
-because the baked ridge and roughness channels presuppose them.
+and reads as erosion rather than static. Damping uses accumulated derivative
+divided by the base frequency, making its slope measure dimensionless; changing
+terrain scale therefore cannot accidentally erase later octaves. Ridged
+multifractal handles mountain belts. Plain fbm, ridged, and derivative-damped
+accumulation ship together, because the baked ridge and roughness channels
+presuppose them.
 
 Coastlines are the one place additive noise misbehaves: it fragments the shore
 into lakes and islets and makes the fine ocean mask disagree with the mask
@@ -136,7 +143,10 @@ support radius, so spatial culling cannot introduce a height or normal seam.
 
 The CPU height evaluator returns `procgen_core::ScalarFieldSample3`, the shared
 backend-neutral scalar value and three-dimensional derivative carried through
-noise, controls, coast behavior, and stamps. Callers construct
+noise, controls, coast behavior, and stamps. Fine elevation remains on the
+coarse normalized scale but is not clamped to `[0, 1]`: detail above or below
+that interval keeps both its relief and derivative, while bounded color mapping
+remains a rendering concern. Callers construct
 `TerrainNoiseKeys` once from the explicit `u64` terrain seed and reuse its
 pre-folded field keys across every vertex in a tile.
 
@@ -173,7 +183,7 @@ named value and derivative-angle tolerances.
 - The tolerances are set at ten times the measured maximum divergence and the
   measurements are recorded beside the constants. The slice-14 Metal sweep
   across levels 1, 4, 8, and 12 plus fade endpoints measured `2.503395081e-6`
-  normalized height and `1.641079038e-1` radians for the default rendered
+  normalized height and `1.637477577e-1` radians for the default rendered
   normal. The corresponding provisional bounds are `3e-5` and `1.7` radians;
   the normal drift is concentrated at the finest octave because CPU and Metal
   cube-sphere transcendental results diverge before high-frequency sampling.
@@ -202,10 +212,14 @@ at face center:
 
 The octave cutoff is the level of detail. A tile evaluates only octaves whose
 wavelength is at least twice its vertex spacing, and the last octave fades in
-with the split factor so refinement does not pop. Skirts hide cracks between
-neighboring levels; index stitching can replace them later. Nodes split and
-merge on projected size with a per-frame budget for new tiles. Tile positions
-are stored relative to the tile origin so f32 precision holds at close range.
+with the spacing split factor. During refinement, child samples are blended
+from bilinearly reconstructed parent samples to their own samples as the
+parent's projected size moves from the split threshold to twice that size.
+Visible neighbors are balanced to a one-level difference, and skirts hide the
+remaining mixed-level cracks; index stitching remains out of scope. Nodes split
+and merge on conservative nearest-depth projected size with a per-frame budget
+for new tiles. Tile positions are stored relative to the tile origin so f32
+precision holds at close range.
 
 The whole planet at level 12 is about 100 million tiles and 4e11 samples. It
 is never materialized; a view holds on the order of a thousand tiles. One tile

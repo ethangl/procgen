@@ -102,12 +102,16 @@ switches to camera-visible adaptive terrain tiles through level 12. A WGSL
 compute pass generates at most eight 65-by-65 core height-and-derivative grids
 per frame and keeps them GPU-resident in 1,024 reusable slots. Each level
 evaluates only wavelengths at least twice its nominal vertex spacing and fades
-the newest octave by that spacing split factor. One-quad radial skirts hide
+the newest octave by that spacing split factor. Child geometry and normals
+morph from bilinearly sampled parent data as the parent's projected size grows
+from the split threshold to twice that threshold, and adjacent visible tiles
+differ by at most one level. One-quad radial skirts hide the remaining
 mixed-level cracks, while deterministic tile-relative origins preserve close
-position precision. The coarse fan returns above the threshold; diagnostic
-fills and overlays retain their existing paths. The camera stops 0.001 radius
-above the nominal surface with a 0.00001-radius near plane—about 6.371 km and
-63.71 m respectively at Earth scale.
+position precision. Projected size uses the tile's nearest conservative depth
+instead of its center depth. The coarse fan returns above the threshold;
+diagnostic fills and overlays retain their existing paths. The camera stops
+0.001 radius above the nominal surface with a 0.00001-radius near plane—about
+6.371 km and 63.71 m respectively at Earth scale.
 Plate interiors use stable per-plate colors.
 Crust is blue for oceanic and amber for continental. Seafloor age runs from
 cyan ridge cells to dark blue old crust, with

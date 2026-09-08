@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use super::{SURFACE_RADIUS, TERRAIN_MAX_TILE_LEVEL};
 use bevy::{camera::Projection, prelude::*};
 use procgen_core::Vec3 as ProcgenVec3;
-use procgen_cubesphere::{CubeFace, TILE_QUADS, TileAddress};
+use procgen_cubesphere::{CubeFace, FaceCoordinates, TILE_QUADS, TileAddress, direction_to_face};
 
 const TILE_SPLIT_PROJECTED_PIXELS: f32 = 180.0;
 const TILE_MERGE_PROJECTED_PIXELS: f32 = 140.0;
@@ -53,6 +53,8 @@ impl QuadtreeSelection {
             let root = TileAddress::root(face);
             self.visit(root, view, &previous, &mut selected);
         }
+        self.balance_neighbor_levels(&mut selected);
+        selected.sort();
         selected
     }
 
@@ -86,6 +88,46 @@ impl QuadtreeSelection {
             selected.push(address);
         }
     }
+
+    fn balance_neighbor_levels(&mut self, selected: &mut Vec<TileAddress>) {
+        loop {
+            let leaves = selected.iter().copied().collect::<HashSet<_>>();
+            let Some(maximum_level) = selected.iter().map(|tile| tile.level()).max() else {
+                return;
+            };
+            let mut split = BTreeSet::new();
+            for &tile in selected.iter() {
+                for direction in outside_edge_directions(tile) {
+                    let coordinates = direction_to_face(direction)
+                        .expect("an edge probe is a finite nonzero direction");
+                    let Some(neighbor) = containing_leaf(&leaves, coordinates, maximum_level)
+                    else {
+                        continue;
+                    };
+                    if neighbor.level() + 1 < tile.level() {
+                        split.insert(neighbor);
+                    }
+                }
+            }
+            if split.is_empty() {
+                return;
+            }
+            selected.retain(|tile| !split.contains(tile));
+            for tile in split {
+                self.split.insert(tile);
+                selected.extend(tile.children().unwrap());
+            }
+        }
+    }
+}
+
+pub(super) fn tile_morph_factor(address: TileAddress, view: CoverageView) -> f32 {
+    let Some(parent) = address.parent() else {
+        return 1.0;
+    };
+    ((TileBounds::new(parent).projected_diameter(view) - TILE_SPLIT_PROJECTED_PIXELS)
+        / TILE_SPLIT_PROJECTED_PIXELS)
+        .clamp(0.0, 1.0)
 }
 
 #[derive(Clone, Copy)]
@@ -119,24 +161,65 @@ impl TileBounds {
 
         let offset = self.center * SURFACE_RADIUS - view.position;
         let depth = offset.dot(view.forward);
-        if depth + self.radius <= 0.0 {
+        let radius = self.radius * SURFACE_RADIUS;
+        if depth + radius <= 0.0 {
             return false;
         }
         let tan_y = (view.vertical_fov * 0.5).tan();
         let tan_x = tan_y * view.aspect_ratio;
-        let vertical_margin = self.radius * (1.0 + tan_y * tan_y).sqrt();
-        let horizontal_margin = self.radius * (1.0 + tan_x * tan_x).sqrt();
+        let vertical_margin = radius * (1.0 + tan_y * tan_y).sqrt();
+        let horizontal_margin = radius * (1.0 + tan_x * tan_x).sqrt();
         offset.dot(view.up).abs() <= depth * tan_y + vertical_margin
             && offset.dot(view.right).abs() <= depth * tan_x + horizontal_margin
     }
 
     fn projected_diameter(self, view: CoverageView) -> f32 {
         let depth = (self.center * SURFACE_RADIUS - view.position).dot(view.forward);
-        if depth <= self.radius {
+        let radius = self.radius * SURFACE_RADIUS;
+        let nearest_depth = depth - radius;
+        if nearest_depth <= 0.0 {
             return f32::INFINITY;
         }
-        view.viewport_height * self.radius / (depth * (view.vertical_fov * 0.5).tan())
+        view.viewport_height * radius / (nearest_depth * (view.vertical_fov * 0.5).tan())
     }
+}
+
+fn outside_edge_directions(address: TileAddress) -> [ProcgenVec3; 4] {
+    let center = address
+        .grid_vertex(TILE_QUADS / 2, TILE_QUADS / 2)
+        .unwrap()
+        .direction();
+    [
+        address.grid_vertex(0, TILE_QUADS / 2).unwrap().direction(),
+        address
+            .grid_vertex(TILE_QUADS, TILE_QUADS / 2)
+            .unwrap()
+            .direction(),
+        address.grid_vertex(TILE_QUADS / 2, 0).unwrap().direction(),
+        address
+            .grid_vertex(TILE_QUADS / 2, TILE_QUADS)
+            .unwrap()
+            .direction(),
+    ]
+    .map(|edge| (edge + (edge - center) * 0.001).normalized())
+}
+
+fn containing_leaf(
+    leaves: &HashSet<TileAddress>,
+    coordinates: FaceCoordinates,
+    maximum_level: u8,
+) -> Option<TileAddress> {
+    (0..=maximum_level).find_map(|level| {
+        let tiles_per_axis = (1_u32 << level) as f32;
+        let x = ((coordinates.u + 1.0) * 0.5 * tiles_per_axis)
+            .floor()
+            .clamp(0.0, tiles_per_axis - 1.0) as u32;
+        let y = ((coordinates.v + 1.0) * 0.5 * tiles_per_axis)
+            .floor()
+            .clamp(0.0, tiles_per_axis - 1.0) as u32;
+        let address = TileAddress::new(coordinates.face, level, x, y).unwrap();
+        leaves.contains(&address).then_some(address)
+    })
 }
 
 pub(super) fn tile_direction(address: TileAddress, x: u32, y: u32) -> Vec3 {
@@ -198,6 +281,55 @@ mod tests {
             large.iter().map(|tile| tile.level()).max()
                 > small.iter().map(|tile| tile.level()).max()
         );
+    }
+
+    #[test]
+    fn every_visible_leaf_meets_the_projected_size_limit() {
+        let view = view(Vec3::new(0.7, 0.3, 1.0).normalize() * 1.08, 900.0);
+        let selected = QuadtreeSelection::default().select(view);
+        for tile in selected {
+            let bounds = TileBounds::new(tile);
+            if bounds.may_be_visible(view) && tile.level() < TERRAIN_MAX_TILE_LEVEL {
+                assert!(
+                    bounds.projected_diameter(view) < TILE_SPLIT_PROJECTED_PIXELS,
+                    "visible leaf {tile:?} exceeds the split threshold"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_neighbors_differ_by_at_most_one_level_across_faces() {
+        let view = view(Vec3::new(1.0, 0.8, 0.9).normalize() * 1.03, 900.0);
+        let selected = QuadtreeSelection::default().select(view);
+        let leaves = selected.iter().copied().collect::<HashSet<_>>();
+        let maximum_level = selected.iter().map(|tile| tile.level()).max().unwrap();
+        for tile in selected {
+            for direction in outside_edge_directions(tile) {
+                if let Some(neighbor) = containing_leaf(
+                    &leaves,
+                    direction_to_face(direction).unwrap(),
+                    maximum_level,
+                ) {
+                    assert!(tile.level().abs_diff(neighbor.level()) <= 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn child_morph_runs_from_split_threshold_to_twice_its_size() {
+        let address = TileAddress::new(CubeFace::PositiveZ, 3, 4, 4).unwrap();
+        let position = Vec3::Z * 1.4;
+        let pixels_per_height =
+            TileBounds::new(address.parent().unwrap()).projected_diameter(view(position, 1.0));
+        let at_split = view(position, TILE_SPLIT_PROJECTED_PIXELS / pixels_per_height);
+        let at_full = view(
+            position,
+            2.0 * TILE_SPLIT_PROJECTED_PIXELS / pixels_per_height,
+        );
+        assert_eq!(tile_morph_factor(address, at_split), 0.0);
+        assert_eq!(tile_morph_factor(address, at_full), 1.0);
     }
 
     #[test]
