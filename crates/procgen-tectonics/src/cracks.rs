@@ -254,13 +254,6 @@ fn adopt_wall_cells(mesh: &SphereMesh, cell_faces: &mut Vec<Option<usize>>) {
     }
 }
 
-/// How much of a merging face's boundary one neighbor holds.
-#[derive(Clone, Copy, Default)]
-struct SharedBoundary {
-    edges: usize,
-    length: f64,
-}
-
 /// Merges faces that are too small or too thin into the neighbor they share
 /// the most edges with, smallest first, then compacts the surviving ids.
 fn merge_faces(mesh: &SphereMesh, mut cell_faces: Vec<usize>, face_count: usize) -> CrackFaces {
@@ -278,20 +271,20 @@ fn merge_faces(mesh: &SphereMesh, mut cell_faces: Vec<usize>, face_count: usize)
         .collect();
     let minimum_area = MIN_FACE_AREA_FRACTION * mesh.total_area();
 
-    let mut areas = vec![0.0; face_count];
-    for (cell, &face) in cell_faces.iter().enumerate() {
-        areas[face] += f64::from(mesh.cell_areas[cell]);
-    }
-    let mut perimeters = vec![0.0; face_count];
-    for (edge, length) in mesh.edges.iter().zip(&edge_lengths) {
-        let (left, right) = (cell_faces[edge.cells[0]], cell_faces[edge.cells[1]]);
-        if left != right {
-            perimeters[left] += length;
-            perimeters[right] += length;
-        }
-    }
-
     loop {
+        let mut areas = vec![0.0; face_count];
+        for (cell, &face) in cell_faces.iter().enumerate() {
+            areas[face] += f64::from(mesh.cell_areas[cell]);
+        }
+        let mut perimeters = vec![0.0; face_count];
+        for (edge, length) in mesh.edges.iter().zip(&edge_lengths) {
+            let (left, right) = (cell_faces[edge.cells[0]], cell_faces[edge.cells[1]]);
+            if left != right {
+                perimeters[left] += length;
+                perimeters[right] += length;
+            }
+        }
+
         let offending = |face: usize| {
             areas[face] > 0.0
                 && (areas[face] < minimum_area
@@ -305,32 +298,23 @@ fn merge_faces(mesh: &SphereMesh, mut cell_faces: Vec<usize>, face_count: usize)
             break;
         };
 
-        let mut shared = vec![SharedBoundary::default(); face_count];
-        for (edge, length) in mesh.edges.iter().zip(&edge_lengths) {
+        let mut shared = vec![0_usize; face_count];
+        for edge in &mesh.edges {
             let (left, right) = (cell_faces[edge.cells[0]], cell_faces[edge.cells[1]]);
             let neighbor = match (left == small, right == small) {
                 (true, false) => right,
                 (false, true) => left,
                 _ => continue,
             };
-            shared[neighbor].edges += 1;
-            shared[neighbor].length += length;
+            shared[neighbor] += 1;
         }
         // A face with no neighbor is the only face left, and it stays.
         let Some(target) = (0..face_count)
-            .filter(|&face| shared[face].edges > 0)
-            .max_by_key(|&face| (shared[face].edges, Reverse(face)))
+            .filter(|&face| shared[face] > 0)
+            .max_by_key(|&face| (shared[face], Reverse(face)))
         else {
             break;
         };
-
-        // The two faces become one: areas add, and the boundary they shared
-        // stops bounding either of them. Every other face keeps its own
-        // perimeter, since its share of the boundary only changes owner.
-        areas[target] += areas[small];
-        areas[small] = 0.0;
-        perimeters[target] += perimeters[small] - 2.0 * shared[target].length;
-        perimeters[small] = 0.0;
         for face in cell_faces.iter_mut() {
             if *face == small {
                 *face = target;
