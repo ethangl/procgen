@@ -1,4 +1,4 @@
-//! Runs the raster plate partition on Bevy's own device.
+//! Runs the raster tectonics pipeline on Bevy's own device.
 //!
 //! The pipeline is not yet interactive, so a run is submitted stage by stage
 //! and waited on, which is what makes per-stage timings measurable without
@@ -13,13 +13,14 @@ use bevy::{
     },
 };
 use procgen_raster_tectonics::{
-    MAX_PLATE_COUNT, MAX_TECTONIC_RESOLUTION, PartitionRun, PipelineTuning, PlatePartitionPipeline,
-    RasterPlatePartitionConfig,
+    MAX_PLATE_COUNT, MAX_TECTONIC_RESOLUTION, PipelineTuning, RASTER_SPHERE_RADIUS,
+    RasterTectonicsConfig, TectonicsPipeline, TectonicsRun,
 };
 use procgen_tectonics::MAX_GROWTH_ROUGHNESS;
 
 /// Face resolutions the viewer offers. The pilot's target is the largest;
-/// slice 2 defaults to a resolution that reruns fast enough to explore.
+/// until the interactivity slice the default is a resolution that reruns fast
+/// enough to explore.
 pub const FACE_RESOLUTIONS: [u32; 4] = [128, 256, 512, MAX_TECTONIC_RESOLUTION];
 pub const DEFAULT_FACE_RESOLUTION: u32 = 256;
 
@@ -28,22 +29,36 @@ pub const MAJOR_PLATE_RANGE: std::ops::RangeInclusive<u32> = 1..=64;
 pub const MINOR_PLATE_RANGE: std::ops::RangeInclusive<u32> = 0..=256;
 pub const HEAD_START_ARC_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.5;
 pub const GROWTH_ROUGHNESS_RANGE: std::ops::RangeInclusive<u32> = 0..=MAX_GROWTH_ROUGHNESS;
+pub const OCEAN_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+pub const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<u32> = 0..=32;
 
 const _: () = assert!(*MAJOR_PLATE_RANGE.end() + *MINOR_PLATE_RANGE.end() <= MAX_PLATE_COUNT);
 
-/// Everything the viewer can change about a partition.
+/// Everything the viewer can change about a run.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
-pub struct PartitionSettings {
+pub struct TectonicsSettings {
     pub resolution: u32,
-    pub config: RasterPlatePartitionConfig,
+    pub config: RasterTectonicsConfig,
 }
 
-impl Default for PartitionSettings {
+impl Default for TectonicsSettings {
     fn default() -> Self {
         Self {
             resolution: DEFAULT_FACE_RESOLUTION,
-            config: RasterPlatePartitionConfig::default(),
+            config: RasterTectonicsConfig::default(),
         }
+    }
+}
+
+impl TectonicsSettings {
+    /// Upper bound on the convergence a migration step can see, which is what
+    /// makes the migration threshold a meaningful fraction rather than a
+    /// number without a scale.
+    pub fn maximum_convergence(&self) -> f32 {
+        self.config
+            .evolution
+            .kinematics
+            .maximum_convergence(RASTER_SPHERE_RADIUS)
     }
 }
 
@@ -55,28 +70,28 @@ struct DeviceAccess {
     queue: RenderQueue,
 }
 
-/// The resident partition and what its last run cost.
+/// The resident pipeline and what its last run cost and produced.
 #[derive(Resource)]
-pub struct ResidentPartition {
-    pipeline: PlatePartitionPipeline,
-    run: PartitionRun,
+pub struct ResidentTectonics {
+    pipeline: TectonicsPipeline,
+    run: TectonicsRun,
 }
 
-impl ResidentPartition {
-    pub const fn pipeline(&self) -> &PlatePartitionPipeline {
+impl ResidentTectonics {
+    pub const fn pipeline(&self) -> &TectonicsPipeline {
         &self.pipeline
     }
 
-    pub const fn run(&self) -> &PartitionRun {
+    pub const fn run(&self) -> &TectonicsRun {
         &self.run
     }
 }
 
-pub struct PlatePartitionPlugin;
+pub struct TectonicsPlugin;
 
-impl Plugin for PlatePartitionPlugin {
+impl Plugin for TectonicsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PartitionSettings>()
+        app.init_resource::<TectonicsSettings>()
             .add_systems(Update, regenerate);
     }
 
@@ -90,13 +105,13 @@ impl Plugin for PlatePartitionPlugin {
     }
 }
 
-/// Reruns the partition once the settings stop changing, so dragging a slider
+/// Reruns the pipeline once the settings stop changing, so dragging a slider
 /// does not queue one blocking run per frame.
 fn regenerate(
     mut commands: Commands,
-    settings: Res<PartitionSettings>,
+    settings: Res<TectonicsSettings>,
     access: Res<DeviceAccess>,
-    resident: Option<ResMut<ResidentPartition>>,
+    resident: Option<ResMut<ResidentTectonics>>,
     mut pending: Local<bool>,
 ) {
     if settings.is_changed() {
@@ -124,12 +139,12 @@ fn regenerate(
         }
         None => {
             let pipeline =
-                PlatePartitionPipeline::new(device, settings.resolution, PipelineTuning::default())
+                TectonicsPipeline::new(device, settings.resolution, PipelineTuning::default())
                     .expect(VALID);
             let run = pipeline
                 .run(device, &access.queue, &settings.config)
                 .expect(VALID);
-            commands.insert_resource(ResidentPartition { pipeline, run });
+            commands.insert_resource(ResidentTectonics { pipeline, run });
         }
     }
 }

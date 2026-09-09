@@ -28,7 +28,8 @@ pub use base_elevation::{
     derive_base_elevation,
 };
 pub use boundaries::{
-    BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
+    BoundaryClass, BoundaryClassification, BoundaryClassificationError,
+    CONVERGENCE_TO_SHEAR_THRESHOLD, classify_boundaries,
 };
 pub use crust::{
     CrustClass, CrustClassification, CrustClassificationConfig, CrustClassificationError,

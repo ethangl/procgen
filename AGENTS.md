@@ -241,14 +241,24 @@ scheduling. Slices 15 and 16, tile export, follow the pilot's evaluation.
 The active work is the compute-shader tectonics pilot
 (`docs/compute-shader-tectonics-pilot.md`): a GPU-only tectonics pipeline on a
 1024-texel-per-face cube-sphere raster in `procgen-raster-tectonics` and
-`apps/raster-viewer`, the intended successor to the viewer. Slices 1 and 2 have
-landed: cube-sphere raster addressing with chamfer links, texel-center
-directions, and the polynomial tangent in Rust and WGSL; the plate seed and
-growth kernels with their frontier relaxation; and the pilot application
-rendering six face grids coloured by ownership at a selectable face resolution.
-Evolution, bathymetry, relief, and interactivity follow. The current viewer is
-frozen while the pilot runs. The pilot's evaluation decides whether geology and
-climate follow, and the future of the Voronoi path.
+`apps/raster-viewer`, the intended successor to the viewer. Slices 1 through 3
+have landed: cube-sphere raster addressing with chamfer links, canonical
+border-edge ids, texel solid angles, texel-center directions, and the
+polynomial tangent in Rust and WGSL; the plate seed and growth kernels with
+their frontier relaxation; crust classification, boundary classification, and
+the simultaneous migration step the evolution repeats; and the pilot
+application rendering six face grids coloured by plate, crust, or boundary
+class at a selectable face resolution, with stage timings and readback
+diagnostics. Bathymetry, relief, and interactivity follow. The current viewer
+is frozen while the pilot runs. The pilot's evaluation decides whether geology
+and climate follow, and the future of the Voronoi path.
+
+The pilot's kernels sit at `wgpu`'s default limit of eight storage buffers per
+stage, so new per-cell state consolidates into an existing buffer rather than
+adding a binding. Fused multiply-add contraction is enabled on Metal through
+`wgpu` and cannot be turned off from there, so integers that float comparisons
+decide are expected to agree across backends only within what slice 5
+measures.
 
 `procgen-core` owns the WGSL mirror of the four-word hash; `procgen-noise`,
 `procgen-terrain`, and `procgen-raster-tectonics` compose it rather than

@@ -1,20 +1,42 @@
 //! Integer cell addressing and adjacency for cube-sphere rasters.
 
-use crate::mapping::{CubeFace, FaceCoordinates, FaceEdge, seam_neighbor, unit_direction};
+use crate::mapping::{
+    CubeFace, FaceCoordinates, FaceEdge, equiangular_tangent, seam_neighbor, unit_direction,
+};
 use procgen_core::Vec3;
-use std::fmt;
+use std::{f32::consts::FRAC_PI_4, fmt};
 
 /// Axis-link length in the raster's integer chamfer metric.
 pub const AXIS_LINK_LENGTH: u32 = 5;
 /// Diagonal-link length in the raster's integer chamfer metric.
 pub const DIAGONAL_LINK_LENGTH: u32 = 7;
+/// Border edges each cell carries: its four axis links, in [`TexelLink`] order.
+pub const BORDER_LINKS_PER_CELL: u32 = 4;
 /// Largest power-of-two face resolution whose six-face cell count fits in `u32`.
 pub const MAX_RASTER_RESOLUTION: u32 = 1 << 14;
+/// Largest face resolution whose border-edge ids fit in `u32`, since a raster
+/// addresses [`BORDER_LINKS_PER_CELL`] of them per cell.
+pub const MAX_BORDER_RESOLUTION: u32 = MAX_RASTER_RESOLUTION / 2;
 /// Sentinel returned by WGSL when a cube-corner diagonal has no neighbor.
 pub const NO_RASTER_CELL: u32 = u32::MAX;
 
+/// Relative Rust/WGSL tolerance for [`FaceTexel::solid_angle`].
+///
+/// Every other raster quantity is integer or exact composition, so the mirrors
+/// agree bit for bit. The area element divides by a square root, which the two
+/// compilers round differently. On 2026-09-08,
+/// `wgsl_raster_adjacency_and_area_match_rust_across_every_seam_and_corner`
+/// measured a maximum relative divergence of `3.8344808e-7` at 8 through 256
+/// texels per face on Apple M1 Max via Metal. The tolerance is ten times that
+/// maximum, rounded upward, and awaits Vulkan calibration.
+pub const TEXEL_SOLID_ANGLE_TOLERANCE: f32 = 4.0e-6;
+
 const _: () =
     assert!(6_u64 * MAX_RASTER_RESOLUTION as u64 * MAX_RASTER_RESOLUTION as u64 <= u32::MAX as u64);
+const _: () = assert!(
+    BORDER_LINKS_PER_CELL as u64 * 6 * MAX_BORDER_RESOLUTION as u64 * MAX_BORDER_RESOLUTION as u64
+        <= u32::MAX as u64
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RasterError {
@@ -121,6 +143,56 @@ impl FaceTexel {
             + self.x
     }
 
+    /// Returns the solid angle this texel covers, in steradians.
+    ///
+    /// The equi-angular mapping spaces texel centers evenly in angle, so a
+    /// texel's solid angle is the gnomonic area element at its center over the
+    /// angular width of one texel. That is a midpoint approximation of the
+    /// exact spherical quadrilateral, whose closed form needs an arc tangent;
+    /// this expression uses the polynomial tangent and arithmetic only, so it
+    /// is the same value everywhere. `cubesphere_texel_solid_angle` mirrors its
+    /// expression order in WGSL.
+    pub fn solid_angle(self) -> f32 {
+        let a = equiangular_tangent(texel_center(self.x, self.resolution));
+        let b = equiangular_tangent(texel_center(self.y, self.resolution));
+        let width = 2.0 * FRAC_PI_4 / self.resolution as f32;
+        let squared = 1.0 + a * a + b * b;
+        width * width * (1.0 + a * a) * (1.0 + b * b) / (squared * squared.sqrt())
+    }
+
+    /// Returns the canonical id of the border edge `link` crosses.
+    ///
+    /// Both cells of a border resolve to the same id. The lower cell id owns
+    /// the border and the id is [`BORDER_LINKS_PER_CELL`] times the owner plus
+    /// the owner's own direction toward the other cell, so every border-edge id
+    /// is a pure function of texel coordinates. Seams may rotate which
+    /// direction that is, which is why the owner's link is searched for rather
+    /// than assumed opposite.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `link` is a border link and the raster's resolution is at
+    /// most [`MAX_BORDER_RESOLUTION`].
+    pub fn border_edge(self, link: TexelLink) -> u32 {
+        assert!(link.is_border(), "border edges cross the axis links");
+        assert!(
+            self.resolution <= MAX_BORDER_RESOLUTION,
+            "border-edge ids are addressable up to {MAX_BORDER_RESOLUTION} texels per face"
+        );
+        let neighbor = self
+            .neighbor(link)
+            .expect("every border link has a neighbor");
+        let cell = self.cell_id();
+        if cell < neighbor.cell_id() {
+            return BORDER_LINKS_PER_CELL * cell + link.index();
+        }
+        let back = TexelLink::BORDERS
+            .into_iter()
+            .find(|&back| neighbor.neighbor(back) == Some(self))
+            .expect("border adjacency is reciprocal");
+        BORDER_LINKS_PER_CELL * neighbor.cell_id() + back.index()
+    }
+
     /// Resolves one of the eight raster links across cube seams.
     ///
     /// The outward diagonal at each cube corner has no unique adjacent cell,
@@ -196,8 +268,18 @@ impl TexelLink {
         Self::TopRight,
     ];
 
+    /// The border links, which are the four sides a cell shares with a
+    /// neighbor. Stages that act across a physical boundary use these; stages
+    /// that grow, flood, or measure distance use all of [`TexelLink::ALL`].
+    pub const BORDERS: [Self; BORDER_LINKS_PER_CELL as usize] =
+        [Self::Left, Self::Right, Self::Bottom, Self::Top];
+
     pub const fn index(self) -> u32 {
         self as u32
+    }
+
+    pub const fn is_border(self) -> bool {
+        matches!(self, Self::Left | Self::Right | Self::Bottom | Self::Top)
     }
 
     pub const fn link_length(self) -> u32 {
@@ -305,6 +387,56 @@ mod tests {
             )
             .unwrap();
             assert_eq!(reprojected, texel);
+        }
+    }
+
+    #[test]
+    fn border_edges_are_shared_by_both_cells_and_number_two_per_cell() {
+        let resolution = 8;
+        let cell_count = FaceTexel::cell_count(resolution).unwrap();
+        let mut owners = std::collections::HashMap::new();
+        for cell_id in 0..cell_count {
+            let texel = FaceTexel::from_cell_id(cell_id, resolution).unwrap();
+            for link in TexelLink::BORDERS {
+                let neighbor = texel.neighbor(link).unwrap();
+                let edge = texel.border_edge(link);
+                let back = TexelLink::BORDERS
+                    .into_iter()
+                    .find(|&back| neighbor.neighbor(back) == Some(texel))
+                    .unwrap();
+                assert_eq!(
+                    edge,
+                    neighbor.border_edge(back),
+                    "{texel:?} and {neighbor:?} disagree on their shared border"
+                );
+                owners
+                    .entry(edge)
+                    .or_insert_with(Vec::new)
+                    .push(texel.cell_id());
+            }
+        }
+        assert_eq!(owners.len() as u32, 2 * cell_count);
+        assert!(owners.values().all(|cells| cells.len() == 2));
+        assert!(owners.keys().all(|&edge| edge < 4 * cell_count));
+    }
+
+    #[test]
+    fn texel_solid_angles_cover_the_sphere() {
+        for resolution in [1, 8, 64] {
+            let total: f32 = (0..FaceTexel::cell_count(resolution).unwrap())
+                .map(|cell_id| {
+                    FaceTexel::from_cell_id(cell_id, resolution)
+                        .unwrap()
+                        .solid_angle()
+                })
+                .sum();
+            // The midpoint rule converges on the sphere from below as the
+            // texels shrink; one texel per face is the coarsest it ever is.
+            let tolerance = 4.0 / (resolution * resolution) as f32;
+            assert!(
+                (total - 4.0 * std::f32::consts::PI).abs() < tolerance,
+                "{resolution} texels per face covered {total} steradians"
+            );
         }
     }
 

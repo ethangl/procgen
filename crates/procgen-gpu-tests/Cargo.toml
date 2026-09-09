@@ -20,4 +20,5 @@ procgen-core = { path = "../procgen-core" }
 procgen-cubesphere = { path = "../procgen-cubesphere" }
 procgen-noise = { path = "../procgen-noise" }
 procgen-raster-tectonics = { path = "../procgen-raster-tectonics" }
+procgen-tectonics = { path = "../procgen-tectonics" }
 procgen-terrain = { path = "../procgen-terrain" }

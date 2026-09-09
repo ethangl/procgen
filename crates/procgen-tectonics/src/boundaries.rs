@@ -2,7 +2,10 @@ use crate::{PlateKinematics, PlatePartition, StageInputError};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
-const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
+/// Ratio of shear a boundary's convergence must exceed to be read as normal
+/// motion rather than transform motion. The raster pipeline classifies with the
+/// same threshold, so it is exported rather than restated.
+pub const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
 
 /// Dense per-edge classification. `Interior` is the sentinel for non-boundary
 /// edges so the array remains directly indexable by mesh edge id.
@@ -16,6 +19,13 @@ pub enum BoundaryClass {
 }
 
 impl BoundaryClass {
+    pub const ALL: [Self; 4] = [
+        Self::Interior,
+        Self::Convergent,
+        Self::Divergent,
+        Self::Transform,
+    ];
+
     pub fn from_relative_motion(convergence: f32, shear: f32) -> Self {
         if convergence.abs() > shear * CONVERGENCE_TO_SHEAR_THRESHOLD {
             if convergence > 0.0 {

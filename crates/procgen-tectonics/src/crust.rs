@@ -10,6 +10,10 @@ pub enum CrustClass {
     Continental,
 }
 
+impl CrustClass {
+    pub const ALL: [Self; 2] = [Self::Oceanic, Self::Continental];
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrustClassificationConfig {
     /// Desired fraction of the sphere's surface covered by oceanic crust.
