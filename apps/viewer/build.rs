@@ -13,7 +13,7 @@ fn main() {
         "Cargo.lock",
         "apps/viewer/Cargo.toml",
         "apps/viewer/src/cache.rs",
-        "apps/viewer/src/model.rs",
+        "apps/viewer/src/model",
         "crates",
     ] {
         collect_files(&workspace.join(path), &mut files);

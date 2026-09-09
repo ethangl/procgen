@@ -166,12 +166,14 @@ impl Plugin for TerrainTileRenderPlugin {
                 sync_relief.run_if(
                     resource_changed::<ReliefSettings>.and(resource_exists::<TerrainTileAssets>),
                 ),
-                update_tile_coverage.run_if(
-                    resource_changed::<GeneratedWorld>
-                        .or(resource_changed::<TerrainTileMode>)
-                        .or(camera_changed)
-                        .or(terrain_dispatch_completed),
-                ),
+                update_tile_coverage
+                    .run_if(resource_exists::<TerrainTileAssets>)
+                    .run_if(
+                        resource_changed::<GeneratedWorld>
+                            .or(resource_changed::<TerrainTileMode>)
+                            .or(camera_changed)
+                            .or(terrain_dispatch_completed),
+                    ),
             )
                 .chain(),
         );
@@ -268,12 +270,16 @@ fn initialize_gpu_world(
     assets.dispatch.job_count = 0;
     assets.dispatch.generation = assets.dispatch.generation.wrapping_add(1);
 
-    let controls = pack_control_bake(&world.terrain_control_bake);
-    let stamps = pack_stamps(&world.terrain_controls.stamps);
+    // Detailed tiles read the geology phase's baked terrain controls.
+    let (Some(tectonics), Some(geology)) = (world.tectonics(), world.geology()) else {
+        return;
+    };
+    let controls = pack_control_bake(&geology.terrain_control_bake);
+    let stamps = pack_stamps(&geology.terrain_controls.stamps);
     let parameters = TerrainGpuParameters::new(
-        &world.terrain_control_bake,
-        &world.terrain_controls.stamps,
-        TerrainNoiseKeys::new(world.config.fibonacci.seed),
+        &geology.terrain_control_bake,
+        &geology.terrain_controls.stamps,
+        TerrainNoiseKeys::new(tectonics.config.fibonacci.seed),
         TerrainHeightConfig::default(),
     );
     let controls = assets.buffers.add(ShaderStorageBuffer::new(
@@ -578,7 +584,7 @@ mod tests {
 
     #[test]
     fn world_replacement_resets_coverage_and_world_owned_gpu_resources() {
-        use crate::test_support::fixture;
+        use crate::test_support::Fixture;
         use bevy::asset::{AssetApp, AssetPlugin};
 
         let mut app = App::new();
@@ -591,7 +597,7 @@ mod tests {
             .insert_resource(QuadtreeSelection::default())
             .insert_resource(TileResidency::default())
             .insert_resource(TerrainGridMesh(Handle::default()))
-            .insert_resource(fixture(64, 70))
+            .insert_resource(Fixture::new(64, 70).into_world())
             .add_systems(
                 Update,
                 initialize_gpu_world.run_if(resource_changed::<GeneratedWorld>),
@@ -623,7 +629,7 @@ mod tests {
                 stale_entity,
             );
 
-        app.insert_resource(fixture(64, 71));
+        app.insert_resource(Fixture::new(64, 71).into_world());
         app.update();
         let second = app.world().resource::<TerrainGpuResources>();
         let second_tile_assets = app.world().resource::<TerrainTileAssets>();

@@ -1,6 +1,9 @@
 use crate::{
     cache::WorldCache,
-    model::{GeneratedWorld, GenerationSettings},
+    model::{
+        ClimateSettings, ClimateWorld, CompleteWorld, GeneratedWorld, GenerationSettings,
+        GeologySettings, GeologyWorld, TectonicsSettings, TectonicsWorld,
+    },
 };
 use procgen_geology::{HotspotFieldConfig, OceanicPeakFieldConfig};
 use procgen_sphere::FibonacciConfig;
@@ -13,8 +16,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub(crate) fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
-    GenerationSettings {
+pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSettings {
+    TectonicsSettings {
         fibonacci: FibonacciConfig {
             jitter: 0.25,
             seed,
@@ -30,18 +33,65 @@ pub(crate) fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
             step_count: 4,
             ..Default::default()
         },
+        ..TectonicsSettings::default()
+    }
+}
+
+pub(crate) fn geology_settings(seed: u64) -> GeologySettings {
+    GeologySettings {
         hotspots: HotspotFieldConfig {
             hotspot_count: 3,
             maximum_trail_cells: 4,
             seed,
         },
         oceanic_peaks: OceanicPeakFieldConfig::new(seed),
-        ..GenerationSettings::default()
+        ..GeologySettings::default()
     }
 }
 
-pub(crate) fn fixture(cell_count: usize, seed: u64) -> GeneratedWorld {
-    GeneratedWorld::generate(settings(cell_count, seed)).unwrap()
+pub(crate) fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
+    GenerationSettings {
+        tectonics: tectonics_settings(cell_count, seed),
+        geology: geology_settings(seed),
+        climate: ClimateSettings::default(),
+    }
+}
+
+/// Every phase result for one settings profile, owned so tests can corrupt
+/// individual fields before encoding a snapshot.
+pub(crate) struct Fixture {
+    pub tectonics: TectonicsWorld,
+    pub geology: GeologyWorld,
+    pub climate: ClimateWorld,
+}
+
+impl Fixture {
+    pub(crate) fn generate(settings: GenerationSettings) -> Self {
+        let tectonics = TectonicsWorld::generate(settings.tectonics).unwrap();
+        let geology = GeologyWorld::generate(&tectonics, settings.geology).unwrap();
+        let climate = ClimateWorld::generate(&tectonics, &geology, settings.climate).unwrap();
+        Self {
+            tectonics,
+            geology,
+            climate,
+        }
+    }
+
+    pub(crate) fn new(cell_count: usize, seed: u64) -> Self {
+        Self::generate(settings(cell_count, seed))
+    }
+
+    pub(crate) fn complete(&self) -> CompleteWorld<'_> {
+        CompleteWorld {
+            tectonics: &self.tectonics,
+            geology: &self.geology,
+            climate: &self.climate,
+        }
+    }
+
+    pub(crate) fn into_world(self) -> GeneratedWorld {
+        GeneratedWorld::from_phases(self.tectonics, self.geology, self.climate)
+    }
 }
 
 pub(crate) fn cache(name: &str) -> (PathBuf, WorldCache) {
@@ -56,3 +106,4 @@ pub(crate) fn cache(name: &str) -> (PathBuf, WorldCache) {
     let cache = WorldCache::new(directory.join("world.bin"));
     (directory, cache)
 }
+

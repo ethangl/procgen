@@ -1,9 +1,9 @@
 use super::{field_summary_stats, format_field_range, stat, stat_grid};
-use crate::model::GeneratedWorld;
+use crate::model::GeologyWorld;
 use bevy_egui::egui;
 use procgen_geology::ElevationEffectDiagnostics;
 
-pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+pub(super) fn summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     hotspot_summary(ui, world);
     volcanic_arc_summary(ui, world);
     oceanic_peak_summary(ui, world);
@@ -13,7 +13,7 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     isostatic_summary(ui, world);
 }
 
-fn hotspot_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn hotspot_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     stat_grid(ui, "Mantle hotspots", "hotspots", |ui| {
         stat(ui, "Hotspots", world.hotspots.hotspots.len());
         stat(
@@ -48,7 +48,7 @@ fn hotspot_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn volcanic_arc_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn volcanic_arc_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     stat_grid(ui, "Volcanic arcs", "volcanic_arcs", |ui| {
         stat(ui, "Segments", world.volcanic_arcs.segments.len());
         stat(
@@ -100,7 +100,7 @@ fn volcanic_arc_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn oceanic_peak_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn oceanic_peak_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     stat_grid(ui, "Seamounts and abyssal hills", "oceanic_peaks", |ui| {
         field_summary_stats(ui, &world.oceanic_peaks.diagnostics.density);
         stat(
@@ -145,7 +145,7 @@ fn oceanic_peak_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn craton_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn craton_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     stat_grid(ui, "Cratons", "cratons", |ui| {
         field_summary_stats(ui, &world.cratons.diagnostics.strength);
         stat(
@@ -180,7 +180,7 @@ fn craton_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn basin_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn basin_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     stat_grid(ui, "Sedimentary basins", "basins", |ui| {
         stat(
             ui,
@@ -214,7 +214,7 @@ fn basin_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn geological_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn geological_elevation_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     let diagnostics = &world.geological_elevation.diagnostics;
     stat_grid(ui, "Geological elevation", "geological_elevation", |ui| {
         field_summary_stats(ui, &diagnostics.elevation);
@@ -225,7 +225,7 @@ fn geological_elevation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn isostatic_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn isostatic_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
     let diagnostics = &world.isostasy.diagnostics;
     stat_grid(ui, "Isostatic adjustment", "isostasy", |ui| {
         stat(

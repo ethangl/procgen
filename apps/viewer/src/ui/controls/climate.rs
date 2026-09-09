@@ -1,8 +1,8 @@
 use super::super::{drag_value, section, slider};
-use crate::model::GenerationSettings;
+use crate::model::ClimateSettings;
 use bevy_egui::egui;
 use procgen_climate::{
-    AtmosphericCirculationConfig, CLIMATE_COUPLING_FRACTION_TOLERANCE_RANGE,
+    ANNUAL_SAMPLE_RANGE, AtmosphericCirculationConfig, CLIMATE_COUPLING_FRACTION_TOLERANCE_RANGE,
     CLIMATE_COUPLING_ITERATION_LIMIT_RANGE, CLIMATE_COUPLING_TOLERANCE_RANGE,
     CRYOSPHERE_CLOSURE_TOLERANCE_RANGE, CRYOSPHERE_FRACTION_RATE_RANGE,
     CRYOSPHERE_ITERATION_LIMIT_RANGE, CRYOSPHERE_MASS_RANGE, CRYOSPHERE_RATE_RANGE,
@@ -10,31 +10,37 @@ use procgen_climate::{
     MAXIMUM_WIND_SPEED_RANGE, MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE,
     MOISTURE_STEP_COUNT_RANGE, MOISTURE_STEP_SECONDS_RANGE, MoistureTransportConfig,
     ORBITAL_PERIOD_DAYS_RANGE, OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE,
-    RadiativeEquilibriumConfig, SeasonalThermalConfig, TEMPERATURE_SENSITIVITY_RANGE,
-    TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE, TRANSPORT_FRACTION_RANGE,
+    RadiativeEquilibriumConfig, SeasonalThermalConfig, SolarForcingConfig,
+    TEMPERATURE_SENSITIVITY_RANGE, TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE,
+    TRANSPORT_FRACTION_RANGE,
+};
+use procgen_planet::{
+    ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE, MAXIMUM_LAND_ELEVATION_METERS_RANGE,
+    PLANET_RADIUS_METERS_RANGE, Planet, SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE,
 };
 
-pub(super) fn generation_controls(ui: &mut egui::Ui, generation: &mut GenerationSettings) {
+pub(super) fn controls(ui: &mut egui::Ui, settings: &mut ClimateSettings) {
+    section(ui, "Planet", |ui| planet_controls(ui, &mut settings.planet));
+    section(ui, "Solar forcing", |ui| {
+        solar_forcing_controls(ui, &mut settings.solar_forcing)
+    });
     section(ui, "Radiative equilibrium", |ui| {
-        radiative_equilibrium_controls(ui, &mut generation.climate_coupling.radiative_equilibrium)
+        radiative_equilibrium_controls(ui, &mut settings.coupling.radiative_equilibrium)
     });
     section(ui, "Seasonal thermal response", |ui| {
-        seasonal_thermal_controls(ui, &mut generation.climate_coupling.seasonal_thermal)
+        seasonal_thermal_controls(ui, &mut settings.coupling.seasonal_thermal)
     });
     section(ui, "Atmospheric circulation", |ui| {
-        atmospheric_circulation_controls(
-            ui,
-            &mut generation.climate_coupling.atmospheric_circulation,
-        )
+        atmospheric_circulation_controls(ui, &mut settings.coupling.atmospheric_circulation)
     });
     section(ui, "Moisture and precipitation", |ui| {
-        moisture_transport_controls(ui, &mut generation.climate_coupling.moisture_transport)
+        moisture_transport_controls(ui, &mut settings.coupling.moisture_transport)
     });
     section(ui, "Cryosphere", |ui| {
-        cryosphere_controls(ui, &mut generation.climate_coupling.cryosphere)
+        cryosphere_controls(ui, &mut settings.coupling.cryosphere)
     });
     section(ui, "Climate coupling", |ui| {
-        climate_coupling_controls(ui, &mut generation.climate_coupling)
+        climate_coupling_controls(ui, &mut settings.coupling)
     });
 }
 
@@ -292,5 +298,47 @@ fn cryosphere_controls(ui: &mut egui::Ui, config: &mut CryosphereConfig) {
         &mut config.sea_ice_melt_fraction_per_kelvin_day,
         CRYOSPHERE_FRACTION_RATE_RANGE,
         0.001,
+    );
+}
+
+fn planet_controls(ui: &mut egui::Ui, planet: &mut Planet) {
+    drag_value(
+        ui,
+        "Planet radius meters",
+        &mut planet.radius_meters,
+        PLANET_RADIUS_METERS_RANGE,
+        10_000.0,
+    );
+    drag_value(
+        ui,
+        "Rotation period seconds",
+        &mut planet.sidereal_rotation_period_seconds,
+        SIDEREAL_ROTATION_PERIOD_SECONDS_RANGE,
+        1_000.0,
+    );
+    drag_value(
+        ui,
+        "Atmospheric gas constant",
+        &mut planet.atmospheric_specific_gas_constant_joules_per_kilogram_kelvin,
+        ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Maximum land elevation meters",
+        &mut planet.maximum_land_elevation_meters,
+        MAXIMUM_LAND_ELEVATION_METERS_RANGE,
+        100.0,
+    );
+}
+
+fn solar_forcing_controls(ui: &mut egui::Ui, config: &mut SolarForcingConfig) {
+    slider(ui, "Orbital phase", &mut config.orbital_phase, 0.0..=1.0);
+    drag_value(
+        ui,
+        "Annual samples",
+        &mut config.annual_sample_count,
+        ANNUAL_SAMPLE_RANGE,
+        1.0,
     );
 }

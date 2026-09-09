@@ -1,6 +1,9 @@
 //! Viewer-owned persistence for the last successfully generated domain model.
 
-use crate::model::{GeneratedWorld, GenerationSettings, GenerationTimings};
+use crate::model::{
+    ClimateSettings, ClimateWorld, CompleteWorld, GeneratedWorld, GenerationTimings,
+    GeologySettings, GeologyWorld, TectonicsSettings, TectonicsWorld,
+};
 use bevy::prelude::Resource;
 use procgen_climate::*;
 use procgen_core::Vec3;
@@ -92,7 +95,7 @@ impl WorldCache {
         matches!(error, CacheError::Io(error) if error.kind() == io::ErrorKind::NotFound)
     }
 
-    pub fn store(&self, world: &GeneratedWorld) -> Result<(), CacheError> {
+    pub fn store(&self, world: CompleteWorld<'_>) -> Result<(), CacheError> {
         let bytes = encode_snapshot(world);
         if bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
             return Err(CacheError::invalid("snapshot exceeds the size limit"));
@@ -172,11 +175,13 @@ impl Drop for AtomicReplacement {
     }
 }
 
-fn encode_snapshot(world: &GeneratedWorld) -> Vec<u8> {
+fn encode_snapshot(world: CompleteWorld<'_>) -> Vec<u8> {
     let mut encoder = Encoder::default();
     encoder.bytes.extend_from_slice(MAGIC);
     GENERATOR_BUILD_ID.to_owned().encode(&mut encoder);
-    world.encode(&mut encoder);
+    world.tectonics.encode(&mut encoder);
+    world.geology.encode(&mut encoder);
+    world.climate.encode(&mut encoder);
     encoder.bytes
 }
 
@@ -190,11 +195,19 @@ fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
             "generator build identity does not match",
         ));
     }
-    let world = GeneratedWorld::decode(&mut decoder)?;
+    let world = GeneratedWorld::from_phases(
+        TectonicsWorld::decode(&mut decoder)?,
+        GeologyWorld::decode(&mut decoder)?,
+        ClimateWorld::decode(&mut decoder)?,
+    );
     if decoder.offset != bytes.len() {
         return Err(CacheError::invalid("snapshot contains trailing data"));
     }
-    world.validate().map_err(CacheError::invalid)?;
+    world
+        .complete()
+        .expect("a decoded snapshot holds every phase")
+        .validate()
+        .map_err(CacheError::invalid)?;
     Ok(world)
 }
 
@@ -396,7 +409,9 @@ struct_codec! {
     MoistureTransportConfig { step_count, step_seconds, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
     CryosphereConfig { maximum_iterations, closure_tolerance, snowfall_temperature_kelvin, melt_temperature_kelvin, full_snow_cover_kg_per_m2, seasonal_snow_capacity_kg_per_m2, snow_melt_kg_per_m2_per_kelvin_day, land_ice_melt_kg_per_m2_per_kelvin_day, sea_ice_growth_fraction_per_kelvin_day, sea_ice_melt_fraction_per_kelvin_day }
     ClimateCouplingConfig { maximum_iterations, under_relaxation, albedo_tolerance, temperature_tolerance_kelvin, precipitation_tolerance_kg_per_m2_per_day, cover_fraction_tolerance, albedo, radiative_equilibrium, seasonal_thermal, atmospheric_circulation, moisture_transport, cryosphere }
-    GenerationSettings { fibonacci, plates, crust, kinematics, evolution, seafloor_age, base_elevation, deformation, elevation, hotspots, oceanic_peaks, volcanic_arcs, cratons, basins, geological_elevation, isostasy, terrain_controls, planet, solar_forcing, climate_coupling }
+    TectonicsSettings { fibonacci, plates, crust, kinematics, evolution, seafloor_age, base_elevation, deformation, elevation }
+    GeologySettings { hotspots, oceanic_peaks, volcanic_arcs, cratons, basins, geological_elevation, isostasy, terrain_controls }
+    ClimateSettings { planet, solar_forcing, coupling }
 
     VoronoiEdge { vertices, cells }
     CellCorner { vertex, neighbor, edge }
@@ -506,7 +521,7 @@ impl<const N: usize> CacheCodec for CubeField<N> {
     }
 }
 
-impl CacheCodec for GeneratedWorld {
+impl CacheCodec for TectonicsWorld {
     fn encode(&self, encoder: &mut Encoder) {
         self.config.encode(encoder);
         self.voronoi.encode(encoder);
@@ -519,23 +534,6 @@ impl CacheCodec for GeneratedWorld {
         self.base_elevation.encode(encoder);
         self.deformation.encode(encoder);
         self.elevation.encode(encoder);
-        self.hotspots.encode(encoder);
-        self.oceanic_peaks.encode(encoder);
-        self.volcanic_arcs.encode(encoder);
-        self.cratons.encode(encoder);
-        self.basins.encode(encoder);
-        self.geological_elevation.encode(encoder);
-        self.isostasy.encode(encoder);
-        self.terrain_controls.encode(encoder);
-        self.terrain_control_bake.encode(encoder);
-        self.solar_forcing.encode(encoder);
-        self.radiative_equilibrium.encode(encoder);
-        self.seasonal_thermal.encode(encoder);
-        self.atmospheric_circulation.encode(encoder);
-        self.moisture_transport.encode(encoder);
-        self.cryosphere.encode(encoder);
-        self.cell_albedo.encode(encoder);
-        self.climate_coupling_diagnostics.encode(encoder);
     }
 
     fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
@@ -551,6 +549,28 @@ impl CacheCodec for GeneratedWorld {
             base_elevation: CacheCodec::decode(decoder)?,
             deformation: CacheCodec::decode(decoder)?,
             elevation: CacheCodec::decode(decoder)?,
+            timings: GenerationTimings::default(),
+        })
+    }
+}
+
+impl CacheCodec for GeologyWorld {
+    fn encode(&self, encoder: &mut Encoder) {
+        self.config.encode(encoder);
+        self.hotspots.encode(encoder);
+        self.oceanic_peaks.encode(encoder);
+        self.volcanic_arcs.encode(encoder);
+        self.cratons.encode(encoder);
+        self.basins.encode(encoder);
+        self.geological_elevation.encode(encoder);
+        self.isostasy.encode(encoder);
+        self.terrain_controls.encode(encoder);
+        self.terrain_control_bake.encode(encoder);
+    }
+
+    fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
+        Ok(Self {
+            config: CacheCodec::decode(decoder)?,
             hotspots: CacheCodec::decode(decoder)?,
             oceanic_peaks: CacheCodec::decode(decoder)?,
             volcanic_arcs: CacheCodec::decode(decoder)?,
@@ -560,6 +580,27 @@ impl CacheCodec for GeneratedWorld {
             isostasy: CacheCodec::decode(decoder)?,
             terrain_controls: CacheCodec::decode(decoder)?,
             terrain_control_bake: CacheCodec::decode(decoder)?,
+            timings: GenerationTimings::default(),
+        })
+    }
+}
+
+impl CacheCodec for ClimateWorld {
+    fn encode(&self, encoder: &mut Encoder) {
+        self.config.encode(encoder);
+        self.solar_forcing.encode(encoder);
+        self.radiative_equilibrium.encode(encoder);
+        self.seasonal_thermal.encode(encoder);
+        self.atmospheric_circulation.encode(encoder);
+        self.moisture_transport.encode(encoder);
+        self.cryosphere.encode(encoder);
+        self.cell_albedo.encode(encoder);
+        self.coupling_diagnostics.encode(encoder);
+    }
+
+    fn decode(decoder: &mut Decoder<'_>) -> Result<Self, CacheError> {
+        Ok(Self {
+            config: CacheCodec::decode(decoder)?,
             solar_forcing: CacheCodec::decode(decoder)?,
             radiative_equilibrium: CacheCodec::decode(decoder)?,
             seasonal_thermal: CacheCodec::decode(decoder)?,
@@ -567,7 +608,7 @@ impl CacheCodec for GeneratedWorld {
             moisture_transport: CacheCodec::decode(decoder)?,
             cryosphere: CacheCodec::decode(decoder)?,
             cell_albedo: CacheCodec::decode(decoder)?,
-            climate_coupling_diagnostics: CacheCodec::decode(decoder)?,
+            coupling_diagnostics: CacheCodec::decode(decoder)?,
             timings: GenerationTimings::default(),
         })
     }
@@ -576,28 +617,43 @@ impl CacheCodec for GeneratedWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{cache as test_cache, fixture};
+    use crate::test_support::{Fixture, cache as test_cache};
 
     #[test]
     fn snapshot_round_trip_restores_settings_and_domain_data_without_timings() {
-        let world = fixture(32, 11);
-        let bytes = encode_snapshot(&world);
+        let fixture = Fixture::new(32, 11);
+        let bytes = encode_snapshot(fixture.complete());
         let loaded = decode_snapshot(&bytes).unwrap();
+        let complete = loaded.complete().unwrap();
 
-        assert_eq!(loaded.config, world.config);
-        assert_eq!(loaded.voronoi.cell_centers, world.voronoi.cell_centers);
-        assert_eq!(loaded.voronoi.edges, world.voronoi.edges);
-        assert_eq!(loaded.plates, world.plates);
-        assert_eq!(loaded.isostasy, world.isostasy);
-        assert_eq!(loaded.cryosphere, world.cryosphere);
-        assert_eq!(loaded.terrain_controls, world.terrain_controls);
-        assert_eq!(loaded.terrain_control_bake, world.terrain_control_bake);
-        assert!(loaded.timings.stages().is_empty());
+        assert_eq!(complete.settings(), fixture.complete().settings());
+        assert_eq!(
+            complete.tectonics.voronoi.cell_centers,
+            fixture.tectonics.voronoi.cell_centers
+        );
+        assert_eq!(
+            complete.tectonics.voronoi.edges,
+            fixture.tectonics.voronoi.edges
+        );
+        assert_eq!(complete.tectonics.plates, fixture.tectonics.plates);
+        assert_eq!(complete.geology.isostasy, fixture.geology.isostasy);
+        assert_eq!(complete.climate.cryosphere, fixture.climate.cryosphere);
+        assert_eq!(
+            complete.geology.terrain_controls,
+            fixture.geology.terrain_controls
+        );
+        assert_eq!(
+            complete.geology.terrain_control_bake,
+            fixture.geology.terrain_control_bake
+        );
+        assert!(complete.tectonics.timings.stages().is_empty());
+        assert!(complete.geology.timings.stages().is_empty());
+        assert!(complete.climate.timings.stages().is_empty());
     }
 
-    fn bake_offset(world: &GeneratedWorld, snapshot: &[u8]) -> usize {
+    fn bake_offset(fixture: &Fixture, snapshot: &[u8]) -> usize {
         let mut encoder = Encoder::default();
-        world.terrain_control_bake.encode(&mut encoder);
+        fixture.geology.terrain_control_bake.encode(&mut encoder);
         snapshot
             .windows(encoder.bytes.len())
             .position(|window| window == encoder.bytes)
@@ -606,9 +662,9 @@ mod tests {
 
     #[test]
     fn corrupt_bake_dimensions_are_rejected() {
-        let world = fixture(32, 22);
-        let mut bytes = encode_snapshot(&world);
-        let offset = bake_offset(&world, &bytes);
+        let fixture = Fixture::new(32, 22);
+        let mut bytes = encode_snapshot(fixture.complete());
+        let offset = bake_offset(&fixture, &bytes);
         bytes[offset..offset + size_of::<u32>()].copy_from_slice(&3_u32.to_le_bytes());
 
         assert!(decode_snapshot(&bytes).is_err());
@@ -616,9 +672,9 @@ mod tests {
 
     #[test]
     fn corrupt_bake_data_is_rejected() {
-        let world = fixture(32, 23);
-        let mut bytes = encode_snapshot(&world);
-        let offset = bake_offset(&world, &bytes) + size_of::<u32>() + size_of::<u64>();
+        let fixture = Fixture::new(32, 23);
+        let mut bytes = encode_snapshot(fixture.complete());
+        let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         bytes[offset..offset + size_of::<f32>()].copy_from_slice(&f32::NAN.to_le_bytes());
 
         assert!(decode_snapshot(&bytes).is_err());
@@ -627,32 +683,27 @@ mod tests {
     #[test]
     fn loaded_snapshot_reuses_cached_bake_data() {
         let (cache_dir, cache) = test_cache("reuse-bake");
-        let world = fixture(32, 24);
-        let mut bytes = encode_snapshot(&world);
-        let offset = bake_offset(&world, &bytes) + size_of::<u32>() + size_of::<u64>();
+        let fixture = Fixture::new(32, 24);
+        let mut bytes = encode_snapshot(fixture.complete());
+        let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         let cached_value = 123.25_f32;
         bytes[offset..offset + size_of::<f32>()].copy_from_slice(&cached_value.to_le_bytes());
         fs::create_dir_all(cache.path.parent().unwrap()).unwrap();
         fs::write(&cache.path, bytes).unwrap();
 
         let loaded = cache.load().unwrap();
-        assert_eq!(
-            loaded
-                .terrain_control_bake
-                .face(CubeFace::PositiveX)
-                .texels()[0][0],
-            cached_value
-        );
-        assert_ne!(loaded.terrain_control_bake, world.terrain_control_bake);
+        let bake = &loaded.geology().unwrap().terrain_control_bake;
+        assert_eq!(bake.face(CubeFace::PositiveX).texels()[0][0], cached_value);
+        assert_ne!(*bake, fixture.geology.terrain_control_bake);
 
         fs::remove_dir_all(cache_dir).unwrap();
     }
 
     #[test]
     fn build_identity_mismatch_invalidates_snapshot() {
-        let world = fixture(32, 12);
+        let fixture = Fixture::new(32, 12);
 
-        let mut wrong_build = encode_snapshot(&world);
+        let mut wrong_build = encode_snapshot(fixture.complete());
         let identity_start = MAGIC.len() + size_of::<u64>();
         wrong_build[identity_start] ^= 1;
         assert!(decode_snapshot(&wrong_build).is_err());
@@ -660,8 +711,8 @@ mod tests {
 
     #[test]
     fn truncated_snapshot_is_nonfatal_corruption() {
-        let world = fixture(32, 13);
-        let mut bytes = encode_snapshot(&world);
+        let fixture = Fixture::new(32, 13);
+        let mut bytes = encode_snapshot(fixture.complete());
         bytes.truncate(bytes.len() / 2);
 
         assert!(decode_snapshot(&bytes).is_err());
@@ -669,38 +720,42 @@ mod tests {
 
     #[test]
     fn invalid_topology_sparse_indices_and_field_lengths_are_rejected() {
-        let mut world = fixture(32, 14);
-        world.voronoi.edges[0].cells[0] = world.voronoi.cell_count();
-        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+        let mut fixture = Fixture::new(32, 14);
+        let cell_count = fixture.tectonics.voronoi.cell_count();
+        fixture.tectonics.voronoi.edges[0].cells[0] = cell_count;
+        assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut world = fixture(32, 15);
-        world.hotspots.hotspots[0].source_cell = world.voronoi.cell_count();
-        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+        let mut fixture = Fixture::new(32, 15);
+        fixture.geology.hotspots.hotspots[0].source_cell = fixture.tectonics.voronoi.cell_count();
+        assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut world = fixture(32, 16);
-        world.hotspots.hotspots[0].plate = world.plates.plate_count;
-        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+        let mut fixture = Fixture::new(32, 16);
+        fixture.geology.hotspots.hotspots[0].plate = fixture.tectonics.plates.plate_count;
+        assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut world = fixture(32, 17);
-        world.cryosphere.cell_snow_cover_fraction.pop();
-        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+        let mut fixture = Fixture::new(32, 17);
+        fixture.climate.cryosphere.cell_snow_cover_fraction.pop();
+        assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut world = fixture(32, 18);
-        world.cell_albedo.pop();
-        assert!(decode_snapshot(&encode_snapshot(&world)).is_err());
+        let mut fixture = Fixture::new(32, 18);
+        fixture.climate.cell_albedo.pop();
+        assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
     }
 
     #[test]
     fn successful_store_atomically_replaces_previous_snapshot() {
         let (cache_dir, cache) = test_cache("replace");
-        let first = fixture(32, 19);
-        let second = fixture(48, 20);
-        cache.store(&first).unwrap();
-        cache.store(&second).unwrap();
+        let first = Fixture::new(32, 19);
+        let second = Fixture::new(48, 20);
+        cache.store(first.complete()).unwrap();
+        cache.store(second.complete()).unwrap();
 
         let loaded = cache.load().unwrap();
-        assert_eq!(loaded.config, second.config);
-        assert_eq!(loaded.voronoi.cell_count(), 48);
+        assert_eq!(
+            loaded.complete().unwrap().settings(),
+            second.complete().settings()
+        );
+        assert_eq!(loaded.tectonics().unwrap().voronoi.cell_count(), 48);
         let parent_entries: Vec<_> = fs::read_dir(cache.path.parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -713,8 +768,8 @@ mod tests {
     #[test]
     fn failed_atomic_write_preserves_previous_snapshot() {
         let (cache_dir, cache) = test_cache("failed-replace");
-        let world = fixture(32, 21);
-        cache.store(&world).unwrap();
+        let fixture = Fixture::new(32, 21);
+        cache.store(fixture.complete()).unwrap();
         let original = fs::read(&cache.path).unwrap();
 
         let mut replacement = AtomicReplacement::begin(&cache.path).unwrap();

@@ -21,58 +21,73 @@ pub(super) fn empty_surface_mesh() -> Mesh {
     )
 }
 
-pub(super) fn plate_colors(world: &GeneratedWorld) -> Vec<Color> {
-    world
-        .plates
-        .cell_plates
-        .iter()
-        .map(|&plate| id_color(plate))
-        .collect()
+pub(super) fn plate_colors(world: &GeneratedWorld) -> Option<Vec<Color>> {
+    Some(
+        world
+            .tectonics()?
+            .plates
+            .cell_plates
+            .iter()
+            .map(|&plate| id_color(plate))
+            .collect(),
+    )
 }
 
-pub(super) fn crust_colors(world: &GeneratedWorld) -> Vec<Color> {
-    (0..world.voronoi.cell_count())
-        .map(|cell| match world.crust.cell_class(&world.plates, cell) {
-            CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
-            CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
-        })
-        .collect()
+pub(super) fn crust_colors(world: &GeneratedWorld) -> Option<Vec<Color>> {
+    let tectonics = world.tectonics()?;
+    Some(
+        (0..tectonics.voronoi.cell_count())
+            .map(
+                |cell| match tectonics.crust.cell_class(&tectonics.plates, cell) {
+                    CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
+                    CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
+                },
+            )
+            .collect(),
+    )
 }
 
-pub(super) fn seafloor_age_colors(world: &GeneratedWorld) -> Vec<Color> {
-    let maximum_age = world.seafloor_age.diagnostics.summary.maximum.max(1.0);
-    world
-        .seafloor_age
-        .cell_ages
-        .iter()
-        .map(|age| match age {
-            Some(age) => opaque_color(piecewise_lerp(
-                *age as f32 / maximum_age,
-                SEAFLOOR_AGE_COLOR_STOPS,
-            )),
-            None => Color::srgb(0.18, 0.16, 0.14),
-        })
-        .collect()
+pub(super) fn seafloor_age_colors(world: &GeneratedWorld) -> Option<Vec<Color>> {
+    let seafloor_age = &world.tectonics()?.seafloor_age;
+    let maximum_age = seafloor_age.diagnostics.summary.maximum.max(1.0);
+    Some(
+        seafloor_age
+            .cell_ages
+            .iter()
+            .map(|age| match age {
+                Some(age) => opaque_color(piecewise_lerp(
+                    *age as f32 / maximum_age,
+                    SEAFLOOR_AGE_COLOR_STOPS,
+                )),
+                None => Color::srgb(0.18, 0.16, 0.14),
+            })
+            .collect(),
+    )
 }
 
-pub(super) fn insolation_colors(world: &GeneratedWorld) -> Vec<Color> {
-    let maximum = world.solar_forcing.diagnostics.daily_mean.maximum;
+pub(super) fn insolation_colors(world: &GeneratedWorld) -> Option<Vec<Color>> {
+    let solar_forcing = &world.climate()?.solar_forcing;
+    let maximum = solar_forcing.diagnostics.daily_mean.maximum;
     let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
-    world
-        .solar_forcing
-        .daily_mean_insolation
-        .iter()
-        .map(|value| opaque_color(piecewise_lerp(value * reciprocal, INSOLATION_COLOR_STOPS)))
-        .collect()
+    Some(
+        solar_forcing
+            .daily_mean_insolation
+            .iter()
+            .map(|value| opaque_color(piecewise_lerp(value * reciprocal, INSOLATION_COLOR_STOPS)))
+            .collect(),
+    )
 }
 
-pub(super) fn basin_colors(world: &GeneratedWorld) -> Vec<Color> {
-    world
-        .basins
-        .cell_basins
-        .iter()
-        .map(|basin| basin.map_or(Color::srgb(0.045, 0.065, 0.075), id_color))
-        .collect()
+pub(super) fn basin_colors(world: &GeneratedWorld) -> Option<Vec<Color>> {
+    Some(
+        world
+            .geology()?
+            .basins
+            .cell_basins
+            .iter()
+            .map(|basin| basin.map_or(Color::srgb(0.045, 0.065, 0.075), id_color))
+            .collect(),
+    )
 }
 
 pub(super) fn cell_surface_mesh(
