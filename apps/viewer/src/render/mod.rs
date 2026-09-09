@@ -107,6 +107,13 @@ impl Plugin for DiagnosticRenderPlugin {
             .add_systems(Startup, setup_scene)
             .add_systems(
                 Update,
+                retarget_surface_selection
+                    .run_if(resource_changed::<GeneratedWorld>)
+                    .before(rebuild_surface)
+                    .before(terrain_tiles::sync_mode),
+            )
+            .add_systems(
+                Update,
                 (
                     rebuild_diagnostic_assets.run_if(resource_changed::<GeneratedWorld>),
                     rebuild_surface.run_if(
@@ -221,6 +228,24 @@ fn rebuild_diagnostic_assets(
     }
 }
 
+/// Keeps the fill on a layer that can be drawn. A selection with no results
+/// behind it is kept while nothing at all is generated, so the fill the world
+/// arrives with is the one that was asked for.
+fn retarget_surface_selection(world: Res<GeneratedWorld>, mut selection: ResMut<SurfaceSelection>) {
+    let Some(selected) = selection.selected() else {
+        return;
+    };
+    if world.holds(selected.phase()) {
+        return;
+    }
+    let fill = world
+        .surface_elevations()
+        .and_then(|(phase, _)| DiagnosticLayer::elevation_fill(phase));
+    if let Some(fill) = fill {
+        selection.set(Some(fill));
+    }
+}
+
 fn rebuild_surface(
     world: Res<GeneratedWorld>,
     selection: Res<SurfaceSelection>,
@@ -228,12 +253,11 @@ fn rebuild_surface(
     mut meshes: ResMut<Assets<Mesh>>,
     surface: Single<&Mesh3d, With<SurfaceLayer>>,
 ) {
-    if let Some(layer) = selection.selected() {
-        *meshes.get_mut(&surface.0).unwrap() = layer
-            .surface()
-            .expect("surface selection only stores fill layers")
-            .build(&world, relief.exaggeration);
-    }
+    *meshes.get_mut(&surface.0).unwrap() = selection
+        .selected()
+        .and_then(DiagnosticLayer::surface)
+        .and_then(|source| source.build(&world, relief.exaggeration))
+        .unwrap_or_else(empty_surface_mesh);
 }
 
 fn sync_surface_visibility(
@@ -259,7 +283,10 @@ fn sync_layer_render_state(
     mut camera_layers: Single<&mut RenderLayers, With<OrbitCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
-    let outer_radius = maximum_surface_radius(&world.isostasy.cell_elevations, relief.exaggeration);
+    let elevations = world
+        .surface_elevations()
+        .map_or(&[][..], |(_, values)| values);
+    let outer_radius = maximum_surface_radius(elevations, relief.exaggeration);
     for (layer, mut transform) in &mut layer_transforms {
         transform.scale = Vec3::splat(outer_radius * overlays.depth_scale(*layer) / SURFACE_RADIUS);
     }
@@ -276,7 +303,7 @@ fn sync_layer_render_state(
         DiagnosticLayer::ALL
             .iter()
             .copied()
-            .filter(|&layer| overlays.is_visible(layer))
+            .filter(|&layer| overlays.is_visible(layer) && world.holds(layer.phase()))
             .map(DiagnosticLayer::render_layer),
     );
     **camera_layers = RenderLayers::from_layers(&layers);
@@ -289,6 +316,8 @@ fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::TectonicsWorld;
+    use crate::test_support::{Fixture, tectonics_settings};
 
     #[test]
     fn detailed_mode_keeps_the_coarse_surface_hidden_across_surface_rebuild_inputs() {
@@ -320,6 +349,39 @@ mod tests {
         assert_eq!(
             overlays.depth_scale(DiagnosticLayer::Motion),
             1.0 + DEPTH_SCALE_STEP
+        );
+    }
+
+    #[test]
+    fn the_fill_follows_the_most_refined_phase_that_still_has_results() {
+        let mut app = App::new();
+        app.insert_resource(GeneratedWorld::default())
+            .init_resource::<SurfaceSelection>()
+            .add_systems(Update, retarget_surface_selection);
+
+        // Nothing is generated, so the requested fill is kept as it is.
+        app.update();
+        assert_eq!(
+            app.world().resource::<SurfaceSelection>().selected(),
+            Some(DiagnosticLayer::IsostaticElevation)
+        );
+
+        let tectonics_only = GeneratedWorld::from_tectonics(
+            TectonicsWorld::generate(tectonics_settings(128, 61)).unwrap(),
+        );
+        app.insert_resource(tectonics_only);
+        app.update();
+        assert_eq!(
+            app.world().resource::<SurfaceSelection>().selected(),
+            Some(DiagnosticLayer::Elevation)
+        );
+
+        // A tectonic fill stays selected once the later phases arrive.
+        app.insert_resource(Fixture::new(128, 61).into_world());
+        app.update();
+        assert_eq!(
+            app.world().resource::<SurfaceSelection>().selected(),
+            Some(DiagnosticLayer::Elevation)
         );
     }
 

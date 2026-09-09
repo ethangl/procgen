@@ -1,9 +1,9 @@
 use super::{stat, stat_grid};
-use crate::model::GeneratedWorld;
+use crate::model::ClimateWorld;
 use bevy_egui::egui;
 use procgen_climate::AreaWeightedSummary;
 
-pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+pub(super) fn summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     planet_summary(ui, world);
     solar_forcing_summary(ui, world);
     radiative_equilibrium_summary(ui, world);
@@ -14,9 +14,9 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     climate_coupling_summary(ui, world);
 }
 
-fn climate_coupling_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
-    let diagnostics = world.climate_coupling_diagnostics;
-    let config = world.config.climate_coupling;
+fn climate_coupling_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
+    let diagnostics = world.coupling_diagnostics;
+    let config = world.config.coupling;
     stat_grid(ui, "Climate coupling", "climate_coupling", |ui| {
         stat(ui, "Iterations", diagnostics.iterations);
         stat(ui, "Iteration limit", config.maximum_iterations);
@@ -51,9 +51,9 @@ fn climate_coupling_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn cryosphere_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn cryosphere_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.cryosphere.diagnostics;
-    let config = world.config.climate_coupling.cryosphere;
+    let config = world.config.coupling.cryosphere;
     stat_grid(ui, "Cryosphere", "cryosphere", |ui| {
         stat(ui, "Maximum refinements", config.maximum_iterations);
         stat(ui, "Refinements used", diagnostics.maximum_iterations_used);
@@ -175,9 +175,9 @@ fn cryosphere_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn moisture_transport_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn moisture_transport_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.moisture_transport.diagnostics;
-    let config = world.config.climate_coupling.moisture_transport;
+    let config = world.config.coupling.moisture_transport;
     stat_grid(ui, "Moisture and precipitation", "moisture", |ui| {
         stat(ui, "Steps", config.step_count);
         stat(
@@ -252,7 +252,7 @@ fn moisture_transport_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn planet_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let planet = world.config.planet;
     stat_grid(ui, "Planet", "planet", |ui| {
         stat(
@@ -281,7 +281,7 @@ fn planet_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn solar_forcing_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.solar_forcing.diagnostics;
     stat_grid(ui, "Solar forcing", "solar_forcing", |ui| {
         stat(
@@ -321,7 +321,7 @@ fn solar_forcing_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
         );
     });
 }
-fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.radiative_equilibrium.diagnostics;
     stat_grid(ui, "Radiative equilibrium", "radiative_equilibrium", |ui| {
         stat(ui, "Albedo", "Per-cell coupled");
@@ -330,11 +330,7 @@ fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
             "Emissivity",
             format!(
                 "{:.3}",
-                world
-                    .config
-                    .climate_coupling
-                    .radiative_equilibrium
-                    .emissivity
+                world.config.coupling.radiative_equilibrium.emissivity
             ),
         );
         area_weighted_stats(ui, "Daily", "K", &diagnostics.daily, fixed_one);
@@ -342,9 +338,9 @@ fn radiative_equilibrium_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
     });
 }
 
-fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn seasonal_thermal_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.seasonal_thermal.diagnostics;
-    let config = world.config.climate_coupling.seasonal_thermal;
+    let config = world.config.coupling.seasonal_thermal;
     stat_grid(ui, "Seasonal thermal response", "seasonal_thermal", |ui| {
         stat(
             ui,
@@ -429,9 +425,9 @@ fn optional_temperature(value: Option<f64>) -> String {
         .unwrap_or_else(|| "n/a".to_owned())
 }
 
-fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &GeneratedWorld) {
+fn atmospheric_circulation_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.atmospheric_circulation.diagnostics;
-    let config = world.config.climate_coupling.atmospheric_circulation;
+    let config = world.config.coupling.atmospheric_circulation;
     stat_grid(
         ui,
         "Atmospheric circulation",

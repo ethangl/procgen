@@ -224,9 +224,11 @@ The coarse pipeline described in `docs/world-heightmap.md` is in place on a
 topology, tectonics through tectonic elevation, geology through isostatic
 adjustment, and climate (solar forcing, radiative equilibrium, seasonal thermal
 response, circulation, moisture transport, cryosphere, and bounded coupling).
-The viewer consumes every stage, caches generated worlds keyed on the generator
-build identity, and draws a displaced fan mesh with relief and lighting
-controls.
+The viewer consumes every stage, caches complete generated worlds keyed on the
+generator build identity, and draws a displaced fan mesh with relief and
+lighting controls. It runs tectonics, geology, and climate as separately
+generated phases: one phase at a time in the sidebar, each generated on its own
+over the upstream results already in memory.
 
 Terrain-detail refinement (`docs/terrain-detail-refinement.md`) is in
 progress. Slices 1 through 14 have landed: the 32-bit hash, `procgen-noise`

@@ -128,7 +128,14 @@ Completed foundations:
   seamount/abyssal density and sparse-peak controls and visualization,
   geological-elevation effect controls and final layer, per-effect aggregate
   diagnostics, isostatic support and adjusted-elevation controls and layers,
-  aggregate rise/sink diagnostics, and stage timings.
+  aggregate rise/sink diagnostics, and stage timings. Generation is split into
+  the tectonics, geology, and climate phases. A navbar selects the phase whose
+  settings and diagnostics the sidebar shows and holds a render tab for the
+  relief, lighting, and layer controls; each phase generates on its own,
+  reusing the upstream results already in memory and generating the upstream
+  phases it is missing. Regenerating a phase drops the downstream results it
+  invalidates, layers and fills are offered only while their phase has
+  results, and only a complete three-phase world reaches the cache.
 - `procgen-planet`: minimal SI-unit stellar, orbital, size, rotation, atmosphere,
   and physical land-elevation-scale inputs, with Earth-like values isolated in a
   preset.

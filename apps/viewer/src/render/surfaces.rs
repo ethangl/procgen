@@ -3,7 +3,7 @@ use super::{
     palette::{INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, opaque_color, piecewise_lerp},
     to_bevy,
 };
-use crate::model::GeneratedWorld;
+use crate::model::{ClimateWorld, GeologyWorld, TectonicsWorld};
 use bevy::{
     asset::RenderAssetUsages,
     color::LinearRgba,
@@ -21,8 +21,8 @@ pub(super) fn empty_surface_mesh() -> Mesh {
     )
 }
 
-pub(super) fn plate_colors(world: &GeneratedWorld) -> Vec<Color> {
-    world
+pub(super) fn plate_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
+    tectonics
         .plates
         .cell_plates
         .iter()
@@ -30,18 +30,20 @@ pub(super) fn plate_colors(world: &GeneratedWorld) -> Vec<Color> {
         .collect()
 }
 
-pub(super) fn crust_colors(world: &GeneratedWorld) -> Vec<Color> {
-    (0..world.voronoi.cell_count())
-        .map(|cell| match world.crust.cell_class(&world.plates, cell) {
-            CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
-            CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
-        })
+pub(super) fn crust_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
+    (0..tectonics.voronoi.cell_count())
+        .map(
+            |cell| match tectonics.crust.cell_class(&tectonics.plates, cell) {
+                CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
+                CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
+            },
+        )
         .collect()
 }
 
-pub(super) fn seafloor_age_colors(world: &GeneratedWorld) -> Vec<Color> {
-    let maximum_age = world.seafloor_age.diagnostics.summary.maximum.max(1.0);
-    world
+pub(super) fn seafloor_age_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
+    let maximum_age = tectonics.seafloor_age.diagnostics.summary.maximum.max(1.0);
+    tectonics
         .seafloor_age
         .cell_ages
         .iter()
@@ -55,10 +57,10 @@ pub(super) fn seafloor_age_colors(world: &GeneratedWorld) -> Vec<Color> {
         .collect()
 }
 
-pub(super) fn insolation_colors(world: &GeneratedWorld) -> Vec<Color> {
-    let maximum = world.solar_forcing.diagnostics.daily_mean.maximum;
+pub(super) fn insolation_colors(_: &TectonicsWorld, climate: &ClimateWorld) -> Vec<Color> {
+    let maximum = climate.solar_forcing.diagnostics.daily_mean.maximum;
     let reciprocal = if maximum > 0.0 { maximum.recip() } else { 0.0 };
-    world
+    climate
         .solar_forcing
         .daily_mean_insolation
         .iter()
@@ -66,8 +68,8 @@ pub(super) fn insolation_colors(world: &GeneratedWorld) -> Vec<Color> {
         .collect()
 }
 
-pub(super) fn basin_colors(world: &GeneratedWorld) -> Vec<Color> {
-    world
+pub(super) fn basin_colors(_: &TectonicsWorld, geology: &GeologyWorld) -> Vec<Color> {
+    geology
         .basins
         .cell_basins
         .iter()

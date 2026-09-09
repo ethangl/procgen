@@ -355,9 +355,11 @@ Metal on macOS and Vulkan on Windows, and every pipeline must run on both.
   readback.
 
 The current viewer is frozen: it takes no new features and keeps working on
-the Voronoi path until the successor covers what it shows. The one change it
-accepts is the second-consumer rule, because the alternative is a second copy
-of everything a viewer needs. Shared viewer support is lifted into
+the Voronoi path until the successor covers what it shows. It accepts the
+second-consumer rule, because the alternative is a second copy of everything a
+viewer needs, and it has accepted phase-scoped generation, because iterating
+tectonic settings on the Voronoi path otherwise pays for geology and climate on
+every run. Shared viewer support is lifted into
 `procgen-viewer-support` as the pilot app reaches for it, and the orbit
 controls and the identity colour ramp are there already.
 

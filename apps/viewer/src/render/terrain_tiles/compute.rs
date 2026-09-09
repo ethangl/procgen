@@ -25,7 +25,11 @@ pub(super) fn install(render_app: &mut SubApp) {
         .add_systems(RenderStartup, initialize_pipeline)
         .add_systems(
             Render,
-            prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
+            // The world-owned buffers only reach the render world once the
+            // geology phase has produced terrain controls.
+            prepare_bind_group
+                .in_set(RenderSystems::PrepareBindGroups)
+                .run_if(resource_exists::<TerrainGpuResources>),
         );
     let mut graph = render_app.world_mut().resource_mut::<RenderGraph>();
     graph.add_node(TerrainComputeLabel, TerrainComputeNode);
