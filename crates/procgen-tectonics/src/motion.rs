@@ -18,7 +18,12 @@
 //! reproduces independent random motion apart from those speed factors.
 //!
 //! A plate with too few cells has no rotation to fit at all: its normal
-//! equations are singular, and it keeps the hashed random rotation whole.
+//! equations are singular, and it keeps the hashed axis. Only direction falls
+//! back; the speed rule is the same for every plate.
+//!
+//! Everything here stays on add, multiply, divide, and square root, so no libm
+//! call sits between the field and the integer boundary classes the angular
+//! velocities decide.
 
 use crate::{CrustClass, CrustClassification, PlatePartition, StageInputError};
 use procgen_core::{
@@ -43,7 +48,7 @@ pub struct PlateKinematicsConfig {
     pub maximum_angular_speed: f32,
     /// Lattice frequency of the flow field, in cycles per unit direction. A
     /// flow cell has to be much larger than a plate for adjacent plates to
-    /// agree, so the useful range runs well below one cycle per radius; see the
+    /// agree, so raising this past the default costs coherence quickly; see the
     /// measurements in `docs/plate-movement.md`.
     pub flow_frequency: f32,
     /// Fraction of the way from the hashed random axis to the fitted axis.
@@ -53,9 +58,6 @@ pub struct PlateKinematicsConfig {
     pub oceanic_speed_factor: f32,
     /// Speed multiplier for plates classified continental.
     pub continental_speed_factor: f32,
-    /// Exponent on the mean plate area over the plate's own area, so larger
-    /// plates move more slowly. Zero makes size irrelevant.
-    pub size_exponent: f32,
 }
 
 impl PlateKinematicsConfig {
@@ -64,11 +66,10 @@ impl PlateKinematicsConfig {
             seed,
             minimum_angular_speed: 0.5,
             maximum_angular_speed: 1.0,
-            flow_frequency: 1.5,
+            flow_frequency: 1.0,
             coherence: 0.85,
             oceanic_speed_factor: 1.4,
             continental_speed_factor: 0.7,
-            size_exponent: 0.25,
         }
     }
 
@@ -107,7 +108,6 @@ pub enum PlateKinematicsError {
     InvalidFlowFrequency,
     InvalidCoherence,
     InvalidCrustSpeedFactor,
-    InvalidSizeExponent,
     Input(StageInputError),
 }
 
@@ -125,9 +125,6 @@ impl fmt::Display for PlateKinematicsError {
             }
             Self::InvalidCrustSpeedFactor => formatter
                 .write_str("oceanic and continental speed factors must be finite and positive"),
-            Self::InvalidSizeExponent => {
-                formatter.write_str("size exponent must be finite and non-negative")
-            }
             Self::Input(error) => error.fmt(formatter),
         }
     }
@@ -157,35 +154,36 @@ pub fn generate_plate_kinematics(
     crust: &CrustClassification,
     config: PlateKinematicsConfig,
 ) -> Result<PlateKinematics, PlateKinematicsError> {
-    validate_fitted_config(config)?;
+    validate_config(config)?;
     partition.validate(mesh)?;
     crust.validate(partition)?;
 
+    let areas = partition.plate_areas(mesh);
+    let reference_area = mesh.total_area() / partition.plate_count as f64;
     let keys = flow_field_keys(config.seed);
-    let fits = fit_plate_rotations(mesh, partition, |direction| {
+    let fitted = fit_plate_rotations(mesh, partition, &areas, |direction| {
         flow_velocity(keys, config.flow_frequency, direction)
     });
-    let reference_area = mesh.total_area() / partition.plate_count as f64;
 
-    let angular_velocities = fits
+    let angular_velocities = fitted
         .iter()
         .zip(&crust.plate_classes)
+        .zip(&areas)
         .enumerate()
-        .map(|(plate, (fit, &class))| match fit {
-            Some(fit) => {
-                let speed = plate_speed(plate, fit.area, reference_area, class, config);
-                blend_axis(
-                    random_axis(plate, config),
-                    fit.rotation.normalized(),
-                    config.coherence,
-                ) * speed
-            }
-            // One cell makes the normal equations exactly singular and two
-            // make them numerically so: there is no rotation to fit. Saying so
-            // and keeping the hashed rotation whole is the honest answer, where
-            // a fixed axis or a pseudo-inverse would return a direction the
-            // field never supplied and hide which plates it happened to.
-            None => random_rotation(plate, config),
+        .map(|(plate, ((fitted, &class), &area))| {
+            let random = random_axis(plate, config);
+            let axis = match fitted {
+                Some(rotation) => blend_axis(random, rotation.normalized(), config.coherence),
+                // One cell makes the normal equations exactly singular and two
+                // make them numerically so: there is no rotation to fit. Saying
+                // so and keeping the hashed axis is the honest answer, where a
+                // fixed axis or a pseudo-inverse would return a direction the
+                // field never supplied and hide which plates it happened to.
+                // Only direction falls back; speed follows the same rule for
+                // every plate.
+                None => random,
+            };
+            axis * plate_speed(plate, area, reference_area, class, config)
         })
         .collect();
 
@@ -204,7 +202,7 @@ pub fn generate_random_plate_kinematics(
     plate_count: usize,
     config: PlateKinematicsConfig,
 ) -> Result<PlateKinematics, PlateKinematicsError> {
-    validate_random_config(config)?;
+    validate_config(config)?;
 
     Ok(PlateKinematics {
         angular_velocities: (0..plate_count)
@@ -213,10 +211,7 @@ pub fn generate_random_plate_kinematics(
     })
 }
 
-/// Validates the rules a hashed rotation depends on. The random generator
-/// checks only these, because the field, the blend, and the speed factors do
-/// not reach its output.
-fn validate_random_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
+fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
     if !config.minimum_angular_speed.is_finite()
         || !config.maximum_angular_speed.is_finite()
         || config.minimum_angular_speed < 0.0
@@ -224,12 +219,6 @@ fn validate_random_config(config: PlateKinematicsConfig) -> Result<(), PlateKine
     {
         return Err(PlateKinematicsError::InvalidAngularSpeedRange);
     }
-    Ok(())
-}
-
-/// Validates every rule the fitted generator's output depends on.
-fn validate_fitted_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
-    validate_random_config(config)?;
     if !config.flow_frequency.is_finite() || config.flow_frequency <= 0.0 {
         return Err(PlateKinematicsError::InvalidFlowFrequency);
     }
@@ -242,9 +231,6 @@ fn validate_fitted_config(config: PlateKinematicsConfig) -> Result<(), PlateKine
         || config.continental_speed_factor <= 0.0
     {
         return Err(PlateKinematicsError::InvalidCrustSpeedFactor);
-    }
-    if !config.size_exponent.is_finite() || config.size_exponent < 0.0 {
-        return Err(PlateKinematicsError::InvalidSizeExponent);
     }
     Ok(())
 }
@@ -281,10 +267,13 @@ fn plate_speed(
         CrustClass::Oceanic => config.oceanic_speed_factor,
         CrustClass::Continental => config.continental_speed_factor,
     };
-    // The one transcendental on this path. Kinematics is a float output that is
-    // never pinned, and the raster pipeline quantizes angular velocities before
-    // upload, so a configurable exponent costs nothing a kernel can observe.
-    let size_factor = (reference_area / plate_area).powf(f64::from(config.size_exponent)) as f32;
+    // Larger plates move more slowly, by the fourth root of the mean plate area
+    // over their own. Two square roots rather than a configurable exponent
+    // because `powf` would put libm on the path that decides boundary classes,
+    // and every integer downstream of them, while `sqrt` is exact in IEEE 754.
+    // A plate that owns no cells has no area to scale by and no edges either,
+    // so nothing reads the maximum speed the clamp then hands it.
+    let size_factor = (reference_area / plate_area).sqrt().sqrt() as f32;
     (random_speed(plate, config) * crust_factor * size_factor)
         .clamp(config.minimum_angular_speed, config.maximum_angular_speed)
 }
@@ -311,19 +300,11 @@ fn flow_velocity(keys: [u32; 3], frequency: f32, direction: Vec3) -> Vec3 {
     sampled - direction * sampled.dot(direction)
 }
 
-/// One plate's fitted rotation and the area it was fitted over.
-struct PlateRotationFit {
-    /// Least-squares Euler vector. Only its direction reaches the output.
-    rotation: Vec3,
-    area: f64,
-}
-
 /// Area-weighted normal equations `matrix * ω = vector` for one plate.
 #[derive(Clone, Copy, Default)]
 struct NormalEquations {
     matrix: [[f64; 3]; 3],
     vector: [f64; 3],
-    area: f64,
 }
 
 impl NormalEquations {
@@ -343,15 +324,18 @@ impl NormalEquations {
         {
             *entry += area * component;
         }
-        self.area += area;
     }
 
-    fn solve(&self) -> Option<PlateRotationFit> {
-        let rotation = solve_symmetric_3x3(self.matrix, self.vector, self.area)?;
-        Some(PlateRotationFit {
-            rotation: Vec3::new(rotation[0] as f32, rotation[1] as f32, rotation[2] as f32),
-            area: self.area,
-        })
+    /// Least-squares Euler vector, or `None` when the system is singular.
+    /// `area` is the plate's own area, which the entries scale with and the
+    /// determinant test needs as its reference.
+    fn solve(&self, area: f64) -> Option<Vec3> {
+        let rotation = solve_3x3(self.matrix, self.vector, area)?;
+        Some(Vec3::new(
+            rotation[0] as f32,
+            rotation[1] as f32,
+            rotation[2] as f32,
+        ))
     }
 }
 
@@ -360,8 +344,9 @@ impl NormalEquations {
 fn fit_plate_rotations(
     mesh: &SphereMesh,
     partition: &PlatePartition,
+    areas: &[f64],
     field: impl Fn(Vec3) -> Vec3,
-) -> Vec<Option<PlateRotationFit>> {
+) -> Vec<Option<Vec3>> {
     let mut equations = vec![NormalEquations::default(); partition.plate_count];
     for (cell, &plate) in partition.cell_plates.iter().enumerate() {
         let direction = mesh.cell_centers[cell].normalized();
@@ -371,12 +356,16 @@ fn fit_plate_rotations(
             field(direction),
         );
     }
-    equations.iter().map(NormalEquations::solve).collect()
+    equations
+        .iter()
+        .zip(areas)
+        .map(|(equations, &area)| equations.solve(area))
+        .collect()
 }
 
-/// Solves a symmetric 3-by-3 system by Cramer's rule, rejecting a determinant
-/// too small for the system's scale to carry a direction.
-fn solve_symmetric_3x3(matrix: [[f64; 3]; 3], vector: [f64; 3], scale: f64) -> Option<[f64; 3]> {
+/// Solves a 3-by-3 system by Cramer's rule, rejecting a determinant too small
+/// for the system's scale to carry a direction.
+fn solve_3x3(matrix: [[f64; 3]; 3], vector: [f64; 3], scale: f64) -> Option<[f64; 3]> {
     let determinant = determinant_3x3(matrix);
     if determinant.abs() <= SINGULAR_DETERMINANT_FRACTION * scale * scale * scale {
         return None;
@@ -437,14 +426,6 @@ mod tests {
         )
     }
 
-    fn plate_areas(mesh: &SphereMesh, partition: &PlatePartition) -> Vec<f64> {
-        let mut areas = vec![0.0; partition.plate_count];
-        for (&plate, &area) in partition.cell_plates.iter().zip(&mesh.cell_areas) {
-            areas[plate] += f64::from(area);
-        }
-        areas
-    }
-
     fn speeds(kinematics: &PlateKinematics) -> Vec<f32> {
         kinematics
             .angular_velocities
@@ -497,19 +478,17 @@ mod tests {
     #[test]
     fn full_coherence_fits_one_global_rotation_and_passes_its_axis_through() {
         // A field that is itself a rigid rotation is the case where the fit has
-        // an exact answer, so every plate recovers the same axis whichever
+        // an exact answer, so every plate recovers the same rotation whichever
         // cells it owns.
         let (mesh, partition) = two_equal_plates();
+        let areas = partition.plate_areas(&mesh);
         let rotation = Vec3::new(0.3, -0.7, 0.5);
-        let fits = fit_plate_rotations(&mesh, &partition, |direction| rotation.cross(direction));
-        let fitted: Vec<_> = fits
-            .iter()
-            .map(|fit| {
-                fit.as_ref()
-                    .expect("both plates span enough cells")
-                    .rotation
-            })
-            .collect();
+        let fitted: Vec<_> = fit_plate_rotations(&mesh, &partition, &areas, |direction| {
+            rotation.cross(direction)
+        })
+        .into_iter()
+        .map(|fit| fit.expect("both plates span enough cells"))
+        .collect();
 
         for (plate, &fit) in fitted.iter().enumerate() {
             assert!(
@@ -529,7 +508,7 @@ mod tests {
             ..PlateKinematicsConfig::new(7)
         };
         let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
-        let flow_fits = fit_plate_rotations(&mesh, &partition, |direction| {
+        let flow_fits = fit_plate_rotations(&mesh, &partition, &areas, |direction| {
             flow_velocity(
                 flow_field_keys(config.seed),
                 config.flow_frequency,
@@ -537,7 +516,7 @@ mod tests {
             )
         });
         for (plate, velocity) in kinematics.angular_velocities.iter().enumerate() {
-            let expected = flow_fits[plate].as_ref().unwrap().rotation.normalized();
+            let expected = flow_fits[plate].unwrap().normalized();
             assert!(
                 (velocity.normalized() - expected).length() < 1.0e-6,
                 "plate {plate} left its fitted axis"
@@ -548,7 +527,7 @@ mod tests {
     #[test]
     fn oceanic_plates_outrun_continental_plates_of_similar_size() {
         let (mesh, partition) = two_equal_plates();
-        let areas = plate_areas(&mesh, &partition);
+        let areas = partition.plate_areas(&mesh);
         assert!(
             (areas[0] - areas[1]).abs() / areas[0] < 0.01,
             "the halves must be similar in size: {areas:?}"
@@ -588,7 +567,7 @@ mod tests {
             ..PlateKinematicsConfig::new(7)
         };
 
-        let areas = plate_areas(&mesh, &partition);
+        let areas = partition.plate_areas(&mesh);
         assert!(areas[0] > areas[1] * 5.0, "{areas:?}");
         let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
         let factors: Vec<_> = speeds(&kinematics)
@@ -610,14 +589,15 @@ mod tests {
     }
 
     #[test]
-    fn single_cell_plates_fall_back_to_the_hashed_rotation() {
+    fn single_cell_plates_fall_back_to_the_hashed_axis() {
         let (mesh, _, partition) = test_support::two_plate_boundary_partition();
         let crust = CrustClassification {
             plate_classes: vec![CrustClass::Oceanic; 2],
         };
         let config = PlateKinematicsConfig::new(7);
+        let areas = partition.plate_areas(&mesh);
 
-        let fits = fit_plate_rotations(&mesh, &partition, |direction| {
+        let fits = fit_plate_rotations(&mesh, &partition, &areas, |direction| {
             flow_velocity(
                 flow_field_keys(config.seed),
                 config.flow_frequency,
@@ -626,8 +606,19 @@ mod tests {
         });
         assert!(fits[1].is_none(), "a one-cell plate has no rotation to fit");
 
+        // Only the axis falls back. The speed rule still reads the plate's
+        // crust and its area, exactly as it does for a plate that fitted.
         let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
-        assert_eq!(kinematics.angular_velocities[1], random_rotation(1, config));
+        assert!(
+            (kinematics.angular_velocities[1].normalized() - random_axis(1, config)).length()
+                < 1.0e-6
+        );
+        let reference_area = mesh.total_area() / 2.0;
+        let expected = plate_speed(1, areas[1], reference_area, CrustClass::Oceanic, config);
+        assert!(
+            (kinematics.angular_velocities[1].length() - expected).abs()
+                < SPEED_TOLERANCE * expected
+        );
     }
 
     #[test]
@@ -736,13 +727,6 @@ mod tests {
                     ..base
                 },
                 PlateKinematicsError::InvalidCrustSpeedFactor,
-            ),
-            (
-                PlateKinematicsConfig {
-                    size_exponent: -1.0,
-                    ..base
-                },
-                PlateKinematicsError::InvalidSizeExponent,
             ),
         ];
 

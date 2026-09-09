@@ -21,8 +21,6 @@ const ANGULAR_SPEED_STEP: f64 = 0.01;
 const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
-// One would make speed inversely proportional to plate area.
-const SIZE_EXPONENT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const SEAFLOOR_AGE_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
@@ -151,12 +149,6 @@ fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
         "Continental speed",
         &mut config.continental_speed_factor,
         CRUST_SPEED_FACTOR_RANGE,
-    );
-    slider(
-        ui,
-        "Size exponent",
-        &mut config.size_exponent,
-        SIZE_EXPONENT_RANGE,
     );
 }
 

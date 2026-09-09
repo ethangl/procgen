@@ -129,12 +129,12 @@ mod tests {
                 summary: FieldSummary {
                     minimum: 0.0,
                     maximum: 3.0,
-                    mean: 0.721_951_25,
+                    mean: 0.684_210_54,
                 },
-                oceanic_cell_count: 205,
-                ridge_cell_count: 103,
-                ridge_plate_count: 10,
-                ridge_less_plate_count: 2,
+                oceanic_cell_count: 209,
+                ridge_cell_count: 101,
+                ridge_plate_count: 8,
+                ridge_less_plate_count: 4,
                 fallback_cell_count: 0,
             }
         );
@@ -145,7 +145,7 @@ mod tests {
                     .iter()
                     .map(|age| { age.map_or(u64::MAX, |age| age as u64) })
             ),
-            3_138_916_056_150_185_816
+            7_048_245_361_707_751_149
         );
     }
 

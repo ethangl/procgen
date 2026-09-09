@@ -20,28 +20,25 @@ them.
 Slice 1, coherent kinematics, has landed.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
-  Euler vector to a smooth global flow field over the plate's own cells, scales
-  the fitted direction by a speed derived from the plate's hashed base speed,
-  its crust class, and its area, and blends the axis back toward the hashed
-  random one by the configured `coherence`. Plates too small to fit — one or
-  two cells — keep the hashed random rotation. At the viewer's defaults the
-  fifty-seven plates give 3923 convergent, 4064 divergent, and 3655 transform
-  edges after nine steps, against 4792, 5436, and 4529 for the old independent
-  motion; coherent motion moves fewer cells across boundaries, 16120 against
-  25246.
-
-  The default flow frequency of 1.5 does not yet organise those edges into
-  belts. Averaged over the adjacent plate pairs, the signed alignment of their
-  rotation axes is 0.02 to 0.26 across three motion seeds, against 0.03 for
-  independent motion — no better than random for the shipped seed. The fit's
-  Euler axis is sensitive to where in a flow cell a plate sits, so a cell has
-  to be much larger than a plate. Frequency 1.0 measures 0.34 to 0.46 and 0.5
-  measures 0.52 to 0.85, both with migration still in the fifteen-thousand
-  range. Retuning the default down is the obvious next step and needs no code.
-  Coherence itself is not the limit: 1.0 measures within 0.02 of 0.85
-  everywhere, because a fifteen-percent random admixture only tilts the axis.
-
-  `generate_random_plate_kinematics` is the unchanged hashed generator, kept
+  Euler vector to a smooth global flow field over the plate's own cells, then
+  scales the fitted direction by the plate's hashed base speed times a crust
+  factor times the fourth root of the mean plate area over its own. A
+  `coherence` fraction blends the axis back toward the hashed random one.
+  Plates too small to fit — one or two cells — keep the hashed axis; the speed
+  rule is the same for every plate. Nothing on the path uses a libm call, so
+  the integer boundary classes the angular velocities decide stay exact.
+- The default flow frequency is 1.0. Averaged over the adjacent plate pairs at
+  the viewer's defaults, the signed alignment of their rotation axes is 0.34 to
+  0.44 across three motion seeds, against 0.03 or less for the independent
+  random motion it replaces. Boundary edges after nine steps are 3978
+  convergent, 4593 divergent, and 3922 transform against 4792, 5436, and 4529,
+  and 16010 cells change owner against 25246: coherent motion moves fewer
+  cells. Frequency is the knob that matters. Halving it to 0.5 reaches 0.52 to
+  0.82 alignment but can halve migration; 1.5 falls back to 0.02 to 0.26,
+  no better than random for some seeds, because a flow cell has to be much
+  larger than a plate for the fit's Euler axis to agree between neighbours.
+  Coherence is not the limit: 1.0 measures within 0.02 of 0.85 everywhere.
+- `generate_random_plate_kinematics` is the unchanged hashed generator, kept
   public as the raster pilot's interim source until slice 1's own kernel.
 - `classify_boundaries` derives per-edge normal and shear speeds from the two
   owners' rotations and classifies each edge. It is correct and stays.
@@ -139,7 +136,13 @@ keeps that: the fit uses add, multiply, divide, and square root, and its
 output is quantized once on the host by the existing function. Boundary
 classes and migration decisions are integers derived from those quantized
 floats through comparisons, so they stay bit-identical run to run and across
-the two development machines. Birth steps and accumulated displacement are
+the two development machines. One libm call remains in reach of the mesh
+path's angular velocities, and it predates this slice:
+`RandomStream::unit_vector` takes a sine and a cosine, and the hashed axis is
+still a fifteen-percent share of every plate's direction at the default
+coherence. If a re-pinned integer fingerprint ever splits between the two
+machines, that is the first thing to replace, with a normalized triple of
+`signed_f32` as the crack walk already uses. Birth steps and accumulated displacement are
 integers or exact multiples of the step length. Accumulated deformation is a
 float field and is tested for run-to-run equality and invariants only, never
 pinned across machines.
@@ -175,13 +178,6 @@ pinned across machines.
 Flow field, per-plate fit, crust and size factors, coherence blend, config
 and viewer controls, docs. Kinematics signature takes the mesh, partition, and
 crust. Raster pilot untouched.
-
-The size factor's configurable exponent is the one transcendental on the path
-that boundary classes are decided from, which the determinism note above did
-not anticipate. It costs nothing yet: kinematics is a float output that is
-never pinned, and the raster pilot still quantizes its own random rotations
-before upload. Slice 1's raster kernel has to settle the exponent as a fixed
-sequence of square roots, or take the same `powf` on the host and quantize.
 
 ### Displacement migration and birth steps.
 

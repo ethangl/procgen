@@ -249,7 +249,7 @@ mod tests {
                 .iter()
                 .map(|&plate| plate as u64),
         );
-        assert_eq!(fingerprint, 12_579_906_744_454_641_726);
+        assert_eq!(fingerprint, 15_263_581_697_152_949_382);
     }
 
     #[test]
