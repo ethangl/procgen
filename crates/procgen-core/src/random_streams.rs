@@ -15,6 +15,7 @@ pub const TERRAIN_COAST_WARP_Y: u64 = 11;
 pub const TERRAIN_COAST_WARP_Z: u64 = 12;
 pub const PLATE_CRACK_ARC: u64 = 13;
 pub const PLATE_FACE_SUBDIVISION: u64 = 14;
+pub const PLATE_FLOW_FIELD: u64 = 15;
 
 #[cfg(test)]
 mod tests {
@@ -38,6 +39,7 @@ mod tests {
             TERRAIN_COAST_WARP_Z,
             PLATE_CRACK_ARC,
             PLATE_FACE_SUBDIVISION,
+            PLATE_FLOW_FIELD,
         ];
         ids.sort_unstable();
         assert!(ids.windows(2).all(|pair| pair[0] != pair[1]));

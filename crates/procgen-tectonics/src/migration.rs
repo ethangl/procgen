@@ -194,7 +194,7 @@ mod tests {
         let (mesh, partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
         let kinematics =
-            generate_plate_kinematics(partition.plate_count, PlateKinematicsConfig::new(7))
+            generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
                 .unwrap();
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
         (mesh, partition, crust, boundaries)
@@ -249,7 +249,7 @@ mod tests {
                 .iter()
                 .map(|&plate| plate as u64),
         );
-        assert_eq!(fingerprint, 3_935_668_216_699_365_675);
+        assert_eq!(fingerprint, 12_579_906_744_454_641_726);
     }
 
     #[test]

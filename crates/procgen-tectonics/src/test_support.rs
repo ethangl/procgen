@@ -49,7 +49,7 @@ pub fn final_state_fixture() -> (
     let (mesh, initial) = reference_partition();
     let crust = classify_crust(&mesh, &initial, CrustClassificationConfig::new(17)).unwrap();
     let kinematics =
-        generate_plate_kinematics(initial.plate_count, PlateKinematicsConfig::new(7)).unwrap();
+        generate_plate_kinematics(&mesh, &initial, &crust, PlateKinematicsConfig::new(7)).unwrap();
     let evolution = evolve_plate_ownership(
         &mesh,
         &initial,

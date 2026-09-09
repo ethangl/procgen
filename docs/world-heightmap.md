@@ -70,12 +70,14 @@ Completed foundations:
   they cross as walls; the connected components between the walls are the
   primary faces, and a configured fraction of them split into minor plates by
   integer-cost growth confined to their own face. It also derives rigid plate
-  angular velocities, local spherical tangent motion, static convergent,
-  divergent, and transform boundary classification, and static per-plate crust
-  classification with area-weighted ocean coverage. It repeatedly reclassifies
-  current boundaries and applies deterministic, simultaneous ownership migration
-  for a configured step count. The result retains final ownership and boundaries
-  plus aggregate evolution diagnostics, without step history. Per-plate crust
+  angular velocities, fitted per plate to a smooth global flow field and scaled
+  by crust class and plate size, local spherical tangent motion, static
+  convergent, divergent, and transform boundary classification, and static
+  per-plate crust classification with area-weighted ocean coverage. It
+  repeatedly reclassifies current boundaries and applies deterministic,
+  simultaneous ownership migration for a configured step count. The result
+  retains final ownership and boundaries plus aggregate evolution diagnostics,
+  without step history. Per-plate crust
   classes remain fixed while cell crust follows current ownership. A separate
   post-evolution stage derives signed per-cell deformation from current-owner
   crust and final boundary classes and strengths, with deterministic overlap
