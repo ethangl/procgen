@@ -581,7 +581,7 @@ mod tests {
             .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
-        assert_eq!(fingerprint(values), 5_753_623_188_708_739_124);
+        assert_eq!(fingerprint(values), 2_222_789_925_634_094_949);
     }
 
     #[test]

@@ -418,7 +418,7 @@ mod tests {
                 u64::from(wind.z.to_bits()),
             ]
         }));
-        assert_eq!(hash, 1_805_051_586_563_245_776);
+        assert_eq!(hash, 8_149_046_688_280_195_221);
     }
 
     #[test]

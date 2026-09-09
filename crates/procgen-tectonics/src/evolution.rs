@@ -167,7 +167,7 @@ mod tests {
                 proposal_count: 601,
                 contested_cell_count: 101,
                 migrated_cell_count: 487,
-                maximum_convergence: 1.600_926_4,
+                maximum_convergence: 1.600_926_2,
             }
         );
     }

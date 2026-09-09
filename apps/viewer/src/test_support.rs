@@ -2,7 +2,8 @@ use crate::{
     cache::WorldCache,
     model::{
         ClimateSettings, ClimateWorld, CompleteWorld, GeneratedWorld, GenerationSettings,
-        GeologySettings, GeologyWorld, TectonicsSettings, TectonicsWorld,
+        GenerationTimings, GeologySettings, GeologyWorld, TectonicsSettings, TectonicsWorld,
+        build_mesh,
     },
 };
 use procgen_geology::{HotspotFieldConfig, OceanicPeakFieldConfig};
@@ -37,6 +38,14 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
     }
 }
 
+/// Builds the mesh and generates the tectonics phase from one settings
+/// profile, the sequencing `GeneratedWorld::generate_phase` owns outside tests.
+pub(crate) fn tectonics_world(settings: TectonicsSettings) -> TectonicsWorld {
+    let mut timings = GenerationTimings::default();
+    let voronoi = build_mesh(settings.fibonacci, &mut timings).unwrap();
+    TectonicsWorld::generate(voronoi, settings, timings).unwrap()
+}
+
 pub(crate) fn geology_settings(seed: u64) -> GeologySettings {
     GeologySettings {
         hotspots: HotspotFieldConfig {
@@ -67,7 +76,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn generate(settings: GenerationSettings) -> Self {
-        let tectonics = TectonicsWorld::generate(settings.tectonics).unwrap();
+        let tectonics = tectonics_world(settings.tectonics);
         let geology = GeologyWorld::generate(&tectonics, settings.geology).unwrap();
         let climate = ClimateWorld::generate(&tectonics, &geology, settings.climate).unwrap();
         Self {

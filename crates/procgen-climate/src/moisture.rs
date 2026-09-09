@@ -804,7 +804,7 @@ mod tests {
                 .chain(&first.cell_precipitation_kg_per_m2_per_day)
                 .map(|value| u64::from(value.to_bits())),
         );
-        assert_eq!(hash, 15_846_752_812_615_516_730);
+        assert_eq!(hash, 6_523_898_614_920_361_580);
     }
 
     #[test]

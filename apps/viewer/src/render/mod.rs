@@ -316,8 +316,7 @@ fn to_bevy(point: procgen_core::Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TectonicsWorld;
-    use crate::test_support::{Fixture, tectonics_settings};
+    use crate::test_support::{Fixture, tectonics_settings, tectonics_world};
 
     #[test]
     fn detailed_mode_keeps_the_coarse_surface_hidden_across_surface_rebuild_inputs() {
@@ -366,9 +365,8 @@ mod tests {
             Some(DiagnosticLayer::IsostaticElevation)
         );
 
-        let tectonics_only = GeneratedWorld::from_tectonics(
-            TectonicsWorld::generate(tectonics_settings(128, 61)).unwrap(),
-        );
+        let tectonics_only =
+            GeneratedWorld::from_tectonics(tectonics_world(tectonics_settings(128, 61)));
         app.insert_resource(tectonics_only);
         app.update();
         assert_eq!(

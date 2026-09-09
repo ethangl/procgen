@@ -4,7 +4,7 @@ mod tectonics;
 
 pub use climate::{ClimateSettings, ClimateWorld};
 pub use geology::{GeologySettings, GeologyWorld};
-pub use tectonics::{TectonicsSettings, TectonicsWorld};
+pub use tectonics::{TectonicsSettings, TectonicsWorld, build_mesh};
 
 use crate::cache::WorldCache;
 use bevy::prelude::*;
@@ -127,7 +127,21 @@ impl GeneratedWorld {
         const UPSTREAM: &str = "a phase runs only after the phases it consumes";
         match phase {
             Phase::Tectonics => {
-                self.tectonics = Some(TectonicsWorld::generate(settings.tectonics)?);
+                let mut timings = GenerationTimings::default();
+                // The mesh is a function of the fibonacci config alone, so an
+                // unchanged one reuses the mesh already in memory. Copying it
+                // costs a fraction of the triangulation it saves and leaves
+                // the world in memory untouched until the new one exists.
+                let reusable = self
+                    .tectonics
+                    .as_ref()
+                    .filter(|previous| previous.config.fibonacci == settings.tectonics.fibonacci);
+                let voronoi = match reusable {
+                    Some(previous) => previous.voronoi.clone(),
+                    None => build_mesh(settings.tectonics.fibonacci, &mut timings)?,
+                };
+                let tectonics = TectonicsWorld::generate(voronoi, settings.tectonics, timings)?;
+                self.tectonics = Some(tectonics);
                 self.geology = None;
                 self.climate = None;
             }
@@ -364,7 +378,9 @@ fn clear_world_cache(cache: Res<WorldCache>, mut status: ResMut<GenerationStatus
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Fixture, cache as test_cache, settings as test_settings};
+    use crate::test_support::{
+        Fixture, cache as test_cache, settings as test_settings, tectonics_world,
+    };
     use std::fs;
 
     fn app_with(cache: WorldCache, settings: GenerationSettings) -> App {
@@ -378,10 +394,25 @@ mod tests {
         app.update();
     }
 
+    fn tectonics_of(app: &App) -> &TectonicsWorld {
+        app.world()
+            .resource::<GeneratedWorld>()
+            .tectonics()
+            .expect("tectonics has been generated")
+    }
+
+    fn ran_delaunay(app: &App) -> bool {
+        tectonics_of(app)
+            .timings
+            .stages()
+            .iter()
+            .any(|stage| stage.label == "Delaunay")
+    }
+
     #[test]
     fn default_settings_generate_every_phase() {
         let settings = GenerationSettings::default();
-        let tectonics = TectonicsWorld::generate(settings.tectonics).unwrap();
+        let tectonics = tectonics_world(settings.tectonics);
         let geology = GeologyWorld::generate(&tectonics, settings.geology).unwrap();
         ClimateWorld::generate(&tectonics, &geology, settings.climate).unwrap();
     }
@@ -460,6 +491,45 @@ mod tests {
         assert_eq!(world.tectonics().unwrap().config, generated_tectonics);
         assert!(world.holds(Phase::Geology));
         assert!(!world.holds(Phase::Climate));
+        assert!(!cache_dir.exists(), "a partial world leaves no snapshot");
+    }
+
+    #[test]
+    fn regenerating_tectonics_reuses_the_mesh_of_an_unchanged_sampling_config() {
+        let (cache_dir, cache) = test_cache("mesh-reuse");
+        let mut app = app_with(cache, test_settings(128, 57));
+        generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
+        assert!(ran_delaunay(&app), "the first run has no mesh to reuse");
+
+        let mut edited = *app.world().resource::<GenerationSettings>();
+        edited.tectonics.plates.seed += 1;
+        app.world_mut().insert_resource(edited);
+        generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
+
+        let tectonics = tectonics_of(&app);
+        assert!(!ran_delaunay(&app));
+        assert_eq!(tectonics.config, edited.tectonics);
+        tectonics.validate().unwrap();
+
+        assert!(!cache_dir.exists(), "a partial world leaves no snapshot");
+    }
+
+    #[test]
+    fn regenerating_tectonics_rebuilds_the_mesh_of_a_changed_sampling_config() {
+        let (cache_dir, cache) = test_cache("mesh-rebuild");
+        let mut app = app_with(cache, test_settings(128, 58));
+        generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
+
+        let mut edited = *app.world().resource::<GenerationSettings>();
+        edited.tectonics.fibonacci.count = 192;
+        app.world_mut().insert_resource(edited);
+        generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
+
+        let tectonics = tectonics_of(&app);
+        assert!(ran_delaunay(&app));
+        assert_eq!(tectonics.voronoi.cell_count(), 192);
+        tectonics.validate().unwrap();
+
         assert!(!cache_dir.exists(), "a partial world leaves no snapshot");
     }
 

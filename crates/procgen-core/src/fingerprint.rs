@@ -1,4 +1,9 @@
 /// Produces a stable FNV-1a fingerprint for deterministic test vectors.
+///
+/// A fingerprint taken over float bits holds for one codegen, not for every
+/// build: optimization changes the last bit of a reduction. The workspace
+/// therefore optimizes every generation crate in both profiles, and the pinned
+/// values are captured from an optimized build.
 pub fn fingerprint(values: impl IntoIterator<Item = u64>) -> u64 {
     values
         .into_iter()
