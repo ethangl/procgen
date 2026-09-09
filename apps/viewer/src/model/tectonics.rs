@@ -36,11 +36,8 @@ impl Default for TectonicsSettings {
                 ..FibonacciConfig::new(65_536)
             },
             plates: PlatePartitionConfig {
-                major_plate_count: 6,
-                minor_plate_count: 111,
-                major_head_start_rounds: 6,
-                growth_roughness: 99,
                 seed: 7,
+                ..PlatePartitionConfig::default()
             },
             crust: CrustClassificationConfig {
                 target_ocean_fraction: 0.75,
@@ -150,9 +147,7 @@ impl TectonicsWorld {
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         let mesh = &self.voronoi;
-        if self.config.fibonacci.count != mesh.cell_count()
-            || self.config.plates.plate_count() != self.plates.plate_count
-        {
+        if self.config.fibonacci.count != mesh.cell_count() {
             return Err("tectonics results do not match their settings".into());
         }
 

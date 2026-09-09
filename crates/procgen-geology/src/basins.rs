@@ -265,7 +265,16 @@ mod tests {
             1.0,
         )
         .unwrap();
-        let plates = partition_plates(&mesh, PlatePartitionConfig::new(4, 4)).unwrap();
+        let plates = partition_plates(
+            &mesh,
+            PlatePartitionConfig {
+                arc_count: 4,
+                piece_fraction: 32.0 / cell_count as f32,
+                growth_roughness: 0,
+                ..PlatePartitionConfig::default()
+            },
+        )
+        .unwrap();
         let crust = CrustClassification {
             plate_classes: vec![CrustClass::Continental; plates.plate_count],
         };

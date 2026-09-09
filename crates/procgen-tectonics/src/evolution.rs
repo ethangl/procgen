@@ -159,12 +159,12 @@ mod tests {
                 .iter()
                 .map(|&plate| plate as u64),
         );
-        assert_eq!(fingerprint, 9_637_389_478_425_232_066);
-        assert_eq!(first.diagnostics.proposal_count, 601);
-        assert_eq!(first.diagnostics.contested_cell_count, 101);
-        assert_eq!(first.diagnostics.migrated_cell_count, 487);
+        assert_eq!(fingerprint, 16_994_075_726_605_587_921);
+        assert_eq!(first.diagnostics.proposal_count, 530);
+        assert_eq!(first.diagnostics.contested_cell_count, 92);
+        assert_eq!(first.diagnostics.migrated_cell_count, 430);
         // Convergence is a float reduction, so machines differ in the last bits.
-        assert!((first.diagnostics.maximum_convergence - 1.600_926).abs() < 1.0e-3);
+        assert!((first.diagnostics.maximum_convergence - 1.546_309).abs() < 1.0e-3);
     }
 
     #[test]

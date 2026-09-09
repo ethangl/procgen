@@ -1,7 +1,23 @@
-use crate::StageInputError;
+//! Plate partitioning as a crack pattern whose faces growth subdivides.
+//!
+//! Stage one is the crack pattern in [`crate::cracks`]: arcs walk the mesh and
+//! the cells between their walls become faces. Stage two seeds each face —
+//! once for a face left whole, farthest-first for a face selected to split —
+//! and runs one shortest-arrival growth over per-edge integer costs that never
+//! crosses a face boundary. Independent per-edge costs alone produce convex
+//! blobs, so the cracks are what give the partition its plate-like outlines.
+//!
+//! Plate ids follow seeding order, and the crack walk is libm-free, so the
+//! whole partition is reproducible; [`crate::cracks`] records exactly what
+//! that rests on.
+
+use crate::{
+    StageInputError,
+    cracks::{CrackFaces, crack_faces},
+};
 use procgen_core::{
     RandomStream,
-    random_streams::{FIRST_MAJOR_PLATE_SEED, PLATE_GROWTH_COST},
+    random_streams::{PLATE_FACE_SUBDIVISION, PLATE_GROWTH_COST},
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{cmp::Reverse, collections::BinaryHeap, fmt};
@@ -10,33 +26,33 @@ const UNASSIGNED_PLATE: usize = usize::MAX;
 const BASE_GROWTH_COST: u64 = 100;
 pub const MAX_GROWTH_ROUGHNESS: u32 = BASE_GROWTH_COST as u32 - 1;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlatePartitionConfig {
-    pub major_plate_count: usize,
-    pub minor_plate_count: usize,
-    /// Expected major-only growth rounds at the baseline traversal cost.
-    /// Roughness means this is not an exact graph-hop count.
-    pub major_head_start_rounds: usize,
+    /// Crack arcs attempted. Arcs that start on an existing wall are skipped,
+    /// so this bounds rather than fixes the number of primary boundaries.
+    pub arc_count: usize,
+    /// Heading change in radians per radian travelled. Zero walks great circles.
+    pub curvature: f32,
+    /// Fraction of faces that growth splits into minor plates.
+    pub subdivided_fraction: f32,
+    /// Target minor-plate area as a fraction of the sphere.
+    pub piece_fraction: f32,
     /// Maximum percentage that an edge's deterministic traversal cost varies
     /// above or below the baseline. Must not exceed `MAX_GROWTH_ROUGHNESS`.
     pub growth_roughness: u32,
     pub seed: u64,
 }
 
-impl PlatePartitionConfig {
-    pub const fn new(major_plate_count: usize, minor_plate_count: usize) -> Self {
+impl Default for PlatePartitionConfig {
+    fn default() -> Self {
         Self {
-            major_plate_count,
-            minor_plate_count,
-            major_head_start_rounds: 0,
-            growth_roughness: 0,
+            arc_count: 40,
+            curvature: 2.0,
+            subdivided_fraction: 0.4,
+            piece_fraction: 1.0 / 120.0,
+            growth_roughness: MAX_GROWTH_ROUGHNESS,
             seed: 0,
         }
-    }
-
-    pub const fn plate_count(self) -> usize {
-        self.major_plate_count
-            .saturating_add(self.minor_plate_count)
     }
 }
 
@@ -65,22 +81,24 @@ impl PlatePartition {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlatePartitionError {
-    NoMajorPlates,
-    TooManyPlates,
-    InsufficientUnclaimedCells,
+    NoArcs,
+    InvalidCurvature,
+    InvalidSubdividedFraction,
+    InvalidPieceFraction,
     InvalidGrowthRoughness,
 }
 
 impl fmt::Display for PlatePartitionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoMajorPlates => formatter.write_str("at least one major plate is required"),
-            Self::TooManyPlates => {
-                formatter.write_str("plate count cannot exceed the mesh cell count")
+            Self::NoArcs => formatter.write_str("at least one crack arc is required"),
+            Self::InvalidCurvature => {
+                formatter.write_str("crack curvature must be finite and nonnegative")
             }
-            Self::InsufficientUnclaimedCells => {
-                formatter.write_str("too few unassigned cells remain to seed the requested plates")
+            Self::InvalidSubdividedFraction => {
+                formatter.write_str("subdivided fraction must lie in [0, 1]")
             }
+            Self::InvalidPieceFraction => formatter.write_str("piece fraction must lie in (0, 1]"),
             Self::InvalidGrowthRoughness => write!(
                 formatter,
                 "plate growth roughness cannot exceed {MAX_GROWTH_ROUGHNESS}%"
@@ -91,35 +109,97 @@ impl fmt::Display for PlatePartitionError {
 
 impl std::error::Error for PlatePartitionError {}
 
-/// Partitions a sphere mesh using major-plate head-start growth followed by
-/// minor-plate seeding and a shared deterministic weighted flood fill.
+/// Partitions a sphere mesh into plates: crack faces first, then one
+/// shortest-arrival growth from the seeds those faces place.
 pub fn partition_plates(
     mesh: &SphereMesh,
     config: PlatePartitionConfig,
 ) -> Result<PlatePartition, PlatePartitionError> {
-    if config.major_plate_count == 0 {
-        return Err(PlatePartitionError::NoMajorPlates);
+    if config.arc_count == 0 {
+        return Err(PlatePartitionError::NoArcs);
     }
-    if config.plate_count() > mesh.cell_count() {
-        return Err(PlatePartitionError::TooManyPlates);
+    if !config.curvature.is_finite() || config.curvature < 0.0 {
+        return Err(PlatePartitionError::InvalidCurvature);
+    }
+    if !(0.0..=1.0).contains(&config.subdivided_fraction) {
+        return Err(PlatePartitionError::InvalidSubdividedFraction);
+    }
+    if !(config.piece_fraction > 0.0 && config.piece_fraction <= 1.0) {
+        return Err(PlatePartitionError::InvalidPieceFraction);
     }
     if config.growth_roughness > MAX_GROWTH_ROUGHNESS {
         return Err(PlatePartitionError::InvalidGrowthRoughness);
     }
 
-    let first_seed = (RandomStream::new(config.seed, FIRST_MAJOR_PLATE_SEED).sample_u64(0, 0)
-        % mesh.cell_count() as u64) as usize;
-    let mut growth = PlateGrowth::new(mesh, config.seed, config.growth_roughness);
-    growth.seed(first_seed);
-    growth.seed_farthest(config.major_plate_count - 1)?;
-    let head_start_cost = (config.major_head_start_rounds as u64).saturating_mul(BASE_GROWTH_COST);
-    growth.grow_for(head_start_cost);
-    growth.seed_farthest(config.minor_plate_count)?;
-    growth.grow_for(u64::MAX);
+    let faces = crack_faces(mesh, config.seed, config.arc_count, config.curvature);
+    let seeds = plate_seeds(mesh, &faces, config);
+    let mut growth = PlateGrowth::new(mesh, &faces.cell_faces, config);
+    for (plate, &cell) in seeds.iter().enumerate() {
+        growth.seed(cell, plate);
+    }
+    growth.grow();
     Ok(PlatePartition {
-        plate_count: growth.plate_seeds.len(),
         cell_plates: growth.cell_plates,
+        plate_count: seeds.len(),
     })
+}
+
+/// Places one seed per face left whole and several inside each face the hash
+/// selects for splitting, face by face, so plate ids come out sequential
+/// without a remap.
+fn plate_seeds(mesh: &SphereMesh, faces: &CrackFaces, config: PlatePartitionConfig) -> Vec<usize> {
+    let mut face_cells = vec![Vec::new(); faces.face_count];
+    for (cell, &face) in faces.cell_faces.iter().enumerate() {
+        face_cells[face].push(cell);
+    }
+    let target_area = f64::from(config.piece_fraction) * mesh.total_area();
+    let subdivision = RandomStream::new(config.seed, PLATE_FACE_SUBDIVISION);
+
+    let mut seeds = Vec::with_capacity(faces.face_count);
+    for (face, cells) in face_cells.iter().enumerate() {
+        let item = face as u64;
+        let first = cells[(subdivision.sample_u64(item, 1) % cells.len() as u64) as usize];
+        if subdivision.unit_f32(item, 0) >= config.subdivided_fraction {
+            seeds.push(first);
+            continue;
+        }
+        let area: f64 = cells
+            .iter()
+            .map(|&cell| f64::from(mesh.cell_areas[cell]))
+            .sum();
+        // At most one piece per cell, so a single-cell face cannot split.
+        let pieces = ((area / target_area).round() as usize)
+            .max(2)
+            .min(cells.len());
+        seeds.extend(farthest_first(mesh, cells, first, pieces));
+    }
+    seeds
+}
+
+/// Returns `count` seeds within one face: `first`, then repeatedly the cell
+/// farthest from every seed already chosen. Ties go to the lower cell index.
+fn farthest_first(mesh: &SphereMesh, cells: &[usize], first: usize, count: usize) -> Vec<usize> {
+    let mut seeds = vec![first];
+    let mut chosen = first;
+    // A chosen cell's own distance falls to zero, so it never wins again.
+    let mut distances = vec![f32::MAX; cells.len()];
+    while seeds.len() < count {
+        let position = mesh.cell_centers[chosen];
+        for (distance, &cell) in distances.iter_mut().zip(cells) {
+            *distance = distance.min(mesh.cell_centers[cell].distance_squared(position));
+        }
+        let (index, _) = distances
+            .iter()
+            .enumerate()
+            .max_by(|(left_index, left), (right_index, right)| {
+                left.total_cmp(right)
+                    .then_with(|| right_index.cmp(left_index))
+            })
+            .expect("a face holds at least one cell");
+        chosen = cells[index];
+        seeds.push(chosen);
+    }
+    seeds
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,74 +210,45 @@ struct Arrival {
     plate: usize,
 }
 
+/// Multi-source shortest-arrival search over per-edge integer costs. A step
+/// is passable only within one face, so a plate never leaves the face its
+/// seed sits in.
 struct PlateGrowth<'mesh> {
     mesh: &'mesh SphereMesh,
+    cell_faces: &'mesh [usize],
     cell_plates: Vec<usize>,
-    plate_seeds: Vec<usize>,
-    seed_distance: Vec<f32>,
     best_arrivals: Vec<u64>,
     arrivals: BinaryHeap<Reverse<Arrival>>,
     next_sequence: u64,
-    current_time: u64,
     growth_roughness: u64,
     growth_costs: RandomStream,
 }
 
 impl<'mesh> PlateGrowth<'mesh> {
-    fn new(mesh: &'mesh SphereMesh, seed: u64, growth_roughness: u32) -> Self {
+    fn new(
+        mesh: &'mesh SphereMesh,
+        cell_faces: &'mesh [usize],
+        config: PlatePartitionConfig,
+    ) -> Self {
         Self {
             mesh,
+            cell_faces,
             cell_plates: vec![UNASSIGNED_PLATE; mesh.cell_count()],
-            plate_seeds: Vec::new(),
-            seed_distance: vec![f32::MAX; mesh.cell_count()],
             best_arrivals: vec![u64::MAX; mesh.cell_count()],
             arrivals: BinaryHeap::new(),
             next_sequence: 0,
-            current_time: 0,
-            growth_roughness: u64::from(growth_roughness),
-            growth_costs: RandomStream::new(seed, PLATE_GROWTH_COST),
+            growth_roughness: u64::from(config.growth_roughness),
+            growth_costs: RandomStream::new(config.seed, PLATE_GROWTH_COST),
         }
     }
 
-    fn seed(&mut self, cell: usize) {
-        let plate = self.plate_seeds.len();
-        self.plate_seeds.push(cell);
-
-        let seed_position = self.mesh.cell_centers[cell];
-        for (candidate, distance) in self.seed_distance.iter_mut().enumerate() {
-            *distance =
-                distance.min(self.mesh.cell_centers[candidate].distance_squared(seed_position));
-        }
-
-        self.settle(cell, plate, self.current_time);
+    /// Plants a plate's first cell, which arrives at zero cost.
+    fn seed(&mut self, cell: usize, plate: usize) {
+        self.settle(cell, plate, 0);
     }
 
-    fn seed_farthest(&mut self, count: usize) -> Result<(), PlatePartitionError> {
-        for _ in 0..count {
-            let cell = self
-                .seed_distance
-                .iter()
-                .enumerate()
-                .filter(|(cell, _)| self.cell_plates[*cell] == UNASSIGNED_PLATE)
-                .max_by(|(left_cell, left), (right_cell, right)| {
-                    left.total_cmp(right)
-                        .then_with(|| right_cell.cmp(left_cell))
-                })
-                .map(|(cell, _)| cell)
-                .ok_or(PlatePartitionError::InsufficientUnclaimedCells)?;
-            self.seed(cell);
-        }
-        Ok(())
-    }
-
-    fn grow_for(&mut self, elapsed_cost: u64) {
-        self.current_time = self.current_time.saturating_add(elapsed_cost);
-        while self
-            .arrivals
-            .peek()
-            .is_some_and(|entry| entry.0.cost <= self.current_time)
-        {
-            let Reverse(arrival) = self.arrivals.pop().unwrap();
+    fn grow(&mut self) {
+        while let Some(Reverse(arrival)) = self.arrivals.pop() {
             if self.cell_plates[arrival.cell] != UNASSIGNED_PLATE {
                 continue;
             }
@@ -207,8 +258,11 @@ impl<'mesh> PlateGrowth<'mesh> {
 
     fn settle(&mut self, cell: usize, plate: usize, cost: u64) {
         self.cell_plates[cell] = plate;
+        let face = self.cell_faces[cell];
         for corner in self.mesh.cell_corners(cell) {
-            if self.cell_plates[corner.neighbor] != UNASSIGNED_PLATE {
+            if self.cell_faces[corner.neighbor] != face
+                || self.cell_plates[corner.neighbor] != UNASSIGNED_PLATE
+            {
                 continue;
             }
             let candidate_cost = cost.saturating_add(self.edge_cost(corner.edge));
@@ -235,57 +289,153 @@ impl<'mesh> PlateGrowth<'mesh> {
 mod tests {
     use super::*;
     use crate::test_support::{fingerprint, mesh, reference_partition_config};
-    use std::collections::VecDeque;
+    use procgen_sphere_mesh::connected_components;
+
+    /// A denser crack pattern than the shared reference, so the invariant
+    /// tests cover many faces.
+    fn dense_config() -> PlatePartitionConfig {
+        PlatePartitionConfig {
+            arc_count: 24,
+            piece_fraction: 32.0 / 1_024.0,
+            seed: 7,
+            ..PlatePartitionConfig::default()
+        }
+    }
 
     #[test]
-    fn rejects_invalid_plate_counts() {
-        let mesh = mesh(32);
-        assert_eq!(
-            partition_plates(&mesh, PlatePartitionConfig::new(0, 1)),
-            Err(PlatePartitionError::NoMajorPlates)
-        );
-        assert_eq!(
-            partition_plates(&mesh, PlatePartitionConfig::new(32, 1)),
-            Err(PlatePartitionError::TooManyPlates)
-        );
-        assert_eq!(
-            partition_plates(
-                &mesh,
+    fn rejects_invalid_configurations() {
+        let mesh = mesh(64);
+        let valid = reference_partition_config();
+        for (config, expected) in [
+            (
+                PlatePartitionConfig {
+                    arc_count: 0,
+                    ..valid
+                },
+                PlatePartitionError::NoArcs,
+            ),
+            (
+                PlatePartitionConfig {
+                    curvature: -1.0,
+                    ..valid
+                },
+                PlatePartitionError::InvalidCurvature,
+            ),
+            (
+                PlatePartitionConfig {
+                    curvature: f32::NAN,
+                    ..valid
+                },
+                PlatePartitionError::InvalidCurvature,
+            ),
+            (
+                PlatePartitionConfig {
+                    subdivided_fraction: 1.5,
+                    ..valid
+                },
+                PlatePartitionError::InvalidSubdividedFraction,
+            ),
+            (
+                PlatePartitionConfig {
+                    piece_fraction: 0.0,
+                    ..valid
+                },
+                PlatePartitionError::InvalidPieceFraction,
+            ),
+            (
                 PlatePartitionConfig {
                     growth_roughness: MAX_GROWTH_ROUGHNESS + 1,
-                    ..PlatePartitionConfig::new(4, 4)
-                }
+                    ..valid
+                },
+                PlatePartitionError::InvalidGrowthRoughness,
             ),
-            Err(PlatePartitionError::InvalidGrowthRoughness)
+        ] {
+            assert_eq!(partition_plates(&mesh, config), Err(expected));
+        }
+    }
+
+    #[test]
+    fn every_cell_belongs_to_one_connected_plate() {
+        let mesh = mesh(1_024);
+        let partition = partition_plates(&mesh, dense_config()).unwrap();
+
+        assert_eq!(partition.cell_plates.len(), mesh.cell_count());
+        assert!(
+            partition
+                .cell_plates
+                .iter()
+                .all(|&plate| plate < partition.plate_count)
         );
+        for plate in 0..partition.plate_count {
+            assert_eq!(
+                connected_components(
+                    &mesh,
+                    |cell| partition.cell_plates[cell] == plate,
+                    |_, _| true
+                )
+                .len(),
+                1,
+                "plate {plate} is empty or disconnected"
+            );
+        }
+    }
+
+    #[test]
+    fn subdivision_splits_only_the_selected_faces() {
+        let mesh = mesh(1_024);
+        let whole = partition_plates(
+            &mesh,
+            PlatePartitionConfig {
+                subdivided_fraction: 0.0,
+                ..dense_config()
+            },
+        )
+        .unwrap();
+        let split = partition_plates(&mesh, dense_config()).unwrap();
+        let every_face = partition_plates(
+            &mesh,
+            PlatePartitionConfig {
+                subdivided_fraction: 1.0,
+                ..dense_config()
+            },
+        )
+        .unwrap();
+
+        assert!(whole.plate_count < split.plate_count);
+        assert!(split.plate_count < every_face.plate_count);
+        // Growth never crosses a face, so every split plate stays inside the
+        // one plate the same mesh has when no face splits.
+        let mut plate_faces = vec![None; split.plate_count];
+        for (cell, &plate) in split.cell_plates.iter().enumerate() {
+            let face = whole.cell_plates[cell];
+            assert_eq!(
+                *plate_faces[plate].get_or_insert(face),
+                face,
+                "plate {plate} spans two faces"
+            );
+        }
     }
 
     #[test]
     fn partition_is_deterministic_and_seeded() {
         let mesh = mesh(512);
         let first = partition_plates(&mesh, reference_partition_config()).unwrap();
+
         assert_eq!(
             first,
             partition_plates(&mesh, reference_partition_config()).unwrap()
         );
-
-        let changed = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                seed: 8,
-                ..reference_partition_config()
-            },
-        )
-        .unwrap();
-        assert_ne!(first, changed);
-
-        let rough_config = PlatePartitionConfig {
-            growth_roughness: 35,
-            ..reference_partition_config()
-        };
-        let rough = partition_plates(&mesh, rough_config).unwrap();
-        assert_eq!(rough, partition_plates(&mesh, rough_config).unwrap());
-        assert_ne!(first, rough);
+        assert_ne!(
+            first,
+            partition_plates(
+                &mesh,
+                PlatePartitionConfig {
+                    seed: 8,
+                    ..reference_partition_config()
+                }
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -294,69 +444,8 @@ mod tests {
         let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
         let fingerprint = fingerprint(partition.cell_plates.iter().map(|&value| value as u64));
 
-        assert_eq!(fingerprint, 2_459_160_733_919_900_345);
-    }
-
-    #[test]
-    fn every_plate_is_nonempty_and_connected() {
-        let mesh = mesh(512);
-        let partition = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                growth_roughness: 35,
-                ..reference_partition_config()
-            },
-        )
-        .unwrap();
-
-        assert!(
-            partition
-                .cell_plates
-                .iter()
-                .all(|&plate| plate < partition.plate_count)
-        );
-        for plate in 0..partition.plate_count {
-            let start = partition
-                .cell_plates
-                .iter()
-                .position(|&cell_plate| cell_plate == plate)
-                .expect("every plate must own at least one cell");
-            let expected = partition
-                .cell_plates
-                .iter()
-                .filter(|&&cell_plate| cell_plate == plate)
-                .count();
-            let mut visited = vec![false; mesh.cell_count()];
-            visited[start] = true;
-            let mut queue = VecDeque::from([start]);
-            let mut actual = 0;
-            while let Some(cell) = queue.pop_front() {
-                actual += 1;
-                for corner in mesh.cell_corners(cell) {
-                    if !visited[corner.neighbor] && partition.cell_plates[corner.neighbor] == plate
-                    {
-                        visited[corner.neighbor] = true;
-                        queue.push_back(corner.neighbor);
-                    }
-                }
-            }
-            assert_eq!(actual, expected, "plate {plate} is disconnected");
-        }
-    }
-
-    #[test]
-    fn excessive_head_start_reports_starved_minor_plates() {
-        let mesh = mesh(64);
-        let result = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                major_plate_count: 2,
-                minor_plate_count: 8,
-                major_head_start_rounds: 100,
-                growth_roughness: 35,
-                seed: 7,
-            },
-        );
-        assert_eq!(result, Err(PlatePartitionError::InsufficientUnclaimedCells));
+        // The crack walk is libm-free, so this value is expected to match on
+        // both the macOS and the Windows development machine.
+        assert_eq!(fingerprint, 10_203_068_204_820_146_677);
     }
 }

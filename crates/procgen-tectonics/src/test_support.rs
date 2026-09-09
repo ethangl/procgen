@@ -21,13 +21,16 @@ pub fn mesh(cell_count: usize) -> SphereMesh {
     .unwrap()
 }
 
-pub const fn reference_partition_config() -> PlatePartitionConfig {
+/// Arcs and minor-plate size scaled to the 512-cell reference mesh: enough
+/// crack faces for merging to matter, splitting into plates of roughly
+/// thirty-two cells.
+pub fn reference_partition_config() -> PlatePartitionConfig {
     PlatePartitionConfig {
-        major_plate_count: 5,
-        minor_plate_count: 11,
-        major_head_start_rounds: 2,
+        arc_count: 20,
+        piece_fraction: 32.0 / 512.0,
         growth_roughness: 0,
         seed: 7,
+        ..PlatePartitionConfig::default()
     }
 }
 

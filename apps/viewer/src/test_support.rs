@@ -25,8 +25,12 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
             ..FibonacciConfig::new(cell_count)
         },
         plates: PlatePartitionConfig {
+            arc_count: 2,
+            // Minor plates of roughly thirty-two cells, so the small test
+            // meshes split into a handful of plates rather than one per cell.
+            piece_fraction: 32.0 / cell_count as f32,
             seed,
-            ..PlatePartitionConfig::new(2, 2)
+            ..PlatePartitionConfig::default()
         },
         crust: CrustClassificationConfig::new(seed),
         kinematics: PlateKinematicsConfig::new(seed),

@@ -235,10 +235,15 @@ back diagnostics.
 
 Growth is one shortest-path problem with per-seed start offsets: major seeds
 start at zero and minor seeds at the head-start cost. That is the mesh
-pipeline's two-phase semantics expressed without phases. Minor seeds are
-chosen among cells still unclaimed at the head-start cost, which is a
+pipeline's former two-phase semantics expressed without phases. Minor seeds
+are chosen among cells still unclaimed at the head-start cost, which is a
 reduction over the growth state, not a readback. Evolution runs the migration
 step `step_count` times, reclassifying boundaries between steps.
+
+The mesh pipeline has since moved on: it walks a crack pattern first and uses
+growth only to subdivide the resulting faces, while the pilot's growth and its
+head start are unchanged, and the fixed-point argument below still covers both
+the pilot's growth and that subdivision step.
 
 Growth and seafloor age are label-correcting relaxations, and at 1024 texels
 per face they need on the order of the sphere's diameter in links, a few

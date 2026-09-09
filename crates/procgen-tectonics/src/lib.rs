@@ -9,6 +9,7 @@
 
 mod base_elevation;
 mod boundaries;
+mod cracks;
 mod crust;
 mod deformation;
 mod elevation;
