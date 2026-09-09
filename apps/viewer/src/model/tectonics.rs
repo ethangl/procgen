@@ -76,10 +76,7 @@ pub struct TectonicsWorld {
 }
 
 /// Samples and triangulates the sphere mesh the tectonics phase and every
-/// later phase read, recording its three stages into `timings`. The mesh is a
-/// function of `config` alone, so a caller replacing a world whose sampling
-/// config is unchanged reuses that world's mesh and leaves those stages out of
-/// the timings rather than reporting them as free.
+/// later phase read, recording its three stages into `timings`.
 pub fn build_mesh(
     config: FibonacciConfig,
     timings: &mut GenerationTimings,

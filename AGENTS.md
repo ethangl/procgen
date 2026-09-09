@@ -44,7 +44,7 @@ and rebuild it incrementally; do not attempt a one-shot translation. See
 - Support two primary development environments, and every GPU pipeline must
   run on both:
   - macOS on a MacBook Pro, reaching Metal through wgpu.
-  - WSL on Windows with an NVIDIA RTX 5070, reaching Vulkan through wgpu.
+  - Windows with an NVIDIA RTX 5070, reaching Vulkan through wgpu.
 - CUDA is not a backend. Nothing may require an NVIDIA GPU, CUDA toolkit, or
   Windows host. Reconsider CUDA only for a workload that needs something wgpu
   cannot provide, and record the reason in the design doc.
