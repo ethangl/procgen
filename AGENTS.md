@@ -206,10 +206,10 @@ reviews. Treat them as the default bar for new work.
 
 ### Tests and docs
 
-- Test invariants and pinned integer fingerprints, not definitions. An assertion that
-  recomputes the function under test with the same code, or checks something
-  the type system already guarantees, is noise. Shared fixtures go in
-  `test_support`.
+- Test invariants and pinned integer fingerprints, not definitions. An
+  assertion that recomputes the function under test with the same code, or
+  checks something the type system already guarantees, is noise. Shared
+  fixtures go in `test_support`.
 - When a fingerprint changes, the commit message says why. Behavior changes,
   default retunes, and visible side effects never ride inside a refactor
   commit.
