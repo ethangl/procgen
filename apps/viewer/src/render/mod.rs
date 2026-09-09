@@ -8,7 +8,7 @@ mod terrain_tiles;
 pub use layers::{DiagnosticLayer, OverlayKind};
 pub use lighting::LightingSettings;
 
-use crate::model::{GeneratedWorld, Phase};
+use crate::model::GeneratedWorld;
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use layers::GizmoSpec;
 use procgen_viewer_support::OrbitCamera;
@@ -228,19 +228,6 @@ fn rebuild_diagnostic_assets(
     }
 }
 
-/// The most refined fill the generated phases can draw. The selection falls
-/// back to it whenever the selected fill belongs to a phase that has been
-/// dropped.
-fn default_fill(world: &GeneratedWorld) -> Option<DiagnosticLayer> {
-    if world.holds(Phase::Geology) {
-        Some(DiagnosticLayer::IsostaticElevation)
-    } else if world.holds(Phase::Tectonics) {
-        Some(DiagnosticLayer::Elevation)
-    } else {
-        None
-    }
-}
-
 /// Keeps the fill on a layer that can be drawn. A selection with no results
 /// behind it is kept while nothing at all is generated, so the fill the world
 /// arrives with is the one that was asked for.
@@ -251,7 +238,10 @@ fn retarget_surface_selection(world: Res<GeneratedWorld>, mut selection: ResMut<
     if world.holds(selected.phase()) {
         return;
     }
-    if let Some(fill) = default_fill(&world) {
+    let fill = world
+        .surface_elevations()
+        .and_then(|(phase, _)| DiagnosticLayer::elevation_fill(phase));
+    if let Some(fill) = fill {
         selection.set(Some(fill));
     }
 }
@@ -263,13 +253,11 @@ fn rebuild_surface(
     mut meshes: ResMut<Assets<Mesh>>,
     surface: Single<&Mesh3d, With<SurfaceLayer>>,
 ) {
-    let built = selection
+    *meshes.get_mut(&surface.0).unwrap() = selection
         .selected()
         .and_then(DiagnosticLayer::surface)
-        .and_then(|source| source.build(&world, relief.exaggeration));
-    if let Some(built) = built {
-        *meshes.get_mut(&surface.0).unwrap() = built;
-    }
+        .and_then(|source| source.build(&world, relief.exaggeration))
+        .unwrap_or_else(empty_surface_mesh);
 }
 
 fn sync_surface_visibility(
@@ -295,10 +283,10 @@ fn sync_layer_render_state(
     mut camera_layers: Single<&mut RenderLayers, With<OrbitCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
-    let outer_radius = maximum_surface_radius(
-        world.surface_elevations().unwrap_or_default(),
-        relief.exaggeration,
-    );
+    let elevations = world
+        .surface_elevations()
+        .map_or(&[][..], |(_, values)| values);
+    let outer_radius = maximum_surface_radius(elevations, relief.exaggeration);
     for (layer, mut transform) in &mut layer_transforms {
         transform.scale = Vec3::splat(outer_radius * overlays.depth_scale(*layer) / SURFACE_RADIUS);
     }
@@ -378,9 +366,9 @@ mod tests {
             Some(DiagnosticLayer::IsostaticElevation)
         );
 
-        let mut tectonics_only = GeneratedWorld::default();
-        tectonics_only
-            .replace_tectonics(TectonicsWorld::generate(tectonics_settings(128, 61)).unwrap());
+        let tectonics_only = GeneratedWorld::from_tectonics(
+            TectonicsWorld::generate(tectonics_settings(128, 61)).unwrap(),
+        );
         app.insert_resource(tectonics_only);
         app.update();
         assert_eq!(

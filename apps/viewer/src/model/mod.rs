@@ -15,9 +15,10 @@ use std::{
 
 pub const WORLD_RADIUS: f32 = 1.0;
 
-/// The generation phases, in dependency order. Each phase consumes the results
-/// of the phases before it and can be regenerated on its own.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The generation phases in dependency order, which is also their order: each
+/// phase consumes the results of the phases before it and can be regenerated
+/// on its own.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Phase {
     Tectonics,
     Geology,
@@ -102,29 +103,57 @@ impl GeneratedWorld {
         })
     }
 
-    /// The most refined elevation the generated phases offer: the isostatically
-    /// adjusted elevation once geology has run, and tectonic elevation before
-    /// that.
-    pub fn surface_elevations(&self) -> Option<&[f32]> {
+    /// The most refined elevation the generated phases offer, with the phase it
+    /// comes from: the isostatically adjusted elevation once geology has run,
+    /// and tectonic elevation before that.
+    pub fn surface_elevations(&self) -> Option<(Phase, &[f32])> {
         match (&self.geology, &self.tectonics) {
-            (Some(geology), _) => Some(&geology.isostasy.cell_elevations),
-            (None, Some(tectonics)) => Some(&tectonics.elevation.cell_elevations),
+            (Some(geology), _) => Some((Phase::Geology, &geology.isostasy.cell_elevations)),
+            (None, Some(tectonics)) => {
+                Some((Phase::Tectonics, &tectonics.elevation.cell_elevations))
+            }
             (None, None) => None,
         }
     }
 
-    /// Replaces the tectonics result, dropping the downstream results it
-    /// invalidates.
-    pub fn replace_tectonics(&mut self, tectonics: TectonicsWorld) {
-        self.tectonics = Some(tectonics);
-        self.geology = None;
-        self.climate = None;
+    /// Generates one phase over the results already in memory and drops the
+    /// results it invalidates. Phases run in order, so the upstream results a
+    /// phase reads are present.
+    fn generate_phase(
+        &mut self,
+        phase: Phase,
+        settings: &GenerationSettings,
+    ) -> Result<(), Box<dyn Error>> {
+        const UPSTREAM: &str = "a phase runs only after the phases it consumes";
+        match phase {
+            Phase::Tectonics => {
+                self.tectonics = Some(TectonicsWorld::generate(settings.tectonics)?);
+                self.geology = None;
+                self.climate = None;
+            }
+            Phase::Geology => {
+                let tectonics = self.tectonics.as_ref().ok_or(UPSTREAM)?;
+                let geology = GeologyWorld::generate(tectonics, settings.geology)?;
+                self.geology = Some(geology);
+                self.climate = None;
+            }
+            Phase::Climate => {
+                let tectonics = self.tectonics.as_ref().ok_or(UPSTREAM)?;
+                let geology = self.geology.as_ref().ok_or(UPSTREAM)?;
+                let climate = ClimateWorld::generate(tectonics, geology, settings.climate)?;
+                self.climate = Some(climate);
+            }
+        }
+        Ok(())
     }
 
-    /// Replaces the geology result, dropping the climate result it invalidates.
-    pub fn replace_geology(&mut self, geology: GeologyWorld) {
-        self.geology = Some(geology);
-        self.climate = None;
+    #[cfg(test)]
+    pub(crate) fn from_tectonics(tectonics: TectonicsWorld) -> Self {
+        Self {
+            tectonics: Some(tectonics),
+            geology: None,
+            climate: None,
+        }
     }
 }
 
@@ -288,39 +317,30 @@ fn run_request(
     settings: GenerationSettings,
     world: &mut GeneratedWorld,
 ) -> Result<Vec<Phase>, Box<dyn Error>> {
-    const UPSTREAM: &str = "upstream phases are generated before the phase that consumes them";
-    let all_phases = request == GenerateRequest::AllPhases;
-    let target = match request {
-        GenerateRequest::Phase(phase) => phase,
-        GenerateRequest::AllPhases => Phase::Climate,
+    let (first, target) = match request {
+        GenerateRequest::AllPhases => (Phase::Tectonics, Phase::Climate),
+        // A single phase starts at the earliest upstream phase with no result
+        // yet, or at itself when everything it consumes is already in memory.
+        GenerateRequest::Phase(target) => (
+            Phase::ALL
+                .iter()
+                .copied()
+                .take_while(|&phase| phase < target)
+                .find(|&phase| !world.holds(phase))
+                .unwrap_or(target),
+            target,
+        ),
     };
 
-    let mut generated = Vec::new();
-    if all_phases || target == Phase::Tectonics || !world.holds(Phase::Tectonics) {
-        world.replace_tectonics(TectonicsWorld::generate(settings.tectonics)?);
-        generated.push(Phase::Tectonics);
+    let phases: Vec<_> = Phase::ALL
+        .iter()
+        .copied()
+        .filter(|&phase| (first..=target).contains(&phase))
+        .collect();
+    for &phase in &phases {
+        world.generate_phase(phase, &settings)?;
     }
-    if target == Phase::Tectonics {
-        return Ok(generated);
-    }
-
-    if all_phases || target == Phase::Geology || !world.holds(Phase::Geology) {
-        let geology = GeologyWorld::generate(world.tectonics().expect(UPSTREAM), settings.geology)?;
-        world.replace_geology(geology);
-        generated.push(Phase::Geology);
-    }
-    if target == Phase::Geology {
-        return Ok(generated);
-    }
-
-    let climate = ClimateWorld::generate(
-        world.tectonics().expect(UPSTREAM),
-        world.geology().expect(UPSTREAM),
-        settings.climate,
-    )?;
-    world.climate = Some(climate);
-    generated.push(Phase::Climate);
-    Ok(generated)
+    Ok(phases)
 }
 
 fn store_complete_world(world: &GeneratedWorld, cache: &WorldCache) -> Vec<String> {
@@ -475,7 +495,10 @@ mod tests {
         assert!(!world.holds(Phase::Climate));
         assert_eq!(
             world.surface_elevations().unwrap(),
-            world.tectonics().unwrap().elevation.cell_elevations
+            (
+                Phase::Tectonics,
+                &world.tectonics().unwrap().elevation.cell_elevations[..]
+            )
         );
 
         fs::remove_dir_all(cache_dir).unwrap();

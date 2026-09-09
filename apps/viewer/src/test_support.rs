@@ -106,4 +106,3 @@ pub(crate) fn cache(name: &str) -> (PathBuf, WorldCache) {
     let cache = WorldCache::new(directory.join("world.bin"));
     (directory, cache)
 }
-

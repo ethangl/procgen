@@ -270,8 +270,11 @@ fn initialize_gpu_world(
     assets.dispatch.job_count = 0;
     assets.dispatch.generation = assets.dispatch.generation.wrapping_add(1);
 
-    // Detailed tiles read the geology phase's baked terrain controls.
+    // Detailed tiles read the geology phase's baked terrain controls, so
+    // dropping geology drops the buffers and material built from it.
     let (Some(tectonics), Some(geology)) = (world.tectonics(), world.geology()) else {
+        assets.commands.remove_resource::<TerrainGpuResources>();
+        assets.commands.remove_resource::<TerrainTileAssets>();
         return;
     };
     let controls = pack_control_bake(&geology.terrain_control_bake);

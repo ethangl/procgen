@@ -14,7 +14,7 @@ use super::surfaces::{
     basin_colors, cell_surface_mesh, crust_colors, insolation_colors, plate_colors,
     seafloor_age_colors,
 };
-use crate::model::{GeneratedWorld, Phase};
+use crate::model::{ClimateWorld, GeneratedWorld, GeologyWorld, Phase, TectonicsWorld};
 use bevy::prelude::{Color, Component, GizmoAsset, Mesh, Vec3};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,21 +81,77 @@ impl OverlayKind {
     }
 }
 
-/// Layer sources read the phase that produced them, so every one of them is
-/// empty until that phase has been generated.
-type CellValues = for<'a> fn(&'a GeneratedWorld) -> Option<&'a [f32]>;
-type CellColors = fn(&GeneratedWorld) -> Option<Vec<Color>>;
+/// A per-cell field read straight from the phase that produced it.
+#[derive(Clone, Copy)]
+pub(super) enum ValueSource {
+    Tectonics(for<'a> fn(&'a TectonicsWorld) -> &'a [f32]),
+    Geology(for<'a> fn(&'a GeologyWorld) -> &'a [f32]),
+    Climate(for<'a> fn(&'a ClimateWorld) -> &'a [f32]),
+}
+
+/// Something built from a phase's results. The mesh lives on the tectonics
+/// result, so the later phases build against it as well.
+pub(super) enum BuildSource<T> {
+    Tectonics(fn(&TectonicsWorld) -> T),
+    Geology(fn(&TectonicsWorld, &GeologyWorld) -> T),
+    Climate(fn(&TectonicsWorld, &ClimateWorld) -> T),
+}
+
+impl ValueSource {
+    const fn phase(self) -> Phase {
+        match self {
+            Self::Tectonics(_) => Phase::Tectonics,
+            Self::Geology(_) => Phase::Geology,
+            Self::Climate(_) => Phase::Climate,
+        }
+    }
+
+    fn read(self, world: &GeneratedWorld) -> Option<&[f32]> {
+        match self {
+            Self::Tectonics(read) => Some(read(world.tectonics()?)),
+            Self::Geology(read) => Some(read(world.geology()?)),
+            Self::Climate(read) => Some(read(world.climate()?)),
+        }
+    }
+}
+
+impl<T> BuildSource<T> {
+    const fn phase(self) -> Phase {
+        match self {
+            Self::Tectonics(_) => Phase::Tectonics,
+            Self::Geology(_) => Phase::Geology,
+            Self::Climate(_) => Phase::Climate,
+        }
+    }
+
+    fn build(self, world: &GeneratedWorld) -> Option<T> {
+        let tectonics = world.tectonics()?;
+        match self {
+            Self::Tectonics(build) => Some(build(tectonics)),
+            Self::Geology(build) => Some(build(tectonics, world.geology()?)),
+            Self::Climate(build) => Some(build(tectonics, world.climate()?)),
+        }
+    }
+}
+
+// Only the function pointers are stored, so the sources copy regardless of
+// what they build.
+impl<T> Clone for BuildSource<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for BuildSource<T> {}
 
 enum LayerSpec {
     Fill {
         label: &'static str,
-        phase: Phase,
         surface: SurfaceSource,
         gizmo: Option<GizmoSpec>,
     },
     Overlay {
         label: &'static str,
-        phase: Phase,
         kind: OverlayKind,
         gizmo: GizmoSpec,
     },
@@ -104,19 +160,13 @@ enum LayerSpec {
 #[derive(Component, Clone, Copy)]
 pub(super) struct GizmoSpec {
     line_width: f32,
-    build: fn(&GeneratedWorld) -> Option<GizmoAsset>,
+    source: BuildSource<GizmoAsset>,
 }
 
 impl LayerSpec {
-    fn scalar(
-        label: &'static str,
-        phase: Phase,
-        values: CellValues,
-        stops: &'static [(f32, Vec3)],
-    ) -> Self {
+    fn scalar(label: &'static str, values: ValueSource, stops: &'static [(f32, Vec3)]) -> Self {
         Self::Fill {
             label,
-            phase,
             surface: SurfaceSource::Scalar { values, stops },
             gizmo: None,
         }
@@ -124,44 +174,38 @@ impl LayerSpec {
 
     fn scalar_with_overlay(
         label: &'static str,
-        phase: Phase,
-        values: CellValues,
+        values: ValueSource,
         stops: &'static [(f32, Vec3)],
         line_width: f32,
-        overlay: fn(&GeneratedWorld) -> Option<GizmoAsset>,
+        overlay: BuildSource<GizmoAsset>,
     ) -> Self {
         Self::Fill {
             label,
-            phase,
             surface: SurfaceSource::Scalar { values, stops },
             gizmo: Some(GizmoSpec::new(line_width, overlay)),
         }
     }
 
-    fn surface(
+    fn colors(
         label: &'static str,
-        phase: Phase,
-        colors: CellColors,
+        colors: BuildSource<Vec<Color>>,
         gizmo: Option<GizmoSpec>,
     ) -> Self {
         Self::Fill {
             label,
-            phase,
-            surface: SurfaceSource::Custom(colors),
+            surface: SurfaceSource::Colors(colors),
             gizmo,
         }
     }
 
     fn overlay(
         label: &'static str,
-        phase: Phase,
         kind: OverlayKind,
         line_width: f32,
-        source: fn(&GeneratedWorld) -> Option<GizmoAsset>,
+        source: BuildSource<GizmoAsset>,
     ) -> Self {
         Self::Overlay {
             label,
-            phase,
             kind,
             gizmo: GizmoSpec::new(line_width, source),
         }
@@ -175,7 +219,8 @@ impl LayerSpec {
 
     fn phase(&self) -> Phase {
         match self {
-            Self::Fill { phase, .. } | Self::Overlay { phase, .. } => *phase,
+            Self::Fill { surface, .. } => surface.phase(),
+            Self::Overlay { gizmo, .. } => gizmo.phase(),
         }
     }
 
@@ -188,40 +233,54 @@ impl LayerSpec {
 }
 
 impl GizmoSpec {
-    const fn new(line_width: f32, build: fn(&GeneratedWorld) -> Option<GizmoAsset>) -> Self {
-        Self { line_width, build }
+    const fn new(line_width: f32, source: BuildSource<GizmoAsset>) -> Self {
+        Self { line_width, source }
     }
 
     pub(super) const fn line_width(self) -> f32 {
         self.line_width
     }
 
+    const fn phase(self) -> Phase {
+        self.source.phase()
+    }
+
     pub(super) fn build(self, world: &GeneratedWorld) -> GizmoAsset {
-        (self.build)(world).unwrap_or_default()
+        self.source.build(world).unwrap_or_default()
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum SurfaceSource {
     Scalar {
-        values: CellValues,
+        values: ValueSource,
         stops: &'static [(f32, Vec3)],
     },
-    Custom(CellColors),
+    Colors(BuildSource<Vec<Color>>),
 }
 
 impl SurfaceSource {
+    const fn phase(self) -> Phase {
+        match self {
+            Self::Scalar { values, .. } => values.phase(),
+            Self::Colors(colors) => colors.phase(),
+        }
+    }
+
     pub(super) fn build(self, world: &GeneratedWorld, relief_exaggeration: f32) -> Option<Mesh> {
         let colors = match self {
-            Self::Scalar { values, stops } => values(world)?
+            Self::Scalar { values, stops } => values
+                .read(world)?
                 .iter()
                 .map(|&value| opaque_color(piecewise_lerp(value, stops)))
                 .collect(),
-            Self::Custom(colors) => colors(world)?,
+            Self::Colors(colors) => colors.build(world)?,
         };
+        let (_, elevations) = world.surface_elevations()?;
         Some(cell_surface_mesh(
             &world.tectonics()?.voronoi,
             &colors,
-            world.surface_elevations()?,
+            elevations,
             relief_exaggeration,
         ))
     }
@@ -287,6 +346,16 @@ impl DiagnosticLayer {
         self.spec().phase()
     }
 
+    /// The elevation fill a phase contributes, which is what the displaced
+    /// surface shows by default. Climate contributes no elevation.
+    pub(super) const fn elevation_fill(phase: Phase) -> Option<Self> {
+        match phase {
+            Phase::Tectonics => Some(Self::Elevation),
+            Phase::Geology => Some(Self::IsostaticElevation),
+            Phase::Climate => None,
+        }
+    }
+
     pub(super) fn gizmo(self) -> Option<GizmoSpec> {
         self.spec().gizmo()
     }
@@ -314,317 +383,234 @@ impl DiagnosticLayer {
     }
 
     fn spec(self) -> LayerSpec {
-        const TECTONICS: Phase = Phase::Tectonics;
-        const GEOLOGY: Phase = Phase::Geology;
-        const CLIMATE: Phase = Phase::Climate;
+        use BuildSource::Tectonics as TectonicsBuild;
+        use BuildSource::{Climate as ClimateBuild, Geology as GeologyBuild};
+        use ValueSource::{Climate, Geology, Tectonics};
         match self {
             Self::Delaunay => LayerSpec::overlay(
                 "Delaunay",
-                TECTONICS,
                 OverlayKind::Edges,
                 1.1,
-                delaunay_asset,
+                TectonicsBuild(delaunay_asset),
             ),
-            Self::Voronoi => {
-                LayerSpec::overlay("Voronoi", TECTONICS, OverlayKind::Edges, 1.5, voronoi_asset)
-            }
-            Self::Plates => LayerSpec::surface(
+            Self::Voronoi => LayerSpec::overlay(
+                "Voronoi",
+                OverlayKind::Edges,
+                1.5,
+                TectonicsBuild(voronoi_asset),
+            ),
+            Self::Plates => LayerSpec::colors(
                 "Tectonic plates",
-                TECTONICS,
-                plate_colors,
-                Some(GizmoSpec::new(2.4, plate_border_asset)),
+                TectonicsBuild(plate_colors),
+                Some(GizmoSpec::new(2.4, TectonicsBuild(plate_border_asset))),
             ),
-            Self::Crust => LayerSpec::surface("Crust classes", TECTONICS, crust_colors, None),
+            Self::Crust => LayerSpec::colors("Crust classes", TectonicsBuild(crust_colors), None),
             Self::Points => LayerSpec::overlay(
                 "Cell centers",
-                TECTONICS,
                 OverlayKind::Markers,
                 1.8,
-                point_asset,
+                TectonicsBuild(point_asset),
             ),
             Self::SeafloorAge => {
-                LayerSpec::surface("Seafloor age", TECTONICS, seafloor_age_colors, None)
+                LayerSpec::colors("Seafloor age", TectonicsBuild(seafloor_age_colors), None)
             }
             Self::BaseElevation => LayerSpec::scalar(
                 "Base elevation",
-                TECTONICS,
-                |world| Some(&world.tectonics()?.base_elevation.cell_elevations),
+                Tectonics(|world| &world.base_elevation.cell_elevations),
                 ELEVATION_COLOR_STOPS,
             ),
             Self::Deformation => LayerSpec::scalar(
                 "Boundary deformation",
-                TECTONICS,
-                |world| Some(&world.tectonics()?.deformation.cell_deformation),
+                Tectonics(|world| &world.deformation.cell_deformation),
                 DEFORMATION_COLOR_STOPS,
             ),
             Self::Elevation => LayerSpec::scalar(
                 "Tectonic elevation",
-                TECTONICS,
-                |world| Some(&world.tectonics()?.elevation.cell_elevations),
+                Tectonics(|world| &world.elevation.cell_elevations),
                 ELEVATION_COLOR_STOPS,
             ),
             Self::GeologicalElevation => LayerSpec::scalar(
                 "Geological elevation",
-                GEOLOGY,
-                |world| Some(&world.geology()?.geological_elevation.cell_elevations),
+                Geology(|world| &world.geological_elevation.cell_elevations),
                 ELEVATION_COLOR_STOPS,
             ),
             Self::IsostaticSupport => LayerSpec::scalar(
                 "Isostatic support",
-                GEOLOGY,
-                |world| Some(&world.geology()?.isostasy.cell_support),
+                Geology(|world| &world.isostasy.cell_support),
                 ELEVATION_COLOR_STOPS,
             ),
             Self::IsostaticElevation => LayerSpec::scalar(
                 "Adjusted elevation",
-                GEOLOGY,
-                |world| Some(&world.geology()?.isostasy.cell_elevations),
+                Geology(|world| &world.isostasy.cell_elevations),
                 ELEVATION_COLOR_STOPS,
             ),
-            Self::Insolation => {
-                LayerSpec::surface("Daily-mean insolation", CLIMATE, insolation_colors, None)
-            }
+            Self::Insolation => LayerSpec::colors(
+                "Daily-mean insolation",
+                ClimateBuild(insolation_colors),
+                None,
+            ),
             Self::CoupledAlbedo => LayerSpec::scalar(
                 "Coupled surface albedo",
-                CLIMATE,
-                |world| Some(&world.climate()?.cell_albedo),
+                Climate(|world| &world.cell_albedo),
                 ALBEDO_COLOR_STOPS,
             ),
             Self::DailyTemperature => LayerSpec::scalar(
                 "Daily effective temperature",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .radiative_equilibrium
-                            .daily_effective_temperature_kelvin,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .radiative_equilibrium
+                        .daily_effective_temperature_kelvin
+                }),
                 TEMPERATURE_COLOR_STOPS,
             ),
             Self::AnnualTemperature => LayerSpec::scalar(
                 "Annual effective temperature",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .radiative_equilibrium
-                            .annual_effective_temperature_kelvin,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .radiative_equilibrium
+                        .annual_effective_temperature_kelvin
+                }),
                 TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalTemperature => LayerSpec::scalar(
                 "Seasonal temperature (selected phase)",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .seasonal_thermal
-                            .selected_temperature_kelvin,
-                    )
-                },
+                Climate(|world| &world.seasonal_thermal.selected_temperature_kelvin),
                 TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalMeanTemperature => LayerSpec::scalar(
                 "Seasonal temperature (annual mean)",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .seasonal_thermal
-                            .annual_mean_temperature_kelvin,
-                    )
-                },
+                Climate(|world| &world.seasonal_thermal.annual_mean_temperature_kelvin),
                 TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalMinimumTemperature => LayerSpec::scalar(
                 "Seasonal temperature (annual minimum)",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .seasonal_thermal
-                            .annual_minimum_temperature_kelvin,
-                    )
-                },
+                Climate(|world| &world.seasonal_thermal.annual_minimum_temperature_kelvin),
                 TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalMaximumTemperature => LayerSpec::scalar(
                 "Seasonal temperature (annual maximum)",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .seasonal_thermal
-                            .annual_maximum_temperature_kelvin,
-                    )
-                },
+                Climate(|world| &world.seasonal_thermal.annual_maximum_temperature_kelvin),
                 TEMPERATURE_COLOR_STOPS,
             ),
             Self::SeasonalTemperatureAmplitude => LayerSpec::scalar(
                 "Seasonal temperature amplitude",
-                CLIMATE,
-                |world| Some(&world.climate()?.seasonal_thermal.annual_amplitude_kelvin),
+                Climate(|world| &world.seasonal_thermal.annual_amplitude_kelvin),
                 TEMPERATURE_AMPLITUDE_COLOR_STOPS,
             ),
             Self::TemperatureGradient => LayerSpec::scalar(
                 "Seasonal temperature gradient",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .atmospheric_circulation
-                            .cell_temperature_gradient_kelvin_per_radian,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_temperature_gradient_kelvin_per_radian
+                }),
                 TEMPERATURE_GRADIENT_COLOR_STOPS,
             ),
             Self::PressureGradientAcceleration => LayerSpec::scalar(
                 "Pressure-gradient acceleration",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .atmospheric_circulation
-                            .cell_pressure_gradient_acceleration_meters_per_second_squared,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_pressure_gradient_acceleration_meters_per_second_squared
+                }),
                 PRESSURE_ACCELERATION_COLOR_STOPS,
             ),
             Self::CoriolisParameter => LayerSpec::scalar(
                 "Coriolis parameter",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .atmospheric_circulation
-                            .cell_coriolis_parameter_per_second,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_coriolis_parameter_per_second
+                }),
                 CORIOLIS_COLOR_STOPS,
             ),
             Self::TerrainSteering => LayerSpec::scalar(
                 "Terrain steering",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .atmospheric_circulation
-                            .cell_terrain_steering_fraction,
-                    )
-                },
+                Climate(|world| &world.atmospheric_circulation.cell_terrain_steering_fraction),
                 FRACTION_COLOR_STOPS,
             ),
             Self::WindSpeed => LayerSpec::scalar(
                 "Wind speed",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .atmospheric_circulation
-                            .cell_wind_speed_meters_per_second,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .atmospheric_circulation
+                        .cell_wind_speed_meters_per_second
+                }),
                 WIND_SPEED_COLOR_STOPS,
             ),
             Self::Wind => LayerSpec::overlay(
                 "Wind vectors",
-                CLIMATE,
                 OverlayKind::Vectors,
                 2.6,
-                wind_asset,
+                ClimateBuild(wind_asset),
             ),
             Self::Humidity => LayerSpec::scalar(
                 "Atmospheric humidity",
-                CLIMATE,
-                |world| Some(&world.climate()?.moisture_transport.cell_humidity_kg_per_m2),
+                Climate(|world| &world.moisture_transport.cell_humidity_kg_per_m2),
                 HUMIDITY_COLOR_STOPS,
             ),
             Self::Precipitation => LayerSpec::scalar(
                 "Precipitation",
-                CLIMATE,
-                |world| {
-                    Some(
-                        &world
-                            .climate()?
-                            .moisture_transport
-                            .cell_precipitation_kg_per_m2_per_day,
-                    )
-                },
+                Climate(|world| {
+                    &world
+                        .moisture_transport
+                        .cell_precipitation_kg_per_m2_per_day
+                }),
                 PRECIPITATION_COLOR_STOPS,
             ),
             Self::SnowCover => LayerSpec::scalar(
                 "Snow cover (selected phase)",
-                CLIMATE,
-                |world| Some(&world.climate()?.cryosphere.cell_snow_cover_fraction),
+                Climate(|world| &world.cryosphere.cell_snow_cover_fraction),
                 SNOW_COVER_COLOR_STOPS,
             ),
             Self::LandIceCover => LayerSpec::scalar(
                 "Land-ice cover",
-                CLIMATE,
-                |world| Some(&world.climate()?.cryosphere.cell_land_ice_cover_fraction),
+                Climate(|world| &world.cryosphere.cell_land_ice_cover_fraction),
                 LAND_ICE_COLOR_STOPS,
             ),
             Self::SeaIceCover => LayerSpec::scalar(
                 "Sea-ice cover (selected phase)",
-                CLIMATE,
-                |world| Some(&world.climate()?.cryosphere.cell_sea_ice_cover_fraction),
+                Climate(|world| &world.cryosphere.cell_sea_ice_cover_fraction),
                 SEA_ICE_COLOR_STOPS,
             ),
             Self::Hotspots => LayerSpec::scalar(
                 "Mantle hotspots",
-                GEOLOGY,
-                |world| Some(&world.geology()?.hotspots.cell_intensities),
+                Geology(|world| &world.hotspots.cell_intensities),
                 HOTSPOT_COLOR_STOPS,
             ),
             Self::OceanicPeaks => LayerSpec::scalar_with_overlay(
                 "Seamount / abyssal peaks",
-                GEOLOGY,
-                |world| Some(&world.geology()?.oceanic_peaks.cell_densities),
+                Geology(|world| &world.oceanic_peaks.cell_densities),
                 OCEANIC_PEAK_COLOR_STOPS,
                 3.8,
-                oceanic_peak_markers,
+                GeologyBuild(oceanic_peak_markers),
             ),
             Self::VolcanicArcs => LayerSpec::scalar_with_overlay(
                 "Volcanic arcs",
-                GEOLOGY,
-                |world| Some(&world.geology()?.volcanic_arcs.cell_strengths),
+                Geology(|world| &world.volcanic_arcs.cell_strengths),
                 VOLCANIC_ARC_COLOR_STOPS,
                 3.8,
-                volcanic_arc_markers,
+                GeologyBuild(volcanic_arc_markers),
             ),
             Self::Cratons => LayerSpec::scalar(
                 "Craton strength",
-                GEOLOGY,
-                |world| Some(&world.geology()?.cratons.cell_strengths),
+                Geology(|world| &world.cratons.cell_strengths),
                 CRATON_COLOR_STOPS,
             ),
-            Self::Basins => LayerSpec::surface("Sedimentary basins", GEOLOGY, basin_colors, None),
+            Self::Basins => {
+                LayerSpec::colors("Sedimentary basins", GeologyBuild(basin_colors), None)
+            }
             Self::Boundaries => LayerSpec::overlay(
                 "Boundary classes",
-                TECTONICS,
                 OverlayKind::Edges,
                 4.0,
-                boundary_asset,
+                TectonicsBuild(boundary_asset),
             ),
             Self::Motion => LayerSpec::overlay(
                 "Plate motion",
-                TECTONICS,
                 OverlayKind::Vectors,
                 2.6,
-                motion_asset,
+                TectonicsBuild(motion_asset),
             ),
         }
     }
@@ -644,41 +630,35 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TectonicsWorld;
-    use crate::test_support::{Fixture, tectonics_settings};
+    use crate::test_support::Fixture;
 
-    /// A layer's declared phase is what the viewer filters on, so it must agree
-    /// with what its own sources can actually read.
     #[test]
-    fn every_layer_draws_exactly_when_its_declared_phase_is_present() {
-        let mut tectonics_only = GeneratedWorld::default();
-        tectonics_only
-            .replace_tectonics(TectonicsWorld::generate(tectonics_settings(128, 31)).unwrap());
-        let worlds = [
-            GeneratedWorld::default(),
-            tectonics_only,
-            Fixture::new(128, 31).into_world(),
-        ];
+    fn every_layer_builds_from_a_complete_world() {
+        let world = Fixture::new(128, 31).into_world();
 
-        for world in &worlds {
-            for &layer in DiagnosticLayer::ALL {
-                let expected = world.holds(layer.phase());
-                if let Some(surface) = layer.surface() {
-                    assert_eq!(
-                        surface.build(world, 0.01).is_some(),
-                        expected,
-                        "{} fill",
-                        layer.label()
-                    );
-                }
-                if let Some(gizmo) = layer.gizmo() {
-                    assert_eq!(
-                        (gizmo.build)(world).is_some(),
-                        expected,
-                        "{} gizmo",
-                        layer.label()
-                    );
-                }
+        for &layer in DiagnosticLayer::ALL {
+            if let Some(surface) = layer.surface() {
+                assert!(
+                    surface.build(&world, 0.01).is_some(),
+                    "{} fill",
+                    layer.label()
+                );
+            }
+            if let Some(gizmo) = layer.gizmo() {
+                assert!(
+                    gizmo.source.build(&world).is_some(),
+                    "{} gizmo",
+                    layer.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_layer_reads_the_phase_its_fill_and_overlay_agree_on() {
+        for &layer in DiagnosticLayer::ALL {
+            if let (Some(surface), Some(gizmo)) = (layer.surface(), layer.gizmo()) {
+                assert_eq!(surface.phase(), gizmo.phase(), "{}", layer.label());
             }
         }
     }

@@ -195,20 +195,20 @@ fn decode_snapshot(bytes: &[u8]) -> Result<GeneratedWorld, CacheError> {
             "generator build identity does not match",
         ));
     }
-    let world = GeneratedWorld::from_phases(
-        TectonicsWorld::decode(&mut decoder)?,
-        GeologyWorld::decode(&mut decoder)?,
-        ClimateWorld::decode(&mut decoder)?,
-    );
+    let tectonics = TectonicsWorld::decode(&mut decoder)?;
+    let geology = GeologyWorld::decode(&mut decoder)?;
+    let climate = ClimateWorld::decode(&mut decoder)?;
     if decoder.offset != bytes.len() {
         return Err(CacheError::invalid("snapshot contains trailing data"));
     }
-    world
-        .complete()
-        .expect("a decoded snapshot holds every phase")
-        .validate()
-        .map_err(CacheError::invalid)?;
-    Ok(world)
+    CompleteWorld {
+        tectonics: &tectonics,
+        geology: &geology,
+        climate: &climate,
+    }
+    .validate()
+    .map_err(CacheError::invalid)?;
+    Ok(GeneratedWorld::from_phases(tectonics, geology, climate))
 }
 
 #[derive(Default)]
