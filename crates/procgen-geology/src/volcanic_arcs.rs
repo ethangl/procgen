@@ -1,8 +1,7 @@
 use crate::field::{GeologyInputError, MaxWinsField};
 use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
-    StageInputError,
+    BoundaryClass, BoundaryClassification, CellCrust, CrustClass, PlatePartition, StageInputError,
 };
 use std::fmt;
 
@@ -171,13 +170,13 @@ struct BoundaryGroup {
 pub fn derive_volcanic_arc_field(
     mesh: &SphereMesh,
     plates: &PlatePartition,
-    crust: &CrustClassification,
+    crust: CellCrust<'_>,
     boundaries: &BoundaryClassification,
     config: VolcanicArcFieldConfig,
 ) -> Result<VolcanicArcField, VolcanicArcFieldError> {
     validate_inputs(mesh, plates, crust, boundaries, config)?;
 
-    let boundary = collect_boundary_data(mesh, plates, crust, boundaries, config);
+    let boundary = collect_boundary_data(mesh, crust, boundaries, config);
     let boundary_cell_count = boundary.claims.iter().flatten().count();
     let mut groups = group_boundaries(mesh, plates, &boundary);
     let original_group_count = groups.len();
@@ -234,7 +233,7 @@ pub fn derive_volcanic_arc_field(
 fn validate_inputs(
     mesh: &SphereMesh,
     plates: &PlatePartition,
-    crust: &CrustClassification,
+    crust: CellCrust<'_>,
     boundaries: &BoundaryClassification,
     config: VolcanicArcFieldConfig,
 ) -> Result<(), VolcanicArcFieldError> {
@@ -251,15 +250,14 @@ fn validate_inputs(
         return Err(VolcanicArcFieldError::InvalidStrengthSaturation);
     }
     plates.validate(mesh)?;
-    crust.validate(plates)?;
+    crust.validate(mesh)?;
     boundaries.validate(mesh)?;
     Ok(())
 }
 
 fn collect_boundary_data(
     mesh: &SphereMesh,
-    plates: &PlatePartition,
-    crust: &CrustClassification,
+    crust: CellCrust<'_>,
     boundaries: &BoundaryClassification,
     config: VolcanicArcFieldConfig,
 ) -> BoundaryData {
@@ -272,7 +270,7 @@ fn collect_boundary_data(
         if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent {
             continue;
         }
-        let classes = edge.cells.map(|cell| crust.cell_class(plates, cell));
+        let classes = edge.cells.map(|cell| crust.class(cell));
         if classes[0] == classes[1] {
             continue;
         }
@@ -437,6 +435,7 @@ fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::plate_cell_birth;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
@@ -445,12 +444,16 @@ mod tests {
         classify_boundaries, classify_crust, generate_plate_kinematics, partition_plates,
     };
 
+    fn crust(cell_birth: &[Option<i32>]) -> CellCrust<'_> {
+        CellCrust { cell_birth }
+    }
+
     fn fixture(
         cell_count: usize,
     ) -> (
         SphereMesh,
         PlatePartition,
-        CrustClassification,
+        Vec<Option<i32>>,
         BoundaryClassification,
     ) {
         let mesh = build_sphere_mesh(
@@ -487,18 +490,22 @@ mod tests {
             generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
                 .unwrap();
         let boundaries = classify_boundaries(&mesh, &plates, &kinematics).unwrap();
-        (mesh, plates, crust, boundaries)
+        let cell_birth = plate_cell_birth(&plates, &crust.plate_classes);
+        (mesh, plates, cell_birth, boundaries)
     }
 
     #[test]
     fn field_is_deterministic_ordered_and_bounded_inland() {
-        let (mesh, plates, crust, boundaries) = fixture(1_024);
+        let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
         let config = VolcanicArcFieldConfig::default();
-        let field = derive_volcanic_arc_field(&mesh, &plates, &crust, &boundaries, config).unwrap();
+        let field =
+            derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
+                .unwrap();
 
         assert_eq!(
             field,
-            derive_volcanic_arc_field(&mesh, &plates, &crust, &boundaries, config).unwrap()
+            derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
+                .unwrap()
         );
         assert!(!field.segments.is_empty());
         assert!(field.segments.windows(2).all(|pair| {
@@ -528,12 +535,12 @@ mod tests {
             assert!((1..=config.inland_offset_cells).contains(&segment.inland_depth));
             assert!(segment.arc_cells.iter().all(|arc_cell| {
                 plates.cell_plates[arc_cell.cell] == segment.overriding_plate
-                    && crust.cell_class(&plates, arc_cell.cell) == CrustClass::Continental
+                    && crust(&cell_birth).class(arc_cell.cell) == CrustClass::Continental
                     && !segment.boundary_cells.contains(&arc_cell.cell)
             }));
             for &edge_index in &segment.boundary_edges {
                 let edge = mesh.edges[edge_index];
-                let classes = edge.cells.map(|cell| crust.cell_class(&plates, cell));
+                let classes = edge.cells.map(|cell| crust(&cell_birth).class(cell));
                 let continental_cell = if classes[0] == CrustClass::Continental {
                     edge.cells[0]
                 } else {
@@ -555,11 +562,11 @@ mod tests {
 
     #[test]
     fn reference_field_has_stable_fingerprint() {
-        let (mesh, plates, crust, boundaries) = fixture(1_024);
+        let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
         let field = derive_volcanic_arc_field(
             &mesh,
             &plates,
-            &crust,
+            crust(&cell_birth),
             &boundaries,
             VolcanicArcFieldConfig::default(),
         )
@@ -590,14 +597,16 @@ mod tests {
 
     #[test]
     fn peaks_and_overlaps_follow_stable_strength_rules() {
-        let (mesh, plates, crust, boundaries) = fixture(1_024);
+        let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
         let config = VolcanicArcFieldConfig {
             minimum_boundary_edges: 1,
             inland_offset_cells: 3,
             peak_density_divisor: 2,
             strength_saturation: 2.0,
         };
-        let field = derive_volcanic_arc_field(&mesh, &plates, &crust, &boundaries, config).unwrap();
+        let field =
+            derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
+                .unwrap();
 
         assert!(field.diagnostics.overlap_cell_count > 0);
         for segment in &field.segments {
@@ -643,13 +652,13 @@ mod tests {
 
     #[test]
     fn no_mixed_convergence_produces_an_empty_field() {
-        let (mesh, plates, mut crust, mut boundaries) = fixture(512);
-        crust.plate_classes.fill(CrustClass::Continental);
+        let (mesh, plates, mut cell_birth, mut boundaries) = fixture(512);
+        cell_birth.fill(None);
         boundaries.edge_classes.fill(BoundaryClass::Convergent);
         let field = derive_volcanic_arc_field(
             &mesh,
             &plates,
-            &crust,
+            crust(&cell_birth),
             &boundaries,
             VolcanicArcFieldConfig::default(),
         )
@@ -663,11 +672,11 @@ mod tests {
 
     #[test]
     fn minimum_edge_filter_reports_discarded_segments() {
-        let (mesh, plates, crust, boundaries) = fixture(512);
+        let (mesh, plates, cell_birth, boundaries) = fixture(512);
         let field = derive_volcanic_arc_field(
             &mesh,
             &plates,
-            &crust,
+            crust(&cell_birth),
             &boundaries,
             VolcanicArcFieldConfig {
                 minimum_boundary_edges: usize::MAX,
@@ -685,7 +694,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_configuration_and_inputs() {
-        let (mesh, plates, crust, boundaries) = fixture(512);
+        let (mesh, plates, cell_birth, boundaries) = fixture(512);
         for (config, error) in [
             (
                 VolcanicArcFieldConfig {
@@ -717,22 +726,20 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                derive_volcanic_arc_field(&mesh, &plates, &crust, &boundaries, config),
+                derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config),
                 Err(error)
             );
         }
 
-        let mut invalid_crust = crust.clone();
-        invalid_crust.plate_classes.pop();
         assert_eq!(
             derive_volcanic_arc_field(
                 &mesh,
                 &plates,
-                &invalid_crust,
+                crust(&cell_birth[1..]),
                 &boundaries,
                 VolcanicArcFieldConfig::default(),
             ),
-            Err(VolcanicArcFieldError::Input(StageInputError::Plates))
+            Err(VolcanicArcFieldError::Input(StageInputError::CrustBirth))
         );
 
         let mut invalid_boundaries = boundaries.clone();
@@ -741,7 +748,7 @@ mod tests {
             derive_volcanic_arc_field(
                 &mesh,
                 &plates,
-                &crust,
+                crust(&cell_birth),
                 &invalid_boundaries,
                 VolcanicArcFieldConfig::default(),
             ),

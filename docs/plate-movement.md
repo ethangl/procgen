@@ -17,7 +17,8 @@ them.
 
 ## Current state
 
-Slice 1, coherent kinematics, has landed.
+Slices 1 and 2, coherent kinematics and displacement-proportional migration,
+have landed.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
@@ -30,10 +31,11 @@ Slice 1, coherent kinematics, has landed.
 - The default flow frequency is 1.0. Averaged over the adjacent plate pairs at
   the viewer's defaults, the signed alignment of their rotation axes is 0.34 to
   0.44 across three motion seeds, against 0.03 or less for the independent
-  random motion it replaces. Boundary edges after nine steps are 3978
-  convergent, 4593 divergent, and 3922 transform against 4792, 5436, and 4529,
-  and 16010 cells change owner against 25246: coherent motion moves fewer
-  cells. Frequency is the knob that matters. Halving it to 0.5 reaches 0.52 to
+  random motion it replaces. Measured while migration was still a binary gate,
+  boundary edges after nine steps were 3978 convergent, 4593 divergent, and
+  3922 transform against 4792, 5436, and 4529, and 16010 cells changed owner
+  against 25246: coherent motion moved fewer cells. Frequency is the knob that
+  matters. Halving it to 0.5 reaches 0.52 to
   0.82 alignment but can halve migration; 1.5 falls back to 0.02 to 0.26,
   no better than random for some seeds, because a flow cell has to be much
   larger than a plate for the fit's Euler axis to agree between neighbours.
@@ -42,15 +44,41 @@ Slice 1, coherent kinematics, has landed.
   public as the raster pilot's interim source until slice 1's own kernel.
 - `classify_boundaries` derives per-edge normal and shear speeds from the two
   owners' rotations and classifies each edge. It is correct and stays.
-- `migrate_plates_once` moves one cell per convergent edge whose closing speed
-  exceeds a threshold; continental overrides oceanic, then the faster side
-  wins. Divergent edges do nothing. Over the default nine steps about four
-  percent of cells change owner. Interiors never move.
-- `derive_seafloor_age` is hop distance from the final ridges within the final
-  owner. `derive_boundary_deformation` is a profile around the final boundary
-  scaled by final strength. Neither sees earlier steps; the world-heightmap
-  doc records this as "none of these stages accumulates state during
-  evolution".
+- Evolution carries four things across steps: ownership, a birth step per cell,
+  a closing debt per edge, and a travel debt per cell. Debts are distances in
+  model units measured against the mesh's one cell width,
+  `sqrt(total_area / cell_count)`. A convergent edge at or above
+  `minimum_convergence` adds `convergence * step_duration` each step and moves
+  one cell across itself once it has closed a whole cell width, carrying the
+  remainder forward; every other edge's debt resets to zero. The retreating
+  cell takes the advancing plate's id and the advancing cell's birth, so the
+  overriding plate's material covers it. `minimum_convergence` is now the speed
+  below which nothing accumulates rather than a binary gate.
+- Every cell accumulates `|velocity| * step_duration` and, on reaching a cell
+  width, pulls the birth of the same-plate neighbour behind it. A cell with no
+  neighbour behind it is at the plate's trailing edge: if the boundary there is
+  a ridge it is reborn as crust made this step, and otherwise it keeps what it
+  has. Both updates read the field as it stood before the substep.
+- Cell crust is derived from birth and never stored: `Some` is oceanic, `None`
+  is original continental crust. `CrustClassification::cell_class` is gone, and
+  every consumer reads `PlateEvolution::cell_crust`. Plate classes still
+  describe plates and still decide migration precedence and volcanic-arc
+  grouping. A rifting continental plate therefore grows an oceanic margin.
+- `derive_crust_birth_prior` is the old hop-distance algorithm, now producing
+  the birth field evolution starts from: `Some(-hops)` for oceanic cells,
+  `Some(-ridge_less_age)` for ridge-less oceanic plates, `None` for continental.
+  `derive_seafloor_age` is `step_count - birth`, in steps rather than hops.
+- `step_duration` defaults to 0.014, the time a plate at the default maximum
+  angular speed of 1.0 takes to cross one cell width on the 65,536-cell default
+  mesh. At the viewer's defaults nine steps produce 6473 proposals, 5752
+  migration events over 4494 distinct cells, and 1847 crust-creation events,
+  against 16010 migration events and no crust creation before. Boundary edges
+  after nine steps are 3297 convergent, 3706 divergent, and 3103 transform,
+  against 3978, 4593, and 3922: proportional migration moves less and leaves
+  smoother boundaries than the binary gate did. Seafloor age spans 1 to 45
+  steps with a mean of 15, where the prior alone spanned 0 to 36 hops.
+- `derive_boundary_deformation` is still a profile around the final boundary
+  scaled by final strength, and still sees no earlier step. Slice 3 replaces it.
 
 ## Design
 
@@ -179,7 +207,7 @@ Flow field, per-plate fit, crust and size factors, coherence blend, config
 and viewer controls, docs. Kinematics signature takes the mesh, partition, and
 crust. Raster pilot untouched.
 
-### Displacement migration and birth steps.
+### Displacement migration and birth steps. Landed.
 
 Per-edge accumulated displacement, divergent opening, per-cell birth step,
 seafloor age from birth, base elevation reading true age.

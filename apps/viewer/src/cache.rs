@@ -252,7 +252,7 @@ macro_rules! number_codec {
     )+};
 }
 
-number_codec!(u32, u64, f32, f64);
+number_codec!(i32, u32, u64, f32, f64);
 
 impl CacheCodec for usize {
     fn encode(&self, encoder: &mut Encoder) {
@@ -386,8 +386,8 @@ struct_codec! {
     CrustClassificationConfig { target_ocean_fraction, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     PlateMigrationConfig { minimum_convergence }
-    PlateEvolutionConfig { step_count, migration }
-    SeafloorAgeConfig { ridge_less_age }
+    PlateEvolutionConfig { step_count, step_duration, migration }
+    CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { continental_base, ridge_elevation, deep_ocean_elevation, cooling_age }
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
@@ -409,7 +409,7 @@ struct_codec! {
     MoistureTransportConfig { step_count, step_seconds, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
     CryosphereConfig { maximum_iterations, closure_tolerance, snowfall_temperature_kelvin, melt_temperature_kelvin, full_snow_cover_kg_per_m2, seasonal_snow_capacity_kg_per_m2, snow_melt_kg_per_m2_per_kelvin_day, land_ice_melt_kg_per_m2_per_kelvin_day, sea_ice_growth_fraction_per_kelvin_day, sea_ice_melt_fraction_per_kelvin_day }
     ClimateCouplingConfig { maximum_iterations, under_relaxation, albedo_tolerance, temperature_tolerance_kelvin, precipitation_tolerance_kg_per_m2_per_day, cover_fraction_tolerance, albedo, radiative_equilibrium, seasonal_thermal, atmospheric_circulation, moisture_transport, cryosphere }
-    TectonicsSettings { fibonacci, plates, crust, kinematics, evolution, seafloor_age, base_elevation, deformation, elevation }
+    TectonicsSettings { fibonacci, plates, crust, kinematics, birth_prior, evolution, base_elevation, deformation, elevation }
     GeologySettings { hotspots, oceanic_peaks, volcanic_arcs, cratons, basins, geological_elevation, isostasy, terrain_controls }
     ClimateSettings { planet, solar_forcing, coupling }
 
@@ -420,9 +420,10 @@ struct_codec! {
     CrustClassification { plate_classes }
     PlateKinematics { angular_velocities }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
-    PlateEvolutionDiagnostics { active_step_count, proposal_count, contested_cell_count, migrated_cell_count, maximum_convergence }
+    PlateEvolutionDiagnostics { active_step_count, proposal_count, contested_cell_count, migrated_cell_count, born_cell_count, maximum_convergence }
     FieldSummary { minimum, maximum, mean }
-    SeafloorAgeDiagnostics { summary, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
+    CrustBirthPriorDiagnostics { hops, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
+    SeafloorAgeDiagnostics { summary, oceanic_cell_count }
     SeafloorAge { cell_ages, diagnostics }
     BaseElevationDiagnostics { summary, oceanic, oceanic_cell_count, continental_cell_count }
     BaseElevation { cell_elevations, diagnostics }
@@ -529,6 +530,8 @@ impl CacheCodec for TectonicsWorld {
         self.crust.encode(encoder);
         self.kinematics.encode(encoder);
         self.boundaries.encode(encoder);
+        self.cell_birth.encode(encoder);
+        self.birth_prior.encode(encoder);
         self.evolution.encode(encoder);
         self.seafloor_age.encode(encoder);
         self.base_elevation.encode(encoder);
@@ -544,6 +547,8 @@ impl CacheCodec for TectonicsWorld {
             crust: CacheCodec::decode(decoder)?,
             kinematics: CacheCodec::decode(decoder)?,
             boundaries: CacheCodec::decode(decoder)?,
+            cell_birth: CacheCodec::decode(decoder)?,
+            birth_prior: CacheCodec::decode(decoder)?,
             evolution: CacheCodec::decode(decoder)?,
             seafloor_age: CacheCodec::decode(decoder)?,
             base_elevation: CacheCodec::decode(decoder)?,
@@ -672,7 +677,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_data_is_rejected() {
-        let fixture = Fixture::new(32, 23);
+        let fixture = Fixture::new(32, 16);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         bytes[offset..offset + size_of::<f32>()].copy_from_slice(&f32::NAN.to_le_bytes());
@@ -711,7 +716,7 @@ mod tests {
 
     #[test]
     fn truncated_snapshot_is_nonfatal_corruption() {
-        let fixture = Fixture::new(32, 13);
+        let fixture = Fixture::new(32, 19);
         let mut bytes = encode_snapshot(fixture.complete());
         bytes.truncate(bytes.len() / 2);
 

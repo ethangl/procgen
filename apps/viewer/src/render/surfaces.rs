@@ -31,13 +31,12 @@ pub(super) fn plate_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
 }
 
 pub(super) fn crust_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
+    let crust = tectonics.cell_crust();
     (0..tectonics.voronoi.cell_count())
-        .map(
-            |cell| match tectonics.crust.cell_class(&tectonics.plates, cell) {
-                CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
-                CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
-            },
-        )
+        .map(|cell| match crust.class(cell) {
+            CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
+            CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
+        })
         .collect()
 }
 

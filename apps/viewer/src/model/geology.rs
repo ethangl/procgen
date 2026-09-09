@@ -86,7 +86,7 @@ impl GeologyWorld {
             derive_volcanic_arc_field(
                 mesh,
                 &tectonics.plates,
-                &tectonics.crust,
+                tectonics.cell_crust(),
                 &tectonics.boundaries,
                 config.volcanic_arcs,
             )
@@ -95,7 +95,7 @@ impl GeologyWorld {
             derive_craton_field(
                 mesh,
                 &tectonics.plates,
-                &tectonics.crust,
+                tectonics.cell_crust(),
                 &tectonics.elevation,
                 config.cratons,
             )
@@ -103,8 +103,7 @@ impl GeologyWorld {
         let basins = timings.record("Sedimentary basins", || {
             derive_sedimentary_basin_field(
                 mesh,
-                &tectonics.plates,
-                &tectonics.crust,
+                tectonics.cell_crust(),
                 &tectonics.elevation,
                 config.basins,
             )
@@ -127,8 +126,7 @@ impl GeologyWorld {
             derive_isostatic_adjustment(
                 mesh,
                 IsostaticAdjustmentInputs {
-                    plates: &tectonics.plates,
-                    crust: &tectonics.crust,
+                    crust: tectonics.cell_crust(),
                     boundaries: &tectonics.boundaries,
                     cratons: &cratons,
                     basins: &basins,

@@ -6,7 +6,9 @@ use std::{cmp::Reverse, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlateMigrationConfig {
-    /// Minimum positive closing speed required for a convergent edge to move.
+    /// Minimum positive closing speed at which a convergent edge accumulates
+    /// displacement. Below it a boundary never moves anything, however long it
+    /// converges.
     pub minimum_convergence: f32,
 }
 
@@ -54,7 +56,6 @@ impl PlateMigration {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlateMigrationError {
-    InvalidMinimumConvergence,
     CellCountMismatch,
     PlateCountMismatch,
     BoundaryCountMismatch,
@@ -63,9 +64,6 @@ pub enum PlateMigrationError {
 impl fmt::Display for PlateMigrationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidMinimumConvergence => {
-                formatter.write_str("minimum convergence must be finite and non-negative")
-            }
             Self::CellCountMismatch => {
                 formatter.write_str("plate assignments must match the mesh cell count")
             }
@@ -73,7 +71,7 @@ impl fmt::Display for PlateMigrationError {
                 formatter.write_str("plate classes must match the partition plate count")
             }
             Self::BoundaryCountMismatch => {
-                formatter.write_str("boundary arrays must match the mesh edge count")
+                formatter.write_str("per-edge arrays must match the mesh edge count")
             }
         }
     }
@@ -81,32 +79,59 @@ impl fmt::Display for PlateMigrationError {
 
 impl std::error::Error for PlateMigrationError {}
 
+/// Advances each edge's accumulated closing distance by one step.
+///
+/// A convergent edge at or above the configured minimum convergence adds the
+/// distance it closed during the step; every other edge resets to zero, so an
+/// edge that stops converging starts its next approach from nothing rather
+/// than from a debt the previous regime left behind.
+pub(crate) fn accumulate_closing_distances(
+    boundaries: &BoundaryClassification,
+    closing: &mut [f32],
+    config: PlateMigrationConfig,
+    step_duration: f32,
+) {
+    for (edge, distance) in closing.iter_mut().enumerate() {
+        let convergence = boundaries.convergence(edge);
+        if boundaries.edge_classes[edge] == BoundaryClass::Convergent
+            && convergence >= config.minimum_convergence
+        {
+            *distance += convergence * step_duration;
+        } else {
+            *distance = 0.0;
+        }
+    }
+}
+
 /// Computes one simultaneous boundary-migration transition.
 ///
-/// Only sufficiently strong convergent edges propose changes. Continental
-/// plates override oceanic plates; equal-crust boundaries advance whichever
-/// plate has the greater local velocity toward the edge. When several edges
-/// target one cell, the strongest convergence wins, followed by the lower
-/// advancing plate id and edge id for deterministic ties.
+/// An edge proposes a change only once its accumulated closing distance
+/// reaches `cell_width`, so a fast boundary proposes most steps and a slow one
+/// rarely. Continental plates override oceanic plates; equal-crust boundaries
+/// advance whichever plate has the greater local velocity toward the edge.
+/// When several edges target one cell, the strongest convergence wins,
+/// followed by the lower advancing plate id and edge id for deterministic
+/// ties. The caller subtracts one cell width from each winning edge.
 ///
-/// `boundaries` must have been classified from `partition` before this step.
+/// `boundaries` and `closing` must have been derived from `partition` before
+/// this step, and `cell_width` must be the mesh's representative cell width.
+/// The debt is the whole qualification: accumulation zeroes every edge that is
+/// not converging above the minimum, so no other edge can reach a cell width.
 pub fn migrate_plates_once(
     mesh: &SphereMesh,
     partition: &PlatePartition,
     crust: &CrustClassification,
     boundaries: &BoundaryClassification,
-    config: PlateMigrationConfig,
+    closing: &[f32],
+    cell_width: f32,
 ) -> Result<PlateMigration, PlateMigrationError> {
-    if !config.minimum_convergence.is_finite() || config.minimum_convergence < 0.0 {
-        return Err(PlateMigrationError::InvalidMinimumConvergence);
-    }
     if partition.cell_plates.len() != mesh.cell_count() {
         return Err(PlateMigrationError::CellCountMismatch);
     }
     if crust.plate_classes.len() != partition.plate_count {
         return Err(PlateMigrationError::PlateCountMismatch);
     }
-    if boundaries.validate(mesh).is_err() {
+    if boundaries.validate(mesh).is_err() || closing.len() != mesh.edge_count() {
         return Err(PlateMigrationError::BoundaryCountMismatch);
     }
 
@@ -115,10 +140,7 @@ pub fn migrate_plates_once(
     let mut proposal_count = 0;
 
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
-        let convergence = boundaries.convergence(edge_index);
-        if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent
-            || convergence < config.minimum_convergence
-        {
+        if closing[edge_index] < cell_width {
             continue;
         }
 
@@ -139,7 +161,7 @@ pub fn migrate_plates_once(
         let proposal = CellMigration {
             to_plate: plates[advancing],
             boundary_edge: edge_index,
-            convergence,
+            convergence: boundaries.convergence(edge_index),
         };
 
         proposal_count += 1;
@@ -177,6 +199,7 @@ fn proposal_precedes(candidate: CellMigration, current: CellMigration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field::mean_cell_width;
     use crate::test_support::{
         empty_boundaries, fingerprint, reference_partition, two_plate_boundary_partition,
     };
@@ -184,6 +207,21 @@ mod tests {
         CrustClassificationConfig, PlateKinematicsConfig, classify_boundaries, classify_crust,
         generate_plate_kinematics,
     };
+
+    /// One step long enough for every edge above the minimum convergence to
+    /// close a whole cell width, so the debt gate reduces to the speed gate.
+    const IMMEDIATE_STEP: f32 = 1.0;
+
+    fn closing_after(
+        mesh: &SphereMesh,
+        boundaries: &BoundaryClassification,
+        config: PlateMigrationConfig,
+        step_duration: f32,
+    ) -> Vec<f32> {
+        let mut closing = vec![0.0; mesh.edge_count()];
+        accumulate_closing_distances(boundaries, &mut closing, config, step_duration);
+        closing
+    }
 
     fn fixture() -> (
         SphereMesh,
@@ -220,25 +258,19 @@ mod tests {
     #[test]
     fn one_step_is_deterministic_simultaneous_and_keeps_plate_classes() {
         let (mesh, partition, crust, boundaries) = fixture();
-        let first = migrate_plates_once(
+        let closing = closing_after(
             &mesh,
-            &partition,
-            &crust,
             &boundaries,
             PlateMigrationConfig::default(),
-        )
-        .unwrap();
+            IMMEDIATE_STEP,
+        );
+        let width = mean_cell_width(&mesh);
+        let first =
+            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap();
 
         assert_eq!(
             first,
-            migrate_plates_once(
-                &mesh,
-                &partition,
-                &crust,
-                &boundaries,
-                PlateMigrationConfig::default(),
-            )
-            .unwrap()
+            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap()
         );
         assert!(first.migrated_cell_count() > 0);
         assert!(first.contested_cell_count > 0);
@@ -253,16 +285,63 @@ mod tests {
     }
 
     #[test]
+    fn debt_accumulates_on_converging_edges_and_resets_everywhere_else() {
+        let (mesh, edge_index, _, _, mut boundaries) = two_plate_convergent_fixture();
+        let config = PlateMigrationConfig::default();
+        let mut closing = vec![0.0; mesh.edge_count()];
+
+        accumulate_closing_distances(&boundaries, &mut closing, config, 0.25);
+        assert_eq!(closing[edge_index], 0.25);
+        accumulate_closing_distances(&boundaries, &mut closing, config, 0.25);
+        assert_eq!(closing[edge_index], 0.5);
+        assert!(
+            closing
+                .iter()
+                .enumerate()
+                .all(|(edge, &distance)| edge == edge_index || distance == 0.0)
+        );
+
+        boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
+        accumulate_closing_distances(&boundaries, &mut closing, config, 0.25);
+        assert_eq!(closing[edge_index], 0.0);
+    }
+
+    #[test]
+    fn an_edge_proposes_only_once_it_has_closed_a_cell_width() {
+        let (mesh, edge_index, partition, crust, boundaries) = two_plate_convergent_fixture();
+        let width = mean_cell_width(&mesh);
+        let mut closing = vec![0.0; mesh.edge_count()];
+        closing[edge_index] = width * 0.99;
+
+        let waiting =
+            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap();
+        assert_eq!(waiting.proposal_count, 0);
+        assert_eq!(waiting.partition, partition);
+
+        closing[edge_index] = width;
+        let moving =
+            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap();
+        assert_eq!(moving.migrated_cell_count(), 1);
+    }
+
+    #[test]
     fn continental_plate_overrides_oceanic_cell() {
         let (mesh, edge_index, partition, crust, boundaries) = two_plate_convergent_fixture();
         let edge = mesh.edges[edge_index];
+        let closing = closing_after(
+            &mesh,
+            &boundaries,
+            PlateMigrationConfig::default(),
+            IMMEDIATE_STEP,
+        );
 
         let migration = migrate_plates_once(
             &mesh,
             &partition,
             &crust,
             &boundaries,
-            PlateMigrationConfig::default(),
+            &closing,
+            mean_cell_width(&mesh),
         )
         .unwrap();
         assert_eq!(
@@ -276,10 +355,6 @@ mod tests {
 
         assert_eq!(migration.partition.cell_plates[edge.cells[1]], 0);
         assert_eq!(migration.migrated_cell_count(), 1);
-        assert_eq!(
-            crust.cell_class(&migration.partition, edge.cells[1]),
-            CrustClass::Continental
-        );
         assert!(crust.ocean_fraction(&mesh, &partition) > 0.0);
         assert_eq!(crust.ocean_fraction(&mesh, &migration.partition), 0.0);
     }
@@ -287,14 +362,21 @@ mod tests {
     #[test]
     fn minimum_convergence_suppresses_weaker_boundaries() {
         let (mesh, _, partition, crust, boundaries) = two_plate_convergent_fixture();
+        let closing = closing_after(
+            &mesh,
+            &boundaries,
+            PlateMigrationConfig {
+                minimum_convergence: 1.1,
+            },
+            IMMEDIATE_STEP,
+        );
         let suppressed = migrate_plates_once(
             &mesh,
             &partition,
             &crust,
             &boundaries,
-            PlateMigrationConfig {
-                minimum_convergence: 1.1,
-            },
+            &closing,
+            mean_cell_width(&mesh),
         )
         .unwrap();
         assert_eq!(suppressed.migrated_cell_count(), 0);
@@ -308,12 +390,19 @@ mod tests {
         let same_crust = CrustClassification {
             plate_classes: vec![CrustClass::Continental; 2],
         };
+        let closing = closing_after(
+            &mesh,
+            &boundaries,
+            PlateMigrationConfig::default(),
+            IMMEDIATE_STEP,
+        );
         let same_crust_migration = migrate_plates_once(
             &mesh,
             &partition,
             &same_crust,
             &boundaries,
-            PlateMigrationConfig::default(),
+            &closing,
+            mean_cell_width(&mesh),
         )
         .unwrap();
         assert_eq!(same_crust_migration.partition.cell_plates[edge.cells[1]], 0);
@@ -351,19 +440,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_or_misaligned_inputs() {
+    fn rejects_misaligned_inputs() {
         let (mesh, partition, crust, boundaries) = fixture();
+        let width = mean_cell_width(&mesh);
+        let closing = vec![0.0; mesh.edge_count()];
+
         assert_eq!(
-            migrate_plates_once(
-                &mesh,
-                &partition,
-                &crust,
-                &boundaries,
-                PlateMigrationConfig {
-                    minimum_convergence: f32::NAN,
-                },
-            ),
-            Err(PlateMigrationError::InvalidMinimumConvergence)
+            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing[1..], width,),
+            Err(PlateMigrationError::BoundaryCountMismatch)
         );
 
         let mut short_boundaries = boundaries;
@@ -374,7 +458,8 @@ mod tests {
                 &partition,
                 &crust,
                 &short_boundaries,
-                PlateMigrationConfig::default(),
+                &closing,
+                width,
             ),
             Err(PlateMigrationError::BoundaryCountMismatch)
         );

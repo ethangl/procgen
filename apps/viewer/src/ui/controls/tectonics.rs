@@ -4,8 +4,9 @@ use bevy_egui::egui;
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
-    ContinentalRiftProfile, CrustClassificationConfig, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig,
-    PlateKinematicsConfig, PlatePartitionConfig, SeafloorAgeConfig,
+    ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
+    DEFAULT_STEP_DURATION, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig, PlateKinematicsConfig,
+    PlatePartitionConfig,
 };
 
 // The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
@@ -22,7 +23,11 @@ const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
-const SEAFLOOR_AGE_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+// Zero freezes the world; the top of the range moves the fastest plates about
+// ten cells per step on the default mesh, past which a step skips terrain it
+// should have crossed.
+const STEP_DURATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=DEFAULT_STEP_DURATION * 10.0;
+const CRUST_BIRTH_PRIOR_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 
@@ -39,11 +44,11 @@ pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     section(ui, "Plate kinematics", |ui| {
         kinematics_controls(ui, &mut settings.kinematics)
     });
+    section(ui, "Crust birth prior", |ui| {
+        birth_prior_controls(ui, &mut settings.birth_prior)
+    });
     section(ui, "Plate evolution", |ui| {
         evolution_controls(ui, &mut settings.evolution, settings.kinematics)
-    });
-    section(ui, "Seafloor age", |ui| {
-        seafloor_age_controls(ui, &mut settings.seafloor_age)
     });
     section(ui, "Base elevation", |ui| {
         base_elevation_controls(ui, &mut settings.base_elevation)
@@ -166,18 +171,24 @@ fn evolution_controls(
     );
     slider(
         ui,
+        "Step duration",
+        &mut config.step_duration,
+        STEP_DURATION_RANGE,
+    );
+    slider(
+        ui,
         "Minimum convergence",
         &mut config.migration.minimum_convergence,
         0.0..=kinematics.maximum_convergence(WORLD_RADIUS),
     );
 }
 
-fn seafloor_age_controls(ui: &mut egui::Ui, config: &mut SeafloorAgeConfig) {
+fn birth_prior_controls(ui: &mut egui::Ui, config: &mut CrustBirthPriorConfig) {
     drag_value(
         ui,
         "Ridge-less age",
         &mut config.ridge_less_age,
-        SEAFLOOR_AGE_RANGE,
+        CRUST_BIRTH_PRIOR_RANGE,
         1.0,
     );
 }

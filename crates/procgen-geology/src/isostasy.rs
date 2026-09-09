@@ -6,8 +6,7 @@ use crate::{
 };
 use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
-    PlatePartition,
+    BoundaryClass, BoundaryClassification, CellCrust, CrustClass, FieldSummary,
 };
 
 /// Configuration for deterministic present-day isostatic support and adjustment.
@@ -42,8 +41,7 @@ impl Default for IsostaticAdjustmentConfig {
 
 #[derive(Clone, Copy, Debug)]
 pub struct IsostaticAdjustmentInputs<'a> {
-    pub plates: &'a PlatePartition,
-    pub crust: &'a CrustClassification,
+    pub crust: CellCrust<'a>,
     pub boundaries: &'a BoundaryClassification,
     pub cratons: &'a CratonField,
     pub basins: &'a SedimentaryBasinField,
@@ -95,7 +93,7 @@ pub fn derive_isostatic_adjustment(
     let divergent_distances = edge_cell_distances(mesh, |edge, _| {
         inputs.boundaries.edge_classes[edge] == BoundaryClass::Divergent
     });
-    let oceanic = |cell: usize| inputs.crust.cell_class(inputs.plates, cell) == CrustClass::Oceanic;
+    let oceanic = |cell: usize| inputs.crust.class(cell) == CrustClass::Oceanic;
     let basin = |cell: usize| inputs.basins.cell_basins[cell].is_some();
     let preserved = |cell: usize| oceanic(cell) || basin(cell);
     let oceanic_cell_count = (0..mesh.cell_count()).filter(|&cell| oceanic(cell)).count();
@@ -165,8 +163,7 @@ fn validate_inputs(
     {
         return Err(GeologyStageError::InvalidConfig);
     }
-    inputs.plates.validate(mesh)?;
-    inputs.crust.validate(inputs.plates)?;
+    inputs.crust.validate(mesh)?;
     inputs.boundaries.validate(mesh)?;
     inputs.cratons.validate(mesh)?;
     inputs.basins.validate(mesh)?;
@@ -188,8 +185,7 @@ mod tests {
     #[derive(Clone)]
     struct Fixture {
         mesh: SphereMesh,
-        plates: PlatePartition,
-        crust: CrustClassification,
+        cell_birth: Vec<Option<i32>>,
         boundaries: BoundaryClassification,
         cratons: CratonField,
         basins: SedimentaryBasinField,
@@ -199,19 +195,13 @@ mod tests {
     impl Fixture {
         fn new(cell_count: usize) -> Self {
             let mesh = mesh(cell_count);
-            let plates = PlatePartition {
-                cell_plates: vec![0; cell_count],
-                plate_count: 1,
-            };
             Self {
                 boundaries: BoundaryClassification {
                     edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
                     edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
                     edge_shear: vec![0.0; mesh.edge_count()],
                 },
-                crust: CrustClassification {
-                    plate_classes: vec![CrustClass::Continental],
-                },
+                cell_birth: vec![None; cell_count],
                 cratons: empty_cratons(cell_count),
                 basins: empty_basins(cell_count),
                 elevation: GeologicalElevation {
@@ -219,7 +209,6 @@ mod tests {
                     diagnostics: GeologicalElevationDiagnostics::default(),
                 },
                 mesh,
-                plates,
             }
         }
 
@@ -230,8 +219,9 @@ mod tests {
             derive_isostatic_adjustment(
                 &self.mesh,
                 IsostaticAdjustmentInputs {
-                    plates: &self.plates,
-                    crust: &self.crust,
+                    crust: CellCrust {
+                        cell_birth: &self.cell_birth,
+                    },
                     boundaries: &self.boundaries,
                     cratons: &self.cratons,
                     basins: &self.basins,
@@ -260,8 +250,7 @@ mod tests {
                 .derive(IsostaticAdjustmentConfig::default())
                 .unwrap()
         );
-        assert_eq!(fixture.plates, original.plates);
-        assert_eq!(fixture.crust, original.crust);
+        assert_eq!(fixture.cell_birth, original.cell_birth);
         assert_eq!(fixture.boundaries, original.boundaries);
         assert_eq!(fixture.cratons, original.cratons);
         assert_eq!(fixture.basins, original.basins);
@@ -338,9 +327,7 @@ mod tests {
     #[test]
     fn oceanic_cells_and_basin_floors_are_unchanged() {
         let mut fixture = Fixture::new(8);
-        fixture.plates.plate_count = 2;
-        fixture.crust.plate_classes = vec![CrustClass::Continental, CrustClass::Oceanic];
-        fixture.plates.cell_plates[0] = 1;
+        fixture.cell_birth[0] = Some(0);
         fixture.elevation.cell_elevations[0] = 0.2;
         fixture.elevation.cell_elevations[1] = 0.42;
         fixture.basins.cell_basins[1] = Some(0);

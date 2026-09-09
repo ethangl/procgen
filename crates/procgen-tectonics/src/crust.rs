@@ -44,11 +44,6 @@ impl CrustClassification {
         Ok(())
     }
 
-    /// Derives a cell's crust class from its current plate ownership.
-    pub fn cell_class(&self, partition: &PlatePartition, cell: usize) -> CrustClass {
-        self.plate_classes[partition.cell_plates[cell]]
-    }
-
     pub fn plate_count(&self, class: CrustClass) -> usize {
         self.plate_classes
             .iter()
@@ -66,6 +61,41 @@ impl CrustClassification {
             .map(|(&area, _)| area)
             .sum();
         (ocean_area / mesh.total_area()) as f32
+    }
+}
+
+/// Per-cell crust class after evolution, read from the step at which each
+/// cell's crust was created: crust with a birth step is oceanic, crust with
+/// none is original continental crust that has never been re-made.
+///
+/// This is the only per-cell answer once evolution has run. A plate's class in
+/// [`CrustClassification`] describes the plate, not the cells it currently
+/// owns: a continental plate that rifts grows an oceanic margin, and a cell
+/// overridden at a subduction zone takes the overriding material's class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellCrust<'a> {
+    pub cell_birth: &'a [Option<i32>],
+}
+
+impl CellCrust<'_> {
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_birth.len() != mesh.cell_count() {
+            return Err(StageInputError::CrustBirth);
+        }
+        Ok(())
+    }
+
+    pub fn class(&self, cell: usize) -> CrustClass {
+        match self.cell_birth[cell] {
+            Some(_) => CrustClass::Oceanic,
+            None => CrustClass::Continental,
+        }
+    }
+
+    pub fn cell_count(&self, class: CrustClass) -> usize {
+        (0..self.cell_birth.len())
+            .filter(|&cell| self.class(cell) == class)
+            .count()
     }
 }
 
@@ -154,36 +184,38 @@ mod tests {
     }
 
     #[test]
-    fn cell_crust_follows_plate_ownership_and_area_drives_fraction() {
+    fn plate_area_drives_the_achieved_ocean_fraction() {
         let (mesh, partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
 
         assert_eq!(crust.plate_classes.len(), partition.plate_count);
-        for (cell, &plate) in partition.cell_plates.iter().enumerate() {
-            assert_eq!(
-                crust.cell_class(&partition, cell),
-                crust.plate_classes[plate]
-            );
-        }
-
         assert!((crust.ocean_fraction(&mesh, &partition) - 0.7).abs() < 0.1);
     }
 
     #[test]
-    fn derived_cell_crust_tracks_current_plate_ownership() {
-        let (mesh, mut partition) = reference_partition();
-        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
-        let cell = 0;
-        let original_class = crust.cell_class(&partition, cell);
-        let replacement_plate = crust
-            .plate_classes
-            .iter()
-            .position(|&class| class != original_class)
-            .unwrap();
+    fn cell_crust_reads_the_birth_step_and_not_plate_ownership() {
+        let mesh = crate::test_support::mesh(32);
+        let cell_birth: Vec<_> = (0..mesh.cell_count())
+            .map(|cell| (cell % 3 != 0).then_some(-(cell as i32)))
+            .collect();
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
 
-        partition.cell_plates[cell] = replacement_plate;
-
-        assert_ne!(crust.cell_class(&partition, cell), original_class);
+        assert_eq!(crust.validate(&mesh), Ok(()));
+        assert_eq!(crust.class(0), CrustClass::Continental);
+        assert_eq!(crust.class(1), CrustClass::Oceanic);
+        assert_eq!(
+            crust.cell_count(CrustClass::Continental) + crust.cell_count(CrustClass::Oceanic),
+            mesh.cell_count()
+        );
+        assert_eq!(
+            CellCrust {
+                cell_birth: &cell_birth[1..]
+            }
+            .validate(&mesh),
+            Err(StageInputError::CrustBirth)
+        );
     }
 
     #[test]

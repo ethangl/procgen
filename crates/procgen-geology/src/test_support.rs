@@ -4,6 +4,20 @@ use crate::{
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
+use procgen_tectonics::{CrustClass, PlatePartition};
+
+/// The per-cell birth field that reproduces plate crust classes cell by cell,
+/// for stages tested on a hand-built partition rather than a real run.
+pub(crate) fn plate_cell_birth(
+    plates: &PlatePartition,
+    plate_classes: &[CrustClass],
+) -> Vec<Option<i32>> {
+    plates
+        .cell_plates
+        .iter()
+        .map(|&plate| (plate_classes[plate] == CrustClass::Oceanic).then_some(0))
+        .collect()
+}
 
 pub(crate) fn mesh(cell_count: usize) -> SphereMesh {
     build_sphere_mesh(

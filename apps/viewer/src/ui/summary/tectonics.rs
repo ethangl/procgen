@@ -5,6 +5,7 @@ use procgen_tectonics::{BoundaryClass, CrustClass};
 
 pub(super) fn summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
     crust_summary(ui, world);
+    birth_prior_summary(ui, world);
     evolution_summary(ui, world);
     boundary_summary(ui, world);
     seafloor_age_summary(ui, world);
@@ -38,6 +39,31 @@ fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             "Continental plates",
             world.crust.plate_count(CrustClass::Continental),
         );
+        stat(
+            ui,
+            "Oceanic cells",
+            world.cell_crust().cell_count(CrustClass::Oceanic),
+        );
+        stat(
+            ui,
+            "Continental cells",
+            world.cell_crust().cell_count(CrustClass::Continental),
+        );
+    });
+}
+
+fn birth_prior_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
+    stat_grid(ui, "Crust birth prior", "birth_prior", |ui| {
+        field_summary_stats(ui, &world.birth_prior.hops);
+        stat(ui, "Oceanic cells", world.birth_prior.oceanic_cell_count);
+        stat(ui, "Ridge cells", world.birth_prior.ridge_cell_count);
+        stat(ui, "Ridge plates", world.birth_prior.ridge_plate_count);
+        stat(
+            ui,
+            "Ridge-less plates",
+            world.birth_prior.ridge_less_plate_count,
+        );
+        stat(ui, "Fallback cells", world.birth_prior.fallback_cell_count);
     });
 }
 
@@ -51,6 +77,7 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             world.evolution.contested_cell_count,
         );
         stat(ui, "Migration events", world.evolution.migrated_cell_count);
+        stat(ui, "Crust creation events", world.evolution.born_cell_count);
         stat(
             ui,
             "Strongest migration",
@@ -86,26 +113,6 @@ fn seafloor_age_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             ui,
             "Oceanic cells",
             world.seafloor_age.diagnostics.oceanic_cell_count,
-        );
-        stat(
-            ui,
-            "Ridge cells",
-            world.seafloor_age.diagnostics.ridge_cell_count,
-        );
-        stat(
-            ui,
-            "Ridge plates",
-            world.seafloor_age.diagnostics.ridge_plate_count,
-        );
-        stat(
-            ui,
-            "Ridge-less plates",
-            world.seafloor_age.diagnostics.ridge_less_plate_count,
-        );
-        stat(
-            ui,
-            "Fallback cells",
-            world.seafloor_age.diagnostics.fallback_cell_count,
         );
     });
 }
