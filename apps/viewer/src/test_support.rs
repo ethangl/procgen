@@ -90,6 +90,9 @@ impl Fixture {
         }
     }
 
+    /// Generates every phase for one cell count and seed. Climate coupling
+    /// does not reach a fixed point on every mesh this small, so each
+    /// fixture's seed is one that converges at its cell count.
     pub(crate) fn new(cell_count: usize, seed: u64) -> Self {
         Self::generate(settings(cell_count, seed))
     }

@@ -130,7 +130,7 @@ mod tests {
         let (mesh, partition) = reference_partition();
         let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
         let kinematics =
-            generate_plate_kinematics(partition.plate_count, PlateKinematicsConfig::new(7))
+            generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
                 .unwrap();
         (mesh, partition, crust, kinematics)
     }
@@ -159,12 +159,12 @@ mod tests {
                 .iter()
                 .map(|&plate| plate as u64),
         );
-        assert_eq!(fingerprint, 16_994_075_726_605_587_921);
-        assert_eq!(first.diagnostics.proposal_count, 530);
-        assert_eq!(first.diagnostics.contested_cell_count, 92);
-        assert_eq!(first.diagnostics.migrated_cell_count, 430);
+        assert_eq!(fingerprint, 10_676_273_653_969_511_450);
+        assert_eq!(first.diagnostics.proposal_count, 451);
+        assert_eq!(first.diagnostics.contested_cell_count, 97);
+        assert_eq!(first.diagnostics.migrated_cell_count, 343);
         // Convergence is a float reduction, so machines differ in the last bits.
-        assert!((first.diagnostics.maximum_convergence - 1.546_309).abs() < 1.0e-3);
+        assert!((first.diagnostics.maximum_convergence - 1.416_975).abs() < 1.0e-3);
     }
 
     #[test]

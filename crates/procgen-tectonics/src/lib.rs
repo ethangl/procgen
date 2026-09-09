@@ -1,6 +1,6 @@
 //! Deterministic tectonic state derived from spherical mesh topology.
 //!
-//! Plate partitioning, rigid spherical plate motion, static boundary
+//! Plate partitioning, flow-field-fitted rigid plate motion, static boundary
 //! classification, static crust classification, one-step plate migration,
 //! deterministic multi-step ownership evolution, post-evolution boundary
 //! deformation, seafloor hop age, oceanic bathymetric base elevation, and
@@ -54,6 +54,7 @@ pub use migration::{
 };
 pub use motion::{
     PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
+    generate_random_plate_kinematics,
 };
 pub use partition::{
     MAX_GROWTH_ROUGHNESS, PlatePartition, PlatePartitionConfig, PlatePartitionError,

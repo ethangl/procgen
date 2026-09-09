@@ -384,7 +384,7 @@ struct_codec! {
     Planet { star, orbit, radius_meters, sidereal_rotation_period_seconds, atmospheric_specific_gas_constant_joules_per_kilogram_kelvin, maximum_land_elevation_meters }
     PlatePartitionConfig { arc_count, curvature, subdivided_fraction, piece_fraction, growth_roughness, seed }
     CrustClassificationConfig { target_ocean_fraction, seed }
-    PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed }
+    PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     PlateMigrationConfig { minimum_convergence }
     PlateEvolutionConfig { step_count, migration }
     SeafloorAgeConfig { ridge_less_age }
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_dimensions_are_rejected() {
-        let fixture = Fixture::new(32, 22);
+        let fixture = Fixture::new(32, 28);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes);
         bytes[offset..offset + size_of::<u32>()].copy_from_slice(&3_u32.to_le_bytes());
@@ -729,7 +729,7 @@ mod tests {
         fixture.geology.hotspots.hotspots[0].source_cell = fixture.tectonics.voronoi.cell_count();
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut fixture = Fixture::new(32, 16);
+        let mut fixture = Fixture::new(32, 25);
         fixture.geology.hotspots.hotspots[0].plate = fixture.tectonics.plates.plate_count;
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
@@ -745,8 +745,8 @@ mod tests {
     #[test]
     fn successful_store_atomically_replaces_previous_snapshot() {
         let (cache_dir, cache) = test_cache("replace");
-        let first = Fixture::new(32, 19);
-        let second = Fixture::new(48, 20);
+        let first = Fixture::new(32, 26);
+        let second = Fixture::new(48, 27);
         cache.store(first.complete()).unwrap();
         cache.store(second.complete()).unwrap();
 

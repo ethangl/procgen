@@ -58,7 +58,7 @@ impl CrustClassification {
 
     /// Derives the current area-weighted ocean fraction from cell ownership.
     pub fn ocean_fraction(&self, mesh: &SphereMesh, partition: &PlatePartition) -> f32 {
-        let areas = plate_areas(mesh, partition);
+        let areas = partition.plate_areas(mesh);
         let ocean_area: f64 = areas
             .iter()
             .zip(&self.plate_classes)
@@ -109,7 +109,7 @@ pub fn classify_crust(
     }
 
     let plate_count = partition.plate_count;
-    let plate_areas = plate_areas(mesh, partition);
+    let plate_areas = partition.plate_areas(mesh);
 
     let target_area = mesh.total_area() * f64::from(config.target_ocean_fraction);
     let random = RandomStream::new(config.seed, CRUST_PLATE_ORDER);
@@ -127,14 +127,6 @@ pub fn classify_crust(
     }
 
     Ok(CrustClassification { plate_classes })
-}
-
-fn plate_areas(mesh: &SphereMesh, partition: &PlatePartition) -> Vec<f64> {
-    let mut areas = vec![0.0; partition.plate_count];
-    for (&plate, &area) in partition.cell_plates.iter().zip(&mesh.cell_areas) {
-        areas[plate] += f64::from(area);
-    }
-    areas
 }
 
 #[cfg(test)]

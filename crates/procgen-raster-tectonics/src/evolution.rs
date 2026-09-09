@@ -12,7 +12,7 @@ use procgen_core::{RandomStream, random_streams::CRUST_PLATE_ORDER};
 use procgen_cubesphere::NO_RASTER_CELL;
 use procgen_tectonics::{
     CrustClassificationConfig, PlateKinematicsConfig, PlateMigrationConfig,
-    generate_plate_kinematics,
+    generate_random_plate_kinematics,
 };
 
 /// Steps per unit an angular-velocity component is quantized to before upload.
@@ -59,7 +59,7 @@ impl RasterEvolutionConfig {
         &self,
         plate_count: u32,
     ) -> Result<Vec<RasterPlate>, RasterTectonicsError> {
-        let kinematics = generate_plate_kinematics(plate_count as usize, self.kinematics)
+        let kinematics = generate_random_plate_kinematics(plate_count as usize, self.kinematics)
             .map_err(|_| RasterTectonicsError::InvalidAngularSpeedRange)?;
         let random = RandomStream::new(self.crust.seed, CRUST_PLATE_ORDER);
         let mut order: Vec<u32> = (0..plate_count).collect();
@@ -124,7 +124,7 @@ mod tests {
         order.sort_unstable();
         assert_eq!(order, (0..12).collect::<Vec<_>>(), "every plate once");
 
-        let kinematics = generate_plate_kinematics(12, config.kinematics).unwrap();
+        let kinematics = generate_random_plate_kinematics(12, config.kinematics).unwrap();
         for (record, velocity) in records.iter().zip(&kinematics.angular_velocities) {
             let quantized = Vec3::new(
                 record.angular_velocity[0],

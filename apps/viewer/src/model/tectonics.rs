@@ -100,7 +100,7 @@ impl TectonicsWorld {
             classify_crust(&voronoi, &initial_plates, config.crust)
         })?;
         let kinematics = timings.record("Plate kinematics", || {
-            generate_plate_kinematics(initial_plates.plate_count, config.kinematics)
+            generate_plate_kinematics(&voronoi, &initial_plates, &crust, config.kinematics)
         })?;
         let evolution_result = timings.record("Plate evolution", || {
             evolve_plate_ownership(

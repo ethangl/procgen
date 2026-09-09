@@ -484,7 +484,8 @@ mod tests {
         )
         .unwrap();
         let kinematics =
-            generate_plate_kinematics(plates.plate_count, PlateKinematicsConfig::new(13)).unwrap();
+            generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
+                .unwrap();
         let boundaries = classify_boundaries(&mesh, &plates, &kinematics).unwrap();
         (mesh, plates, crust, boundaries)
     }
@@ -584,7 +585,7 @@ mod tests {
             .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
-        assert_eq!(fingerprint(values), 15_375_813_075_100_641_942);
+        assert_eq!(fingerprint(values), 11_150_607_478_568_488_617);
     }
 
     #[test]

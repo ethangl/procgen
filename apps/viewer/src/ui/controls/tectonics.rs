@@ -16,6 +16,11 @@ const CURVATURE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=8.0;
 const PIECE_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0005..=0.1;
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
+// A flow cell spans the sphere at low frequency and a single plate near the top
+// of this range, past which the fit averages the field away.
+const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
+// Crust factors multiply the hashed base speed before it is clamped.
+const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const SEAFLOOR_AGE_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
@@ -126,6 +131,25 @@ fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
                 .speed(ANGULAR_SPEED_STEP),
         );
     });
+    slider(ui, "Coherence", &mut config.coherence, 0.0..=1.0);
+    slider(
+        ui,
+        "Flow frequency",
+        &mut config.flow_frequency,
+        FLOW_FREQUENCY_RANGE,
+    );
+    slider(
+        ui,
+        "Oceanic speed",
+        &mut config.oceanic_speed_factor,
+        CRUST_SPEED_FACTOR_RANGE,
+    );
+    slider(
+        ui,
+        "Continental speed",
+        &mut config.continental_speed_factor,
+        CRUST_SPEED_FACTOR_RANGE,
+    );
 }
 
 fn evolution_controls(

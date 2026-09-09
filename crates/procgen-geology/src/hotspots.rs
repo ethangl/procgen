@@ -265,7 +265,8 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
     use procgen_tectonics::{
-        PlateKinematicsConfig, PlatePartitionConfig, generate_plate_kinematics, partition_plates,
+        CrustClassificationConfig, PlateKinematicsConfig, PlatePartitionConfig, classify_crust,
+        generate_plate_kinematics, partition_plates,
     };
 
     fn fixture(cell_count: usize) -> (SphereMesh, PlatePartition, PlateKinematics) {
@@ -290,8 +291,10 @@ mod tests {
             },
         )
         .unwrap();
+        let crust = classify_crust(&mesh, &plates, CrustClassificationConfig::new(17)).unwrap();
         let kinematics =
-            generate_plate_kinematics(plates.plate_count, PlateKinematicsConfig::new(13)).unwrap();
+            generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
+                .unwrap();
         (mesh, plates, kinematics)
     }
 
@@ -356,7 +359,7 @@ mod tests {
             )
         });
 
-        assert_eq!(fingerprint(values), 10_470_165_389_376_680_258);
+        assert_eq!(fingerprint(values), 10_292_652_998_035_741_680);
     }
 
     #[test]

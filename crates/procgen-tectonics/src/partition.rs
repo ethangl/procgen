@@ -77,6 +77,17 @@ impl PlatePartition {
         }
         Ok(())
     }
+
+    /// Total surface area each plate currently owns. `partition_plates` seeds
+    /// every plate with a cell, so an entry is zero only for a plate id a
+    /// hand-built partition left unowned.
+    pub fn plate_areas(&self, mesh: &SphereMesh) -> Vec<f64> {
+        let mut areas = vec![0.0; self.plate_count];
+        for (&plate, &area) in self.cell_plates.iter().zip(&mesh.cell_areas) {
+            areas[plate] += f64::from(area);
+        }
+        areas
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
