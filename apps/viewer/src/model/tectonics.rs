@@ -75,14 +75,27 @@ pub struct TectonicsWorld {
     pub config: TectonicsSettings,
 }
 
+/// Samples and triangulates the sphere mesh the tectonics phase and every
+/// later phase read, recording its three stages into `timings`.
+pub fn build_mesh(
+    config: FibonacciConfig,
+    timings: &mut GenerationTimings,
+) -> Result<SphereMesh, Box<dyn Error>> {
+    let points = timings.record("Sampling", || fibonacci_sphere(config))?;
+    let delaunay = timings.record("Delaunay", || SphericalDelaunay::build(points))?;
+    let voronoi = timings.record("Voronoi", || {
+        SphereMesh::from_delaunay(&delaunay, WORLD_RADIUS)
+    })?;
+    Ok(voronoi)
+}
+
 impl TectonicsWorld {
-    pub fn generate(config: TectonicsSettings) -> Result<Self, Box<dyn Error>> {
-        let mut timings = GenerationTimings::default();
-        let points = timings.record("Sampling", || fibonacci_sphere(config.fibonacci))?;
-        let delaunay = timings.record("Delaunay", || SphericalDelaunay::build(points))?;
-        let voronoi = timings.record("Voronoi", || {
-            SphereMesh::from_delaunay(&delaunay, WORLD_RADIUS)
-        })?;
+    /// Generates the phase over `voronoi`, appending its stages to `timings`.
+    pub fn generate(
+        voronoi: SphereMesh,
+        config: TectonicsSettings,
+        mut timings: GenerationTimings,
+    ) -> Result<Self, Box<dyn Error>> {
         let initial_plates = timings.record("Plate partition", || {
             partition_plates(&voronoi, config.plates)
         })?;
@@ -158,13 +171,12 @@ impl TectonicsWorld {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_support::tectonics_settings;
+    use crate::test_support::{tectonics_settings, tectonics_world};
     use procgen_tectonics::CrustClass;
 
     #[test]
     fn tectonics_runs_without_the_later_phases() {
-        let world = TectonicsWorld::generate(tectonics_settings(128, 7)).unwrap();
+        let world = tectonics_world(tectonics_settings(128, 7));
 
         world.validate().unwrap();
         assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);

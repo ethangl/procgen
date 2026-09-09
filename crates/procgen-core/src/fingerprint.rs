@@ -1,4 +1,7 @@
 /// Produces a stable FNV-1a fingerprint for deterministic test vectors.
+///
+/// Fingerprint integer test vectors only. Float bits are never pinned, because
+/// libm results differ across machines.
 pub fn fingerprint(values: impl IntoIterator<Item = u64>) -> u64 {
     values
         .into_iter()

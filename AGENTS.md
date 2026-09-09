@@ -44,7 +44,7 @@ and rebuild it incrementally; do not attempt a one-shot translation. See
 - Support two primary development environments, and every GPU pipeline must
   run on both:
   - macOS on a MacBook Pro, reaching Metal through wgpu.
-  - WSL on Windows with an NVIDIA RTX 5070, reaching Vulkan through wgpu.
+  - Windows with an NVIDIA RTX 5070, reaching Vulkan through wgpu.
 - CUDA is not a backend. Nothing may require an NVIDIA GPU, CUDA toolkit, or
   Windows host. Reconsider CUDA only for a workload that needs something wgpu
   cannot provide, and record the reason in the design doc.
@@ -194,11 +194,11 @@ reviews. Treat them as the default bar for new work.
   before upload.
 - Avoid 64-bit integers and `f64` in any kernel or any path a kernel mirrors.
   Narrow seeds once on the host through one named public function.
-- Test vector tables and agreement tolerances are public constants in the
-  library crate, not literals in a test. Record the measured divergence,
-  adapters, and date beside each tolerance and set it at ten times the
-  measured maximum. Pin integer fingerprints per seed; they must match on both
-  development machines.
+- Pin integer fingerprints exactly, and never pin float bits: libm and codegen
+  differ across machines, so a hash over `to_bits()` pins the toolchain rather
+  than the algorithm. Where a float agreement test needs a tolerance, use a
+  round number with a one-line reason for where it sits, and calibrate it
+  against measurements only if it fires.
 - GPU pipeline tests assert run-to-run and schedule invariance across
   workgroup and frontier chunk sizes, and structural invariants read back at
   full resolution. Expected values at small resolution may be computed in test
@@ -206,10 +206,10 @@ reviews. Treat them as the default bar for new work.
 
 ### Tests and docs
 
-- Test invariants and pinned fingerprints, not definitions. An assertion that
-  recomputes the function under test with the same code, or checks something
-  the type system already guarantees, is noise. Shared fixtures go in
-  `test_support`.
+- Test invariants and pinned integer fingerprints, not definitions. An
+  assertion that recomputes the function under test with the same code, or
+  checks something the type system already guarantees, is noise. Shared
+  fixtures go in `test_support`.
 - When a fingerprint changes, the commit message says why. Behavior changes,
   default retunes, and visible side effects never ride inside a refactor
   commit.
@@ -271,5 +271,4 @@ Crate boundaries and the per-stage conventions in "Code quality" are
 established. New stages should follow the sibling shapes rather than introduce
 new ones. There is no CUDA backend and none is planned. The WGSL noise and
 terrain mirrors are exercised by `procgen-gpu-tests` through wgpu; their
-tolerances are calibrated on Metal and await Vulkan calibration on the Windows
-machine.
+tolerances were set on Metal, and one can be widened if Vulkan trips it.

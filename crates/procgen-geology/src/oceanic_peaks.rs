@@ -390,15 +390,10 @@ mod tests {
                     OceanicPeakKind::Seamount => 0,
                     OceanicPeakKind::AbyssalHill => 1,
                 },
-                u64::from(peak.position.x.to_bits()),
-                u64::from(peak.position.y.to_bits()),
-                u64::from(peak.position.z.to_bits()),
-                u64::from(peak.strength.to_bits()),
-                u64::from(peak.height.to_bits()),
             ]
         });
 
-        assert_eq!(fingerprint(values), 12_689_882_900_264_755_237);
+        assert_eq!(fingerprint(values), 11_270_971_428_283_730_323);
     }
 
     #[test]

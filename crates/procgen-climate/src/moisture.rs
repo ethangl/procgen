@@ -585,7 +585,6 @@ fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
@@ -797,14 +796,20 @@ mod tests {
             MoistureTransportConfig::EARTHLIKE,
         );
         assert_eq!(first, second);
-        let hash = fingerprint(
-            first
-                .cell_humidity_kg_per_m2
-                .iter()
-                .chain(&first.cell_precipitation_kg_per_m2_per_day)
-                .map(|value| u64::from(value.to_bits())),
+        // Water leaves the ocean, some of it falls, and the rest is still aloft
+        // when the run ends, so rain is positive and stays under evaporation.
+        let precipitation = first
+            .diagnostics
+            .precipitation_kg_per_m2_per_day
+            .area_weighted_mean;
+        let evaporation = first
+            .diagnostics
+            .evaporation_kg_per_m2_per_day
+            .area_weighted_mean;
+        assert!(
+            0.0 < precipitation && precipitation < evaporation,
+            "{precipitation} kg/m2/day of rain against {evaporation} evaporated"
         );
-        assert_eq!(hash, 15_846_752_812_615_516_730);
     }
 
     #[test]

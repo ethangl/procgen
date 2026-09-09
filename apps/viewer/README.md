@@ -6,15 +6,25 @@ Run from the workspace root:
 cargo run -p procgen-viewer
 ```
 
+The workspace dev profile optimizes every generation crate and its
+dependencies and leaves the two applications unoptimized, so the sidebar's
+stage timings measure the algorithms rather than a debug build. Debug
+assertions and overflow checks still put them a little above a `--release`
+build, so quote release numbers in design docs.
+
 Startup reuses the last successfully generated world from the operating
 system's per-user cache directory when the generator build identity, mesh
 topology, and field lengths still match. Otherwise it
 regenerates normally; cache read and write failures remain nonfatal. The cached
 snapshot contains generation settings, domain data, terrain controls and their
 five-channel CPU control bake, so render assets are rebuilt and generation
-timings are not restored. **Regenerate** always runs
-the complete pipeline before atomically replacing the snapshot, and **Clear
-cache** removes it without changing the active world.
+timings are not restored. **Generate** runs every phase before
+atomically replacing the snapshot, and **Clear cache** removes it without
+changing the active world. However generation starts, tectonics keeps the
+sphere mesh already in memory when the sampling count, jitter, and seed are
+unchanged, so iterating on plate, crust, kinematics, or evolution settings
+skips sampling and retriangulation; the sampling, Delaunay, and Voronoi stages
+are then absent from the timings rather than reported as free.
 
 The build identity hashes the viewer codec and the complete generation-crate
 tree; test-only and example edits therefore invalidate the cache too, an
