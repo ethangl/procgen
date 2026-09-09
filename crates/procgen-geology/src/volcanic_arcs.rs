@@ -466,11 +466,11 @@ mod tests {
         let plates = partition_plates(
             &mesh,
             PlatePartitionConfig {
-                major_plate_count: 8,
-                minor_plate_count: 12,
-                major_head_start_rounds: 2,
+                arc_count: 8,
+                piece_fraction: 32.0 / cell_count as f32,
                 growth_roughness: 0,
                 seed: 11,
+                ..PlatePartitionConfig::default()
             },
         )
         .unwrap();
@@ -584,7 +584,7 @@ mod tests {
             .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
-        assert_eq!(fingerprint(values), 600_931_779_793_019_199);
+        assert_eq!(fingerprint(values), 15_375_813_075_100_641_942);
     }
 
     #[test]

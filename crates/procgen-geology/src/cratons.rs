@@ -136,8 +136,7 @@ mod tests {
 
     fn fixture(
         cell_count: usize,
-        major_plate_count: usize,
-        minor_plate_count: usize,
+        arc_count: usize,
     ) -> (
         SphereMesh,
         PlatePartition,
@@ -157,11 +156,11 @@ mod tests {
         let plates = partition_plates(
             &mesh,
             PlatePartitionConfig {
-                major_plate_count,
-                minor_plate_count,
-                major_head_start_rounds: 2,
+                arc_count,
+                piece_fraction: 32.0 / cell_count as f32,
                 growth_roughness: 0,
                 seed: 11,
+                ..PlatePartitionConfig::default()
             },
         )
         .unwrap();
@@ -174,16 +173,22 @@ mod tests {
             },
         )
         .unwrap();
-        let elevation = CoarseElevation {
-            cell_elevations: vec![0.65; mesh.cell_count()],
-            diagnostics: Default::default(),
-        };
+        let elevation = flat_elevation(mesh.cell_count());
         (mesh, plates, crust, elevation)
+    }
+
+    /// Continental elevation everywhere, so craton eligibility turns on crust
+    /// class and boundary distance alone.
+    fn flat_elevation(cell_count: usize) -> CoarseElevation {
+        CoarseElevation {
+            cell_elevations: vec![0.65; cell_count],
+            diagnostics: Default::default(),
+        }
     }
 
     #[test]
     fn field_is_deterministic_bounded_and_preserves_elevation() {
-        let (mesh, plates, crust, elevation) = fixture(1_024, 8, 12);
+        let (mesh, plates, crust, elevation) = fixture(1_024, 6);
         let original_elevation = elevation.clone();
         let config = CratonFieldConfig::default();
         let first = derive_craton_field(&mesh, &plates, &crust, &elevation, config).unwrap();
@@ -239,7 +244,7 @@ mod tests {
 
     #[test]
     fn reference_field_has_stable_fingerprint() {
-        let (mesh, plates, crust, elevation) = fixture(1_024, 8, 12);
+        let (mesh, plates, crust, elevation) = fixture(1_024, 6);
         let field = derive_craton_field(
             &mesh,
             &plates,
@@ -253,12 +258,12 @@ mod tests {
             .iter()
             .map(|strength| u64::from(strength.to_bits()));
 
-        assert_eq!(fingerprint(values), 15_008_142_936_841_976_928);
+        assert_eq!(fingerprint(values), 3_953_090_922_574_247_052);
     }
 
     #[test]
     fn eligibility_and_ramp_follow_present_day_inputs() {
-        let (mesh, plates, mut crust, mut elevation) = fixture(512, 4, 4);
+        let (mesh, plates, mut crust, mut elevation) = fixture(512, 4);
         crust.plate_classes.fill(CrustClass::Continental);
         let hard_cutoff = derive_craton_field(
             &mesh,
@@ -314,8 +319,15 @@ mod tests {
 
     #[test]
     fn one_plate_world_has_no_boundary_distance_or_cratons() {
-        let (mesh, plates, mut crust, elevation) = fixture(128, 1, 0);
-        crust.plate_classes.fill(CrustClass::Continental);
+        let mesh = crate::test_support::mesh(128);
+        let plates = PlatePartition {
+            cell_plates: vec![0; mesh.cell_count()],
+            plate_count: 1,
+        };
+        let crust = CrustClassification {
+            plate_classes: vec![CrustClass::Continental],
+        };
+        let elevation = flat_elevation(mesh.cell_count());
         let field = derive_craton_field(
             &mesh,
             &plates,
@@ -341,7 +353,7 @@ mod tests {
 
     #[test]
     fn rejects_mismatched_inputs() {
-        let (mesh, plates, crust, elevation) = fixture(128, 2, 2);
+        let (mesh, plates, crust, elevation) = fixture(128, 2);
 
         let mut invalid_plates = plates.clone();
         invalid_plates.cell_plates.pop();

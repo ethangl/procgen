@@ -8,6 +8,12 @@ use procgen_tectonics::{
     PlateKinematicsConfig, PlatePartitionConfig, SeafloorAgeConfig,
 };
 
+// The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
+const CELL_COUNT_RANGE: std::ops::RangeInclusive<usize> = 4..=262_144;
+const ARC_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=256;
+const CURVATURE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=8.0;
+// A minor plate cannot be smaller than a cell nor larger than the face it splits.
+const PIECE_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0005..=0.1;
 const ANGULAR_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 const ANGULAR_SPEED_STEP: f64 = 0.01;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
@@ -46,7 +52,7 @@ pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
 }
 
 fn sampling_controls(ui: &mut egui::Ui, config: &mut FibonacciConfig) {
-    drag_value(ui, "Cells", &mut config.count, 4..=65_536, 16.0);
+    drag_value(ui, "Cells", &mut config.count, CELL_COUNT_RANGE, 16.0);
     slider(ui, "Jitter", &mut config.jitter, 0.0..=1.0);
     drag_value(
         ui,
@@ -58,14 +64,25 @@ fn sampling_controls(ui: &mut egui::Ui, config: &mut FibonacciConfig) {
 }
 
 fn plate_controls(ui: &mut egui::Ui, config: &mut PlatePartitionConfig) {
-    drag_value(ui, "Major", &mut config.major_plate_count, 1..=128, 1.0);
-    drag_value(ui, "Minor", &mut config.minor_plate_count, 0..=256, 1.0);
     drag_value(
         ui,
-        "Major head start",
-        &mut config.major_head_start_rounds,
-        0..=64,
+        "Crack arcs",
+        &mut config.arc_count,
+        ARC_COUNT_RANGE,
         1.0,
+    );
+    slider(ui, "Curvature", &mut config.curvature, CURVATURE_RANGE);
+    slider(
+        ui,
+        "Subdivided faces",
+        &mut config.subdivided_fraction,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
+        "Minor plate area",
+        &mut config.piece_fraction,
+        PIECE_FRACTION_RANGE,
     );
     drag_value(
         ui,

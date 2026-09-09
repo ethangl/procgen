@@ -382,7 +382,7 @@ struct_codec! {
     Star { luminosity_watts }
     Orbit { semi_major_axis_meters, eccentricity, obliquity_radians, stellar_longitude_at_periapsis_radians }
     Planet { star, orbit, radius_meters, sidereal_rotation_period_seconds, atmospheric_specific_gas_constant_joules_per_kilogram_kelvin, maximum_land_elevation_meters }
-    PlatePartitionConfig { major_plate_count, minor_plate_count, major_head_start_rounds, growth_roughness, seed }
+    PlatePartitionConfig { arc_count, curvature, subdivided_fraction, piece_fraction, growth_roughness, seed }
     CrustClassificationConfig { target_ocean_fraction, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed }
     PlateMigrationConfig { minimum_convergence }

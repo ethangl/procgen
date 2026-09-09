@@ -128,13 +128,13 @@ mod tests {
             SeafloorAgeDiagnostics {
                 summary: FieldSummary {
                     minimum: 0.0,
-                    maximum: 3.0,
-                    mean: 0.666_666_7,
+                    maximum: 4.0,
+                    mean: 0.868_085_1,
                 },
-                oceanic_cell_count: 270,
-                ridge_cell_count: 147,
-                ridge_plate_count: 13,
-                ridge_less_plate_count: 0,
+                oceanic_cell_count: 235,
+                ridge_cell_count: 112,
+                ridge_plate_count: 8,
+                ridge_less_plate_count: 4,
                 fallback_cell_count: 0,
             }
         );
@@ -145,7 +145,7 @@ mod tests {
                     .iter()
                     .map(|age| { age.map_or(u64::MAX, |age| age as u64) })
             ),
-            7_651_439_301_921_684_041
+            8_766_806_636_343_248_088
         );
     }
 

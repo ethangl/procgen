@@ -3243,6 +3243,7 @@ name = "procgen-tectonics"
 version = "0.1.0"
 dependencies = [
  "procgen-core",
+ "procgen-noise",
  "procgen-sphere",
  "procgen-sphere-mesh",
 ]

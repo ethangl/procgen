@@ -282,11 +282,11 @@ mod tests {
         let plates = partition_plates(
             &mesh,
             PlatePartitionConfig {
-                major_plate_count: 4,
-                minor_plate_count: 4,
-                major_head_start_rounds: 1,
+                arc_count: 4,
+                piece_fraction: 32.0 / cell_count as f32,
                 growth_roughness: 0,
                 seed: 11,
+                ..PlatePartitionConfig::default()
             },
         )
         .unwrap();
@@ -356,7 +356,7 @@ mod tests {
             )
         });
 
-        assert_eq!(fingerprint(values), 12_311_312_604_747_609_208);
+        assert_eq!(fingerprint(values), 10_470_165_389_376_680_258);
     }
 
     #[test]

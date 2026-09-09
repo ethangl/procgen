@@ -249,6 +249,14 @@ impl SphereMesh {
         &self.corners[self.cell_offsets[cell]..self.cell_offsets[cell + 1]]
     }
 
+    /// Reports whether the two cells share a Voronoi edge. Both must be mesh
+    /// cells; a cell is not adjacent to itself.
+    pub fn are_adjacent(&self, cell: usize, other: usize) -> bool {
+        self.cell_corners(cell)
+            .iter()
+            .any(|corner| corner.neighbor == other)
+    }
+
     /// Interpolates a surface position within one triangle of a cell's fan.
     /// Weights correspond to the cell center, the selected corner, and the
     /// next corner in ring order; they must be finite, nonnegative, and sum to one.
@@ -496,6 +504,18 @@ mod tests {
         for corner in mesh.cell_corners(0) {
             let neighbor = mesh.cell_centers[corner.neighbor].normalized();
             assert!(position.dot(center) + 1.0e-6 >= position.dot(neighbor));
+        }
+    }
+
+    #[test]
+    fn adjacency_follows_the_corner_ring() {
+        let mesh = tetrahedron();
+        for cell in 0..mesh.cell_count() {
+            assert!(!mesh.are_adjacent(cell, cell));
+            for corner in mesh.cell_corners(cell) {
+                assert!(mesh.are_adjacent(cell, corner.neighbor));
+                assert!(mesh.are_adjacent(corner.neighbor, cell));
+            }
         }
     }
 
