@@ -143,11 +143,6 @@ pub(super) fn piecewise_lerp(value: f32, stops: &[(f32, Vec3)]) -> Vec3 {
     stops[stops.len() - 1].1
 }
 
-pub(super) fn id_color(id: usize) -> Color {
-    let hue = (id as f32 * 137.508) % 360.0;
-    Color::hsla(hue, 0.62, 0.62, 0.95)
-}
-
 pub(super) fn opaque_color(color: Vec3) -> Color {
     Color::srgb(color.x, color.y, color.z)
 }

@@ -56,3 +56,18 @@ fn cubesphere_texel_neighbor(cell_id: u32, resolution: u32, link: u32) -> u32 {
         resolution,
     );
 }
+
+fn cubesphere_texel_center(index: u32, resolution: u32) -> f32 {
+    return -1.0 + f32(2u * index + 1u) / f32(resolution);
+}
+
+fn cubesphere_texel_direction(cell_id: u32, resolution: u32) -> vec3<f32> {
+    let face_size = resolution * resolution;
+    let face = cell_id / face_size;
+    let local = cell_id % face_size;
+    return cubesphere_unit_direction(CubesphereFaceCoordinates(
+        face,
+        cubesphere_texel_center(local % resolution, resolution),
+        cubesphere_texel_center(local / resolution, resolution),
+    ));
+}

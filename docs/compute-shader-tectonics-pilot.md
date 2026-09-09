@@ -94,6 +94,38 @@ What exists to build on:
 - Bevy 0.18 re-exports its wgpu, so a crate built on plain `wgpu` at the same
   version shares the viewer's device.
 
+## Measured so far
+
+Plate partition only, in a release build on the development MacBook Pro
+(Apple M1 Max via Metal) on 2026-09-08, with the default configuration of six
+major and 111 minor plates at 99 percent growth roughness and seed 0. Each
+stage is timed from submission to device idle. Frontier passes are what the
+longer of the two relaxations consumed out of its budget; the frontier's order
+varies run to run, so the count moves by a pass or two while the labels it
+settles on do not.
+
+| Face resolution | Initialize | Plate seeds | Plate growth | Total   | Passes     |
+| --------------- | ---------- | ----------- | ------------ | ------- | ---------- |
+| 128             | 3 ms       | 9 ms        | 36 ms        | 48 ms   | 115/768    |
+| 256             | 1 ms       | 12 ms       | 49 ms        | 62 ms   | 230/1536   |
+| 512             | 3 ms       | 21 ms       | 193 ms       | 218 ms  | 435/3072   |
+| 1024            | 5 ms       | 67 ms       | 947 ms       | 1020 ms | 923/6144   |
+
+Pass counts grow with the face resolution rather than with its square, and the
+budget clears the measured need by six times. Growth is dominated by the
+frontier's latency rather than its arithmetic: a pass carries a few thousand
+cells at 1024 texels per face, which occupies a small fraction of the device.
+Seeding re-evaluates every texel direction once per plate, which is why it
+grows faster than the cell count; folding the distance-field update into the
+farthest-point reduction removed one of its two full passes per plate, and
+widening that reduction past 256 workgroups costs more in its serial final
+step than it recovers. Neither stage is addressed further yet; the
+interactivity slice has the measurements it needs to choose.
+
+Boundaries at 256 texels per face do not read as grid-aligned at the default
+roughness, and plate areas keep the same distribution across resolutions
+because the head start is configured as an arc.
+
 ## The raster
 
 A cube-sphere face resolution `R` defines `6 * R^2` cells. Each texel is a
@@ -156,7 +188,10 @@ integers, so distance fields are bit-exact by construction. Growth costs scale
 with link length before roughness is applied. Configs the mesh pipeline
 measures in hops are measured here in link-length units, with defaults derived
 from the same physical distances; those fields are owned by the pilot crate
-rather than reused, because their meaning changes.
+rather than reused, because their meaning changes. The partition's one such
+field, the major plates' head start, is configured as a great-circle arc and
+converted to link-length cost against the face resolution, so plate sizes stay
+comparable when the resolution changes.
 
 One texel-neighbor rule, in WGSL for the kernels and in Rust for tests,
 resolves both borders and links across the twelve cube edges and at the eight
@@ -278,14 +313,19 @@ Metal on macOS and Vulkan on Windows, and every pipeline must run on both.
   lookups; no fan mesh, no CPU-side vertex rebuild. Grid density is a display
   setting independent of texel resolution, since the grids sample the
   buffers. It exposes the tectonic settings, a face-resolution switch, stage
-  timings, and diagnostics read back asynchronously one frame late. Dispatch
-  follows the render-graph node pattern in the current viewer's
-  `terrain_tiles/compute.rs`.
+  timings, and diagnostics read back asynchronously one frame late. Until the
+  interactivity slice it submits the pipeline stage by stage on Bevy's device
+  and waits, which is what makes per-stage timings measurable without timestamp
+  queries; the render-graph node pattern in the current viewer's
+  `terrain_tiles/compute.rs` arrives with the preview and the asynchronous
+  readback.
 
-The current viewer is frozen. It is not modified, and it keeps working on the
-Voronoi path until the successor covers what it shows. Shared viewer support
-such as the orbit camera, lighting, and palette is lifted into a small crate
-when the second application needs it, which is the second-consumer rule.
+The current viewer is frozen: it takes no new features and keeps working on
+the Voronoi path until the successor covers what it shows. The one change it
+accepts is the second-consumer rule, because the alternative is a second copy
+of everything a viewer needs. Shared viewer support is lifted into
+`procgen-viewer-support` as the pilot app reaches for it, and the orbit
+controls and the identity colour ramp are there already.
 
 The pilot follows the code-quality rules in `AGENTS.md`: stage outputs own
 their validation, configs are public data, no speculative surface, one
@@ -345,6 +385,14 @@ Settled before implementation:
   lengths 5 and 7 for growth and distance.
 - Growth ties break on cost then plate id. Link costs are 32-bit. Every other
   definition is the mesh pipeline's.
+- Ownership and arrival cost share one `u32` per cell: nine bits of plate id
+  below twenty-three bits of cost, so the numeric order of the word is the
+  lexicographic order of the label and one `atomicMin` is the whole tie rule.
+  The reserved plate id makes the unclaimed label `u32::MAX`, and the cost
+  field holds the costliest shortest path 1024 texels per face can produce.
+- A head start large enough to claim every cell leaves its minor plates
+  seedless rather than failing the run. Every cell is still owned; those plates
+  simply own none, and the seed-cell buffer records which.
 - Texel directions come from a polynomial tangent with add and multiply
   only, identical in Rust and WGSL. Host-computed per-plate inputs are
   quantized before upload.

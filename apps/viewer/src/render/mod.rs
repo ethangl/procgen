@@ -8,9 +8,10 @@ mod terrain_tiles;
 pub use layers::{DiagnosticLayer, OverlayKind};
 pub use lighting::LightingSettings;
 
-use crate::{camera::ViewerCamera, model::GeneratedWorld};
+use crate::model::GeneratedWorld;
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use layers::GizmoSpec;
+use procgen_viewer_support::OrbitCamera;
 use surfaces::{empty_surface_mesh, maximum_surface_radius};
 use terrain_tiles::TerrainTileMode;
 
@@ -255,7 +256,7 @@ fn sync_layer_render_state(
     overlays: Res<OverlaySettings>,
     world: Res<GeneratedWorld>,
     relief: Res<ReliefSettings>,
-    mut camera_layers: Single<&mut RenderLayers, With<ViewerCamera>>,
+    mut camera_layers: Single<&mut RenderLayers, With<OrbitCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
     let outer_radius = maximum_surface_radius(&world.isostasy.cell_elevations, relief.exaggeration);

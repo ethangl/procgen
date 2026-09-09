@@ -1,5 +1,5 @@
 [package]
-name = "procgen-viewer"
+name = "procgen-raster-viewer"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -12,17 +12,13 @@ bevy = { version = "0.18.1", default-features = false, features = [
   "bevy_camera",
   "bevy_color",
   "bevy_core_pipeline",
-  "bevy_gizmos",
-  "bevy_gizmos_render",
   "bevy_image",
   "bevy_input_focus",
-  "bevy_light",
   "bevy_log",
   "bevy_mesh",
   "bevy_pbr",
   "bevy_render",
   "bevy_shader",
-  "bevy_state",
   "bevy_window",
   "bevy_winit",
   "default_font",
@@ -32,13 +28,7 @@ bevy = { version = "0.18.1", default-features = false, features = [
   "x11",
 ] }
 bevy_egui = { version = "0.39.1", default-features = false, features = ["default_fonts", "render"] }
-procgen-climate = { path = "../../crates/procgen-climate" }
-procgen-core = { path = "../../crates/procgen-core" }
 procgen-cubesphere = { path = "../../crates/procgen-cubesphere" }
-procgen-geology = { path = "../../crates/procgen-geology" }
-procgen-planet = { path = "../../crates/procgen-planet" }
-procgen-sphere = { path = "../../crates/procgen-sphere" }
-procgen-sphere-mesh = { path = "../../crates/procgen-sphere-mesh" }
+procgen-raster-tectonics = { path = "../../crates/procgen-raster-tectonics" }
 procgen-tectonics = { path = "../../crates/procgen-tectonics" }
-procgen-terrain = { path = "../../crates/procgen-terrain" }
 procgen-viewer-support = { path = "../../crates/procgen-viewer-support" }

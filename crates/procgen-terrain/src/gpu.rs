@@ -42,12 +42,14 @@ pub const TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE: f32 = 4.0e-2;
 
 /// Checked-in WGSL mirror of canonical terrain height and tile evaluation.
 ///
-/// The source composes the settled `procgen-noise` kernel and
-/// `procgen-cubesphere` mapping/field sources, then expects its consumer to
-/// provide storage accessors for control texels and stamps. This keeps every
-/// algorithm with its owning crate and leaves the wgpu bind-group layout to
-/// the consumer.
+/// The source composes the settled `procgen-core` hash, `procgen-noise`
+/// kernel, and `procgen-cubesphere` mapping/field sources, then expects its
+/// consumer to provide storage accessors for control texels and stamps. This
+/// keeps every algorithm with its owning crate and leaves the wgpu bind-group
+/// layout to the consumer.
 pub const TERRAIN_WGSL_SOURCE: &str = concat!(
+    include_str!("../../procgen-core/wgsl/hash.wgsl"),
+    "\n",
     include_str!("../../procgen-noise/wgsl/noise.wgsl"),
     "\n",
     include_str!("../../procgen-cubesphere/wgsl/mapping.wgsl"),

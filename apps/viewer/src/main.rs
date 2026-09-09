@@ -8,7 +8,7 @@ mod ui;
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
-use camera::OrbitCameraPlugin;
+use camera::ViewerCameraPlugin;
 use model::WorldModelPlugin;
 use render::DiagnosticRenderPlugin;
 use ui::ViewerUiPlugin;
@@ -27,7 +27,7 @@ fn main() {
         .add_plugins((
             EguiPlugin::default(),
             WorldModelPlugin::default(),
-            OrbitCameraPlugin,
+            ViewerCameraPlugin,
             DiagnosticRenderPlugin,
             ViewerUiPlugin,
         ))
