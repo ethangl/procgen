@@ -186,11 +186,28 @@ impl FaceTexel {
         if cell < neighbor.cell_id() {
             return BORDER_LINKS_PER_CELL * cell + link.index();
         }
-        let back = TexelLink::BORDERS
+        BORDER_LINKS_PER_CELL * neighbor.cell_id() + self.link_back(link).index()
+    }
+
+    /// Returns the border link the neighbor across `link` traverses to reach
+    /// this texel.
+    ///
+    /// Border adjacency is reciprocal, so exactly one of the neighbor's border
+    /// links leads back. A seam can rotate which one, so it is searched for
+    /// rather than taken as the opposite direction.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `link` is a border link.
+    pub fn link_back(self, link: TexelLink) -> TexelLink {
+        assert!(link.is_border(), "only border links are reciprocal");
+        let neighbor = self
+            .neighbor(link)
+            .expect("every border link has a neighbor");
+        TexelLink::BORDERS
             .into_iter()
             .find(|&back| neighbor.neighbor(back) == Some(self))
-            .expect("border adjacency is reciprocal");
-        BORDER_LINKS_PER_CELL * neighbor.cell_id() + back.index()
+            .expect("border adjacency is reciprocal")
     }
 
     /// Resolves one of the eight raster links across cube seams.
@@ -400,13 +417,9 @@ mod tests {
             for link in TexelLink::BORDERS {
                 let neighbor = texel.neighbor(link).unwrap();
                 let edge = texel.border_edge(link);
-                let back = TexelLink::BORDERS
-                    .into_iter()
-                    .find(|&back| neighbor.neighbor(back) == Some(texel))
-                    .unwrap();
                 assert_eq!(
                     edge,
-                    neighbor.border_edge(back),
+                    neighbor.border_edge(texel.link_back(link)),
                     "{texel:?} and {neighbor:?} disagree on their shared border"
                 );
                 owners

@@ -68,16 +68,13 @@ fn initialize(
         state.chosen_cell = config.first_seed_cell;
         atomicStore(&state.frontier_count[0], 0u);
         atomicStore(&state.frontier_count[1], 0u);
+        // Only the two diagnostics that accumulate across the whole run are
+        // cleared here, because no single stage owns them. Every other counter
+        // is written outright by the stage that produces it.
         state.diagnostics.longest_relaxation = 0u;
-        state.diagnostics.total_area = 0u;
-        state.diagnostics.ocean_area = 0u;
-        state.diagnostics.empty_plate_count = 0u;
         atomicStore(&state.diagnostics.migrated_cell_count, 0u);
     }
     let stride = raster_cell_stride(groups);
-    for (var border = id.x; border < RASTER_BOUNDARY_CLASS_COUNT; border += stride) {
-        atomicStore(&state.diagnostics.boundary_class_counts[border], 0u);
-    }
     for (var plate = id.x; plate < RASTER_PLATE_ID_COUNT; plate += stride) {
         atomicStore(&state.plate_areas[plate], 0u);
     }

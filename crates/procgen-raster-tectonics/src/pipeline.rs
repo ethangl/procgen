@@ -5,15 +5,15 @@
 //! copies back the diagnostics they counted. Buffers stay resident between runs
 //! so a settings change reruns the stages rather than reallocating them.
 
-use crate::evolution::RasterEvolutionConfig;
-use crate::field::{
-    BINDING_COUNT, MAX_DISPATCH_WORKGROUPS, PipelineTuning, RasterPlate, RasterTectonicsError,
-    STORAGE_BINDING_COUNT, validate_resolution,
+use crate::device::{
+    BINDING_COUNT, PipelineTuning, RasterTectonicsError, validate_device, validate_resolution,
 };
+use crate::evolution::RasterEvolutionConfig;
+use crate::field::{PLATE_ID_COUNT, RasterPlate};
 use crate::kernels::tectonics_kernel_source;
+use crate::layout::{PackedDiagnostics, PackedTectonicsConfig, PackedTectonicsState};
 use crate::partition::{
-    PLATE_ID_COUNT, RasterPlatePartitionConfig, SEED_REDUCTION_WORKGROUPS, first_seed_cell,
-    fold_growth_key, frontier_size, growth_passes,
+    RasterPlatePartitionConfig, SEED_REDUCTION_WORKGROUPS, frontier_size, growth_passes,
 };
 use procgen_tectonics::BoundaryClass;
 use std::{
@@ -185,8 +185,9 @@ impl TectonicsPipeline {
     /// Compiles the kernels and allocates every stage buffer for one face
     /// resolution. Changing the resolution builds a new pipeline.
     ///
-    /// The device must meet `wgpu`'s default limits; [`validate_device`] states
-    /// which of them the kernels actually depend on.
+    /// The device must meet `wgpu`'s default limits;
+    /// [`crate::device::validate_device`] states which of them the kernels
+    /// actually depend on.
     pub fn new(
         device: &wgpu::Device,
         resolution: u32,
@@ -194,7 +195,7 @@ impl TectonicsPipeline {
     ) -> Result<Self, RasterTectonicsError> {
         let cell_count = validate_resolution(resolution)?;
         tuning.validate()?;
-        validate_device(device, cell_count, tuning)?;
+        validate_device(device, tuning, frontier_size(cell_count))?;
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raster tectonics"),
@@ -368,22 +369,23 @@ impl TectonicsPipeline {
         queue: &wgpu::Queue,
         config: &RasterTectonicsConfig,
     ) -> Result<TectonicsRun, RasterTectonicsError> {
+        // Everything that can fail happens before anything is written, so a
+        // configuration the pipeline refuses leaves the resident buffers as the
+        // last accepted run left them.
         config.validate(self.resolution)?;
         let plate_count = config.partition.plate_count();
+        let plates = config.evolution.plate_records(plate_count)?;
         queue.write_buffer(
             &self.config_buffer,
             0,
             bytemuck::bytes_of(&PackedTectonicsConfig::new(
-                config,
+                &config.partition,
+                &config.evolution,
                 self.resolution,
                 self.cell_count,
             )),
         );
-        queue.write_buffer(
-            &self.plates,
-            0,
-            bytemuck::cast_slice(&config.evolution.plate_records(plate_count)?),
-        );
+        queue.write_buffer(&self.plates, 0, bytemuck::cast_slice(&plates));
 
         let mut timings = StageTimings::default();
         self.submit(
@@ -617,98 +619,6 @@ impl TectonicsPipeline {
     }
 }
 
-/// The uniform block every kernel reads. The trailing pair rounds the block to
-/// the sixteen-byte stride a uniform binding requires.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-struct PackedTectonicsConfig {
-    resolution: u32,
-    cell_count: u32,
-    plate_count: u32,
-    major_plate_count: u32,
-    head_start_cost: u32,
-    growth_roughness: u32,
-    growth_key: u32,
-    first_seed_cell: u32,
-    target_ocean_fraction: f32,
-    minimum_convergence: f32,
-    padding: [u32; 2],
-}
-
-impl PackedTectonicsConfig {
-    fn new(config: &RasterTectonicsConfig, resolution: u32, cell_count: u32) -> Self {
-        Self {
-            resolution,
-            cell_count,
-            plate_count: config.partition.plate_count(),
-            major_plate_count: config.partition.major_plate_count,
-            head_start_cost: config.partition.head_start_cost(resolution),
-            growth_roughness: config.partition.growth_roughness,
-            growth_key: fold_growth_key(config.partition.seed),
-            first_seed_cell: first_seed_cell(config.partition.seed, cell_count),
-            target_ocean_fraction: config.evolution.crust.target_ocean_fraction,
-            minimum_convergence: config.evolution.migration.minimum_convergence,
-            padding: [0; 2],
-        }
-    }
-}
-
-/// The counters the kernels accumulate, copied back once per run.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct PackedDiagnostics {
-    longest_relaxation: u32,
-    total_area: u32,
-    ocean_area: u32,
-    empty_plate_count: u32,
-    migrated_cell_count: u32,
-    boundary_class_counts: [u32; BoundaryClass::ALL.len()],
-}
-
-/// Mirror of `RasterTectonicsState` in the kernels, so the host sizes the
-/// buffer and addresses its dispatch arguments and diagnostics by field rather
-/// than by counting words. Nothing reads the mirror's fields; `size_of` and
-/// `offset_of!` are its whole purpose.
-#[repr(C)]
-struct PackedTectonicsState {
-    relax_dispatch: [u32; 3],
-    pass_index: u32,
-    phase_passes: u32,
-    next_plate: u32,
-    chosen_cell: u32,
-    frontier_count: [u32; 2],
-    diagnostics: PackedDiagnostics,
-    plate_areas: [u32; PLATE_ID_COUNT as usize],
-    seed_partials: [[u32; 2]; SEED_REDUCTION_WORKGROUPS as usize],
-}
-
-const _: () = assert!(
-    offset_of!(PackedTectonicsState, seed_partials) % 8 == 0,
-    "WGSL aligns the seed candidates to eight bytes, so the fields before them \
-     must occupy a multiple of eight"
-);
-
-/// The limits the kernels depend on, checked so a device that cannot run them
-/// is refused rather than failing inside `wgpu`.
-fn validate_device(
-    device: &wgpu::Device,
-    cell_count: u32,
-    tuning: PipelineTuning,
-) -> Result<(), RasterTectonicsError> {
-    let limits = device.limits();
-    let frontier = frontier_size(cell_count);
-    if limits.max_storage_buffers_per_shader_stage < STORAGE_BINDING_COUNT
-        || limits.max_compute_invocations_per_workgroup < tuning.workgroup_size
-        || limits.max_compute_workgroup_size_x < tuning.workgroup_size
-        || limits.max_compute_workgroups_per_dimension < MAX_DISPATCH_WORKGROUPS
-        || u64::from(limits.max_storage_buffer_binding_size) < frontier
-        || limits.max_buffer_size < frontier
-    {
-        return Err(RasterTectonicsError::UnsupportedDevice);
-    }
-    Ok(())
-}
-
 fn bind_group_layout_entries() -> [wgpu::BindGroupLayoutEntry; BINDING_COUNT] {
     std::array::from_fn(|binding| wgpu::BindGroupLayoutEntry {
         binding: binding as u32,
@@ -743,85 +653,6 @@ fn buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Returns the WGSL member offsets and size of one kernel struct.
-    fn wgsl_layout(name: &str) -> (Vec<(String, u32)>, u32) {
-        let source = tectonics_kernel_source(PipelineTuning::default());
-        let module =
-            wgpu::naga::front::wgsl::parse_str(&source).expect("the assembled kernels must parse");
-        let (_, ty) = module
-            .types
-            .iter()
-            .find(|(_, ty)| ty.name.as_deref() == Some(name))
-            .unwrap_or_else(|| panic!("the kernels must declare {name}"));
-        let wgpu::naga::TypeInner::Struct { members, span } = &ty.inner else {
-            panic!("{name} must be a struct");
-        };
-        (
-            members
-                .iter()
-                .map(|member| {
-                    (
-                        member.name.clone().expect("kernel members are named"),
-                        member.offset,
-                    )
-                })
-                .collect(),
-            *span,
-        )
-    }
-
-    #[test]
-    fn host_mirrors_match_the_kernels_own_layout() {
-        let (members, span) = wgsl_layout("RasterTectonicsState");
-        assert_eq!(span as usize, size_of::<PackedTectonicsState>());
-        assert_eq!(
-            members,
-            [
-                (
-                    "relax_dispatch_x",
-                    offset_of!(PackedTectonicsState, relax_dispatch)
-                ),
-                (
-                    "relax_dispatch_y",
-                    offset_of!(PackedTectonicsState, relax_dispatch) + 4
-                ),
-                (
-                    "relax_dispatch_z",
-                    offset_of!(PackedTectonicsState, relax_dispatch) + 8
-                ),
-                ("pass_index", offset_of!(PackedTectonicsState, pass_index)),
-                (
-                    "phase_passes",
-                    offset_of!(PackedTectonicsState, phase_passes)
-                ),
-                ("next_plate", offset_of!(PackedTectonicsState, next_plate)),
-                ("chosen_cell", offset_of!(PackedTectonicsState, chosen_cell)),
-                (
-                    "frontier_count",
-                    offset_of!(PackedTectonicsState, frontier_count)
-                ),
-                ("diagnostics", offset_of!(PackedTectonicsState, diagnostics)),
-                ("plate_areas", offset_of!(PackedTectonicsState, plate_areas)),
-                (
-                    "seed_partials",
-                    offset_of!(PackedTectonicsState, seed_partials)
-                ),
-            ]
-            .map(|(name, offset)| (name.to_owned(), offset as u32))
-        );
-
-        let (_, span) = wgsl_layout("RasterTectonicsDiagnostics");
-        assert_eq!(span as usize, size_of::<PackedDiagnostics>());
-        let (_, span) = wgsl_layout("RasterTectonicsConfig");
-        assert_eq!(span as usize, size_of::<PackedTectonicsConfig>());
-        let (members, span) = wgsl_layout("RasterPlate");
-        assert_eq!(span as usize, size_of::<RasterPlate>());
-        assert_eq!(
-            members.last().map(|(_, offset)| *offset as usize),
-            Some(offset_of!(RasterPlate, angular_velocity))
-        );
-    }
 
     #[test]
     fn timings_accumulate_per_stage() {

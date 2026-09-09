@@ -2,47 +2,18 @@
 //!
 //! Crust, motion, boundary classification, and migration keep the mesh
 //! pipeline's definitions, so their configuration types are reused rather than
-//! restated. What this module owns is how the raster packs their results: one
-//! ownership word per cell carrying the current and pending plate, one
-//! boundary word per cell carrying the class of each of its four borders, and
-//! the integer area units the crust reduction sums.
+//! restated. What this module owns is the configuration itself and the
+//! per-plate inputs the host computes for the kernels; how their results are
+//! packed is [`crate::field`]'s.
 
-use crate::field::{RasterPlate, RasterTectonicsError};
-use crate::partition::PLATE_ID_COUNT;
+use crate::device::RasterTectonicsError;
+use crate::field::{PLATE_ID_COUNT, RasterPlate};
 use procgen_core::{RandomStream, random_streams::CRUST_PLATE_ORDER};
-use procgen_cubesphere::{NO_RASTER_CELL, TexelLink};
+use procgen_cubesphere::NO_RASTER_CELL;
 use procgen_tectonics::{
-    BoundaryClass, CrustClass, CrustClassificationConfig, PlateKinematicsConfig,
-    PlateMigrationConfig, generate_plate_kinematics,
+    CrustClassificationConfig, PlateKinematicsConfig, PlateMigrationConfig,
+    generate_plate_kinematics,
 };
-
-/// Area units one steradian is worth in the crust reduction.
-///
-/// Cell areas are summed with integer atomics, so the reduction is
-/// order-independent by construction. The scale is the largest that keeps the
-/// whole sphere inside a `u32` with room to spare, which leaves the coarsest
-/// cell about sixty units at the pilot's default resolution.
-pub const AREA_UNITS_PER_STERADIAN: u32 = 32_000_000;
-
-const _: () = assert!(
-    13 * AREA_UNITS_PER_STERADIAN as u64 <= u32::MAX as u64,
-    "the whole sphere's area, under 13 steradians, must fit one u32 counter"
-);
-
-/// Bits of a cell's ownership word reserved for its current plate. The pending
-/// plate a migration step proposes occupies the bits above them.
-pub const CELL_PLATE_BITS: u32 = 16;
-/// Mask of one plate field inside a cell's ownership word.
-pub const CELL_PLATE_MASK: u32 = (1 << CELL_PLATE_BITS) - 1;
-
-const _: () = assert!(PLATE_ID_COUNT <= CELL_PLATE_MASK + 1);
-
-/// Bits one border's class occupies in a cell's packed boundary word.
-pub const BOUNDARY_CLASS_BITS: u32 = 2;
-/// Mask of one border's class inside a cell's packed boundary word.
-pub const BOUNDARY_CLASS_MASK: u32 = (1 << BOUNDARY_CLASS_BITS) - 1;
-
-const _: () = assert!(BoundaryClass::ALL.len() as u32 <= BOUNDARY_CLASS_MASK + 1);
 
 /// Steps per unit an angular-velocity component is quantized to before upload.
 ///
@@ -50,51 +21,6 @@ const _: () = assert!(BoundaryClass::ALL.len() as u32 <= BOUNDARY_CLASS_MASK + 1
 /// components are snapped to a power-of-two grid that `f32` represents exactly
 /// and no ulp difference between platforms reaches a kernel.
 pub const ANGULAR_VELOCITY_STEPS_PER_UNIT: f32 = (1 << 20) as f32;
-
-/// Packs a cell's current and pending plate into one ownership word.
-///
-/// Migration is a simultaneous update, so a step reads every cell's current
-/// plate while writing its own pending plate. Both live in one word because
-/// the kernels are already at `wgpu`'s default storage-binding limit.
-pub const fn plate_ownership(current: u32, pending: u32) -> u32 {
-    (pending << CELL_PLATE_BITS) | current
-}
-
-/// Returns the plate a cell currently belongs to.
-pub const fn current_plate(ownership: u32) -> u32 {
-    ownership & CELL_PLATE_MASK
-}
-
-/// Returns the plate the last migration step proposed for a cell, which equals
-/// its current plate when no proposal won.
-pub const fn pending_plate(ownership: u32) -> u32 {
-    ownership >> CELL_PLATE_BITS
-}
-
-/// Returns the code the boundary buffer stores for a class.
-pub const fn boundary_class_code(class: BoundaryClass) -> u32 {
-    class as u32
-}
-
-/// Returns the code the plate buffer stores for a crust class.
-pub const fn crust_class_code(class: CrustClass) -> u32 {
-    class as u32
-}
-
-/// Returns the class of one of a cell's borders from its packed boundary word.
-///
-/// Both cells of a border classify it independently from the same inputs and
-/// reach the same class, so a cell's word answers for every border it touches
-/// without resolving which cell owns the border edge.
-pub fn boundary_class(classes: u32, link: TexelLink) -> BoundaryClass {
-    assert!(link.is_border(), "only border links carry a boundary class");
-    match (classes >> (BOUNDARY_CLASS_BITS * link.index())) & BOUNDARY_CLASS_MASK {
-        0 => BoundaryClass::Interior,
-        1 => BoundaryClass::Convergent,
-        2 => BoundaryClass::Divergent,
-        _ => BoundaryClass::Transform,
-    }
-}
 
 /// Configuration of the raster plate evolution.
 ///
@@ -182,32 +108,6 @@ fn quantize(component: f32) -> f32 {
 mod tests {
     use super::*;
     use procgen_core::Vec3;
-
-    #[test]
-    fn ownership_carries_the_current_and_pending_plate_independently() {
-        let ownership = plate_ownership(7, 300);
-        assert_eq!(current_plate(ownership), 7);
-        assert_eq!(pending_plate(ownership), 300);
-        assert_eq!(
-            pending_plate(plate_ownership(
-                crate::UNCLAIMED_PLATE,
-                crate::UNCLAIMED_PLATE
-            )),
-            crate::UNCLAIMED_PLATE
-        );
-    }
-
-    #[test]
-    fn each_border_link_reads_back_its_own_class() {
-        let mut classes = 0;
-        for (index, link) in TexelLink::BORDERS.into_iter().enumerate() {
-            classes |= boundary_class_code(BoundaryClass::ALL[index])
-                << (BOUNDARY_CLASS_BITS * link.index());
-        }
-        for (index, link) in TexelLink::BORDERS.into_iter().enumerate() {
-            assert_eq!(boundary_class(classes, link), BoundaryClass::ALL[index]);
-        }
-    }
 
     #[test]
     fn plate_records_carry_a_seeded_order_and_quantized_motion() {

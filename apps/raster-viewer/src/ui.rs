@@ -26,10 +26,12 @@ fn raster_viewer_ui(
     mut contexts: EguiContexts,
     mut settings: ResMut<TectonicsSettings>,
     mut display: ResMut<DisplaySettings>,
+    mut layer: ResMut<SurfaceLayer>,
     tectonics: Option<Res<ResidentTectonics>>,
 ) -> Result {
     let mut next_settings = *settings;
     let mut next_display = *display;
+    let mut next_layer = *layer;
     egui::SidePanel::left("raster controls")
         .default_width(300.0)
         .resizable(false)
@@ -41,7 +43,7 @@ fn raster_viewer_ui(
                     egui::Slider::new(&mut next_display.grid_quads, GRID_QUAD_RANGE)
                         .text("Grid quads per face"),
                 );
-                layer_control(ui, &mut next_display);
+                layer_control(ui, &mut next_layer);
 
                 ui.separator();
                 ui.heading("Plates");
@@ -67,6 +69,7 @@ fn raster_viewer_ui(
         });
     settings.set_if_neq(next_settings);
     display.set_if_neq(next_display);
+    layer.set_if_neq(next_layer);
     Ok(())
 }
 
@@ -79,11 +82,11 @@ fn resolution_control(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     });
 }
 
-fn layer_control(ui: &mut egui::Ui, display: &mut DisplaySettings) {
+fn layer_control(ui: &mut egui::Ui, selected: &mut SurfaceLayer) {
     ui.horizontal(|ui| {
         ui.label("Layer");
         for layer in SurfaceLayer::ALL {
-            ui.selectable_value(&mut display.layer, layer, layer.label());
+            ui.selectable_value(selected, layer, layer.label());
         }
     });
 }

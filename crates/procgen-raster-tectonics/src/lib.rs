@@ -1,35 +1,36 @@
 //! GPU-resident tectonics on a cube-sphere raster.
 //!
 //! Every stage is a WGSL compute kernel dispatched through `wgpu`; there is no
-//! CPU implementation and none is planned. [`field`] owns the failure
-//! convention, the dispatch shape, and the per-plate record; [`partition`] and
+//! CPU implementation and none is planned. [`field`] owns how the buffers pack
+//! their fields and mirrors `wgsl/field.wgsl` one for one; [`device`] owns the
+//! failure convention and what the kernels need of a device; [`partition`] and
 //! [`evolution`] own their stages' backend-neutral contracts; [`kernels`]
-//! assembles the WGSL from them; and [`pipeline`] owns dispatch against a
-//! device.
+//! assembles the WGSL from all of them; [`layout`] mirrors the kernels' own
+//! structs; and [`pipeline`] owns dispatch.
 //!
 //! The pilot this crate serves is described in
 //! `docs/compute-shader-tectonics-pilot.md`.
 
+mod device;
 mod evolution;
 mod field;
 mod kernels;
+mod layout;
 mod partition;
 mod pipeline;
 
-pub use evolution::{
-    ANGULAR_VELOCITY_STEPS_PER_UNIT, AREA_UNITS_PER_STERADIAN, BOUNDARY_CLASS_BITS,
-    BOUNDARY_CLASS_MASK, CELL_PLATE_BITS, CELL_PLATE_MASK, RasterEvolutionConfig, boundary_class,
-    boundary_class_code, crust_class_code, current_plate, pending_plate, plate_ownership,
-};
+pub use device::{MAX_TECTONIC_RESOLUTION, PipelineTuning, RasterTectonicsError};
+pub use evolution::{ANGULAR_VELOCITY_STEPS_PER_UNIT, RasterEvolutionConfig};
 pub use field::{
-    MAX_TECTONIC_RESOLUTION, PipelineTuning, RASTER_SPHERE_RADIUS, RasterPlate,
-    RasterTectonicsError,
+    AREA_UNITS_PER_STERADIAN, BOUNDARY_CLASS_BITS, BOUNDARY_CLASS_MASK, CELL_PLATE_BITS,
+    CELL_PLATE_MASK, MAX_GROWTH_COST, MAX_PLATE_COUNT, PLATE_ID_COUNT, PLATE_LABEL_BITS,
+    RASTER_SPHERE_RADIUS, RasterPlate, UNCLAIMED_LABEL, UNCLAIMED_PLATE, boundary_class,
+    boundary_class_code, crust_class_code, current_plate, growth_label, growth_label_cost,
+    growth_label_plate, pending_plate, plate_ownership,
 };
 pub use kernels::{field_wgsl_source, tectonics_kernel_source};
 pub use partition::{
-    BASE_GROWTH_COST, MAX_PLATE_COUNT, PLATE_ID_COUNT, PLATE_LABEL_BITS,
-    RasterPlatePartitionConfig, UNCLAIMED_LABEL, UNCLAIMED_PLATE, first_seed_cell, fold_growth_key,
-    growth_label, growth_label_cost, growth_label_plate,
+    BASE_GROWTH_COST, RasterPlatePartitionConfig, first_seed_cell, fold_growth_key,
 };
 pub use pipeline::{
     PipelineStage, RasterTectonicsConfig, StageTimings, TectonicsDiagnostics, TectonicsPipeline,

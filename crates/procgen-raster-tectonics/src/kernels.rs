@@ -5,14 +5,15 @@
 //! and `procgen-cubesphere`'s mapping and raster mirrors rather than restating
 //! them.
 
-use crate::evolution::{
+use crate::device::{MAX_DISPATCH_WORKGROUPS, PipelineTuning};
+use crate::field::{
     AREA_UNITS_PER_STERADIAN, BOUNDARY_CLASS_BITS, BOUNDARY_CLASS_MASK, CELL_PLATE_BITS,
-    CELL_PLATE_MASK, boundary_class_code, crust_class_code,
+    CELL_PLATE_MASK, PLATE_ID_COUNT, PLATE_LABEL_BITS, UNCLAIMED_LABEL, UNCLAIMED_PLATE,
+    boundary_class_code, crust_class_code,
 };
-use crate::field::PipelineTuning;
 use crate::partition::{
-    BASE_GROWTH_COST, NO_FRONTIER_PASS, NO_SEED_DISTANCE, PLATE_ID_COUNT, PLATE_LABEL_BITS,
-    SEED_DISTANCE_CEILING, SEED_REDUCTION_WORKGROUPS, UNCLAIMED_LABEL, UNCLAIMED_PLATE,
+    BASE_GROWTH_COST, NO_FRONTIER_PASS, NO_SEED_DISTANCE, SEED_DISTANCE_CEILING,
+    SEED_REDUCTION_WORKGROUPS,
 };
 use procgen_cubesphere::{MAPPING_WGSL_SOURCE, RASTER_WGSL_SOURCE};
 use procgen_tectonics::{BoundaryClass, CONVERGENCE_TO_SHEAR_THRESHOLD, CrustClass};
@@ -22,7 +23,8 @@ const BINDINGS_WGSL_SOURCE: &str = include_str!("../wgsl/bindings.wgsl");
 const PARTITION_WGSL_SOURCE: &str = include_str!("../wgsl/partition.wgsl");
 const EVOLUTION_WGSL_SOURCE: &str = include_str!("../wgsl/evolution.wgsl");
 
-/// Assembles the packed-field accessors and the constants behind them.
+/// Assembles the packed-field accessors and the constants behind them, which
+/// mirror [`crate::field`] one for one.
 ///
 /// Applications that display the pipeline's buffers compose this source, so
 /// the packing has one definition rather than one per consumer. It declares no
@@ -69,14 +71,13 @@ pub fn tectonics_kernel_source(tuning: PipelineTuning) -> String {
         "const RASTER_BASE_GROWTH_COST: u32 = {BASE_GROWTH_COST}u;\n\
          const RASTER_GROWTH_COST_STREAM: u32 = {}u;\n\
          const RASTER_SEED_REDUCTION_WORKGROUPS: u32 = {SEED_REDUCTION_WORKGROUPS}u;\n\
-         const RASTER_MAX_DISPATCH_WORKGROUPS: u32 = {}u;\n\
+         const RASTER_MAX_DISPATCH_WORKGROUPS: u32 = {MAX_DISPATCH_WORKGROUPS}u;\n\
          const RASTER_SEED_DISTANCE_CEILING: f32 = {SEED_DISTANCE_CEILING:e};\n\
          const RASTER_NO_SEED_DISTANCE: f32 = {NO_SEED_DISTANCE:?};\n\
          const RASTER_NO_FRONTIER_PASS: u32 = {NO_FRONTIER_PASS}u;\n\
          const RASTER_WORKGROUP_SIZE: u32 = {workgroup_size}u;\n\
          const RASTER_FRONTIER_CHUNK: u32 = {frontier_chunk}u;",
         procgen_core::random_streams::PLATE_GROWTH_COST as u32,
-        crate::field::MAX_DISPATCH_WORKGROUPS,
     );
     [
         procgen_core::HASH_WGSL_SOURCE,

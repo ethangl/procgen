@@ -1,31 +1,16 @@
 //! Data contracts for the raster plate partition.
 //!
-//! Everything here is backend-neutral: the configuration, the packed growth
-//! label, and the budgets the seeding and growth kernels run inside. Dispatch
-//! lives in [`crate::pipeline`].
+//! Everything here is backend-neutral: the configuration, the traversal costs,
+//! and the budgets the seeding and growth kernels run inside. How their results
+//! are packed is [`crate::field`]'s; dispatch is [`crate::pipeline`]'s.
 
-use crate::field::{MAX_TECTONIC_RESOLUTION, RasterTectonicsError, validate_resolution};
+use crate::device::{MAX_TECTONIC_RESOLUTION, RasterTectonicsError, validate_resolution};
+use crate::field::{MAX_GROWTH_COST, MAX_PLATE_COUNT};
 use procgen_core::{RandomStream, hash_u32, random_streams};
 use procgen_cubesphere::{AXIS_LINK_LENGTH, DIAGONAL_LINK_LENGTH};
 use procgen_tectonics::MAX_GROWTH_ROUGHNESS;
 use std::f32::consts::FRAC_PI_2;
 
-/// Bits of a packed growth label reserved for the owning plate id.
-///
-/// A label is `(arrival cost << PLATE_LABEL_BITS) | plate`, so the numeric
-/// order of the word is the lexicographic order of `(cost, plate)` and one
-/// `atomicMin` settles growth ties on cost and then on the lower plate id.
-pub const PLATE_LABEL_BITS: u32 = 9;
-/// Plate ids the label field can hold, one of which is reserved.
-pub const PLATE_ID_COUNT: u32 = 1 << PLATE_LABEL_BITS;
-/// Plate id reserved to mean "no plate has reached this cell".
-pub const UNCLAIMED_PLATE: u32 = PLATE_ID_COUNT - 1;
-/// Largest plate count a partition can address, since one id is reserved.
-pub const MAX_PLATE_COUNT: u32 = UNCLAIMED_PLATE;
-/// The label of a cell no plate has reached.
-pub const UNCLAIMED_LABEL: u32 = u32::MAX;
-/// Largest arrival cost the packed label can carry.
-pub const MAX_GROWTH_COST: u32 = UNCLAIMED_LABEL >> PLATE_LABEL_BITS;
 /// Traversal cost of one unit of link length before roughness is applied.
 pub const BASE_GROWTH_COST: u32 = 100;
 
@@ -78,23 +63,6 @@ pub(crate) const NO_FRONTIER_PASS: u32 = u32::MAX;
 /// makes and therefore the one a device is most likely to refuse.
 pub(crate) const fn frontier_size(cell_count: u32) -> u64 {
     2 * cell_count as u64 * size_of::<u32>() as u64
-}
-
-/// Packs an arrival cost and a plate into one growth label.
-pub const fn growth_label(cost: u32, plate: u32) -> u32 {
-    (cost << PLATE_LABEL_BITS) | plate
-}
-
-/// Returns the arrival cost a packed growth label carries.
-pub const fn growth_label_cost(label: u32) -> u32 {
-    label >> PLATE_LABEL_BITS
-}
-
-/// Returns the plate a packed growth label carries, or [`UNCLAIMED_PLATE`].
-///
-/// The reserved plate id is all ones, so it doubles as the field's mask.
-pub const fn growth_label_plate(label: u32) -> u32 {
-    label & UNCLAIMED_PLATE
 }
 
 /// Configuration of the raster plate partition.
@@ -196,27 +164,6 @@ pub fn first_seed_cell(seed: u64, cell_count: u32) -> u32 {
 mod tests {
     use super::*;
     use procgen_cubesphere::RasterError;
-
-    #[test]
-    fn packed_labels_order_by_cost_then_plate() {
-        let mut labels: Vec<u32> = [(8, 4), (7, 500), (8, 3), (7, 0)]
-            .into_iter()
-            .map(|(cost, plate)| growth_label(cost, plate))
-            .collect();
-        labels.sort_unstable();
-        assert_eq!(
-            labels
-                .iter()
-                .map(|&label| (growth_label_cost(label), growth_label_plate(label)))
-                .collect::<Vec<_>>(),
-            [(7, 0), (7, 500), (8, 3), (8, 4)]
-        );
-        assert_eq!(
-            UNCLAIMED_LABEL,
-            growth_label(MAX_GROWTH_COST, UNCLAIMED_PLATE),
-            "the unclaimed label must be the largest label, so atomicMin settles it"
-        );
-    }
 
     #[test]
     fn head_start_arc_converts_to_the_same_distance_at_every_resolution() {

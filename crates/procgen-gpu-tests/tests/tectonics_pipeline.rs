@@ -210,13 +210,12 @@ fn evolution_holds_its_structural_invariants() {
                 plate == other,
                 "cell {cell} link {link:?} classified {class:?} between plates {plate} and {other}"
             );
-            let back = TexelLink::BORDERS
-                .into_iter()
-                .find(|&back| neighbor.neighbor(back) == Some(texel))
-                .unwrap();
             assert_eq!(
                 class,
-                boundary_class(buffers.boundary_classes[neighbor.cell_id() as usize], back),
+                boundary_class(
+                    buffers.boundary_classes[neighbor.cell_id() as usize],
+                    texel.link_back(link)
+                ),
                 "the two cells of a border disagree on its class"
             );
             if cell < neighbor.cell_id() {

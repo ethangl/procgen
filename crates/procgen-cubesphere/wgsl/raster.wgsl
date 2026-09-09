@@ -83,6 +83,9 @@ fn cubesphere_border_edge(cell_id: u32, resolution: u32, link: u32) -> u32 {
     if cell_id < neighbor {
         return CUBESPHERE_BORDER_LINKS_PER_CELL * cell_id + link;
     }
+    // Exactly one of the neighbor's border links leads back, so the search
+    // starts from the first candidate as the standing answer and needs no
+    // unreachable fallback.
     var back = 0u;
     for (var candidate = 1u; candidate < CUBESPHERE_BORDER_LINKS_PER_CELL; candidate++) {
         if cubesphere_texel_neighbor(neighbor, resolution, candidate) == cell_id {

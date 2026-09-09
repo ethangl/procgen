@@ -20,9 +20,7 @@ use bevy::{
 use procgen_cubesphere::{
     CubeFace, FaceCoordinates, MAPPING_WGSL_SOURCE, RASTER_WGSL_SOURCE, face_to_direction,
 };
-use procgen_raster_tectonics::{
-    PLATE_ID_COUNT, UNCLAIMED_PLATE, boundary_class_code, crust_class_code, field_wgsl_source,
-};
+use procgen_raster_tectonics::{PLATE_ID_COUNT, UNCLAIMED_PLATE, field_wgsl_source};
 use procgen_tectonics::{BoundaryClass, CrustClass};
 use procgen_viewer_support::id_color;
 
@@ -45,7 +43,11 @@ const DEFAULT_GRID_QUADS: u32 = 128;
 const FACE_FRAGMENT_SHADER: Handle<Shader> = uuid_handle!("2f36f2f5-0a1e-4a0e-9a54-2a8e0f4d0f11");
 
 /// Which field the face grids colour themselves by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// This is a resource of its own rather than a field of [`DisplaySettings`]
+/// because the two drive different work: the layer only reaches the material,
+/// while grid density rebuilds the meshes.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SurfaceLayer {
     #[default]
     Plates,
@@ -65,19 +67,16 @@ impl SurfaceLayer {
     }
 }
 
-/// How finely the face grids are tessellated, independent of texel resolution,
-/// and which field they show.
+/// How finely the face grids are tessellated, independent of texel resolution.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisplaySettings {
     pub grid_quads: u32,
-    pub layer: SurfaceLayer,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             grid_quads: DEFAULT_GRID_QUADS,
-            layer: SurfaceLayer::default(),
         }
     }
 }
@@ -129,16 +128,15 @@ impl Plugin for FaceGridRenderPlugin {
         register_shader(app);
         app.add_plugins(MaterialPlugin::<PlateFaceMaterial>::default())
             .init_resource::<DisplaySettings>()
+            .init_resource::<SurfaceLayer>()
             .add_systems(Startup, initialize_palette)
             .add_systems(
                 Update,
                 (
                     sync_grid_meshes.run_if(resource_changed::<DisplaySettings>),
-                    sync_material.run_if(
-                        resource_exists_and_changed::<ResidentTectonics>
-                            .or(resource_exists::<ResidentTectonics>
-                                .and(resource_changed::<DisplaySettings>)),
-                    ),
+                    sync_material.run_if(resource_exists::<ResidentTectonics>.and(
+                        resource_changed::<ResidentTectonics>.or(resource_changed::<SurfaceLayer>),
+                    )),
                     sync_faces.run_if(faces_are_stale),
                 )
                     .chain(),
@@ -173,12 +171,14 @@ fn register_shader(app: &mut App) {
         .expect("the face shader handle must be free");
 }
 
-/// Colour of each crust class, in [`CrustClass::ALL`] order.
+/// Colour of each crust class, in [`CrustClass::ALL`] order, which is also the
+/// order the plate buffer's crust codes take.
 const CRUST_COLORS: [Color; CrustClass::ALL.len()] =
     [Color::srgb(0.10, 0.24, 0.45), Color::srgb(0.52, 0.46, 0.32)];
 
-/// Colour of each boundary class, in [`BoundaryClass::ALL`] order. The interior
-/// entry is never sampled; the layer dims the plate colour there instead.
+/// Colour of each boundary class, in [`BoundaryClass::ALL`] order, which is
+/// also the order the boundary word's codes take. The interior entry is never
+/// sampled; the layer dims the plate colour there instead.
 const BOUNDARY_COLORS: [Color; BoundaryClass::ALL.len()] = [
     UNCLAIMED_COLOR,
     Color::srgb(0.85, 0.24, 0.18),
@@ -198,12 +198,9 @@ fn initialize_palette(mut commands: Commands, mut buffers: ResMut<Assets<ShaderS
             id_color(plate)
         }
     });
-    let crust = CrustClass::ALL.map(|class| CRUST_COLORS[crust_class_code(class) as usize]);
-    let boundaries =
-        BoundaryClass::ALL.map(|class| BOUNDARY_COLORS[boundary_class_code(class) as usize]);
     let palette: Vec<[f32; 4]> = plates
-        .chain(crust)
-        .chain(boundaries)
+        .chain(CRUST_COLORS)
+        .chain(BOUNDARY_COLORS)
         .map(|color| color.to_linear().to_f32_array())
         .collect();
     debug_assert_eq!(palette.len(), PALETTE_LEN);
@@ -229,7 +226,7 @@ fn sync_grid_meshes(
 fn sync_material(
     mut commands: Commands,
     tectonics: Res<ResidentTectonics>,
-    display: Res<DisplaySettings>,
+    layer: Res<SurfaceLayer>,
     palette: Res<PlatePalette>,
     mut materials: ResMut<Assets<PlateFaceMaterial>>,
     existing: Option<Res<FaceMaterial>>,
@@ -241,7 +238,7 @@ fn sync_material(
         plates: Buffer::from(pipeline.plate_buffer().clone()),
         display: PlateFaceDisplay {
             resolution: pipeline.resolution(),
-            layer: layer_code(display.layer),
+            layer: layer_code(*layer),
         },
         palette: palette.0.clone(),
     };
