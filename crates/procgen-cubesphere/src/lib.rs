@@ -13,8 +13,9 @@ pub use mapping::{
     direction_to_face, equiangular_tangent, face_to_direction,
 };
 pub use raster::{
-    AXIS_LINK_LENGTH, DIAGONAL_LINK_LENGTH, FaceTexel, MAX_RASTER_RESOLUTION, NO_RASTER_CELL,
-    RasterError, TexelLink,
+    AXIS_LINK_LENGTH, BORDER_LINKS_PER_CELL, DIAGONAL_LINK_LENGTH, FaceTexel,
+    MAX_BORDER_RESOLUTION, MAX_RASTER_RESOLUTION, NO_RASTER_CELL, RasterError,
+    TEXEL_SOLID_ANGLE_TOLERANCE, TexelLink,
 };
 pub use tile::{
     FaceGridVertex, MAX_TILE_LEVEL, TILE_QUADS, TILE_VERTICES, TileAddress, TileError,

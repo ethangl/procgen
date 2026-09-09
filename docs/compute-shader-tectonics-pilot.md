@@ -96,35 +96,48 @@ What exists to build on:
 
 ## Measured so far
 
-Plate partition only, in a release build on the development MacBook Pro
+Partition through evolution, in a release build on the development MacBook Pro
 (Apple M1 Max via Metal) on 2026-09-08, with the default configuration of six
-major and 111 minor plates at 99 percent growth roughness and seed 0. Each
-stage is timed from submission to device idle. Frontier passes are what the
-longer of the two relaxations consumed out of its budget; the frontier's order
-varies run to run, so the count moves by a pass or two while the labels it
-settles on do not.
+major and 111 minor plates at 99 percent growth roughness, seed 0, a 0.75
+target ocean fraction, and nine evolution steps. Each stage is timed from
+submission to device idle. The border and migration columns are the whole
+evolution: ten classifications and nine migration steps.
 
-| Face resolution | Initialize | Plate seeds | Plate growth | Total   | Passes     |
-| --------------- | ---------- | ----------- | ------------ | ------- | ---------- |
-| 128             | 3 ms       | 9 ms        | 36 ms        | 48 ms   | 115/768    |
-| 256             | 1 ms       | 12 ms       | 49 ms        | 62 ms   | 230/1536   |
-| 512             | 3 ms       | 21 ms       | 193 ms       | 218 ms  | 435/3072   |
-| 1024            | 5 ms       | 67 ms       | 947 ms       | 1020 ms | 923/6144   |
+| Resolution | Init | Seeds | Growth | Crust | Borders | Migration | Total   |
+| ---------- | ---- | ----- | ------ | ----- | ------- | --------- | ------- |
+| 128        | 1 ms | 9 ms  | 20 ms  | 1 ms  | 13 ms   | 12 ms     | 56 ms   |
+| 256        | 1 ms | 12 ms | 54 ms  | 3 ms  | 28 ms   | 17 ms     | 115 ms  |
+| 512        | 1 ms | 22 ms | 197 ms | 1 ms  | 59 ms   | 16 ms     | 297 ms  |
+| 1024       | 1 ms | 68 ms | 940 ms | 3 ms  | 198 ms  | 26 ms     | 1236 ms |
 
-Pass counts grow with the face resolution rather than with its square, and the
-budget clears the measured need by six times. Growth is dominated by the
-frontier's latency rather than its arithmetic: a pass carries a few thousand
-cells at 1024 texels per face, which occupies a small fraction of the device.
-Seeding re-evaluates every texel direction once per plate, which is why it
-grows faster than the cell count; folding the distance-field update into the
-farthest-point reduction removed one of its two full passes per plate, and
-widening that reduction past 256 workgroups costs more in its serial final
-step than it recovers. Neither stage is addressed further yet; the
-interactivity slice has the measurements it needs to choose.
+Frontier passes are what the longer of the two growth relaxations consumed out
+of its budget; the frontier's order varies run to run, so the count moves by a
+pass or two while the labels it settles on do not. It measured 115 of 768 at
+128 texels per face, 230 of 1536 at 256, 435 of 3072 at 512, and 923 of 6144 at
+1024. Pass counts grow with the face resolution rather than with its square,
+and the budget clears the measured need by six times.
+
+Growth is dominated by the frontier's latency rather than its arithmetic: a
+pass carries a few thousand cells at 1024 texels per face, which occupies a
+small fraction of the device. Seeding re-evaluates every texel direction once
+per plate, which is why it grows faster than the cell count; folding the
+distance-field update into the farthest-point reduction removed one of its two
+full passes per plate, and widening that reduction past 256 workgroups costs
+more in its serial final step than it recovers. Neither stage is addressed
+further yet; the interactivity slice has the measurements it needs to choose.
+
+Evolution is cheap by comparison and scales with the cell count as a
+full-raster map should: at 1024 texels per face one boundary classification is
+about 20 ms and one migration step about 3 ms, so the nineteen dispatch rounds
+together cost about a fifth of growth. The crust reduction is negligible
+because a workgroup accumulates its own plate areas before touching the shared
+counters.
 
 Boundaries at 256 texels per face do not read as grid-aligned at the default
 roughness, and plate areas keep the same distribution across resolutions
-because the head start is configured as an arc.
+because the head start is configured as an arc. The evolution reaches the
+requested ocean fraction to within a thousandth at every resolution and moves
+roughly four percent of the raster's cells over its nine steps.
 
 ## The raster
 
@@ -175,7 +188,10 @@ Border edges are the four shared borders of each quad, each with two cells
 and a midpoint. Stages that act across a physical boundary use them: boundary
 classification, migration proposals, and later moisture flux. Border edges
 are ordered per cell in a fixed direction order, so every edge id is a pure
-function of texel coordinates.
+function of texel coordinates: the lower of the two cells owns the border and
+the id is four times that cell plus its own direction toward the other. A seam
+can rotate which direction that is, so the owner's direction is resolved
+rather than assumed opposite.
 
 Links are the eight neighbors a cell can traverse, each with an integer
 length. Stages that grow, flood, or measure distance use links: plate growth,
@@ -236,12 +252,24 @@ shape: a label of cost and origin, a lexicographic minimum, and a frontier.
 Deformation is the same relaxation bounded by its depth, and the smoothing
 stencil is a fixed small number of full passes.
 
-Stage outputs are GPU buffers indexed by cell or border edge: ownership,
-arrival cost, boundary class and normal speeds, age, deformation, elevation.
-At 1024 texels per face they total roughly half a gigabyte, dominated by the
-per-edge arrays, which fits both development machines. They stay resident
-between runs, and a settings change reruns the pipeline from the first dirty
-stage.
+Stage outputs are GPU buffers indexed by cell: ownership, arrival cost,
+boundary class, age, deformation, elevation. Per-border results are stored per
+cell rather than per edge, because `wgpu`'s default limits cap one storage
+binding at 128 MiB and a per-edge array at 1024 texels per face is four times
+the cell count. A cell's four boundary classes are two bits each in one word,
+and both cells of a border classify it independently and agree, so no reader
+resolves the owning edge. Normal speeds are not stored at all: they follow from
+the plate angular velocities and the two cells' directions, which are already
+resident, and the migration gather recomputes them through the same function
+that classified the border.
+
+The kernels share one bind group of one uniform block and eight storage
+buffers, which is `wgpu`'s default storage-binding limit exactly. A stage that
+needs another buffer consolidates two existing ones rather than adding a ninth;
+the per-plate record is already one such consolidation, and so is the ownership
+word that carries a cell's current and pending plate together. Outputs stay
+resident between runs, and a settings change reruns the pipeline from the first
+dirty stage.
 
 ## Determinism
 
@@ -269,11 +297,17 @@ themselves, established by construction and verified by test:
   quantized to a fixed grid before upload so platform math libraries cannot
   leak ulp differences into the pipeline.
 - Boundary class and migration winners are integer outcomes of float
-  comparisons. With identical inputs, add-multiply-compare arithmetic in a
-  fixed expression order, and FMA contraction verified disabled by a test
-  vector on each backend, they are expected to be bit-identical across Metal
-  and Vulkan. The tests assert it. If a flip appears, convergence moves to
-  fixed-point `i32`. That is decided by measurement, not in advance.
+  comparisons, evaluated in a fixed expression order. The test vector that was
+  to verify fused multiply-add contraction disabled instead measured it
+  enabled: on 2026-09-08 Metal through `wgpu` contracted every vector in the
+  table, and `wgpu` exposes no control over it. Contraction is a property of
+  one backend's shader compiler, so it is deterministic within a backend and
+  leaves run-to-run and schedule invariance intact; what it puts in question is
+  cross-backend agreement, which is now measured rather than assumed. The test
+  records which of the two roundings a backend chose and fails only on a third,
+  which would mean reassociation or reduced precision. If a class or winner
+  flips between the two machines, convergence moves to fixed-point `i32`. That
+  is decided in slice 5, by measurement.
 
 Float tolerances for deformation and elevation follow the workspace rule: ten
 times the measured maximum divergence between the two development GPUs,
@@ -392,7 +426,26 @@ Settled before implementation:
   field holds the costliest shortest path 1024 texels per face can produce.
 - A head start large enough to claim every cell leaves its minor plates
   seedless rather than failing the run. Every cell is still owned; those plates
-  simply own none, and the seed-cell buffer records which.
+  simply own none, and the plate buffer records which.
+- A border edge's canonical id is four times its lower cell plus that cell's
+  own direction toward the other, so both cells name it identically. It orders
+  migration ties; it indexes nothing.
+- Boundary classes are stored per cell, two bits per border, because both cells
+  of a border reach the same class from the same inputs. Normal speeds are
+  derived where they are needed rather than stored.
+- Plate areas are integers: each cell's solid angle is quantized against a
+  fixed scale and summed with atomics, so the crust classification is exact
+  integer arithmetic on an order-independent reduction. The solid angle itself
+  is a midpoint rule over the gnomonic area element, evaluated with the
+  polynomial tangent, because the exact spherical quadrilateral needs an arc
+  tangent.
+- Crust visits plates in a seeded order the host computes and uploads, since
+  the mesh pipeline's order comes from a 64-bit stream no kernel may see.
+- Per-plate motion is computed on the host by the mesh pipeline's own
+  kinematics function and quantized to a power-of-two grid before upload.
+- The kernels sit at `wgpu`'s default limit of eight storage buffers per stage.
+  New per-cell state consolidates into an existing buffer rather than adding a
+  binding.
 - Texel directions come from a polynomial tangent with add and multiply
   only, identical in Rust and WGSL. Host-computed per-plate inputs are
   quantized before upload.

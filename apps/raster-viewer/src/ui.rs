@@ -1,15 +1,17 @@
-//! Settings panel and stage-timing readout.
+//! Settings panel, stage-timing readout, and run diagnostics.
 
 use crate::{
-    partition::{
-        FACE_RESOLUTIONS, GROWTH_ROUGHNESS_RANGE, HEAD_START_ARC_RANGE, MAJOR_PLATE_RANGE,
-        MINOR_PLATE_RANGE, PartitionSettings, ResidentPartition,
+    render::{DisplaySettings, GRID_QUAD_RANGE, SurfaceLayer},
+    tectonics::{
+        EVOLUTION_STEP_RANGE, FACE_RESOLUTIONS, GROWTH_ROUGHNESS_RANGE, HEAD_START_ARC_RANGE,
+        MAJOR_PLATE_RANGE, MINOR_PLATE_RANGE, OCEAN_FRACTION_RANGE, ResidentTectonics,
+        TectonicsSettings,
     },
-    render::{DisplaySettings, GRID_QUAD_RANGE},
 };
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_raster_tectonics::PipelineStage;
+use procgen_tectonics::BoundaryClass;
 
 pub struct RasterViewerUiPlugin;
 
@@ -22,14 +24,16 @@ impl Plugin for RasterViewerUiPlugin {
 
 fn raster_viewer_ui(
     mut contexts: EguiContexts,
-    mut settings: ResMut<PartitionSettings>,
+    mut settings: ResMut<TectonicsSettings>,
     mut display: ResMut<DisplaySettings>,
-    partition: Option<Res<ResidentPartition>>,
+    mut layer: ResMut<SurfaceLayer>,
+    tectonics: Option<Res<ResidentTectonics>>,
 ) -> Result {
     let mut next_settings = *settings;
     let mut next_display = *display;
+    let mut next_layer = *layer;
     egui::SidePanel::left("raster controls")
-        .default_width(280.0)
+        .default_width(300.0)
         .resizable(false)
         .show(contexts.ctx_mut()?, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -39,17 +43,22 @@ fn raster_viewer_ui(
                     egui::Slider::new(&mut next_display.grid_quads, GRID_QUAD_RANGE)
                         .text("Grid quads per face"),
                 );
+                layer_control(ui, &mut next_layer);
 
                 ui.separator();
                 ui.heading("Plates");
                 partition_controls(ui, &mut next_settings);
 
                 ui.separator();
+                ui.heading("Evolution");
+                evolution_controls(ui, &mut next_settings);
+
+                ui.separator();
                 ui.heading("Run");
-                match &partition {
-                    Some(partition) => run_summary(ui, partition),
+                match &tectonics {
+                    Some(tectonics) => run_summary(ui, tectonics),
                     None => {
-                        ui.label("Generating the first partition.");
+                        ui.label("Generating the first world.");
                     }
                 }
 
@@ -60,10 +69,11 @@ fn raster_viewer_ui(
         });
     settings.set_if_neq(next_settings);
     display.set_if_neq(next_display);
+    layer.set_if_neq(next_layer);
     Ok(())
 }
 
-fn resolution_control(ui: &mut egui::Ui, settings: &mut PartitionSettings) {
+fn resolution_control(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     ui.horizontal(|ui| {
         ui.label("Texels per face");
         for resolution in FACE_RESOLUTIONS {
@@ -72,24 +82,55 @@ fn resolution_control(ui: &mut egui::Ui, settings: &mut PartitionSettings) {
     });
 }
 
-fn partition_controls(ui: &mut egui::Ui, settings: &mut PartitionSettings) {
-    let config = &mut settings.config;
-    ui.add(egui::Slider::new(&mut config.major_plate_count, MAJOR_PLATE_RANGE).text("Major"));
-    ui.add(egui::Slider::new(&mut config.minor_plate_count, MINOR_PLATE_RANGE).text("Minor"));
+fn layer_control(ui: &mut egui::Ui, selected: &mut SurfaceLayer) {
+    ui.horizontal(|ui| {
+        ui.label("Layer");
+        for layer in SurfaceLayer::ALL {
+            ui.selectable_value(selected, layer, layer.label());
+        }
+    });
+}
+
+fn partition_controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
+    let partition = &mut settings.config.partition;
+    ui.add(egui::Slider::new(&mut partition.major_plate_count, MAJOR_PLATE_RANGE).text("Major"));
+    ui.add(egui::Slider::new(&mut partition.minor_plate_count, MINOR_PLATE_RANGE).text("Minor"));
     ui.add(
-        egui::Slider::new(&mut config.major_head_start_arc, HEAD_START_ARC_RANGE)
+        egui::Slider::new(&mut partition.major_head_start_arc, HEAD_START_ARC_RANGE)
             .text("Head start (rad)"),
     );
     ui.add(
-        egui::Slider::new(&mut config.growth_roughness, GROWTH_ROUGHNESS_RANGE)
+        egui::Slider::new(&mut partition.growth_roughness, GROWTH_ROUGHNESS_RANGE)
             .text("Growth roughness %"),
     );
-    ui.add(egui::DragValue::new(&mut config.seed).prefix("Seed "));
+    ui.add(egui::DragValue::new(&mut partition.seed).prefix("Seed "));
 }
 
-fn run_summary(ui: &mut egui::Ui, partition: &ResidentPartition) {
-    let pipeline = partition.pipeline();
-    let run = partition.run();
+fn evolution_controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
+    let maximum_convergence = settings.maximum_convergence();
+    let evolution = &mut settings.config.evolution;
+    ui.add(
+        egui::Slider::new(
+            &mut evolution.crust.target_ocean_fraction,
+            OCEAN_FRACTION_RANGE,
+        )
+        .text("Target ocean fraction"),
+    );
+    ui.add(egui::DragValue::new(&mut evolution.crust.seed).prefix("Crust seed "));
+    ui.add(egui::DragValue::new(&mut evolution.kinematics.seed).prefix("Motion seed "));
+    ui.add(
+        egui::Slider::new(
+            &mut evolution.migration.minimum_convergence,
+            0.0..=maximum_convergence,
+        )
+        .text("Minimum convergence"),
+    );
+    ui.add(egui::Slider::new(&mut evolution.step_count, EVOLUTION_STEP_RANGE).text("Steps"));
+}
+
+fn run_summary(ui: &mut egui::Ui, tectonics: &ResidentTectonics) {
+    let pipeline = tectonics.pipeline();
+    let run = tectonics.run();
     ui.label(format!(
         "{} cells at {} texels per face",
         pipeline.cell_count(),
@@ -97,20 +138,43 @@ fn run_summary(ui: &mut egui::Ui, partition: &ResidentPartition) {
     ));
     for stage in PipelineStage::ALL {
         ui.label(format!(
-            "{:<13} {:>8.2} ms",
+            "{:<11} {:>8.2} ms",
             stage.label(),
             millis(run.timings.duration(stage))
         ));
     }
     ui.label(format!(
-        "{:<13} {:>8.2} ms",
+        "{:<11} {:>8.2} ms",
         "Total",
         millis(run.timings.total())
     ));
+
+    ui.separator();
+    ui.heading("Diagnostics");
+    let diagnostics = &run.diagnostics;
     ui.label(format!(
         "Frontier passes {} of {}",
-        run.longest_relaxation_passes, run.pass_budget
+        diagnostics.longest_relaxation_passes, run.pass_budget
     ));
+    ui.label(format!("Ocean fraction {:.3}", diagnostics.ocean_fraction));
+    ui.label(format!(
+        "Migrated cells {}",
+        diagnostics.migrated_cell_count
+    ));
+    if diagnostics.empty_plate_count > 0 {
+        ui.label(format!(
+            "Plates left seedless {}",
+            diagnostics.empty_plate_count
+        ));
+    }
+    for class in BoundaryClass::ALL {
+        ui.label(format!(
+            "{:<11} {:>6.2}%  ({})",
+            format!("{class:?}"),
+            100.0 * diagnostics.boundary_fraction(class),
+            diagnostics.count(class)
+        ));
+    }
     if !run.settled() {
         ui.colored_label(
             egui::Color32::LIGHT_RED,

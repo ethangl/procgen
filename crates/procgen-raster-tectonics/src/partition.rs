@@ -1,35 +1,18 @@
 //! Data contracts for the raster plate partition.
 //!
-//! Everything here is backend-neutral: the configuration, the packed growth
-//! label, the buffer layouts the kernels read, and the assembled WGSL source.
-//! Dispatch lives in [`crate::pipeline`].
+//! Everything here is backend-neutral: the configuration, the traversal costs,
+//! and the budgets the seeding and growth kernels run inside. How their results
+//! are packed is [`crate::field`]'s; dispatch is [`crate::pipeline`]'s.
 
+use crate::device::{MAX_TECTONIC_RESOLUTION, RasterTectonicsError, validate_resolution};
+use crate::field::{MAX_GROWTH_COST, MAX_PLATE_COUNT};
 use procgen_core::{RandomStream, hash_u32, random_streams};
-use procgen_cubesphere::{
-    AXIS_LINK_LENGTH, DIAGONAL_LINK_LENGTH, FaceTexel, MAPPING_WGSL_SOURCE, RASTER_WGSL_SOURCE,
-    RasterError,
-};
+use procgen_cubesphere::{AXIS_LINK_LENGTH, DIAGONAL_LINK_LENGTH};
 use procgen_tectonics::MAX_GROWTH_ROUGHNESS;
-use std::{f32::consts::FRAC_PI_2, fmt};
+use std::f32::consts::FRAC_PI_2;
 
-/// Bits of a packed growth label reserved for the owning plate id.
-///
-/// A label is `(arrival cost << PLATE_LABEL_BITS) | plate`, so the numeric
-/// order of the word is the lexicographic order of `(cost, plate)` and one
-/// `atomicMin` settles growth ties on cost and then on the lower plate id.
-pub const PLATE_LABEL_BITS: u32 = 9;
-/// Plate id reserved to mean "no plate has reached this cell".
-pub const UNCLAIMED_PLATE: u32 = (1 << PLATE_LABEL_BITS) - 1;
-/// Largest plate count a partition can address, since one id is reserved.
-pub const MAX_PLATE_COUNT: u32 = UNCLAIMED_PLATE;
-/// The label of a cell no plate has reached.
-pub const UNCLAIMED_LABEL: u32 = u32::MAX;
-/// Largest arrival cost the packed label can carry.
-pub const MAX_GROWTH_COST: u32 = UNCLAIMED_LABEL >> PLATE_LABEL_BITS;
 /// Traversal cost of one unit of link length before roughness is applied.
 pub const BASE_GROWTH_COST: u32 = 100;
-/// Largest face resolution the pilot runs, and the cap the cost budget assumes.
-pub const MAX_TECTONIC_RESOLUTION: u32 = 1_024;
 
 /// Face widths a chamfer shortest path can cross between any two cube cells.
 ///
@@ -68,46 +51,18 @@ pub(crate) const fn growth_passes(resolution: u32) -> u32 {
 /// over the whole raster and emits one candidate.
 pub(crate) const SEED_REDUCTION_WORKGROUPS: u32 = 256;
 
-/// Workgroups one dispatch may cover, from `wgpu`'s default device limits.
-pub(crate) const MAX_DISPATCH_WORKGROUPS: u32 = 65_535;
-
-/// Bind-group entries every kernel shares: one uniform block of configuration
-/// and the stage buffers behind it.
-pub(crate) const BINDING_COUNT: usize = 8;
-/// Storage bindings among those, which the device must supply to one stage.
-pub(crate) const STORAGE_BINDING_COUNT: u32 = BINDING_COUNT as u32 - 1;
+/// Squared chord distance no pair of unit directions can reach, used as the
+/// farthest-point field's initial value.
+pub(crate) const SEED_DISTANCE_CEILING: f32 = 1.0e30;
+/// Distance of the candidate a reduction emits when it found no eligible cell.
+pub(crate) const NO_SEED_DISTANCE: f32 = -1.0;
+/// Frontier pass index no cell has been queued for.
+pub(crate) const NO_FRONTIER_PASS: u32 = u32::MAX;
 
 /// Bytes the frontier occupies, which is the largest binding the pipeline
 /// makes and therefore the one a device is most likely to refuse.
 pub(crate) const fn frontier_size(cell_count: u32) -> u64 {
     2 * cell_count as u64 * size_of::<u32>() as u64
-}
-
-/// Squared chord distance no pair of unit directions can reach, used as the
-/// farthest-point field's initial value.
-const SEED_DISTANCE_CEILING: f32 = 1.0e30;
-/// Distance of the candidate a reduction emits when it found no eligible cell.
-const NO_SEED_DISTANCE: f32 = -1.0;
-/// Frontier pass index no cell has been queued for.
-const NO_FRONTIER_PASS: u32 = u32::MAX;
-
-const PARTITION_WGSL_SOURCE: &str = include_str!("../wgsl/partition.wgsl");
-
-/// Packs an arrival cost and a plate into one growth label.
-pub const fn growth_label(cost: u32, plate: u32) -> u32 {
-    (cost << PLATE_LABEL_BITS) | plate
-}
-
-/// Returns the arrival cost a packed growth label carries.
-pub const fn growth_label_cost(label: u32) -> u32 {
-    label >> PLATE_LABEL_BITS
-}
-
-/// Returns the plate a packed growth label carries, or [`UNCLAIMED_PLATE`].
-///
-/// The reserved plate id is all ones, so it doubles as the field's mask.
-pub const fn growth_label_plate(label: u32) -> u32 {
-    label & UNCLAIMED_PLATE
 }
 
 /// Configuration of the raster plate partition.
@@ -162,141 +117,23 @@ impl RasterPlatePartitionConfig {
         (steps * (AXIS_LINK_LENGTH * BASE_GROWTH_COST) as f32) as u32
     }
 
-    pub(crate) fn validate(&self, resolution: u32) -> Result<(), RasterPartitionError> {
+    pub(crate) fn validate(&self, resolution: u32) -> Result<(), RasterTectonicsError> {
         let cell_count = validate_resolution(resolution)?;
         if self.major_plate_count == 0 {
-            return Err(RasterPartitionError::NoMajorPlates);
+            return Err(RasterTectonicsError::NoMajorPlates);
         }
         if self.plate_count() > MAX_PLATE_COUNT || self.plate_count() > cell_count {
-            return Err(RasterPartitionError::TooManyPlates);
+            return Err(RasterTectonicsError::TooManyPlates);
         }
         if self.growth_roughness > MAX_GROWTH_ROUGHNESS {
-            return Err(RasterPartitionError::InvalidGrowthRoughness);
+            return Err(RasterTectonicsError::InvalidGrowthRoughness);
         }
         if !self.major_head_start_arc.is_finite()
             || !(0.0..=std::f32::consts::PI).contains(&self.major_head_start_arc)
         {
-            return Err(RasterPartitionError::InvalidHeadStartArc);
+            return Err(RasterTectonicsError::InvalidHeadStartArc);
         }
         Ok(())
-    }
-}
-
-/// Returns the cell count of a face resolution the pilot can run.
-pub(crate) fn validate_resolution(resolution: u32) -> Result<u32, RasterPartitionError> {
-    let cell_count = FaceTexel::cell_count(resolution)?;
-    if resolution > MAX_TECTONIC_RESOLUTION {
-        return Err(RasterPartitionError::UnsupportedResolution);
-    }
-    Ok(cell_count)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RasterPartitionError {
-    Resolution(RasterError),
-    UnsupportedResolution,
-    UnsupportedDevice,
-    NoMajorPlates,
-    TooManyPlates,
-    InvalidGrowthRoughness,
-    InvalidHeadStartArc,
-    InvalidWorkgroupSize,
-    InvalidFrontierChunk,
-}
-
-impl From<RasterError> for RasterPartitionError {
-    fn from(error: RasterError) -> Self {
-        Self::Resolution(error)
-    }
-}
-
-impl fmt::Display for RasterPartitionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Resolution(error) => error.fmt(formatter),
-            Self::UnsupportedResolution => write!(
-                formatter,
-                "raster tectonics runs at face resolutions up to {MAX_TECTONIC_RESOLUTION}"
-            ),
-            Self::UnsupportedDevice => write!(
-                formatter,
-                "the device must meet wgpu's default limits: {STORAGE_BINDING_COUNT} storage \
-                 bindings per stage, {} invocations per workgroup, {MAX_DISPATCH_WORKGROUPS} \
-                 workgroups per dispatch, and a storage binding holding the frontier at the \
-                 requested face resolution",
-                PipelineTuning::MAX_WORKGROUP_SIZE
-            ),
-            Self::NoMajorPlates => formatter.write_str("at least one major plate is required"),
-            Self::TooManyPlates => write!(
-                formatter,
-                "plate count cannot exceed the cell count or {MAX_PLATE_COUNT}"
-            ),
-            Self::InvalidGrowthRoughness => write!(
-                formatter,
-                "plate growth roughness cannot exceed {MAX_GROWTH_ROUGHNESS}%"
-            ),
-            Self::InvalidHeadStartArc => {
-                formatter.write_str("the major head start must be an arc between 0 and PI radians")
-            }
-            Self::InvalidWorkgroupSize => write!(
-                formatter,
-                "the workgroup size must be a power of two of at most {} invocations",
-                PipelineTuning::MAX_WORKGROUP_SIZE
-            ),
-            Self::InvalidFrontierChunk => {
-                formatter.write_str("the frontier chunk must relax at least one entry")
-            }
-        }
-    }
-}
-
-impl std::error::Error for RasterPartitionError {}
-
-/// Dispatch shape the kernels are compiled for.
-///
-/// Neither field changes any result: the frontier is order-independent and the
-/// farthest-point reduction is an exact minimum. They exist so the pipeline
-/// tests can assert that by running the same seed at different shapes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PipelineTuning {
-    /// Invocations per workgroup. Must be a power of two of at most 256.
-    pub workgroup_size: u32,
-    /// Frontier entries one invocation relaxes per pass, which sizes the
-    /// indirect dispatch.
-    pub frontier_chunk: u32,
-}
-
-impl Default for PipelineTuning {
-    fn default() -> Self {
-        Self {
-            workgroup_size: 64,
-            frontier_chunk: 4,
-        }
-    }
-}
-
-impl PipelineTuning {
-    /// Largest workgroup size `wgpu`'s default device limits allow.
-    pub const MAX_WORKGROUP_SIZE: u32 = 256;
-
-    pub(crate) fn validate(&self) -> Result<(), RasterPartitionError> {
-        if self.workgroup_size == 0
-            || self.workgroup_size > Self::MAX_WORKGROUP_SIZE
-            || !self.workgroup_size.is_power_of_two()
-        {
-            return Err(RasterPartitionError::InvalidWorkgroupSize);
-        }
-        if self.frontier_chunk == 0 {
-            return Err(RasterPartitionError::InvalidFrontierChunk);
-        }
-        Ok(())
-    }
-
-    /// Workgroups a kernel that strides over every cell dispatches.
-    pub(crate) fn cell_workgroups(&self, cell_count: u32) -> u32 {
-        cell_count
-            .div_ceil(self.workgroup_size * self.frontier_chunk)
-            .clamp(1, MAX_DISPATCH_WORKGROUPS)
     }
 }
 
@@ -323,121 +160,10 @@ pub fn first_seed_cell(seed: u64, cell_count: u32) -> u32 {
         % u64::from(cell_count)) as u32
 }
 
-/// The uniform block every partition kernel reads. The trailing word rounds the
-/// block to the sixteen-byte stride a uniform binding requires.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct PackedPartitionConfig {
-    resolution: u32,
-    cell_count: u32,
-    major_plate_count: u32,
-    head_start_cost: u32,
-    growth_roughness: u32,
-    growth_key: u32,
-    first_seed_cell: u32,
-    padding: u32,
-}
-
-impl PackedPartitionConfig {
-    pub(crate) fn new(
-        config: &RasterPlatePartitionConfig,
-        resolution: u32,
-        cell_count: u32,
-    ) -> Self {
-        Self {
-            resolution,
-            cell_count,
-            major_plate_count: config.major_plate_count,
-            head_start_cost: config.head_start_cost(resolution),
-            growth_roughness: config.growth_roughness,
-            growth_key: fold_growth_key(config.seed),
-            first_seed_cell: first_seed_cell(config.seed, cell_count),
-            padding: 0,
-        }
-    }
-}
-
-/// Bytes one farthest-point candidate occupies: an `f32` distance beside the
-/// `u32` cell id that carries it.
-pub(crate) const SEED_CANDIDATE_SIZE: u64 = 2 * size_of::<u32>() as u64;
-
-/// Mirror of `RasterPartitionState` in the kernels, so the host sizes the
-/// buffer and addresses its dispatch arguments and diagnostic by field rather
-/// than by counting words. Nothing reads the mirror's fields; `size_of` and
-/// `offset_of!` are its whole purpose.
-#[repr(C)]
-pub(crate) struct PackedPartitionState {
-    pub(crate) relax_dispatch: [u32; 3],
-    pub(crate) pass_index: u32,
-    pub(crate) phase_passes: u32,
-    pub(crate) longest_relaxation: u32,
-    pub(crate) next_plate: u32,
-    pub(crate) chosen_cell: u32,
-    pub(crate) frontier_count: [u32; 2],
-}
-
-/// Assembles the partition kernels for one dispatch shape.
-///
-/// The source composes `procgen-core`'s hash and `procgen-cubesphere`'s mapping
-/// and raster mirrors, so every constant this crate owns reaches WGSL from its
-/// Rust definition rather than a shader literal.
-pub fn partition_kernel_source(tuning: PipelineTuning) -> String {
-    let PipelineTuning {
-        workgroup_size,
-        frontier_chunk,
-    } = tuning;
-    let constants = format!(
-        "const RASTER_PLATE_LABEL_BITS: u32 = {PLATE_LABEL_BITS}u;\n\
-         const RASTER_UNCLAIMED_PLATE: u32 = {UNCLAIMED_PLATE}u;\n\
-         const RASTER_UNCLAIMED_LABEL: u32 = {UNCLAIMED_LABEL}u;\n\
-         const RASTER_BASE_GROWTH_COST: u32 = {BASE_GROWTH_COST}u;\n\
-         const RASTER_GROWTH_COST_STREAM: u32 = {}u;\n\
-         const RASTER_SEED_REDUCTION_WORKGROUPS: u32 = {SEED_REDUCTION_WORKGROUPS}u;\n\
-         const RASTER_MAX_DISPATCH_WORKGROUPS: u32 = {MAX_DISPATCH_WORKGROUPS}u;\n\
-         const RASTER_SEED_DISTANCE_CEILING: f32 = {SEED_DISTANCE_CEILING:e};\n\
-         const RASTER_NO_SEED_DISTANCE: f32 = {NO_SEED_DISTANCE:?};\n\
-         const RASTER_NO_FRONTIER_PASS: u32 = {NO_FRONTIER_PASS}u;\n\
-         const RASTER_WORKGROUP_SIZE: u32 = {workgroup_size}u;\n\
-         const RASTER_FRONTIER_CHUNK: u32 = {frontier_chunk}u;",
-        random_streams::PLATE_GROWTH_COST as u32,
-    );
-    [
-        procgen_core::HASH_WGSL_SOURCE,
-        MAPPING_WGSL_SOURCE,
-        RASTER_WGSL_SOURCE,
-        &constants,
-        PARTITION_WGSL_SOURCE,
-    ]
-    .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn packed_labels_order_by_cost_then_plate() {
-        let mut labels: Vec<u32> = [(8, 4), (7, 500), (8, 3), (7, 0)]
-            .into_iter()
-            .map(|(cost, plate)| growth_label(cost, plate))
-            .collect();
-        labels.sort_unstable();
-        assert_eq!(
-            labels
-                .iter()
-                .map(|&label| (
-                    crate::growth_label_cost(label),
-                    crate::growth_label_plate(label)
-                ))
-                .collect::<Vec<_>>(),
-            [(7, 0), (7, 500), (8, 3), (8, 4)]
-        );
-        assert_eq!(
-            UNCLAIMED_LABEL,
-            growth_label(MAX_GROWTH_COST, UNCLAIMED_PLATE),
-            "the unclaimed label must be the largest label, so atomicMin settles it"
-        );
-    }
+    use procgen_cubesphere::RasterError;
 
     #[test]
     fn head_start_arc_converts_to_the_same_distance_at_every_resolution() {
@@ -460,13 +186,9 @@ mod tests {
         let config = RasterPlatePartitionConfig::default();
         assert_eq!(
             config.validate(3),
-            Err(RasterPartitionError::Resolution(
+            Err(RasterTectonicsError::Resolution(
                 RasterError::InvalidResolution
             ))
-        );
-        assert_eq!(
-            config.validate(2_048),
-            Err(RasterPartitionError::UnsupportedResolution)
         );
         assert_eq!(
             RasterPlatePartitionConfig {
@@ -474,7 +196,7 @@ mod tests {
                 ..config
             }
             .validate(64),
-            Err(RasterPartitionError::NoMajorPlates)
+            Err(RasterTectonicsError::NoMajorPlates)
         );
         assert_eq!(
             RasterPlatePartitionConfig {
@@ -482,7 +204,7 @@ mod tests {
                 ..config
             }
             .validate(64),
-            Err(RasterPartitionError::TooManyPlates)
+            Err(RasterTectonicsError::TooManyPlates)
         );
         assert_eq!(
             RasterPlatePartitionConfig {
@@ -490,7 +212,7 @@ mod tests {
                 ..config
             }
             .validate(64),
-            Err(RasterPartitionError::InvalidGrowthRoughness)
+            Err(RasterTectonicsError::InvalidGrowthRoughness)
         );
         assert_eq!(
             RasterPlatePartitionConfig {
@@ -498,46 +220,7 @@ mod tests {
                 ..config
             }
             .validate(64),
-            Err(RasterPartitionError::InvalidHeadStartArc)
+            Err(RasterTectonicsError::InvalidHeadStartArc)
         );
-    }
-
-    #[test]
-    fn rejects_dispatch_shapes_the_kernels_cannot_compile() {
-        assert_eq!(
-            PipelineTuning {
-                workgroup_size: 48,
-                frontier_chunk: 1,
-            }
-            .validate(),
-            Err(RasterPartitionError::InvalidWorkgroupSize)
-        );
-        assert_eq!(
-            PipelineTuning {
-                workgroup_size: 512,
-                frontier_chunk: 1,
-            }
-            .validate(),
-            Err(RasterPartitionError::InvalidWorkgroupSize)
-        );
-        assert_eq!(
-            PipelineTuning {
-                workgroup_size: 64,
-                frontier_chunk: 0,
-            }
-            .validate(),
-            Err(RasterPartitionError::InvalidFrontierChunk)
-        );
-    }
-
-    #[test]
-    fn cell_dispatches_stay_inside_the_device_workgroup_limit() {
-        let tuning = PipelineTuning {
-            workgroup_size: 64,
-            frontier_chunk: 1,
-        };
-        let cells = FaceTexel::cell_count(MAX_TECTONIC_RESOLUTION).unwrap();
-        assert_eq!(tuning.cell_workgroups(cells), MAX_DISPATCH_WORKGROUPS);
-        assert_eq!(tuning.cell_workgroups(1), 1);
     }
 }

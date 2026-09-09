@@ -1,23 +1,42 @@
-//! wgpu dispatch for the raster plate partition.
+//! wgpu dispatch for the raster tectonics pipeline.
 //!
 //! This module holds no per-cell logic: it allocates the stage buffers, packs
-//! the configuration, and sequences the kernels [`crate::partition`] defines.
-//! Buffers stay resident between runs so a settings change reruns the stages
-//! rather than reallocating them.
+//! the configuration, sequences the kernels the stage modules define, and
+//! copies back the diagnostics they counted. Buffers stay resident between runs
+//! so a settings change reruns the stages rather than reallocating them.
 
-use crate::partition::{
-    BINDING_COUNT, MAX_DISPATCH_WORKGROUPS, MAX_PLATE_COUNT, PackedPartitionConfig,
-    PackedPartitionState, PipelineTuning, RasterPartitionError, RasterPlatePartitionConfig,
-    SEED_CANDIDATE_SIZE, SEED_REDUCTION_WORKGROUPS, STORAGE_BINDING_COUNT, frontier_size,
-    growth_passes, partition_kernel_source, validate_resolution,
+use crate::device::{
+    BINDING_COUNT, PipelineTuning, RasterTectonicsError, validate_device, validate_resolution,
 };
+use crate::evolution::RasterEvolutionConfig;
+use crate::field::{PLATE_ID_COUNT, RasterPlate};
+use crate::kernels::tectonics_kernel_source;
+use crate::layout::{PackedDiagnostics, PackedTectonicsConfig, PackedTectonicsState};
+use crate::partition::{
+    RasterPlatePartitionConfig, SEED_REDUCTION_WORKGROUPS, frontier_size, growth_passes,
+};
+use procgen_tectonics::BoundaryClass;
 use std::{
     mem::offset_of,
     sync::mpsc,
     time::{Duration, Instant},
 };
 
-/// The stages a partition run reports separately.
+/// Everything one tectonics run is configured by.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RasterTectonicsConfig {
+    pub partition: RasterPlatePartitionConfig,
+    pub evolution: RasterEvolutionConfig,
+}
+
+impl RasterTectonicsConfig {
+    pub(crate) fn validate(&self, resolution: u32) -> Result<(), RasterTectonicsError> {
+        self.partition.validate(resolution)?;
+        self.evolution.validate()
+    }
+}
+
+/// The stages a run reports separately.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PipelineStage {
     /// Clearing the resident buffers for a new run.
@@ -26,16 +45,32 @@ pub enum PipelineStage {
     PlateSeeds,
     /// Both frontier relaxations: majors alone, then majors with minors.
     PlateGrowth,
+    /// Per-plate area reduction and the crust classes it decides.
+    CrustClassification,
+    /// Every boundary classification the evolution runs.
+    BoundaryClassification,
+    /// Every migration step the evolution runs.
+    PlateMigration,
 }
 
 impl PipelineStage {
-    pub const ALL: [Self; 3] = [Self::Initialize, Self::PlateSeeds, Self::PlateGrowth];
+    pub const ALL: [Self; 6] = [
+        Self::Initialize,
+        Self::PlateSeeds,
+        Self::PlateGrowth,
+        Self::CrustClassification,
+        Self::BoundaryClassification,
+        Self::PlateMigration,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Initialize => "Initialize",
             Self::PlateSeeds => "Plate seeds",
             Self::PlateGrowth => "Plate growth",
+            Self::CrustClassification => "Crust",
+            Self::BoundaryClassification => "Boundaries",
+            Self::PlateMigration => "Migration",
         }
     }
 }
@@ -60,42 +95,76 @@ impl StageTimings {
     }
 }
 
-/// What one partition run cost.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PartitionRun {
-    pub timings: StageTimings,
-    /// Frontier passes the longer of the two relaxations consumed. The
+/// What one run produced, counted on the device and copied back once.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TectonicsDiagnostics {
+    /// Frontier passes the longer of the two growth relaxations consumed. The
     /// frontier's order varies run to run, so this varies by a pass or two
     /// while the labels it settles on do not. Read it as a cost, not a result.
     pub longest_relaxation_passes: u32,
-    /// Frontier passes each relaxation was allowed.
-    pub pass_budget: u32,
+    /// Share of the sphere's area the oceanic plates cover.
+    pub ocean_fraction: f32,
+    /// Plates that own no cell, which a head start large enough to claim every
+    /// cell leaves behind.
+    pub empty_plate_count: u32,
+    /// Ownership changes across every migration step. A cell can migrate more
+    /// than once.
+    pub migrated_cell_count: u32,
+    boundary_class_counts: [u32; BoundaryClass::ALL.len()],
 }
 
-impl PartitionRun {
-    /// Whether both relaxations reached their fixed point. A run that spends
-    /// its whole budget stopped short of one, and its ownership is not the
-    /// partition the configuration describes.
-    pub const fn settled(&self) -> bool {
-        self.longest_relaxation_passes < self.pass_budget
+impl TectonicsDiagnostics {
+    /// Border edges the final classification put in `class`.
+    pub const fn count(&self, class: BoundaryClass) -> u32 {
+        self.boundary_class_counts[class as usize]
+    }
+
+    /// Share of the raster's border edges the final classification put in
+    /// `class`.
+    pub fn boundary_fraction(&self, class: BoundaryClass) -> f32 {
+        let total: u32 = self.boundary_class_counts.iter().sum();
+        if total == 0 {
+            return 0.0;
+        }
+        self.count(class) as f32 / total as f32
     }
 }
 
-/// The GPU-resident plate partition.
-pub struct PlatePartitionPipeline {
+/// What one run cost and produced.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TectonicsRun {
+    pub timings: StageTimings,
+    pub diagnostics: TectonicsDiagnostics,
+    /// Frontier passes each growth relaxation was allowed.
+    pub pass_budget: u32,
+}
+
+impl TectonicsRun {
+    /// Whether both growth relaxations reached their fixed point. A run that
+    /// spends its whole budget stopped short of one, and its ownership is not
+    /// the partition the configuration describes.
+    pub const fn settled(&self) -> bool {
+        self.diagnostics.longest_relaxation_passes < self.pass_budget
+    }
+}
+
+/// The GPU-resident tectonics pipeline.
+pub struct TectonicsPipeline {
     resolution: u32,
     cell_count: u32,
     tuning: PipelineTuning,
-    kernels: PartitionKernels,
+    kernels: TectonicsKernels,
     bind_group: wgpu::BindGroup,
     config_buffer: wgpu::Buffer,
     state_buffer: wgpu::Buffer,
     growth_labels: wgpu::Buffer,
-    plate_seed_cells: wgpu::Buffer,
+    ownership: wgpu::Buffer,
+    boundary_classes: wgpu::Buffer,
+    plates: wgpu::Buffer,
     diagnostics: wgpu::Buffer,
 }
 
-struct PartitionKernels {
+struct TectonicsKernels {
     initialize: wgpu::ComputePipeline,
     begin_frontier: wgpu::ComputePipeline,
     seed_reduce: wgpu::ComputePipeline,
@@ -103,33 +172,41 @@ struct PartitionKernels {
     seed_place: wgpu::ComputePipeline,
     prepare_relax: wgpu::ComputePipeline,
     relax: wgpu::ComputePipeline,
+    derive_ownership: wgpu::ComputePipeline,
+    reduce_plate_areas: wgpu::ComputePipeline,
+    classify_crust: wgpu::ComputePipeline,
+    begin_boundaries: wgpu::ComputePipeline,
+    classify_boundaries: wgpu::ComputePipeline,
+    propose_migration: wgpu::ComputePipeline,
+    apply_migration: wgpu::ComputePipeline,
 }
 
-impl PlatePartitionPipeline {
+impl TectonicsPipeline {
     /// Compiles the kernels and allocates every stage buffer for one face
     /// resolution. Changing the resolution builds a new pipeline.
     ///
-    /// The device must meet `wgpu`'s default limits; [`validate_device`] states
-    /// which of them the kernels actually depend on.
+    /// The device must meet `wgpu`'s default limits;
+    /// [`crate::device::validate_device`] states which of them the kernels
+    /// actually depend on.
     pub fn new(
         device: &wgpu::Device,
         resolution: u32,
         tuning: PipelineTuning,
-    ) -> Result<Self, RasterPartitionError> {
+    ) -> Result<Self, RasterTectonicsError> {
         let cell_count = validate_resolution(resolution)?;
         tuning.validate()?;
-        validate_device(device, cell_count, tuning)?;
+        validate_device(device, tuning, frontier_size(cell_count))?;
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("raster plate partition"),
-            source: wgpu::ShaderSource::Wgsl(partition_kernel_source(tuning).into()),
+            label: Some("raster tectonics"),
+            source: wgpu::ShaderSource::Wgsl(tectonics_kernel_source(tuning).into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("raster plate partition"),
+            label: Some("raster tectonics"),
             entries: &bind_group_layout_entries(),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("raster plate partition"),
+            label: Some("raster tectonics"),
             bind_group_layouts: &[&layout],
             push_constant_ranges: &[],
         });
@@ -143,7 +220,7 @@ impl PlatePartitionPipeline {
                 cache: None,
             })
         };
-        let kernels = PartitionKernels {
+        let kernels = TectonicsKernels {
             initialize: kernel("initialize"),
             begin_frontier: kernel("begin_frontier"),
             seed_reduce: kernel("seed_reduce"),
@@ -151,26 +228,33 @@ impl PlatePartitionPipeline {
             seed_place: kernel("seed_place"),
             prepare_relax: kernel("prepare_relax"),
             relax: kernel("relax"),
+            derive_ownership: kernel("derive_ownership"),
+            reduce_plate_areas: kernel("reduce_plate_areas"),
+            classify_crust: kernel("classify_crust"),
+            begin_boundaries: kernel("begin_boundaries"),
+            classify_boundaries: kernel("classify_boundaries"),
+            propose_migration: kernel("propose_migration"),
+            apply_migration: kernel("apply_migration"),
         };
 
         let cells = u64::from(cell_count) * size_of::<u32>() as u64;
         let storage = wgpu::BufferUsages::STORAGE;
         let config_buffer = buffer(
             device,
-            "raster partition config",
-            size_of::<PackedPartitionConfig>() as u64,
+            "raster tectonics config",
+            size_of::<PackedTectonicsConfig>() as u64,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
         let state_buffer = buffer(
             device,
-            "raster partition state",
-            size_of::<PackedPartitionState>() as u64,
+            "raster tectonics state",
+            size_of::<PackedTectonicsState>() as u64,
             storage | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC,
         );
         let diagnostics = buffer(
             device,
-            "raster partition diagnostics",
-            size_of::<u32>() as u64,
+            "raster tectonics diagnostics",
+            size_of::<PackedDiagnostics>() as u64,
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         );
         let growth_labels = buffer(
@@ -187,17 +271,23 @@ impl PlatePartitionPipeline {
             storage,
         );
         let seed_distance = buffer(device, "raster farthest-point distance", cells, storage);
-        let seed_partials = buffer(
+        let ownership = buffer(
             device,
-            "raster seed candidates",
-            u64::from(SEED_REDUCTION_WORKGROUPS) * SEED_CANDIDATE_SIZE,
-            storage,
-        );
-        let plate_seed_cells = buffer(
-            device,
-            "raster plate seed cells",
-            u64::from(MAX_PLATE_COUNT) * size_of::<u32>() as u64,
+            "raster cell ownership",
+            cells,
             storage | wgpu::BufferUsages::COPY_SRC,
+        );
+        let boundary_classes = buffer(
+            device,
+            "raster boundary classes",
+            cells,
+            storage | wgpu::BufferUsages::COPY_SRC,
+        );
+        let plates = buffer(
+            device,
+            "raster plates",
+            u64::from(PLATE_ID_COUNT) * size_of::<RasterPlate>() as u64,
+            storage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
         );
         let resources = [
             config_buffer.as_entire_binding(),
@@ -206,11 +296,12 @@ impl PlatePartitionPipeline {
             queued_pass.as_entire_binding(),
             frontier.as_entire_binding(),
             seed_distance.as_entire_binding(),
-            seed_partials.as_entire_binding(),
-            plate_seed_cells.as_entire_binding(),
+            ownership.as_entire_binding(),
+            boundary_classes.as_entire_binding(),
+            plates.as_entire_binding(),
         ];
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("raster plate partition"),
+            label: Some("raster tectonics"),
             layout: &layout,
             entries: &std::array::from_fn::<_, BINDING_COUNT, _>(|binding| wgpu::BindGroupEntry {
                 binding: binding as u32,
@@ -227,7 +318,9 @@ impl PlatePartitionPipeline {
             config_buffer,
             state_buffer,
             growth_labels,
-            plate_seed_cells,
+            ownership,
+            boundary_classes,
+            plates,
             diagnostics,
         })
     }
@@ -245,101 +338,92 @@ impl PlatePartitionPipeline {
     }
 
     /// One `u32` per cell holding the packed `(arrival cost, plate)` growth
-    /// label. Cells no plate reached carry
-    /// [`crate::UNCLAIMED_LABEL`](crate::UNCLAIMED_LABEL).
+    /// label the partition settled on, before any migration.
     pub const fn growth_label_buffer(&self) -> &wgpu::Buffer {
         &self.growth_labels
     }
 
-    /// One `u32` per plate identity holding the cell its seed was placed on, or
-    /// [`procgen_cubesphere::NO_RASTER_CELL`] when the head start left no
-    /// eligible cell and the plate stayed empty.
-    pub const fn plate_seed_buffer(&self) -> &wgpu::Buffer {
-        &self.plate_seed_cells
+    /// One `u32` per cell holding its current and pending plate, as
+    /// [`crate::plate_ownership`] packs them.
+    pub const fn ownership_buffer(&self) -> &wgpu::Buffer {
+        &self.ownership
     }
 
-    /// Runs the partition from a clean state and returns per-stage timings.
+    /// One `u32` per cell holding the class of each of its four borders, as
+    /// [`crate::boundary_class`] reads them.
+    pub const fn boundary_class_buffer(&self) -> &wgpu::Buffer {
+        &self.boundary_classes
+    }
+
+    /// One [`RasterPlate`] per addressable plate id, including the reserved id
+    /// no plate uses.
+    pub const fn plate_buffer(&self) -> &wgpu::Buffer {
+        &self.plates
+    }
+
+    /// Runs the pipeline from a clean state and returns its timings and
+    /// diagnostics.
     pub fn run(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        config: &RasterPlatePartitionConfig,
-    ) -> Result<PartitionRun, RasterPartitionError> {
+        config: &RasterTectonicsConfig,
+    ) -> Result<TectonicsRun, RasterTectonicsError> {
+        // Everything that can fail happens before anything is written, so a
+        // configuration the pipeline refuses leaves the resident buffers as the
+        // last accepted run left them.
         config.validate(self.resolution)?;
+        let plate_count = config.partition.plate_count();
+        let plates = config.evolution.plate_records(plate_count)?;
         queue.write_buffer(
             &self.config_buffer,
             0,
-            bytemuck::bytes_of(&PackedPartitionConfig::new(
-                config,
+            bytemuck::bytes_of(&PackedTectonicsConfig::new(
+                &config.partition,
+                &config.evolution,
                 self.resolution,
                 self.cell_count,
             )),
         );
+        queue.write_buffer(&self.plates, 0, bytemuck::cast_slice(&plates));
 
-        let cell_workgroups = self.tuning.cell_workgroups(self.cell_count);
         let mut timings = StageTimings::default();
         self.submit(
             device,
             queue,
             &mut timings,
             PipelineStage::Initialize,
-            |pass| {
-                pass.set_pipeline(&self.kernels.initialize);
-                pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            |pass, kernels, workgroups| {
+                pass.set_pipeline(&kernels.initialize);
+                pass.dispatch_workgroups(workgroups, 1, 1);
             },
         );
-        self.seed_round(device, queue, &mut timings, 0..config.major_plate_count);
+        self.seed_round(
+            device,
+            queue,
+            &mut timings,
+            0..config.partition.major_plate_count,
+        );
         self.grow(device, queue, &mut timings);
         self.seed_round(
             device,
             queue,
             &mut timings,
-            config.major_plate_count..config.plate_count(),
+            config.partition.major_plate_count..plate_count,
         );
         self.grow(device, queue, &mut timings);
-        Ok(PartitionRun {
+        self.classify_crust(device, queue, &mut timings);
+        for _ in 0..config.evolution.step_count {
+            self.classify_boundaries(device, queue, &mut timings);
+            self.migrate(device, queue, &mut timings);
+        }
+        self.classify_boundaries(device, queue, &mut timings);
+
+        Ok(TectonicsRun {
             timings,
-            longest_relaxation_passes: self.read_longest_relaxation(device, queue),
+            diagnostics: self.read_diagnostics(device, queue),
             pass_budget: growth_passes(self.resolution),
         })
-    }
-
-    /// Copies the one diagnostic the host reads: how close the longer
-    /// relaxation came to exhausting its pass budget.
-    fn read_longest_relaxation(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> u32 {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("raster partition diagnostics"),
-        });
-        encoder.copy_buffer_to_buffer(
-            &self.state_buffer,
-            offset_of!(PackedPartitionState, longest_relaxation) as u64,
-            &self.diagnostics,
-            0,
-            size_of::<u32>() as u64,
-        );
-        queue.submit([encoder.finish()]);
-
-        let slice = self.diagnostics.slice(..);
-        let (sender, receiver) = mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            sender
-                .send(result)
-                .expect("the diagnostic receiver outlives the map")
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the partition device must accept a blocking poll");
-        receiver
-            .recv()
-            .expect("the diagnostic map must report a result")
-            .expect("the diagnostic buffer must map for reading");
-        let passes = u32::from_ne_bytes(
-            slice.get_mapped_range()[..size_of::<u32>()]
-                .try_into()
-                .expect("the diagnostic buffer holds one u32"),
-        );
-        self.diagnostics.unmap();
-        passes
     }
 
     /// Places one seed per plate in `plates`, each on the eligible cell
@@ -352,20 +436,26 @@ impl PlatePartitionPipeline {
         timings: &mut StageTimings,
         plates: std::ops::Range<u32>,
     ) {
-        self.submit(device, queue, timings, PipelineStage::PlateSeeds, |pass| {
-            pass.set_pipeline(&self.kernels.begin_frontier);
-            pass.dispatch_workgroups(1, 1, 1);
-            for plate in plates {
-                if plate > 0 {
-                    pass.set_pipeline(&self.kernels.seed_reduce);
-                    pass.dispatch_workgroups(SEED_REDUCTION_WORKGROUPS, 1, 1);
-                    pass.set_pipeline(&self.kernels.seed_select);
+        self.submit(
+            device,
+            queue,
+            timings,
+            PipelineStage::PlateSeeds,
+            |pass, kernels, _| {
+                pass.set_pipeline(&kernels.begin_frontier);
+                pass.dispatch_workgroups(1, 1, 1);
+                for plate in plates {
+                    if plate > 0 {
+                        pass.set_pipeline(&kernels.seed_reduce);
+                        pass.dispatch_workgroups(SEED_REDUCTION_WORKGROUPS, 1, 1);
+                        pass.set_pipeline(&kernels.seed_select);
+                        pass.dispatch_workgroups(1, 1, 1);
+                    }
+                    pass.set_pipeline(&kernels.seed_place);
                     pass.dispatch_workgroups(1, 1, 1);
                 }
-                pass.set_pipeline(&self.kernels.seed_place);
-                pass.dispatch_workgroups(1, 1, 1);
-            }
-        });
+            },
+        );
     }
 
     /// Relaxes the frontier until it empties. Passes past convergence read an
@@ -373,17 +463,128 @@ impl PlatePartitionPipeline {
     /// only its dispatches and needs no readback to stop.
     fn grow(&self, device: &wgpu::Device, queue: &wgpu::Queue, timings: &mut StageTimings) {
         let passes = growth_passes(self.resolution);
-        self.submit(device, queue, timings, PipelineStage::PlateGrowth, |pass| {
-            for _ in 0..passes {
-                pass.set_pipeline(&self.kernels.prepare_relax);
+        self.submit(
+            device,
+            queue,
+            timings,
+            PipelineStage::PlateGrowth,
+            |pass, kernels, _| {
+                for _ in 0..passes {
+                    pass.set_pipeline(&kernels.prepare_relax);
+                    pass.dispatch_workgroups(1, 1, 1);
+                    pass.set_pipeline(&kernels.relax);
+                    pass.dispatch_workgroups_indirect(
+                        &self.state_buffer,
+                        offset_of!(PackedTectonicsState, relax_dispatch) as u64,
+                    );
+                }
+            },
+        );
+    }
+
+    /// Lifts the settled labels into ownership and decides the crust classes
+    /// the plate areas imply. Deriving ownership belongs to this submission
+    /// because the area reduction is its first reader.
+    fn classify_crust(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        timings: &mut StageTimings,
+    ) {
+        self.submit(
+            device,
+            queue,
+            timings,
+            PipelineStage::CrustClassification,
+            |pass, kernels, workgroups| {
+                pass.set_pipeline(&kernels.derive_ownership);
+                pass.dispatch_workgroups(workgroups, 1, 1);
+                pass.set_pipeline(&kernels.reduce_plate_areas);
+                pass.dispatch_workgroups(workgroups, 1, 1);
+                pass.set_pipeline(&kernels.classify_crust);
                 pass.dispatch_workgroups(1, 1, 1);
-                pass.set_pipeline(&self.kernels.relax);
-                pass.dispatch_workgroups_indirect(
-                    &self.state_buffer,
-                    offset_of!(PackedPartitionState, relax_dispatch) as u64,
-                );
-            }
+            },
+        );
+    }
+
+    fn classify_boundaries(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        timings: &mut StageTimings,
+    ) {
+        self.submit(
+            device,
+            queue,
+            timings,
+            PipelineStage::BoundaryClassification,
+            |pass, kernels, workgroups| {
+                pass.set_pipeline(&kernels.begin_boundaries);
+                pass.dispatch_workgroups(1, 1, 1);
+                pass.set_pipeline(&kernels.classify_boundaries);
+                pass.dispatch_workgroups(workgroups, 1, 1);
+            },
+        );
+    }
+
+    fn migrate(&self, device: &wgpu::Device, queue: &wgpu::Queue, timings: &mut StageTimings) {
+        self.submit(
+            device,
+            queue,
+            timings,
+            PipelineStage::PlateMigration,
+            |pass, kernels, workgroups| {
+                pass.set_pipeline(&kernels.propose_migration);
+                pass.dispatch_workgroups(workgroups, 1, 1);
+                pass.set_pipeline(&kernels.apply_migration);
+                pass.dispatch_workgroups(workgroups, 1, 1);
+            },
+        );
+    }
+
+    /// Copies the counters the kernels accumulated and derives the fractions
+    /// the host reports from them.
+    fn read_diagnostics(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> TectonicsDiagnostics {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("raster tectonics diagnostics"),
         });
+        encoder.copy_buffer_to_buffer(
+            &self.state_buffer,
+            offset_of!(PackedTectonicsState, diagnostics) as u64,
+            &self.diagnostics,
+            0,
+            size_of::<PackedDiagnostics>() as u64,
+        );
+        queue.submit([encoder.finish()]);
+
+        let slice = self.diagnostics.slice(..);
+        let (sender, receiver) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            sender
+                .send(result)
+                .expect("the diagnostic receiver outlives the map")
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the tectonics device must accept a blocking poll");
+        receiver
+            .recv()
+            .expect("the diagnostic map must report a result")
+            .expect("the diagnostic buffer must map for reading");
+        let packed = *bytemuck::from_bytes::<PackedDiagnostics>(&slice.get_mapped_range());
+        self.diagnostics.unmap();
+
+        TectonicsDiagnostics {
+            longest_relaxation_passes: packed.longest_relaxation,
+            ocean_fraction: if packed.total_area == 0 {
+                0.0
+            } else {
+                packed.ocean_area as f32 / packed.total_area as f32
+            },
+            empty_plate_count: packed.empty_plate_count,
+            migrated_cell_count: packed.migrated_cell_count,
+            boundary_class_counts: packed.boundary_class_counts,
+        }
     }
 
     fn submit(
@@ -392,7 +593,7 @@ impl PlatePartitionPipeline {
         queue: &wgpu::Queue,
         timings: &mut StageTimings,
         stage: PipelineStage,
-        record: impl FnOnce(&mut wgpu::ComputePass<'_>),
+        record: impl FnOnce(&mut wgpu::ComputePass<'_>, &TectonicsKernels, u32),
     ) {
         let started = Instant::now();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -404,35 +605,18 @@ impl PlatePartitionPipeline {
                 timestamp_writes: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
-            record(&mut pass);
+            record(
+                &mut pass,
+                &self.kernels,
+                self.tuning.cell_workgroups(self.cell_count),
+            );
         }
         queue.submit([encoder.finish()]);
         device
             .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the partition device must accept a blocking poll");
+            .expect("the tectonics device must accept a blocking poll");
         timings.record(stage, started.elapsed());
     }
-}
-
-/// The limits the kernels depend on, checked so a device that cannot run them
-/// is refused rather than failing inside `wgpu`.
-fn validate_device(
-    device: &wgpu::Device,
-    cell_count: u32,
-    tuning: PipelineTuning,
-) -> Result<(), RasterPartitionError> {
-    let limits = device.limits();
-    let frontier = frontier_size(cell_count);
-    if limits.max_storage_buffers_per_shader_stage < STORAGE_BINDING_COUNT
-        || limits.max_compute_invocations_per_workgroup < tuning.workgroup_size
-        || limits.max_compute_workgroup_size_x < tuning.workgroup_size
-        || limits.max_compute_workgroups_per_dimension < MAX_DISPATCH_WORKGROUPS
-        || u64::from(limits.max_storage_buffer_binding_size) < frontier
-        || limits.max_buffer_size < frontier
-    {
-        return Err(RasterPartitionError::UnsupportedDevice);
-    }
-    Ok(())
 }
 
 fn bind_group_layout_entries() -> [wgpu::BindGroupLayoutEntry; BINDING_COUNT] {
@@ -480,5 +664,23 @@ mod tests {
             Duration::from_millis(7)
         );
         assert_eq!(timings.total(), Duration::from_millis(7));
+    }
+
+    #[test]
+    fn boundary_fractions_share_out_every_classified_border() {
+        let diagnostics = TectonicsDiagnostics {
+            longest_relaxation_passes: 0,
+            ocean_fraction: 0.0,
+            empty_plate_count: 0,
+            migrated_cell_count: 0,
+            boundary_class_counts: [70, 10, 15, 5],
+        };
+        assert_eq!(diagnostics.count(BoundaryClass::Divergent), 15);
+        assert_eq!(diagnostics.boundary_fraction(BoundaryClass::Interior), 0.7);
+        let total: f32 = BoundaryClass::ALL
+            .into_iter()
+            .map(|class| diagnostics.boundary_fraction(class))
+            .sum();
+        assert!((total - 1.0).abs() < f32::EPSILON);
     }
 }

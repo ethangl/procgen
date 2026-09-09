@@ -3,6 +3,7 @@
 
 const CUBESPHERE_AXIS_LINK_LENGTH: u32 = 5u;
 const CUBESPHERE_DIAGONAL_LINK_LENGTH: u32 = 7u;
+const CUBESPHERE_BORDER_LINKS_PER_CELL: u32 = 4u;
 const CUBESPHERE_NO_RASTER_CELL: u32 = 0xffffffffu;
 
 fn cubesphere_texel_link_offset(link: u32) -> vec2<i32> {
@@ -70,4 +71,40 @@ fn cubesphere_texel_direction(cell_id: u32, resolution: u32) -> vec3<f32> {
         cubesphere_texel_center(local % resolution, resolution),
         cubesphere_texel_center(local / resolution, resolution),
     ));
+}
+
+/// Canonical id of the border edge `link` crosses, identical from either cell.
+///
+/// The lower cell id owns the border and contributes its own direction toward
+/// the other cell. Seams may rotate which direction that is, so the owner's
+/// link is searched for rather than assumed opposite.
+fn cubesphere_border_edge(cell_id: u32, resolution: u32, link: u32) -> u32 {
+    let neighbor = cubesphere_texel_neighbor(cell_id, resolution, link);
+    if cell_id < neighbor {
+        return CUBESPHERE_BORDER_LINKS_PER_CELL * cell_id + link;
+    }
+    // Exactly one of the neighbor's border links leads back, so the search
+    // starts from the first candidate as the standing answer and needs no
+    // unreachable fallback.
+    var back = 0u;
+    for (var candidate = 1u; candidate < CUBESPHERE_BORDER_LINKS_PER_CELL; candidate++) {
+        if cubesphere_texel_neighbor(neighbor, resolution, candidate) == cell_id {
+            back = candidate;
+        }
+    }
+    return CUBESPHERE_BORDER_LINKS_PER_CELL * neighbor + back;
+}
+
+/// Solid angle a texel covers, in steradians.
+fn cubesphere_texel_solid_angle(cell_id: u32, resolution: u32) -> f32 {
+    let local = cell_id % (resolution * resolution);
+    let a = cubesphere_equiangular_tangent(
+        cubesphere_texel_center(local % resolution, resolution),
+    );
+    let b = cubesphere_equiangular_tangent(
+        cubesphere_texel_center(local / resolution, resolution),
+    );
+    let width = 2.0 * CUBESPHERE_PI_OVER_FOUR / f32(resolution);
+    let squared = 1.0 + a * a + b * b;
+    return width * width * (1.0 + a * a) * (1.0 + b * b) / (squared * sqrt(squared));
 }

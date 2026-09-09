@@ -1,66 +1,10 @@
-// WGSL kernels for the raster tectonics plate partition.
+// WGSL kernels for the raster tectonics plate partition: clearing the resident
+// buffers, farthest-point seed placement, and the frontier relaxation that
+// grows plates over the chamfer links.
 //
-// Compose procgen-core's hash, procgen-cubesphere's mapping and raster
-// sources, and the constant preamble that `partition.rs` emits before this
-// source. Every kernel shares one bind group so a stage never depends on the
-// order the host records dispatches.
-
-struct RasterPartitionConfig {
-    resolution: u32,
-    cell_count: u32,
-    major_plate_count: u32,
-    head_start_cost: u32,
-    growth_roughness: u32,
-    growth_key: u32,
-    first_seed_cell: u32,
-    padding: u32,
-}
-
-// `relax_dispatch_*` are the indirect arguments of the next relaxation pass and
-// occupy the first twelve bytes of the buffer.
-struct RasterPartitionState {
-    relax_dispatch_x: u32,
-    relax_dispatch_y: u32,
-    relax_dispatch_z: u32,
-    /// Frontier generation, which also marks which cells a pass has queued.
-    pass_index: u32,
-    /// Productive passes the relaxation running now has consumed.
-    phase_passes: u32,
-    /// Productive passes the longer relaxation of the run has consumed.
-    longest_relaxation: u32,
-    next_plate: u32,
-    chosen_cell: u32,
-    /// Entries in each frontier half, indexed by the pass that fills it.
-    frontier_count: array<atomic<u32>, 2>,
-}
-
-struct RasterSeedCandidate {
-    distance: f32,
-    cell: u32,
-}
-
-@group(0) @binding(0) var<uniform> config: RasterPartitionConfig;
-@group(0) @binding(1) var<storage, read_write> state: RasterPartitionState;
-@group(0) @binding(2) var<storage, read_write> labels: array<atomic<u32>>;
-@group(0) @binding(3) var<storage, read_write> queued_pass: array<atomic<u32>>;
-@group(0) @binding(4) var<storage, read_write> frontier: array<u32>;
-@group(0) @binding(5) var<storage, read_write> seed_distance: array<f32>;
-@group(0) @binding(6) var<storage, read_write> seed_partials: array<RasterSeedCandidate>;
-@group(0) @binding(7) var<storage, read_write> plate_seed_cells: array<u32>;
+// Compose bindings.wgsl before this source.
 
 var<workgroup> seed_reduction: array<RasterSeedCandidate, RASTER_WORKGROUP_SIZE>;
-
-fn raster_pack_label(cost: u32, plate: u32) -> u32 {
-    return (cost << RASTER_PLATE_LABEL_BITS) | plate;
-}
-
-fn raster_label_cost(label: u32) -> u32 {
-    return label >> RASTER_PLATE_LABEL_BITS;
-}
-
-fn raster_label_plate(label: u32) -> u32 {
-    return label & RASTER_UNCLAIMED_PLATE;
-}
 
 /// Deterministic traversal cost of one link, keyed by its canonical cell pair
 /// so both directions agree.
@@ -118,15 +62,22 @@ fn initialize(
         state.relax_dispatch_z = 1u;
         state.pass_index = 0u;
         state.phase_passes = 0u;
-        state.longest_relaxation = 0u;
         state.next_plate = 0u;
         // The first plate is seeded from the configuration, so the host skips
         // its reduction and this is the cell it places.
         state.chosen_cell = config.first_seed_cell;
         atomicStore(&state.frontier_count[0], 0u);
         atomicStore(&state.frontier_count[1], 0u);
+        // Only the two diagnostics that accumulate across the whole run are
+        // cleared here, because no single stage owns them. Every other counter
+        // is written outright by the stage that produces it.
+        state.diagnostics.longest_relaxation = 0u;
+        atomicStore(&state.diagnostics.migrated_cell_count, 0u);
     }
-    let stride = groups.x * RASTER_WORKGROUP_SIZE;
+    let stride = raster_cell_stride(groups);
+    for (var plate = id.x; plate < RASTER_PLATE_ID_COUNT; plate += stride) {
+        atomicStore(&state.plate_areas[plate], 0u);
+    }
     for (var cell = id.x; cell < config.cell_count; cell += stride) {
         atomicStore(&labels[cell], RASTER_UNCLAIMED_LABEL);
         atomicStore(&queued_pass[cell], RASTER_NO_FRONTIER_PASS);
@@ -160,18 +111,18 @@ fn seed_reduce(
     @builtin(num_workgroups) groups: vec3<u32>,
 ) {
     let ceiling = raster_seed_cost_ceiling();
-    let placed = plate_seed_cells[state.next_plate - 1u];
+    let placed = plates[state.next_plate - 1u].seed_cell;
     let seeded = placed != CUBESPHERE_NO_RASTER_CELL;
     var placed_direction = vec3(0.0, 0.0, 0.0);
     if seeded {
-        placed_direction = cubesphere_texel_direction(placed, config.resolution);
+        placed_direction = raster_cell_direction(placed);
     }
-    let stride = groups.x * RASTER_WORKGROUP_SIZE;
+    let stride = raster_cell_stride(groups);
     var best = raster_no_seed();
     for (var cell = id.x; cell < config.cell_count; cell += stride) {
         var distance = seed_distance[cell];
         if seeded {
-            let offset = cubesphere_texel_direction(cell, config.resolution) - placed_direction;
+            let offset = raster_cell_direction(cell) - placed_direction;
             distance = min(
                 distance,
                 offset.x * offset.x + offset.y * offset.y + offset.z * offset.z,
@@ -192,7 +143,7 @@ fn seed_reduce(
         workgroupBarrier();
     }
     if local == 0u {
-        seed_partials[group.x] = seed_reduction[0];
+        state.seed_partials[group.x] = seed_reduction[0];
     }
 }
 
@@ -201,20 +152,20 @@ fn seed_reduce(
 fn seed_select() {
     var best = raster_no_seed();
     for (var index = 0u; index < RASTER_SEED_REDUCTION_WORKGROUPS; index++) {
-        best = raster_better_seed(best, seed_partials[index]);
+        best = raster_better_seed(best, state.seed_partials[index]);
     }
     state.chosen_cell = best.cell;
 }
 
 /// Places the next plate's seed on the cell the reduction chose. A round that
-/// finds no eligible cell leaves its plate seedless, which the seed-cell buffer
+/// finds no eligible cell leaves its plate seedless, which the plate buffer
 /// records.
 @compute @workgroup_size(1)
 fn seed_place() {
     let plate = state.next_plate;
     state.next_plate = plate + 1u;
     let cell = state.chosen_cell;
-    plate_seed_cells[plate] = cell;
+    plates[plate].seed_cell = cell;
     if cell == CUBESPHERE_NO_RASTER_CELL {
         return;
     }
@@ -242,7 +193,8 @@ fn prepare_relax() {
     let pass_index = state.pass_index + 1u;
     state.pass_index = pass_index;
     state.phase_passes = state.phase_passes + 1u;
-    state.longest_relaxation = max(state.longest_relaxation, state.phase_passes);
+    state.diagnostics.longest_relaxation =
+        max(state.diagnostics.longest_relaxation, state.phase_passes);
     atomicStore(&state.frontier_count[pass_index & 1u], 0u);
     let stride = RASTER_WORKGROUP_SIZE * RASTER_FRONTIER_CHUNK;
     state.relax_dispatch_x = min(
@@ -278,7 +230,7 @@ fn relax(
     let half = (state.pass_index + 1u) & 1u;
     let count = atomicLoad(&state.frontier_count[half]);
     let base = half * config.cell_count;
-    let stride = groups.x * RASTER_WORKGROUP_SIZE;
+    let stride = raster_cell_stride(groups);
     for (var index = id.x; index < count; index += stride) {
         raster_relax_cell(frontier[base + index]);
     }

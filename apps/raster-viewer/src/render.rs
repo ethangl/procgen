@@ -1,11 +1,11 @@
-//! Six cube-face grids that sample the resident partition buffers.
+//! Six cube-face grids that sample the resident tectonics buffers.
 //!
-//! Grid density is a display setting: the grids only carry geometry, and every
-//! per-cell lookup happens in the fragment shader against the growth-label
-//! buffer, so the rendered boundaries stay at texel resolution however coarse
-//! the grid is.
+//! Grid density and the layer on show are display settings: the grids only
+//! carry geometry, and every per-cell lookup happens in the fragment shader
+//! against the pipeline's own buffers, so the rendered boundaries stay at texel
+//! resolution however coarse the grid is.
 
-use crate::partition::ResidentPartition;
+use crate::tectonics::ResidentTectonics;
 use bevy::{
     asset::{RenderAssetUsages, uuid_handle},
     camera::visibility::NoFrustumCulling,
@@ -17,21 +17,55 @@ use bevy::{
     },
     shader::{Shader, ShaderRef},
 };
-use procgen_cubesphere::{CubeFace, FaceCoordinates, MAPPING_WGSL_SOURCE, face_to_direction};
-use procgen_raster_tectonics::{MAX_PLATE_COUNT, UNCLAIMED_PLATE};
+use procgen_cubesphere::{
+    CubeFace, FaceCoordinates, MAPPING_WGSL_SOURCE, RASTER_WGSL_SOURCE, face_to_direction,
+};
+use procgen_raster_tectonics::{PLATE_ID_COUNT, UNCLAIMED_PLATE, field_wgsl_source};
+use procgen_tectonics::{BoundaryClass, CrustClass};
 use procgen_viewer_support::id_color;
 
 /// Radius the face grids are drawn at.
 const SURFACE_RADIUS: f32 = 1.0;
 /// Colour of a cell no plate reached, which only a starved head start leaves.
 const UNCLAIMED_COLOR: Color = Color::srgb(0.08, 0.08, 0.1);
-/// One colour per addressable plate, plus the reserved unclaimed id.
-const PALETTE_LEN: usize = MAX_PLATE_COUNT as usize + 1;
+/// How far a plate's colour is dimmed where the boundary layer draws no border.
+const INTERIOR_DIMMING: f32 = 0.3;
+
+/// The palette holds one colour per addressable plate id, then one per crust
+/// class, then one per boundary class, so every layer is one lookup.
+const CRUST_PALETTE_BASE: usize = PLATE_ID_COUNT as usize;
+const BOUNDARY_PALETTE_BASE: usize = CRUST_PALETTE_BASE + CrustClass::ALL.len();
+const PALETTE_LEN: usize = BOUNDARY_PALETTE_BASE + BoundaryClass::ALL.len();
 
 pub const GRID_QUAD_RANGE: std::ops::RangeInclusive<u32> = 16..=256;
 const DEFAULT_GRID_QUADS: u32 = 128;
 
 const FACE_FRAGMENT_SHADER: Handle<Shader> = uuid_handle!("2f36f2f5-0a1e-4a0e-9a54-2a8e0f4d0f11");
+
+/// Which field the face grids colour themselves by.
+///
+/// This is a resource of its own rather than a field of [`DisplaySettings`]
+/// because the two drive different work: the layer only reaches the material,
+/// while grid density rebuilds the meshes.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceLayer {
+    #[default]
+    Plates,
+    Crust,
+    Boundaries,
+}
+
+impl SurfaceLayer {
+    pub const ALL: [Self; 3] = [Self::Plates, Self::Crust, Self::Boundaries];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Plates => "Plates",
+            Self::Crust => "Crust",
+            Self::Boundaries => "Boundaries",
+        }
+    }
+}
 
 /// How finely the face grids are tessellated, independent of texel resolution.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,15 +84,20 @@ impl Default for DisplaySettings {
 #[derive(Clone, Copy, Debug, ShaderType)]
 struct PlateFaceDisplay {
     resolution: u32,
+    layer: u32,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, TypePath)]
 struct PlateFaceMaterial {
     #[storage(0, read_only, buffer)]
-    growth_labels: Buffer,
-    #[uniform(1)]
+    ownership: Buffer,
+    #[storage(1, read_only, buffer)]
+    boundary_classes: Buffer,
+    #[storage(2, read_only, buffer)]
+    plates: Buffer,
+    #[uniform(3)]
     display: PlateFaceDisplay,
-    #[storage(2, read_only)]
+    #[storage(4, read_only)]
     palette: Handle<ShaderStorageBuffer>,
 }
 
@@ -89,12 +128,15 @@ impl Plugin for FaceGridRenderPlugin {
         register_shader(app);
         app.add_plugins(MaterialPlugin::<PlateFaceMaterial>::default())
             .init_resource::<DisplaySettings>()
+            .init_resource::<SurfaceLayer>()
             .add_systems(Startup, initialize_palette)
             .add_systems(
                 Update,
                 (
                     sync_grid_meshes.run_if(resource_changed::<DisplaySettings>),
-                    sync_material.run_if(resource_exists_and_changed::<ResidentPartition>),
+                    sync_material.run_if(resource_exists::<ResidentTectonics>.and(
+                        resource_changed::<ResidentTectonics>.or(resource_changed::<SurfaceLayer>),
+                    )),
                     sync_faces.run_if(faces_are_stale),
                 )
                     .chain(),
@@ -103,8 +145,23 @@ impl Plugin for FaceGridRenderPlugin {
 }
 
 fn register_shader(app: &mut App) {
-    let constants = format!("const RASTER_PLATE_LABEL_MASK: u32 = {UNCLAIMED_PLATE}u;");
-    let source = [MAPPING_WGSL_SOURCE, &constants, include_str!("faces.wgsl")].join("\n");
+    let constants = format!(
+        "const RASTER_LAYER_CRUST: u32 = {}u;\n\
+         const RASTER_LAYER_BOUNDARIES: u32 = {}u;\n\
+         const RASTER_CRUST_PALETTE_BASE: u32 = {CRUST_PALETTE_BASE}u;\n\
+         const RASTER_BOUNDARY_PALETTE_BASE: u32 = {BOUNDARY_PALETTE_BASE}u;\n\
+         const RASTER_INTERIOR_DIMMING: f32 = {INTERIOR_DIMMING:?};",
+        layer_code(SurfaceLayer::Crust),
+        layer_code(SurfaceLayer::Boundaries),
+    );
+    let source = [
+        MAPPING_WGSL_SOURCE,
+        RASTER_WGSL_SOURCE,
+        &field_wgsl_source(),
+        &constants,
+        include_str!("faces.wgsl"),
+    ]
+    .join("\n");
     app.world_mut()
         .resource_mut::<Assets<Shader>>()
         .insert(
@@ -114,17 +171,39 @@ fn register_shader(app: &mut App) {
         .expect("the face shader handle must be free");
 }
 
+/// Colour of each crust class, in [`CrustClass::ALL`] order, which is also the
+/// order the plate buffer's crust codes take.
+const CRUST_COLORS: [Color; CrustClass::ALL.len()] =
+    [Color::srgb(0.10, 0.24, 0.45), Color::srgb(0.52, 0.46, 0.32)];
+
+/// Colour of each boundary class, in [`BoundaryClass::ALL`] order, which is
+/// also the order the boundary word's codes take. The interior entry is never
+/// sampled; the layer dims the plate colour there instead.
+const BOUNDARY_COLORS: [Color; BoundaryClass::ALL.len()] = [
+    UNCLAIMED_COLOR,
+    Color::srgb(0.85, 0.24, 0.18),
+    Color::srgb(0.20, 0.55, 0.85),
+    Color::srgb(0.92, 0.78, 0.22),
+];
+
+const fn layer_code(layer: SurfaceLayer) -> u32 {
+    layer as u32
+}
+
 fn initialize_palette(mut commands: Commands, mut buffers: ResMut<Assets<ShaderStorageBuffer>>) {
-    let palette: Vec<[f32; 4]> = (0..PALETTE_LEN)
-        .map(|plate| {
-            let color = if plate == UNCLAIMED_PLATE as usize {
-                UNCLAIMED_COLOR
-            } else {
-                id_color(plate)
-            };
-            color.to_linear().to_f32_array()
-        })
+    let plates = (0..PLATE_ID_COUNT as usize).map(|plate| {
+        if plate == UNCLAIMED_PLATE as usize {
+            UNCLAIMED_COLOR
+        } else {
+            id_color(plate)
+        }
+    });
+    let palette: Vec<[f32; 4]> = plates
+        .chain(CRUST_COLORS)
+        .chain(BOUNDARY_COLORS)
+        .map(|color| color.to_linear().to_f32_array())
         .collect();
+    debug_assert_eq!(palette.len(), PALETTE_LEN);
     commands.insert_resource(PlatePalette(buffers.add(ShaderStorageBuffer::new(
         bytemuck::cast_slice(&palette),
         RenderAssetUsages::default(),
@@ -146,16 +225,20 @@ fn sync_grid_meshes(
 
 fn sync_material(
     mut commands: Commands,
-    partition: Res<ResidentPartition>,
+    tectonics: Res<ResidentTectonics>,
+    layer: Res<SurfaceLayer>,
     palette: Res<PlatePalette>,
     mut materials: ResMut<Assets<PlateFaceMaterial>>,
     existing: Option<Res<FaceMaterial>>,
 ) {
-    let pipeline = partition.pipeline();
+    let pipeline = tectonics.pipeline();
     let material = PlateFaceMaterial {
-        growth_labels: Buffer::from(pipeline.growth_label_buffer().clone()),
+        ownership: Buffer::from(pipeline.ownership_buffer().clone()),
+        boundary_classes: Buffer::from(pipeline.boundary_class_buffer().clone()),
+        plates: Buffer::from(pipeline.plate_buffer().clone()),
         display: PlateFaceDisplay {
             resolution: pipeline.resolution(),
+            layer: layer_code(*layer),
         },
         palette: palette.0.clone(),
     };
@@ -163,7 +246,7 @@ fn sync_material(
         Some(existing) => {
             *materials
                 .get_mut(&existing.0)
-                .expect("the face material outlives the resident partition") = material;
+                .expect("the face material outlives the resident pipeline") = material;
         }
         None => commands.insert_resource(FaceMaterial(materials.add(material))),
     }

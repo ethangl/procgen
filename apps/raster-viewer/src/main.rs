@@ -5,8 +5,8 @@
 //! renders six face grids that sample the resulting buffers. No generation
 //! logic lives here.
 
-mod partition;
 mod render;
+mod tectonics;
 mod ui;
 
 use bevy::{camera::PerspectiveProjection, core_pipeline::tonemapping::Tonemapping, prelude::*};
@@ -35,7 +35,7 @@ fn main() {
             OrbitCameraPlugin {
                 limits: ORBIT_LIMITS,
             },
-            partition::PlatePartitionPlugin,
+            tectonics::TectonicsPlugin,
             render::FaceGridRenderPlugin,
             ui::RasterViewerUiPlugin,
         ))

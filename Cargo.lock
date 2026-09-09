@@ -3181,6 +3181,7 @@ dependencies = [
  "procgen-cubesphere",
  "procgen-noise",
  "procgen-raster-tectonics",
+ "procgen-tectonics",
  "procgen-terrain",
  "wgpu",
 ]
