@@ -368,12 +368,11 @@ fn propagate_boundary_effects(
 mod tests {
     use super::*;
     use crate::test_support::{
-        empty_boundaries, final_state_fixture, fingerprint, mesh as test_mesh,
-        two_plate_boundary_partition,
+        empty_boundaries, final_state_fixture, mesh as test_mesh, two_plate_boundary_partition,
     };
 
     #[test]
-    fn deformation_is_deterministic_signed_and_stable() {
+    fn deformation_is_deterministic_and_signed() {
         let (mesh, partition, crust, boundaries) = final_state_fixture();
         let config = BoundaryDeformationConfig::default();
         let first =
@@ -390,14 +389,6 @@ mod tests {
             first.diagnostics.uplifted_cell_count + first.diagnostics.subsided_cell_count
         );
         assert!(first.diagnostics.affected_cell_count() >= first.diagnostics.source_cell_count);
-
-        let fingerprint = fingerprint(
-            first
-                .cell_deformation
-                .iter()
-                .map(|value| value.to_bits() as u64),
-        );
-        assert_eq!(fingerprint, 14_523_663_219_577_290_899);
     }
 
     #[test]

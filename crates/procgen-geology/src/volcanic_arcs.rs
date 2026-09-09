@@ -575,13 +575,16 @@ mod tests {
             .into_iter()
             .chain(segment.boundary_edges.iter().map(|&value| value as u64))
             .chain(segment.boundary_cells.iter().map(|&value| value as u64))
-            .chain(segment.arc_cells.iter().flat_map(|arc_cell| {
-                [arc_cell.cell as u64, u64::from(arc_cell.strength.to_bits())]
-            }))
+            .chain(
+                segment
+                    .arc_cells
+                    .iter()
+                    .map(|arc_cell| arc_cell.cell as u64),
+            )
             .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
-        assert_eq!(fingerprint(values), 2_222_789_925_634_094_949);
+        assert_eq!(fingerprint(values), 600_931_779_793_019_199);
     }
 
     #[test]

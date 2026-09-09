@@ -10,9 +10,6 @@ rust-version = "1.92"
 # inflates them by roughly sevenfold, so the generation crates and their
 # dependencies are optimized even in a dev build while the two applications
 # stay at the dev default to keep them debuggable and quick to rebuild.
-# Lowering this costs more than slower timings: the float-derived fingerprints
-# in procgen-climate, procgen-geology, and procgen-tectonics are pinned against
-# optimized codegen and fail at opt-level 0.
 [profile.dev]
 opt-level = 3
 

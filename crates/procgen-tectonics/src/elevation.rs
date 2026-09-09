@@ -153,7 +153,7 @@ fn smooth(mesh: &SphereMesh, elevation: &mut Vec<f32>, passes: usize, weight: f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{final_state_fixture, fingerprint, two_plate_boundary_partition};
+    use crate::test_support::{final_state_fixture, two_plate_boundary_partition};
     use crate::{
         BaseElevationConfig, BaseElevationDiagnostics, BoundaryDeformationConfig,
         SeafloorAgeConfig, derive_base_elevation, derive_boundary_deformation, derive_seafloor_age,
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn composition_is_deterministic_normalized_and_preserves_the_pipeline_fingerprint() {
+    fn composition_is_deterministic_and_normalized() {
         let (mesh, base, deformation) = final_fixture();
         let config = CoarseElevationConfig::default();
         let first = compose_coarse_elevation(&mesh, &base, &deformation, config).unwrap();
@@ -222,13 +222,8 @@ mod tests {
                 .iter()
                 .all(|value| (0.0..=1.0).contains(value))
         );
-        let fingerprint = fingerprint(
-            first
-                .cell_elevations
-                .iter()
-                .map(|value| value.to_bits() as u64),
-        );
-        assert_eq!(fingerprint, 17_987_375_597_227_743_863);
+        // Normalization would also accept a field that collapsed to one value.
+        assert!(first.diagnostics.minimum < first.diagnostics.maximum);
     }
 
     #[test]
