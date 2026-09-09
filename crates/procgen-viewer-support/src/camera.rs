@@ -24,9 +24,10 @@ pub struct OrbitLimits {
     pub max_distance: f32,
 }
 
-/// Where the camera is looking from.
+/// Where the camera is looking from. The plugin owns it; applications drive it
+/// with the mouse and read it off their camera's transform.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
-pub struct Orbit {
+struct Orbit {
     yaw: f32,
     pitch: f32,
     distance: f32,
@@ -34,7 +35,7 @@ pub struct Orbit {
 }
 
 impl Orbit {
-    pub fn new(limits: OrbitLimits) -> Self {
+    fn new(limits: OrbitLimits) -> Self {
         Self {
             yaw: START_YAW,
             pitch: START_PITCH,
@@ -43,12 +44,8 @@ impl Orbit {
         }
     }
 
-    pub const fn distance(&self) -> f32 {
-        self.distance
-    }
-
     /// The camera transform this orbit describes.
-    pub fn transform(&self) -> Transform {
+    fn transform(&self) -> Transform {
         let horizontal = self.distance * self.pitch.cos();
         let position = Vec3::new(
             horizontal * self.yaw.sin(),

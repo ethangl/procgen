@@ -120,7 +120,9 @@ fn initialize(
         state.phase_passes = 0u;
         state.longest_relaxation = 0u;
         state.next_plate = 0u;
-        state.chosen_cell = CUBESPHERE_NO_RASTER_CELL;
+        // The first plate is seeded from the configuration, so the host skips
+        // its reduction and this is the cell it places.
+        state.chosen_cell = config.first_seed_cell;
         atomicStore(&state.frontier_count[0], 0u);
         atomicStore(&state.frontier_count[1], 0u);
     }
@@ -204,17 +206,14 @@ fn seed_select() {
     state.chosen_cell = best.cell;
 }
 
-/// Places the next plate's seed. The first plate takes the configuration's
-/// cell; a later round that finds no eligible cell leaves its plate seedless,
-/// which the seed-cell buffer records.
+/// Places the next plate's seed on the cell the reduction chose. A round that
+/// finds no eligible cell leaves its plate seedless, which the seed-cell buffer
+/// records.
 @compute @workgroup_size(1)
 fn seed_place() {
     let plate = state.next_plate;
     state.next_plate = plate + 1u;
-    var cell = state.chosen_cell;
-    if plate == 0u {
-        cell = config.first_seed_cell;
-    }
+    let cell = state.chosen_cell;
     plate_seed_cells[plate] = cell;
     if cell == CUBESPHERE_NO_RASTER_CELL {
         return;
@@ -235,12 +234,12 @@ fn seed_place() {
 /// a readback.
 @compute @workgroup_size(1)
 fn prepare_relax() {
-    let pass_index = state.pass_index + 1u;
-    let count = atomicLoad(&state.frontier_count[(pass_index + 1u) & 1u]);
+    let count = atomicLoad(&state.frontier_count[state.pass_index & 1u]);
     if count == 0u {
         state.relax_dispatch_x = 0u;
         return;
     }
+    let pass_index = state.pass_index + 1u;
     state.pass_index = pass_index;
     state.phase_passes = state.phase_passes + 1u;
     state.longest_relaxation = max(state.longest_relaxation, state.phase_passes);

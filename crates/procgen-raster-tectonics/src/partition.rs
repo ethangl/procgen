@@ -366,7 +366,6 @@ pub(crate) const SEED_CANDIDATE_SIZE: u64 = 2 * size_of::<u32>() as u64;
 /// than by counting words. Nothing reads the mirror's fields; `size_of` and
 /// `offset_of!` are its whole purpose.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct PackedPartitionState {
     pub(crate) relax_dispatch: [u32; 3],
     pub(crate) pass_index: u32,

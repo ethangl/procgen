@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bytemuck = "1.24"
 bevy = { version = "0.18.1", default-features = false, features = [
   "async_executor",
   "bevy_asset",

@@ -6,5 +6,5 @@
 mod camera;
 mod palette;
 
-pub use camera::{Orbit, OrbitCamera, OrbitCameraPlugin, OrbitLimits};
-pub use palette::{ID_HUE_STEP_DEGREES, ID_LIGHTNESS, ID_SATURATION, id_color};
+pub use camera::{OrbitCamera, OrbitCameraPlugin, OrbitLimits};
+pub use palette::id_color;

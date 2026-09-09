@@ -11,15 +11,22 @@ use bevy::{
     camera::visibility::NoFrustumCulling,
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
-    render::render_resource::{AsBindGroup, Buffer, ShaderType},
+    render::{
+        render_resource::{AsBindGroup, Buffer, ShaderType},
+        storage::ShaderStorageBuffer,
+    },
     shader::{Shader, ShaderRef},
 };
 use procgen_cubesphere::{CubeFace, FaceCoordinates, MAPPING_WGSL_SOURCE, face_to_direction};
-use procgen_raster_tectonics::UNCLAIMED_PLATE;
-use procgen_viewer_support::{ID_HUE_STEP_DEGREES, ID_LIGHTNESS, ID_SATURATION};
+use procgen_raster_tectonics::{MAX_PLATE_COUNT, UNCLAIMED_PLATE};
+use procgen_viewer_support::id_color;
 
 /// Radius the face grids are drawn at.
 const SURFACE_RADIUS: f32 = 1.0;
+/// Colour of a cell no plate reached, which only a starved head start leaves.
+const UNCLAIMED_COLOR: Color = Color::srgb(0.08, 0.08, 0.1);
+/// One colour per addressable plate, plus the reserved unclaimed id.
+const PALETTE_LEN: usize = MAX_PLATE_COUNT as usize + 1;
 
 pub const GRID_QUAD_RANGE: std::ops::RangeInclusive<u32> = 16..=256;
 const DEFAULT_GRID_QUADS: u32 = 128;
@@ -51,6 +58,8 @@ struct PlateFaceMaterial {
     growth_labels: Buffer,
     #[uniform(1)]
     display: PlateFaceDisplay,
+    #[storage(2, read_only)]
+    palette: Handle<ShaderStorageBuffer>,
 }
 
 impl Material for PlateFaceMaterial {
@@ -65,6 +74,11 @@ struct FaceGrids([Handle<Mesh>; CubeFace::ALL.len()]);
 #[derive(Resource)]
 struct FaceMaterial(Handle<PlateFaceMaterial>);
 
+/// The identity ramp, resolved to linear colour on the host so the shader is a
+/// lookup rather than a second implementation of Bevy's colour conversions.
+#[derive(Resource)]
+struct PlatePalette(Handle<ShaderStorageBuffer>);
+
 #[derive(Component)]
 struct FaceGrid;
 
@@ -75,6 +89,7 @@ impl Plugin for FaceGridRenderPlugin {
         register_shader(app);
         app.add_plugins(MaterialPlugin::<PlateFaceMaterial>::default())
             .init_resource::<DisplaySettings>()
+            .add_systems(Startup, initialize_palette)
             .add_systems(
                 Update,
                 (
@@ -88,13 +103,7 @@ impl Plugin for FaceGridRenderPlugin {
 }
 
 fn register_shader(app: &mut App) {
-    let constants = format!(
-        "const RASTER_UNCLAIMED_PLATE: u32 = {UNCLAIMED_PLATE}u;\n\
-         const RASTER_PLATE_HUE_TURNS: f32 = {};\n\
-         const RASTER_PLATE_SATURATION: f32 = {ID_SATURATION};\n\
-         const RASTER_PLATE_LIGHTNESS: f32 = {ID_LIGHTNESS};",
-        ID_HUE_STEP_DEGREES / 360.0,
-    );
+    let constants = format!("const RASTER_PLATE_LABEL_MASK: u32 = {UNCLAIMED_PLATE}u;");
     let source = [MAPPING_WGSL_SOURCE, &constants, include_str!("faces.wgsl")].join("\n");
     app.world_mut()
         .resource_mut::<Assets<Shader>>()
@@ -103,6 +112,23 @@ fn register_shader(app: &mut App) {
             Shader::from_wgsl(source, "procgen-raster-faces.wgsl"),
         )
         .expect("the face shader handle must be free");
+}
+
+fn initialize_palette(mut commands: Commands, mut buffers: ResMut<Assets<ShaderStorageBuffer>>) {
+    let palette: Vec<[f32; 4]> = (0..PALETTE_LEN)
+        .map(|plate| {
+            let color = if plate == UNCLAIMED_PLATE as usize {
+                UNCLAIMED_COLOR
+            } else {
+                id_color(plate)
+            };
+            color.to_linear().to_f32_array()
+        })
+        .collect();
+    commands.insert_resource(PlatePalette(buffers.add(ShaderStorageBuffer::new(
+        bytemuck::cast_slice(&palette),
+        RenderAssetUsages::default(),
+    ))));
 }
 
 fn sync_grid_meshes(
@@ -121,6 +147,7 @@ fn sync_grid_meshes(
 fn sync_material(
     mut commands: Commands,
     partition: Res<ResidentPartition>,
+    palette: Res<PlatePalette>,
     mut materials: ResMut<Assets<PlateFaceMaterial>>,
     existing: Option<Res<FaceMaterial>>,
 ) {
@@ -130,6 +157,7 @@ fn sync_material(
         display: PlateFaceDisplay {
             resolution: pipeline.resolution(),
         },
+        palette: palette.0.clone(),
     };
     match existing {
         Some(existing) => {

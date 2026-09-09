@@ -2,9 +2,9 @@ use bevy::prelude::Color;
 
 /// Hue step, in degrees, between consecutive identity colours. The golden angle
 /// keeps neighbouring ids distinguishable however many there are.
-pub const ID_HUE_STEP_DEGREES: f32 = 137.508;
-pub const ID_SATURATION: f32 = 0.62;
-pub const ID_LIGHTNESS: f32 = 0.62;
+const ID_HUE_STEP_DEGREES: f32 = 137.508;
+const ID_SATURATION: f32 = 0.62;
+const ID_LIGHTNESS: f32 = 0.62;
 const ID_ALPHA: f32 = 0.95;
 
 /// A stable colour for an integer identity such as a plate or a basin.

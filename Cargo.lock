@@ -3213,6 +3213,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "bytemuck",
  "procgen-cubesphere",
  "procgen-raster-tectonics",
  "procgen-tectonics",
