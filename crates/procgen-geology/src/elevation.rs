@@ -5,7 +5,7 @@ use crate::{
     },
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{BaseElevation, CoarseElevation, FieldSummary};
+use procgen_tectonics::{BaseElevation, CoarseElevation, ElevationField, FieldSummary};
 
 /// Configuration for the ordered coarse geological-elevation composition.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,10 +63,20 @@ pub struct GeologicalElevationDiagnostics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeologicalElevation {
     pub cell_elevations: Vec<f32>,
+    /// Datum this field was composed against, carried from the tectonic
+    /// elevation the stage refined. Geology moves elevations, never the datum.
+    pub sea_level: f32,
     pub diagnostics: GeologicalElevationDiagnostics,
 }
 
 impl GeologicalElevation {
+    pub fn field(&self) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations: &self.cell_elevations,
+            sea_level: self.sea_level,
+        }
+    }
+
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), GeologyInputError> {
         if self.cell_elevations.len() != mesh.cell_count() {
             return Err(GeologyInputError::Elevation);
@@ -141,6 +151,7 @@ pub fn compose_geological_elevation(
     diagnostics.elevation = FieldSummary::from_values(&cell_elevations);
     Ok(GeologicalElevation {
         cell_elevations,
+        sea_level: inputs.tectonic_elevation.sea_level,
         diagnostics,
     })
 }
@@ -294,6 +305,23 @@ mod tests {
             ),
             14_138_733_168_948_866_849
         );
+    }
+
+    /// Geology moves elevations and never the datum, so the composed field
+    /// answers land questions against the datum its input carried.
+    #[test]
+    fn the_composed_field_carries_its_inputs_datum() {
+        let mesh = mesh(4);
+        let mut fixture = Fixture::new(vec![0.41, 0.43, 0.6, 0.9]);
+        fixture.tectonic_elevation.sea_level = 0.42;
+
+        let result = fixture
+            .compose(&mesh, 0.6, GeologicalElevationConfig::default())
+            .unwrap();
+
+        assert_eq!(result.sea_level, 0.42);
+        assert!(!result.field().is_land(0));
+        assert_eq!(result.field().land_cell_count(), 3);
     }
 
     #[test]

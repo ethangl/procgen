@@ -6,7 +6,7 @@ use crate::{
 };
 use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CellCrust, CrustClass, FieldSummary,
+    BoundaryClass, BoundaryClassification, CellCrust, CrustClass, ElevationField, FieldSummary,
 };
 
 /// Configuration for deterministic present-day isostatic support and adjustment.
@@ -63,10 +63,20 @@ pub struct IsostaticAdjustment {
     /// their geological elevation so the uniform adjustment remains a no-op.
     pub cell_support: Vec<f32>,
     pub cell_elevations: Vec<f32>,
+    /// Datum this field was adjusted against, carried from the geological
+    /// elevation it started from.
+    pub sea_level: f32,
     pub diagnostics: IsostaticAdjustmentDiagnostics,
 }
 
 impl IsostaticAdjustment {
+    pub fn field(&self) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations: &self.cell_elevations,
+            sea_level: self.sea_level,
+        }
+    }
+
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), crate::GeologyInputError> {
         if self.cell_support.len() != mesh.cell_count()
             || self.cell_elevations.len() != mesh.cell_count()
@@ -136,6 +146,7 @@ pub fn derive_isostatic_adjustment(
     Ok(IsostaticAdjustment {
         cell_support,
         cell_elevations,
+        sea_level: inputs.geological_elevation.sea_level,
         diagnostics,
     })
 }
@@ -180,7 +191,7 @@ mod tests {
         test_support::{empty_basins, empty_cratons, mesh},
     };
     use procgen_core::fingerprint;
-    use procgen_tectonics::StageInputError;
+    use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
     struct Fixture {
@@ -206,6 +217,7 @@ mod tests {
                 basins: empty_basins(cell_count),
                 elevation: GeologicalElevation {
                     cell_elevations: vec![0.65; cell_count],
+                    sea_level: CoarseElevationConfig::default().sea_level,
                     diagnostics: GeologicalElevationDiagnostics::default(),
                 },
                 mesh,
@@ -264,6 +276,26 @@ mod tests {
             ),
             16_615_095_888_973_175_191
         );
+    }
+
+    /// The datum belongs to the field, not to a config the stage never sees,
+    /// so an adjusted field answers land questions the way its input did.
+    #[test]
+    fn the_adjusted_field_carries_the_datum_it_started_from() {
+        let mut fixture = Fixture::new(16);
+        fixture.elevation.sea_level = 0.42;
+        // An oceanic cell keeps its elevation, so the only thing deciding
+        // whether it is land is the datum the field carries.
+        fixture.cell_birth[0] = Some(0);
+        fixture.elevation.cell_elevations[0] = 0.41;
+
+        let adjusted = fixture
+            .derive(IsostaticAdjustmentConfig::default())
+            .unwrap();
+
+        assert_eq!(adjusted.sea_level, 0.42);
+        assert!(!adjusted.field().is_land(0));
+        assert!(adjusted.field().is_land(1));
     }
 
     #[test]

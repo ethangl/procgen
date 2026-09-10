@@ -308,6 +308,7 @@ fn validate_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_sea_level;
     use procgen_geology::GeologyInputError;
     use procgen_geology::{
         CratonDiagnostics, Hotspot, HotspotDiagnostics, IsostaticAdjustmentDiagnostics,
@@ -348,6 +349,7 @@ mod tests {
                 isostasy: IsostaticAdjustment {
                     cell_support: vec![0.5; cells],
                     cell_elevations: vec![0.5; cells],
+                    sea_level: test_sea_level(),
                     diagnostics: IsostaticAdjustmentDiagnostics::default(),
                 },
                 cratons: CratonField {

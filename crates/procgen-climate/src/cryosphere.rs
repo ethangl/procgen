@@ -3,6 +3,7 @@ use crate::{
     Surface, orbit::selected_sample_index, validate_range,
 };
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::ElevationField;
 use std::{fmt, ops::RangeInclusive};
 
 pub const CRYOSPHERE_ITERATION_LIMIT_RANGE: RangeInclusive<usize> = 1..=4_096;
@@ -53,10 +54,8 @@ pub struct CryosphereInputs<'a> {
     pub orbital_period_days: f64,
     /// Existing precipitation climatology, held constant within the annual cycle.
     pub precipitation_kg_per_m2_per_day: &'a [f32],
-    /// The sea-level predicate applied to this field is the ocean mask.
-    pub final_elevation: &'a [f32],
-    /// Sea-level datum the elevation field was composed against.
-    pub sea_level: f32,
+    /// The land/ocean split this field's own datum makes is the ocean mask.
+    pub final_elevation: ElevationField<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -272,7 +271,7 @@ pub fn derive_cryosphere(
         let temperatures = &inputs.annual_temperature_samples_kelvin
             [cell * inputs.annual_sample_count..(cell + 1) * inputs.annual_sample_count];
         let precipitation = f64::from(inputs.precipitation_kg_per_m2_per_day[cell]);
-        let surface = Surface::from_elevation(inputs.final_elevation[cell], inputs.sea_level);
+        let surface = Surface::at(inputs.final_elevation, cell);
         results.push(match surface {
             Surface::Land => solve_land_cell(
                 temperatures,
@@ -636,11 +635,12 @@ fn validate(
     {
         return Err(CryosphereError::Precipitation);
     }
-    if inputs.final_elevation.len() != mesh.cell_count() {
+    if inputs.final_elevation.cell_elevations.len() != mesh.cell_count() {
         return Err(CryosphereError::ElevationCells);
     }
     if inputs
         .final_elevation
+        .cell_elevations
         .iter()
         .any(|value| !value.is_finite())
     {
@@ -703,10 +703,13 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
-    /// The datum the tectonic pipeline defaults to, which these synthetic
-    /// elevation fields are written against.
-    fn default_sea_level() -> f32 {
-        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    /// Lends a synthetic field against the datum the tectonic pipeline
+    /// defaults to, which these elevations are written against.
+    fn elevation_field(cell_elevations: &[f32]) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations,
+            sea_level: procgen_tectonics::CoarseElevationConfig::default().sea_level,
+        }
     }
 
     fn mesh() -> SphereMesh {
@@ -730,8 +733,7 @@ mod tests {
                 selected_orbital_phase: phase,
                 orbital_period_days: 360.0,
                 precipitation_kg_per_m2_per_day: &precipitation,
-                final_elevation: &elevation,
-                sea_level: default_sea_level(),
+                final_elevation: elevation_field(&elevation),
             },
             CryosphereConfig::EARTHLIKE,
         )

@@ -292,10 +292,10 @@ impl SurfaceSource {
     }
 
     pub(super) fn build(self, world: &GeneratedWorld, relief_exaggeration: f32) -> Option<Mesh> {
-        let sea_level = world.sea_level()?;
+        let (_, elevation) = world.surface_elevations()?;
         let colors = match self {
             Self::Scalar { values, palette } => {
-                let stops = palette.stops(sea_level);
+                let stops = palette.stops(elevation.sea_level);
                 values
                     .read(world)?
                     .iter()
@@ -304,12 +304,10 @@ impl SurfaceSource {
             }
             Self::Colors(colors) => colors.build(world)?,
         };
-        let (_, elevations) = world.surface_elevations()?;
         Some(cell_surface_mesh(
             &world.tectonics()?.voronoi,
             &colors,
-            elevations,
-            sea_level,
+            elevation,
             relief_exaggeration,
         ))
     }

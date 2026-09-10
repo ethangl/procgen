@@ -97,7 +97,7 @@ impl GeologyWorld {
                 mesh,
                 &tectonics.plates,
                 tectonics.cell_crust(),
-                &tectonics.elevation,
+                tectonics.elevation.field(),
                 config.cratons,
             )
         })?;
@@ -105,7 +105,7 @@ impl GeologyWorld {
             derive_sedimentary_basin_field(
                 mesh,
                 tectonics.cell_crust(),
-                &tectonics.elevation,
+                tectonics.elevation.field(),
                 config.basins,
             )
         })?;

@@ -2,7 +2,7 @@ use crate::{AreaWeightedSummary, ClimateOutputError, SECONDS_PER_DAY, validate_r
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{is_land, land_elevation_meters};
+use procgen_tectonics::{ElevationField, land_elevation_meters};
 use std::{fmt, ops::RangeInclusive};
 
 pub const MOISTURE_STEP_COUNT_RANGE: RangeInclusive<usize> = 1..=4_096;
@@ -61,9 +61,7 @@ impl MoistureTransportConfig {
 pub struct MoistureTransportInputs<'a> {
     pub planet: Planet,
     pub selected_temperature_kelvin: &'a [f32],
-    pub final_elevation: &'a [f32],
-    /// Sea-level datum the elevation field was composed against.
-    pub sea_level: f32,
+    pub final_elevation: ElevationField<'a>,
     pub cell_wind_meters_per_second: &'a [Vec3],
 }
 
@@ -219,11 +217,12 @@ impl CellModel {
             .collect::<Vec<_>>();
         let elevation_meters = inputs
             .final_elevation
+            .cell_elevations
             .iter()
             .map(|&elevation| {
                 land_elevation_meters(
                     elevation,
-                    inputs.sea_level,
+                    inputs.final_elevation.sea_level,
                     inputs.planet.maximum_land_elevation_meters,
                 ) as f32
             })
@@ -250,7 +249,7 @@ impl CellModel {
             capacity_mass.push(capacity * areas[cell]);
             capacity_kg_per_m2.push(capacity as f32);
 
-            let land = is_land(inputs.final_elevation[cell], inputs.sea_level);
+            let land = inputs.final_elevation.is_land(cell);
             evaporation_fraction.push(if land {
                 0.0
             } else {
@@ -499,7 +498,7 @@ fn validate(
     if inputs.selected_temperature_kelvin.len() != mesh.cell_count() {
         return Err(MoistureTransportError::TemperatureCells);
     }
-    if inputs.final_elevation.len() != mesh.cell_count() {
+    if inputs.final_elevation.cell_elevations.len() != mesh.cell_count() {
         return Err(MoistureTransportError::ElevationCells);
     }
     if inputs.cell_wind_meters_per_second.len() != mesh.cell_count() {
@@ -514,6 +513,7 @@ fn validate(
     }
     if inputs
         .final_elevation
+        .cell_elevations
         .iter()
         .any(|value| !value.is_finite())
     {
@@ -594,10 +594,13 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
-    /// The datum the tectonic pipeline defaults to, which these synthetic
-    /// elevation fields are written against.
-    fn default_sea_level() -> f32 {
-        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    /// Lends a synthetic field against the datum the tectonic pipeline
+    /// defaults to, which these elevations are written against.
+    fn elevation_field(cell_elevations: &[f32]) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations,
+            sea_level: procgen_tectonics::CoarseElevationConfig::default().sea_level,
+        }
     }
 
     fn mesh(count: usize) -> SphereMesh {
@@ -609,7 +612,7 @@ mod tests {
     fn run(
         mesh: &SphereMesh,
         temperature: &[f32],
-        elevation: &[f32],
+        elevations: &[f32],
         wind: &[Vec3],
         config: MoistureTransportConfig,
     ) -> MoistureTransport {
@@ -618,8 +621,7 @@ mod tests {
             MoistureTransportInputs {
                 planet: Planet::EARTH,
                 selected_temperature_kelvin: temperature,
-                final_elevation: elevation,
-                sea_level: default_sea_level(),
+                final_elevation: elevation_field(elevations),
                 cell_wind_meters_per_second: wind,
             },
             config,
@@ -644,14 +646,13 @@ mod tests {
         let temperature = vec![288.0; mesh.cell_count()];
         let elevation = vec![0.2; mesh.cell_count()];
         let wind = vec![Vec3::ZERO; mesh.cell_count()];
-        let error = |planet, temperature: &[f32], elevation: &[f32], wind: &[Vec3], config| {
+        let error = |planet, temperature: &[f32], elevations: &[f32], wind: &[Vec3], config| {
             derive_moisture_transport(
                 &mesh,
                 MoistureTransportInputs {
                     planet,
                     selected_temperature_kelvin: temperature,
-                    final_elevation: elevation,
-                    sea_level: default_sea_level(),
+                    final_elevation: elevation_field(elevations),
                     cell_wind_meters_per_second: wind,
                 },
                 config,
@@ -918,8 +919,9 @@ mod tests {
             &vec![Vec3::ZERO; mesh.cell_count()],
             MoistureTransportConfig::EARTHLIKE,
         );
-        for (cell, &height) in elevation.iter().enumerate() {
-            if is_land(height, default_sea_level()) {
+        let elevation = elevation_field(&elevation);
+        for cell in 0..mesh.cell_count() {
+            if elevation.is_land(cell) {
                 assert_eq!(result.cell_humidity_kg_per_m2[cell], 0.0);
                 assert_eq!(result.cell_precipitation_kg_per_m2_per_day[cell], 0.0);
             }

@@ -278,7 +278,9 @@ fn initialize_gpu_world(
     };
     let controls = pack_control_bake(&geology.terrain_control_bake);
     let stamps = pack_stamps(&geology.terrain_controls.stamps);
-    let sea_level = tectonics.elevation.sea_level;
+    // The bake descends from the isostatic field, so its datum is the one the
+    // detailed surface is measured against.
+    let sea_level = geology.isostasy.sea_level;
     let parameters = TerrainGpuParameters::new(
         &geology.terrain_control_bake,
         &geology.terrain_controls.stamps,

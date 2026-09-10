@@ -10,6 +10,7 @@ use crate::{
 };
 use procgen_planet::Planet;
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::ElevationField;
 use std::{fmt, ops::RangeInclusive};
 
 pub const CLIMATE_COUPLING_ITERATION_LIMIT_RANGE: RangeInclusive<usize> = 1..=256;
@@ -72,9 +73,7 @@ pub struct ClimateCouplingInputs<'a> {
     pub planet: Planet,
     pub solar_forcing: &'a SolarForcing,
     pub solar_forcing_config: SolarForcingConfig,
-    pub final_elevation: &'a [f32],
-    /// Sea-level datum the elevation field was composed against.
-    pub sea_level: f32,
+    pub final_elevation: ElevationField<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -249,26 +248,18 @@ pub fn derive_coupled_climate(
     config: ClimateCouplingConfig,
 ) -> Result<ClimateCoupling, ClimateCouplingError> {
     validate(config)?;
-    let mut albedo = inputs
-        .final_elevation
-        .iter()
-        .map(
-            |&elevation| match Surface::from_elevation(elevation, inputs.sea_level) {
-                Surface::Land => config.albedo.snow as f32,
-                Surface::Ocean => config.albedo.ice as f32,
-            },
-        )
+    let mut albedo = (0..inputs.final_elevation.cell_elevations.len())
+        .map(|cell| match Surface::at(inputs.final_elevation, cell) {
+            Surface::Land => config.albedo.snow as f32,
+            Surface::Ocean => config.albedo.ice as f32,
+        })
         .collect::<Vec<_>>();
     let mut previous: Option<StageOutputs> = None;
 
     for iteration in 1..=config.maximum_iterations {
         let current = run_stages(mesh, inputs, config, &albedo)?;
-        let target_albedo = compose_albedo(
-            inputs.final_elevation,
-            inputs.sea_level,
-            &current.cryosphere,
-            config.albedo,
-        );
+        let target_albedo =
+            compose_albedo(inputs.final_elevation, &current.cryosphere, config.albedo);
         let albedo_residual = area_weighted_rms_difference(mesh, &albedo, &target_albedo);
         let residuals = previous
             .as_ref()
@@ -314,7 +305,6 @@ fn run_stages(
             solar_forcing: inputs.solar_forcing_config,
             emissivity: config.radiative_equilibrium.emissivity,
             final_elevation: inputs.final_elevation,
-            sea_level: inputs.sea_level,
         },
         config.seasonal_thermal,
         albedo,
@@ -324,7 +314,7 @@ fn run_stages(
         AtmosphericCirculationInputs {
             planet: inputs.planet,
             selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
-            final_elevation: inputs.final_elevation,
+            final_elevation: inputs.final_elevation.cell_elevations,
         },
         config.atmospheric_circulation,
     )?;
@@ -334,7 +324,6 @@ fn run_stages(
             planet: inputs.planet,
             selected_temperature_kelvin: &seasonal_thermal.selected_temperature_kelvin,
             final_elevation: inputs.final_elevation,
-            sea_level: inputs.sea_level,
             cell_wind_meters_per_second: &atmospheric_circulation.cell_wind_meters_per_second,
         },
         config.moisture_transport,
@@ -349,7 +338,6 @@ fn run_stages(
             precipitation_kg_per_m2_per_day: &moisture_transport
                 .cell_precipitation_kg_per_m2_per_day,
             final_elevation: inputs.final_elevation,
-            sea_level: inputs.sea_level,
         },
         config.cryosphere,
     )?;
@@ -402,35 +390,30 @@ fn validate(config: ClimateCouplingConfig) -> Result<(), ClimateCouplingError> {
 }
 
 fn compose_albedo(
-    elevation: &[f32],
-    sea_level: f32,
+    elevation: ElevationField<'_>,
     cryosphere: &Cryosphere,
     config: ClimateAlbedoConfig,
 ) -> Vec<f32> {
-    elevation
-        .iter()
-        .enumerate()
-        .map(
-            |(cell, &elevation)| match Surface::from_elevation(elevation, sea_level) {
-                Surface::Ocean => blend(
-                    config.ocean,
+    (0..elevation.cell_elevations.len())
+        .map(|cell| match Surface::at(elevation, cell) {
+            Surface::Ocean => blend(
+                config.ocean,
+                config.ice,
+                f64::from(cryosphere.cell_sea_ice_cover_fraction[cell]),
+            ) as f32,
+            Surface::Land => {
+                let ice = blend(
+                    config.land,
                     config.ice,
-                    f64::from(cryosphere.cell_sea_ice_cover_fraction[cell]),
-                ) as f32,
-                Surface::Land => {
-                    let ice = blend(
-                        config.land,
-                        config.ice,
-                        f64::from(cryosphere.cell_land_ice_cover_fraction[cell]),
-                    );
-                    blend(
-                        ice,
-                        config.snow,
-                        f64::from(cryosphere.cell_snow_cover_fraction[cell]),
-                    ) as f32
-                }
-            },
-        )
+                    f64::from(cryosphere.cell_land_ice_cover_fraction[cell]),
+                );
+                blend(
+                    ice,
+                    config.snow,
+                    f64::from(cryosphere.cell_snow_cover_fraction[cell]),
+                ) as f32
+            }
+        })
         .collect()
 }
 
@@ -445,10 +428,13 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
-    /// The datum the tectonic pipeline defaults to, which these synthetic
-    /// elevation fields are written against.
-    fn default_sea_level() -> f32 {
-        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    /// Lends a synthetic field against the datum the tectonic pipeline
+    /// defaults to, which these elevations are written against.
+    fn elevation_field(cell_elevations: &[f32]) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations,
+            sea_level: procgen_tectonics::CoarseElevationConfig::default().sea_level,
+        }
     }
 
     fn mesh(count: usize) -> SphereMesh {
@@ -515,8 +501,7 @@ mod tests {
                 planet,
                 solar_forcing: &forcing,
                 solar_forcing_config: solar_config,
-                final_elevation: &elevation,
-                sea_level: default_sea_level(),
+                final_elevation: elevation_field(&elevation),
             },
             config,
         )
@@ -580,8 +565,7 @@ mod tests {
                 planet,
                 solar_forcing: &forcing,
                 solar_forcing_config: solar_config,
-                final_elevation: &elevation,
-                sea_level: default_sea_level(),
+                final_elevation: elevation_field(&elevation),
             },
             config(),
         )

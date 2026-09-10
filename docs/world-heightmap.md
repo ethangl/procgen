@@ -157,7 +157,10 @@ Completed foundations:
   boundary proximity, craton strength, basin membership, and geological
   elevation. It produces a separate clamped elevation field, keeps oceanic cells
   unchanged, preserves basin floors, and reports aggregate rise and sink without
-  mutating its inputs.
+  mutating its inputs. Both geological elevation outputs carry the sea-level
+  datum they were composed against, the same one tectonic elevation carries, so
+  a reader downstream is handed a field it can ask where its ocean ends rather
+  than a bare vector and a loose sea level from somewhere else.
 - `procgen-viewer`: diagnostic GPU viewer with one retained filled Voronoi-cell
   field plus independently toggleable edge, marker, and vector overlays, orbit
   controls, deterministic
@@ -187,8 +190,8 @@ Completed foundations:
   albedo, emissivity, and Stefan-Boltzmann radiation. Earthlike values exist only
   as a caller-selected preset. A third stage solves an isolated local seasonal
   surface-energy balance over a periodic orbit using explicit land and ocean
-  heat capacities selected from final elevation and the elevation field's
-  sea-level datum. It reports the
+  heat capacities selected from the final elevation field's own land/ocean
+  split. It reports the
   selected phase plus annual mean, extrema, amplitude, and convergence
   diagnostics. A fourth independent stage derives coarse finite tangent winds
   from selected seasonal-temperature gradients, explicit planetary rotation
