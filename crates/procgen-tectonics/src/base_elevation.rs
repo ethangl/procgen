@@ -9,7 +9,12 @@ pub struct BaseElevationConfig {
     pub ridge_elevation: f32,
     /// Minimum elevation reached by sufficiently old oceanic crust.
     pub deep_ocean_elevation: f32,
-    /// Seafloor hop age at which oceanic crust reaches the deep-ocean floor.
+    /// Seafloor age in evolution steps at which oceanic crust reaches the
+    /// deep-ocean floor. Age spans one step, for crust born at a ridge during
+    /// the run, to the prior's hop age plus the whole run for crust that
+    /// predates it, so this belongs near the top of that span: below it the
+    /// whole ocean sits on the deep floor and only crust made during the run
+    /// carries any gradient.
     pub cooling_age: usize,
 }
 
@@ -19,7 +24,7 @@ impl Default for BaseElevationConfig {
             continental_base: 0.65,
             ridge_elevation: 0.30,
             deep_ocean_elevation: 0.08,
-            cooling_age: 8,
+            cooling_age: 40,
         }
     }
 }
@@ -69,8 +74,9 @@ impl std::error::Error for BaseElevationError {}
 ///
 /// `None` retains the configured continental base. `Some(age)` follows a
 /// square-root cooling curve from ridge elevation to deep-ocean elevation.
-/// Ages at or above `cooling_age` use the deep floor. The seafloor-age stage
-/// supplies a configured fallback age for ridge-less oceanic plates.
+/// Ages at or above `cooling_age` use the deep floor. Crust that predates the
+/// run carries the prior's age plus the steps the run took, so an old ocean
+/// reaches the deep floor and crust born at a ridge during the run does not.
 pub fn derive_base_elevation(
     seafloor_age: &SeafloorAge,
     config: BaseElevationConfig,
@@ -129,25 +135,14 @@ fn validate_config(config: BaseElevationConfig) -> Result<(), BaseElevationError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{
-        empty_boundaries, final_state_fixture, fingerprint, reference_partition,
-    };
-    use crate::{
-        CrustClass, CrustClassification, SeafloorAgeConfig, SeafloorAgeDiagnostics,
-        derive_seafloor_age,
-    };
+    use crate::test_support::{final_state_fixture, fingerprint, reference_evolution_config};
+    use crate::{SeafloorAgeDiagnostics, derive_seafloor_age};
 
     #[test]
     fn base_elevation_is_deterministic_and_has_a_stable_fingerprint() {
-        let (mesh, partition, crust, boundaries) = final_state_fixture();
-        let age = derive_seafloor_age(
-            &mesh,
-            &partition,
-            &crust,
-            &boundaries,
-            SeafloorAgeConfig::default(),
-        )
-        .unwrap();
+        let (mesh, _, evolution) = final_state_fixture();
+        let age = derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count)
+            .unwrap();
         let config = BaseElevationConfig::default();
         let first = derive_base_elevation(&age, config).unwrap();
 
@@ -163,7 +158,7 @@ mod tests {
                     .iter()
                     .map(|value| value.to_bits() as u64)
             ),
-            12_440_903_630_488_236_800
+            7_480_106_659_402_858_283
         );
     }
 
@@ -191,19 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn ridge_less_oceanic_crust_uses_the_configured_age_and_deep_floor() {
-        let (mesh, partition) = reference_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic; partition.plate_count],
+    fn crust_older_than_the_cooling_age_sits_on_the_deep_floor() {
+        let age = SeafloorAge {
+            cell_ages: vec![Some(13); 32],
+            diagnostics: SeafloorAgeDiagnostics::default(),
         };
-        let age = derive_seafloor_age(
-            &mesh,
-            &partition,
-            &crust,
-            &empty_boundaries(&mesh),
-            SeafloorAgeConfig { ridge_less_age: 13 },
-        )
-        .unwrap();
         let config = BaseElevationConfig {
             cooling_age: 8,
             ..Default::default()
@@ -215,7 +202,7 @@ mod tests {
                 .iter()
                 .all(|&value| value == config.deep_ocean_elevation)
         );
-        assert_eq!(base.diagnostics.oceanic_cell_count, mesh.cell_count());
+        assert_eq!(base.diagnostics.oceanic_cell_count, 32);
     }
 
     #[test]

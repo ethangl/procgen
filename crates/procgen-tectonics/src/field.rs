@@ -1,3 +1,12 @@
+use procgen_sphere_mesh::SphereMesh;
+
+/// The mesh's one representative cell width: the side of a square with the
+/// mean cell area. Evolution measures every accumulated displacement against
+/// it, so a finer mesh moves more cells for the same motion.
+pub(crate) fn mean_cell_width(mesh: &SphereMesh) -> f32 {
+    (mesh.total_area() / mesh.cell_count() as f64).sqrt() as f32
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FieldSummary {
     pub minimum: f32,

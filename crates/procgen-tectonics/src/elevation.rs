@@ -153,28 +153,24 @@ fn smooth(mesh: &SphereMesh, elevation: &mut Vec<f32>, passes: usize, weight: f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{final_state_fixture, two_plate_boundary_partition};
+    use crate::test_support::{
+        final_state_fixture, reference_evolution_config, two_plate_boundary_partition,
+    };
     use crate::{
         BaseElevationConfig, BaseElevationDiagnostics, BoundaryDeformationConfig,
-        SeafloorAgeConfig, derive_base_elevation, derive_boundary_deformation, derive_seafloor_age,
+        derive_base_elevation, derive_boundary_deformation, derive_seafloor_age,
     };
 
     fn final_fixture() -> (SphereMesh, BaseElevation, BoundaryDeformation) {
-        let (mesh, partition, crust, boundaries) = final_state_fixture();
-        let age = derive_seafloor_age(
-            &mesh,
-            &partition,
-            &crust,
-            &boundaries,
-            SeafloorAgeConfig::default(),
-        )
-        .unwrap();
+        let (mesh, _, evolution) = final_state_fixture();
+        let age = derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count)
+            .unwrap();
         let base = derive_base_elevation(&age, BaseElevationConfig::default()).unwrap();
         let deformation = derive_boundary_deformation(
             &mesh,
-            &partition,
-            &crust,
-            &boundaries,
+            &evolution.partition,
+            evolution.cell_crust(),
+            &evolution.boundaries,
             BoundaryDeformationConfig::default(),
         )
         .unwrap();

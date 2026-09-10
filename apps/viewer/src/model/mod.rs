@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn an_empty_cache_leaves_the_viewer_without_a_world() {
         let (cache_dir, cache) = test_cache("empty-start");
-        let app = app_with(cache, test_settings(32, 41));
+        let app = app_with(cache, test_settings(32, 20));
 
         let world = app.world().resource::<GeneratedWorld>();
         assert!(Phase::ALL.iter().all(|&phase| !world.holds(phase)));
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn startup_loads_cached_world_and_restores_its_settings() {
         let (cache_dir, cache) = test_cache("startup-load");
-        let cached_settings = test_settings(32, 41);
+        let cached_settings = test_settings(32, 20);
         let fixture = Fixture::generate(cached_settings);
         cache.store(fixture.complete()).unwrap();
 

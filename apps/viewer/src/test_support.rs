@@ -9,7 +9,8 @@ use crate::{
 use procgen_geology::{HotspotFieldConfig, OceanicPeakFieldConfig};
 use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
-    CrustClassificationConfig, PlateEvolutionConfig, PlateKinematicsConfig, PlatePartitionConfig,
+    CrustClassificationConfig, DEFAULT_STEP_DURATION, PlateEvolutionConfig, PlateKinematicsConfig,
+    PlatePartitionConfig,
 };
 use std::{
     env,
@@ -36,6 +37,11 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
         kinematics: PlateKinematicsConfig::new(seed),
         evolution: PlateEvolutionConfig {
             step_count: 4,
+            // The default duration is scaled to the 65,536-cell mesh. Cell
+            // width goes as the reciprocal square root of cell count, so a
+            // step on these much coarser test meshes has to be that much
+            // longer to move a plate the same one cell.
+            step_duration: DEFAULT_STEP_DURATION * (65_536.0 / cell_count as f32).sqrt(),
             ..Default::default()
         },
         ..TectonicsSettings::default()

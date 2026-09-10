@@ -3,11 +3,13 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation,
-    BoundaryDeformationConfig, CoarseElevation, CoarseElevationConfig, CrustClassification,
+    BoundaryDeformationConfig, CellCrust, CoarseElevation, CoarseElevationConfig, CrustBirthPrior,
+    CrustBirthPriorConfig, CrustBirthPriorDiagnostics, CrustClassification,
     CrustClassificationConfig, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
-    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, SeafloorAge,
-    SeafloorAgeConfig, classify_crust, compose_coarse_elevation, derive_base_elevation,
-    derive_boundary_deformation, derive_seafloor_age, evolve_plate_ownership,
+    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlatePartition,
+    PlatePartitionConfig, SeafloorAge, classify_boundaries, classify_crust,
+    compose_coarse_elevation, derive_base_elevation, derive_boundary_deformation,
+    derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
     generate_plate_kinematics, partition_plates,
 };
 use std::error::Error;
@@ -20,8 +22,8 @@ pub struct TectonicsSettings {
     pub plates: PlatePartitionConfig,
     pub crust: CrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
+    pub birth_prior: CrustBirthPriorConfig,
     pub evolution: PlateEvolutionConfig,
-    pub seafloor_age: SeafloorAgeConfig,
     pub base_elevation: BaseElevationConfig,
     pub deformation: BoundaryDeformationConfig,
     pub elevation: CoarseElevationConfig,
@@ -44,11 +46,11 @@ impl Default for TectonicsSettings {
                 ..CrustClassificationConfig::new(7)
             },
             kinematics: PlateKinematicsConfig::new(7),
+            birth_prior: CrustBirthPriorConfig::default(),
             evolution: PlateEvolutionConfig {
                 step_count: 9,
                 ..Default::default()
             },
-            seafloor_age: SeafloorAgeConfig::default(),
             base_elevation: BaseElevationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
@@ -63,6 +65,10 @@ pub struct TectonicsWorld {
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
     pub boundaries: BoundaryClassification,
+    /// Step at which each cell's crust was created; the only per-cell answer
+    /// to what crust a cell carries.
+    pub cell_birth: Vec<Option<i32>>,
+    pub birth_prior: CrustBirthPriorDiagnostics,
     pub evolution: PlateEvolutionDiagnostics,
     pub seafloor_age: SeafloorAge,
     pub base_elevation: BaseElevation,
@@ -102,28 +108,57 @@ impl TectonicsWorld {
         let kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(&voronoi, &initial_plates, &crust, config.kinematics)
         })?;
-        let evolution_result = timings.record("Plate evolution", || {
-            evolve_plate_ownership(
+        let initial_boundaries = timings.record("Boundary classification", || {
+            classify_boundaries(&voronoi, &initial_plates, &kinematics)
+        })?;
+        let birth_prior = timings.record("Crust birth prior", || {
+            derive_crust_birth_prior(
                 &voronoi,
                 &initial_plates,
                 &crust,
-                &kinematics,
+                &initial_boundaries,
+                config.birth_prior,
+            )
+        })?;
+        let evolution_result = timings.record("Plate evolution", || {
+            evolve_plate_ownership(
+                &voronoi,
+                PlateEvolutionInputs {
+                    partition: &initial_plates,
+                    crust: &crust,
+                    kinematics: &kinematics,
+                    boundaries: &initial_boundaries,
+                    birth_prior: &birth_prior,
+                },
                 config.evolution,
             )
+        })?;
+        let seafloor_age = timings.record("Seafloor age", || {
+            derive_seafloor_age(&voronoi, &evolution_result, config.evolution.step_count)
         })?;
         let PlateEvolution {
             partition: plates,
             boundaries,
+            cell_birth,
             diagnostics: evolution,
         } = evolution_result;
-        let seafloor_age = timings.record("Seafloor age", || {
-            derive_seafloor_age(&voronoi, &plates, &crust, &boundaries, config.seafloor_age)
-        })?;
+        let CrustBirthPrior {
+            diagnostics: birth_prior,
+            ..
+        } = birth_prior;
         let base_elevation = timings.record("Base elevation", || {
             derive_base_elevation(&seafloor_age, config.base_elevation)
         })?;
         let deformation = timings.record("Boundary deformation", || {
-            derive_boundary_deformation(&voronoi, &plates, &crust, &boundaries, config.deformation)
+            derive_boundary_deformation(
+                &voronoi,
+                &plates,
+                CellCrust {
+                    cell_birth: &cell_birth,
+                },
+                &boundaries,
+                config.deformation,
+            )
         })?;
         let elevation = timings.record("Tectonic elevation", || {
             compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)
@@ -135,6 +170,8 @@ impl TectonicsWorld {
             crust,
             kinematics,
             boundaries,
+            cell_birth,
+            birth_prior,
             evolution,
             seafloor_age,
             base_elevation,
@@ -143,6 +180,14 @@ impl TectonicsWorld {
             timings,
             config,
         })
+    }
+
+    /// Per-cell crust after evolution. Plate crust classes describe plates,
+    /// not the cells they currently own.
+    pub fn cell_crust(&self) -> CellCrust<'_> {
+        CellCrust {
+            cell_birth: &self.cell_birth,
+        }
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -156,6 +201,7 @@ impl TectonicsWorld {
         self.crust.validate(&self.plates)?;
         self.kinematics.validate(&self.plates)?;
         self.boundaries.validate(mesh)?;
+        self.cell_crust().validate(mesh)?;
         self.seafloor_age.validate(mesh)?;
         self.base_elevation.validate(mesh)?;
         self.deformation.validate(mesh)?;

@@ -1,11 +1,11 @@
 //! Deterministic tectonic state derived from spherical mesh topology.
 //!
 //! Plate partitioning, flow-field-fitted rigid plate motion, static boundary
-//! classification, static crust classification, one-step plate migration,
-//! deterministic multi-step ownership evolution, post-evolution boundary
-//! deformation, seafloor hop age, oceanic bathymetric base elevation, and
-//! coarse elevation composition live here. Geological effects remain separate
-//! later stages.
+//! classification, static per-plate crust classification, one-step plate
+//! migration, deterministic multi-step evolution of ownership and crust birth,
+//! post-evolution boundary deformation, seafloor age in evolution steps,
+//! oceanic bathymetric base elevation, and coarse elevation composition live
+//! here. Geological effects remain separate later stages.
 
 mod base_elevation;
 mod boundaries;
@@ -33,8 +33,8 @@ pub use boundaries::{
     CONVERGENCE_TO_SHEAR_THRESHOLD, classify_boundaries,
 };
 pub use crust::{
-    CrustClass, CrustClassification, CrustClassificationConfig, CrustClassificationError,
-    classify_crust,
+    CellCrust, CrustClass, CrustClassification, CrustClassificationConfig,
+    CrustClassificationError, classify_crust,
 };
 pub use deformation::{
     BoundaryDeformation, BoundaryDeformationConfig, BoundaryDeformationDiagnostics,
@@ -45,8 +45,8 @@ pub use elevation::{
     compose_coarse_elevation, is_land, land_elevation_meters,
 };
 pub use evolution::{
-    PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,
-    evolve_plate_ownership,
+    DEFAULT_STEP_DURATION, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
+    PlateEvolutionError, PlateEvolutionInputs, evolve_plate_ownership,
 };
 pub use field::FieldSummary;
 pub use migration::{
@@ -61,6 +61,7 @@ pub use partition::{
     partition_plates,
 };
 pub use seafloor_age::{
-    SeafloorAge, SeafloorAgeConfig, SeafloorAgeDiagnostics, derive_seafloor_age,
+    CrustBirthPrior, CrustBirthPriorConfig, CrustBirthPriorDiagnostics, SeafloorAge,
+    SeafloorAgeDiagnostics, derive_crust_birth_prior, derive_seafloor_age,
 };
 pub use stage::StageInputError;

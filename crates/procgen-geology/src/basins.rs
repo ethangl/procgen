@@ -1,8 +1,6 @@
 use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, connected_components};
-use procgen_tectonics::{
-    CoarseElevation, CrustClass, CrustClassification, PlatePartition, SEA_LEVEL, StageInputError,
-};
+use procgen_tectonics::{CellCrust, CoarseElevation, CrustClass, SEA_LEVEL, StageInputError};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,16 +110,15 @@ impl From<StageInputError> for SedimentaryBasinFieldError {
 /// tectonic elevation field is read without being modified.
 pub fn derive_sedimentary_basin_field(
     mesh: &SphereMesh,
-    plates: &PlatePartition,
-    crust: &CrustClassification,
+    crust: CellCrust<'_>,
     elevation: &CoarseElevation,
     config: SedimentaryBasinFieldConfig,
 ) -> Result<SedimentaryBasinField, SedimentaryBasinFieldError> {
-    validate_inputs(mesh, plates, crust, elevation, config)?;
+    validate_inputs(mesh, crust, elevation, config)?;
 
     let candidates: Vec<_> = (0..mesh.cell_count())
         .map(|cell| {
-            crust.cell_class(plates, cell) == CrustClass::Continental
+            crust.class(cell) == CrustClass::Continental
                 && elevation.is_land(cell)
                 && elevation.cell_elevations[cell] < config.maximum_elevation
         })
@@ -221,8 +218,7 @@ fn summarize_component(
 
 fn validate_inputs(
     mesh: &SphereMesh,
-    plates: &PlatePartition,
-    crust: &CrustClassification,
+    crust: CellCrust<'_>,
     elevation: &CoarseElevation,
     config: SedimentaryBasinFieldConfig,
 ) -> Result<(), SedimentaryBasinFieldError> {
@@ -240,8 +236,7 @@ fn validate_inputs(
     {
         return Err(SedimentaryBasinFieldError::InvalidOceanPerimeterFraction);
     }
-    plates.validate(mesh)?;
-    crust.validate(plates)?;
+    crust.validate(mesh)?;
     elevation.validate(mesh)?;
     Ok(())
 }
@@ -252,9 +247,9 @@ mod tests {
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::{build_sphere_mesh, multi_source_distances};
-    use procgen_tectonics::{PlatePartitionConfig, partition_plates};
 
-    fn fixture(cell_count: usize) -> (SphereMesh, PlatePartition, CrustClassification) {
+    /// An all-continental world: every cell without a birth step.
+    fn fixture(cell_count: usize) -> (SphereMesh, Vec<Option<i32>>) {
         let mesh = build_sphere_mesh(
             fibonacci_sphere(FibonacciConfig {
                 count: cell_count,
@@ -265,20 +260,7 @@ mod tests {
             1.0,
         )
         .unwrap();
-        let plates = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                arc_count: 4,
-                piece_fraction: 32.0 / cell_count as f32,
-                growth_roughness: 0,
-                ..PlatePartitionConfig::default()
-            },
-        )
-        .unwrap();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Continental; plates.plate_count],
-        };
-        (mesh, plates, crust)
+        (mesh, vec![None; cell_count])
     }
 
     fn elevation(values: Vec<f32>) -> CoarseElevation {
@@ -300,7 +282,10 @@ mod tests {
 
     #[test]
     fn field_is_deterministic_connected_compact_and_preserves_elevation() {
-        let (mesh, plates, crust) = fixture(256);
+        let (mesh, cell_birth) = fixture(256);
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
         let mut values = vec![0.7; mesh.cell_count()];
         for (index, cell) in connected_cells(&mesh, 12).into_iter().enumerate() {
             values[cell] = 0.52 + index as f32 * 0.001;
@@ -308,12 +293,11 @@ mod tests {
         let elevation = elevation(values);
         let original_elevation = elevation.clone();
         let config = SedimentaryBasinFieldConfig::default();
-        let first =
-            derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation, config).unwrap();
+        let first = derive_sedimentary_basin_field(&mesh, crust, &elevation, config).unwrap();
 
         assert_eq!(
             first,
-            derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation, config).unwrap()
+            derive_sedimentary_basin_field(&mesh, crust, &elevation, config).unwrap()
         );
         assert_eq!(elevation, original_elevation);
         assert_eq!(first.basins.len(), 1);
@@ -336,7 +320,10 @@ mod tests {
 
     #[test]
     fn size_and_ocean_perimeter_filters_are_independent() {
-        let (mesh, plates, crust) = fixture(64);
+        let (mesh, cell_birth) = fixture(64);
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
         let component = connected_cells(&mesh, 4);
         let mut enclosed = vec![0.7; mesh.cell_count()];
         for &cell in &component {
@@ -347,8 +334,7 @@ mod tests {
             ..Default::default()
         };
         let small =
-            derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation(enclosed), config)
-                .unwrap();
+            derive_sedimentary_basin_field(&mesh, crust, &elevation(enclosed), config).unwrap();
         assert!(small.basins.is_empty());
         assert_eq!(small.diagnostics.rejected_small_component_count, 1);
         assert_eq!(small.diagnostics.rejected_ocean_exposed_component_count, 0);
@@ -359,8 +345,7 @@ mod tests {
         }
         let exposed = derive_sedimentary_basin_field(
             &mesh,
-            &plates,
-            &crust,
+            crust,
             &elevation(exposed),
             SedimentaryBasinFieldConfig {
                 minimum_cell_count: 1,
@@ -379,7 +364,10 @@ mod tests {
 
     #[test]
     fn disconnected_components_receive_compact_ids_in_root_order() {
-        let (mesh, plates, crust) = fixture(64);
+        let (mesh, cell_birth) = fixture(64);
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
         let first = 0;
         let second = (1..mesh.cell_count())
             .find(|&cell| {
@@ -395,8 +383,7 @@ mod tests {
 
         let field = derive_sedimentary_basin_field(
             &mesh,
-            &plates,
-            &crust,
+            crust,
             &elevation(values),
             SedimentaryBasinFieldConfig {
                 minimum_cell_count: 1,
@@ -420,9 +407,8 @@ mod tests {
 
     #[test]
     fn eligibility_respects_land_crust_and_strict_elevation_edges() {
-        let (mesh, plates, mut crust) = fixture(32);
+        let (mesh, mut cell_birth) = fixture(32);
         let cell = 0;
-        let plate = plates.cell_plates[cell];
         let config = SedimentaryBasinFieldConfig {
             minimum_cell_count: 1,
             maximum_ocean_perimeter_fraction: 1.0,
@@ -431,30 +417,44 @@ mod tests {
         for value in [SEA_LEVEL, config.maximum_elevation] {
             let mut values = vec![0.7; mesh.cell_count()];
             values[cell] = value;
-            let field =
-                derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation(values), config)
-                    .unwrap();
+            let field = derive_sedimentary_basin_field(
+                &mesh,
+                CellCrust {
+                    cell_birth: &cell_birth,
+                },
+                &elevation(values),
+                config,
+            )
+            .unwrap();
             assert!(field.basins.is_empty());
         }
 
         let mut values = vec![0.7; mesh.cell_count()];
         values[cell] = SEA_LEVEL + 0.01;
-        crust.plate_classes[plate] = CrustClass::Oceanic;
-        let field =
-            derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation(values), config)
-                .unwrap();
+        cell_birth[cell] = Some(0);
+        let field = derive_sedimentary_basin_field(
+            &mesh,
+            CellCrust {
+                cell_birth: &cell_birth,
+            },
+            &elevation(values),
+            config,
+        )
+        .unwrap();
         assert!(field.basins.is_empty());
         assert_eq!(field.diagnostics.candidate_cell_count, 0);
     }
 
     #[test]
     fn empty_fields_and_invalid_configuration_are_explicit() {
-        let (mesh, plates, crust) = fixture(32);
+        let (mesh, cell_birth) = fixture(32);
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
         let elevation = elevation(vec![0.7; mesh.cell_count()]);
         let empty = derive_sedimentary_basin_field(
             &mesh,
-            &plates,
-            &crust,
+            crust,
             &elevation,
             SedimentaryBasinFieldConfig::default(),
         )
@@ -488,7 +488,7 @@ mod tests {
         ];
         for (config, expected) in invalid_cases {
             assert_eq!(
-                derive_sedimentary_basin_field(&mesh, &plates, &crust, &elevation, config),
+                derive_sedimentary_basin_field(&mesh, crust, &elevation, config),
                 Err(expected)
             );
         }
