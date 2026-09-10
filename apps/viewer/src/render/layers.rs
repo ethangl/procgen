@@ -4,14 +4,14 @@ use super::assets::{
 };
 use super::palette::{
     ALBEDO_COLOR_STOPS, CORIOLIS_COLOR_STOPS, CRATON_COLOR_STOPS, DEFORMATION_COLOR_STOPS,
-    ELEVATION_COLOR_STOPS, FRACTION_COLOR_STOPS, HOTSPOT_COLOR_STOPS, HUMIDITY_COLOR_STOPS,
-    LAND_ICE_COLOR_STOPS, OCEANIC_PEAK_COLOR_STOPS, PRECIPITATION_COLOR_STOPS,
-    PRESSURE_ACCELERATION_COLOR_STOPS, SEA_ICE_COLOR_STOPS, SNOW_COVER_COLOR_STOPS,
-    TEMPERATURE_AMPLITUDE_COLOR_STOPS, TEMPERATURE_COLOR_STOPS, TEMPERATURE_GRADIENT_COLOR_STOPS,
-    VOLCANIC_ARC_COLOR_STOPS, WIND_SPEED_COLOR_STOPS, opaque_color, piecewise_lerp,
+    ELEVATION_COLOR_STOPS, FRACTION_COLOR_STOPS, HUMIDITY_COLOR_STOPS, LAND_ICE_COLOR_STOPS,
+    OCEANIC_PEAK_COLOR_STOPS, PRECIPITATION_COLOR_STOPS, PRESSURE_ACCELERATION_COLOR_STOPS,
+    SEA_ICE_COLOR_STOPS, SNOW_COVER_COLOR_STOPS, TEMPERATURE_AMPLITUDE_COLOR_STOPS,
+    TEMPERATURE_COLOR_STOPS, TEMPERATURE_GRADIENT_COLOR_STOPS, VOLCANIC_ARC_COLOR_STOPS,
+    WIND_SPEED_COLOR_STOPS, opaque_color, piecewise_lerp,
 };
 use super::surfaces::{
-    basin_colors, cell_surface_mesh, crust_colors, insolation_colors, plate_colors,
+    basin_colors, cell_surface_mesh, crust_colors, hotspot_colors, insolation_colors, plate_colors,
     seafloor_age_colors,
 };
 use crate::model::{ClimateWorld, GeneratedWorld, GeologyWorld, Phase, TectonicsWorld};
@@ -573,11 +573,9 @@ impl DiagnosticLayer {
                 Climate(|world| &world.cryosphere.cell_sea_ice_cover_fraction),
                 SEA_ICE_COLOR_STOPS,
             ),
-            Self::Hotspots => LayerSpec::scalar(
-                "Mantle hotspots",
-                Geology(|world| &world.hotspots.cell_intensities),
-                HOTSPOT_COLOR_STOPS,
-            ),
+            Self::Hotspots => {
+                LayerSpec::colors("Mantle hotspots", GeologyBuild(hotspot_colors), None)
+            }
             Self::OceanicPeaks => LayerSpec::scalar_with_overlay(
                 "Seamount / abyssal peaks",
                 Geology(|world| &world.oceanic_peaks.cell_densities),

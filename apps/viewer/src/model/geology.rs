@@ -70,6 +70,7 @@ impl GeologyWorld {
             generate_hotspot_field(
                 mesh,
                 &tectonics.plates,
+                tectonics.cell_crust(),
                 &tectonics.kinematics,
                 config.hotspots,
             )

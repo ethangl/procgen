@@ -32,6 +32,7 @@ pub(crate) fn empty_hotspots(cell_count: usize) -> HotspotField {
         hotspots: Vec::new(),
         cell_intensities: vec![0.0; cell_count],
         cell_hotspots: vec![None; cell_count],
+        cell_plateau: vec![0.0; cell_count],
         diagnostics: HotspotDiagnostics::default(),
     }
 }

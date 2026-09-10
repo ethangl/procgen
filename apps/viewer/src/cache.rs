@@ -395,12 +395,12 @@ struct_codec! {
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
     BoundaryDeformationConfig { convergent, rift, transform, collision, trench, saturation_speed, full_deformation_time, maximum_magnitude }
     CoarseElevationConfig { smoothing_passes, smoothing_weight }
-    HotspotFieldConfig { hotspot_count, maximum_trail_cells, seed }
+    HotspotFieldConfig { hotspot_count, maximum_trail_cells, province_fraction, province_radius_hops, province_rim_hops, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }
     VolcanicArcFieldConfig { minimum_boundary_edges, inland_offset_cells, peak_density_divisor, strength_saturation }
     CratonFieldConfig { minimum_boundary_distance, ramp_width }
     SedimentaryBasinFieldConfig { maximum_elevation, minimum_cell_count, maximum_ocean_perimeter_fraction }
-    GeologicalElevationConfig { hotspot_uplift, volcanic_arc_uplift, craton_flattening, basin_flattening }
+    GeologicalElevationConfig { hotspot_uplift, plateau_uplift, volcanic_arc_uplift, craton_flattening, basin_flattening }
     IsostaticAdjustmentConfig { adjustment_strength, continental_support, convergent_support_bonus, divergent_support_penalty, craton_support_bonus, maximum_boundary_distance }
     TerrainControlConfig { base_detail_amplitude, craton_amplitude_delta, volcanic_arc_amplitude, convergent_boundary_amplitude, divergent_boundary_amplitude, transform_boundary_amplitude, basin_amplitude_delta, boundary_strength_saturation, base_ridge_weight, convergent_ridge_weight, volcanic_arc_ridge_weight, base_octave_gain, craton_octave_gain_delta, basin_octave_gain_delta, maximum_abyssal_amplitude, abyssal_age_saturation, hotspot_stamp_strength, volcanic_arc_stamp_scale, oceanic_peak_stamp_scale }
     SolarForcingConfig { orbital_phase, annual_sample_count }
@@ -433,9 +433,9 @@ struct_codec! {
     BoundaryDeformation { cell_deformation, diagnostics }
     CoarseElevation { cell_elevations, diagnostics }
     HotspotTrailCell { cell, intensity }
-    Hotspot { mantle_position, source_cell, plate, trail }
-    HotspotDiagnostics { trail_cell_count, affected_cell_count, overlap_cell_count, stationary_source_count, shortest_trail_cells, longest_trail_cells }
-    HotspotField { hotspots, cell_intensities, cell_hotspots, diagnostics }
+    Hotspot { mantle_position, source_cell, plate, trail, province_cell_count }
+    HotspotDiagnostics { trail_cell_count, affected_cell_count, overlap_cell_count, stationary_source_count, shortest_trail_cells, longest_trail_cells, province_count, province_cell_count }
+    HotspotField { hotspots, cell_intensities, cell_hotspots, cell_plateau, diagnostics }
     OceanicPeak { cell, kind, position, strength, height }
     OceanicPeakDiagnostics { oceanic_cell_count, hotspot_candidate_cell_count, young_seafloor_candidate_cell_count, overlap_cell_count, density, peak_count, seamount_peak_count, abyssal_hill_peak_count, height }
     OceanicPeakField { cell_densities, cell_kinds, peaks, diagnostics }

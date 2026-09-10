@@ -45,6 +45,12 @@ fn hotspot_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
                 world.hotspots.diagnostics.longest_trail_cells
             ),
         );
+        stat(ui, "Provinces", world.hotspots.diagnostics.province_count);
+        stat(
+            ui,
+            "Province cells",
+            world.hotspots.diagnostics.province_cell_count,
+        );
     });
 }
 

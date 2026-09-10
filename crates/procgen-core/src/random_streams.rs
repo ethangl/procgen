@@ -19,6 +19,7 @@ pub const PLATE_FLOW_FIELD: u64 = 15;
 pub const PLATE_POLE_DRIFT: u64 = 16;
 pub const PLATE_RIFT: u64 = 17;
 pub const PLATE_BASEMENT: u64 = 18;
+pub const HOTSPOT_PROVINCE: u64 = 19;
 
 #[cfg(test)]
 mod tests {
@@ -46,6 +47,7 @@ mod tests {
             PLATE_POLE_DRIFT,
             PLATE_RIFT,
             PLATE_BASEMENT,
+            HOTSPOT_PROVINCE,
         ];
         ids.sort_unstable();
         assert!(ids.windows(2).all(|pair| pair[0] != pair[1]));
