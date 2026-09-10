@@ -77,16 +77,6 @@ pub(crate) fn crack_faces(
     merge_faces(mesh, cell_faces, components.len())
 }
 
-/// Rotates `vector` toward `perpendicular` by the angle whose tangent
-/// half-angle is `half_tangent`. Writing every rotation this way keeps the
-/// walk to add, multiply, and divide, which is what makes it exact on both
-/// development machines.
-fn rotate(vector: Vec3, perpendicular: Vec3, half_tangent: f32) -> Vec3 {
-    let square = half_tangent * half_tangent;
-    let scale = (1.0 + square).recip();
-    vector * ((1.0 - square) * scale) + perpendicular * (2.0 * half_tangent * scale)
-}
-
 struct Cracks<'mesh> {
     mesh: &'mesh SphereMesh,
     /// Owning arc per wall cell.
@@ -133,12 +123,9 @@ impl<'mesh> Cracks<'mesh> {
         // direction and the two opposite walk directions, that covers every
         // orientation a crack line can take.
         let tangent = center.cross(hashed).normalized();
-        let tangent = rotate(
-            tangent,
-            center.cross(tangent),
-            self.arcs.signed_f32(item, 4),
-        )
-        .normalized();
+        let tangent = tangent
+            .rotated_toward(center.cross(tangent), self.arcs.signed_f32(item, 4))
+            .normalized();
 
         self.walk(arc, start, center, tangent);
         self.walk(arc, start, center, -tangent);
@@ -151,14 +138,16 @@ impl<'mesh> Cracks<'mesh> {
         let mut travelled = 0.0;
 
         while travelled < DIRECTION_ARC {
-            let advanced = rotate(position, tangent, half_step);
-            tangent = rotate(tangent, -position, half_step);
+            let advanced = position.rotated_toward(tangent, half_step);
+            tangent = tangent.rotated_toward(-position, half_step);
             position = advanced.normalized();
             tangent = (tangent - position * position.dot(tangent)).normalized();
             if self.curvature > 0.0 {
                 let noise = gradient_noise_3d(noise_key, position * NOISE_FREQUENCY).value;
                 let bend = self.curvature * noise * self.step;
-                tangent = rotate(tangent, position.cross(tangent), 0.5 * bend).normalized();
+                tangent = tangent
+                    .rotated_toward(position.cross(tangent), 0.5 * bend)
+                    .normalized();
             }
             travelled += self.step;
 

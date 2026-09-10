@@ -2,19 +2,28 @@ pub use procgen_core::fingerprint;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
+use crate::field::DEFAULT_STEP_DURATION;
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
     CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
     PlateKinematicsConfig, PlateMigrationConfig, PlatePartition, PlatePartitionConfig,
-    classify_boundaries, classify_crust, derive_crust_birth_prior, evolve_plate_ownership,
-    generate_plate_kinematics, partition_plates,
+    PoleDriftConfig, classify_boundaries, classify_crust, derive_crust_birth_prior,
+    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
 /// is 0.157 against the default mesh's 0.0138, so a step here has to be about
 /// eleven times longer to move a plate the same one cell.
 pub const REFERENCE_STEP_DURATION: f32 = 0.15;
+
+/// No pole drift, for the fixtures whose assertions are about what one fixed
+/// motion does over several steps. Their steps are long enough that the
+/// default rates would turn an axis a large fraction of a right angle each.
+pub const NO_POLE_DRIFT: PoleDriftConfig = PoleDriftConfig {
+    axis_drift_rate: 0.0,
+    speed_drift_rate: 0.0,
+};
 
 pub fn mesh(cell_count: usize) -> SphereMesh {
     build_sphere_mesh(
@@ -50,8 +59,16 @@ pub fn reference_partition() -> (SphereMesh, PlatePartition) {
 
 pub fn reference_evolution_config() -> PlateEvolutionConfig {
     let default = PlateEvolutionConfig::default();
+    let time_scale = DEFAULT_STEP_DURATION / REFERENCE_STEP_DURATION;
     PlateEvolutionConfig {
         step_duration: REFERENCE_STEP_DURATION,
+        pole_drift: PoleDriftConfig {
+            // Drift rates are per unit time and this step is eleven times the
+            // default one, so scaling them by the same ratio gives the
+            // reference run the per-step wander the viewer's defaults produce.
+            axis_drift_rate: default.pole_drift.axis_drift_rate * time_scale,
+            speed_drift_rate: default.pole_drift.speed_drift_rate * time_scale,
+        },
         deformation: BoundaryDeformationConfig {
             // The whole reference run, so a boundary that converged throughout
             // reaches its full profile offset, as the viewer's defaults do.
@@ -68,6 +85,9 @@ pub struct EvolutionFixture {
     pub partition: PlatePartition,
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
+    /// The bounds a run's drift clamps back into. Fixtures whose rotations are
+    /// hand-built rather than fitted still need a band to stay inside.
+    pub kinematics_config: PlateKinematicsConfig,
     pub boundaries: BoundaryClassification,
     pub birth_prior: CrustBirthPrior,
 }
@@ -78,6 +98,7 @@ impl EvolutionFixture {
             partition: &self.partition,
             crust: &self.crust,
             kinematics: &self.kinematics,
+            kinematics_config: self.kinematics_config,
             boundaries: &self.boundaries,
             birth_prior: &self.birth_prior,
         }
@@ -91,9 +112,9 @@ impl EvolutionFixture {
 pub fn evolution_fixture() -> EvolutionFixture {
     let (mesh, partition) = reference_partition();
     let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
+    let kinematics_config = PlateKinematicsConfig::new(7);
     let kinematics =
-        generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
-            .unwrap();
+        generate_plate_kinematics(&mesh, &partition, &crust, kinematics_config).unwrap();
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,
@@ -108,6 +129,7 @@ pub fn evolution_fixture() -> EvolutionFixture {
         partition,
         crust,
         kinematics,
+        kinematics_config,
         boundaries,
         birth_prior,
     }
@@ -138,6 +160,13 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
     let (mesh, edge, partition) = two_plate_boundary_partition();
     let crust = CrustClassification { plate_classes };
     let kinematics = opposed_kinematics(&mesh, edge, outward);
+    // `opposed_kinematics` builds unit-speed rotations, so the band has to
+    // reach one for a drifted speed to have anywhere to go.
+    let kinematics_config = PlateKinematicsConfig {
+        minimum_angular_speed: 0.0,
+        maximum_angular_speed: 1.0,
+        ..PlateKinematicsConfig::new(7)
+    };
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,
@@ -152,6 +181,7 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
         partition,
         crust,
         kinematics,
+        kinematics_config,
         boundaries,
         birth_prior,
     }
@@ -165,6 +195,22 @@ pub fn rift_config(step_count: usize) -> PlateEvolutionConfig {
     PlateEvolutionConfig {
         step_count,
         step_duration: 0.7,
+        migration: PlateMigrationConfig {
+            minimum_convergence: f32::MAX,
+        },
+        pole_drift: NO_POLE_DRIFT,
+        ..PlateEvolutionConfig::default()
+    }
+}
+
+/// A run on the two-plate fixture that isolates pole drift: migration is off
+/// and the step is far too short for a cell to travel a cell width, so
+/// nothing but the drifting motion can change what the boundaries are. The
+/// default rates over a step this long turn an axis about nine degrees.
+pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
+    PlateEvolutionConfig {
+        step_count,
+        step_duration: 0.02,
         migration: PlateMigrationConfig {
             minimum_convergence: f32::MAX,
         },

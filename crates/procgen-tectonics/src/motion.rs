@@ -24,6 +24,10 @@
 //! Everything here stays on add, multiply, divide, and square root, so no libm
 //! call sits between the field and the integer boundary classes the angular
 //! velocities decide.
+//!
+//! What this stage produces is the motion evolution starts from. Evolution
+//! drifts its own copy of it step by step and returns the motion it ended on,
+//! which is what every consumer downstream of a run reads.
 
 use crate::{CrustClass, CrustClassification, PlatePartition, StageInputError};
 use procgen_core::{
@@ -211,7 +215,7 @@ pub fn generate_random_plate_kinematics(
     })
 }
 
-fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
+pub(crate) fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
     if !config.minimum_angular_speed.is_finite()
         || !config.maximum_angular_speed.is_finite()
         || config.minimum_angular_speed < 0.0

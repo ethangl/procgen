@@ -17,8 +17,8 @@ them.
 
 ## Current state
 
-Slices 1, 2, and 3 — coherent kinematics, displacement-proportional migration,
-and accumulated deformation — have landed.
+Slices 1, 2, 3, and 4 — coherent kinematics, displacement-proportional
+migration, accumulated deformation, and drifting Euler poles — have landed.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
@@ -113,10 +113,49 @@ and accumulated deformation — have landed.
   step state and the two fields it carries. `CarriedFields` holds birth and
   deformation together and exposes one `move_onto` that migration and
   advection both call, so the upstream-neighbour search is written once.
-- Carried risk: the viewer's 32-cell cache fixtures each use a seed at which
+- Kinematics is per-step state inside the evolving world rather than a fixed
+  input. Every step ends, after deform, migrate, and advect and before the
+  next classification, by drifting each plate's rotation vector: the axis
+  turns through the fixed angle `axis_drift_rate * step_duration` toward a
+  fresh hashed direction perpendicular to it, and the speed is multiplied by
+  `1 + s * speed_drift_rate * step_duration` for a hashed `s` in `[-1, 1)`
+  and clamped back into the kinematics config's speed bounds. Four
+  `signed_f32` draws per plate per step, from a `PLATE_POLE_DRIFT` stream on
+  evolution's own new seed, supply the direction and the speed. Because the
+  angle per step is fixed and only the direction is hashed, an axis takes a
+  random walk on the sphere of directions, whose expected total wander over
+  `n` steps is roughly `theta * sqrt(n)`.
+- `axis_drift_rate` defaults to 8.0 and `speed_drift_rate` to 3.5, both per
+  unit time. At `DEFAULT_STEP_DURATION` the first turns an axis 0.112 radians
+  a step, so `0.112 * sqrt(9)` is about twenty degrees of expected wander over
+  a default nine-step run, and the second changes a speed by at most about
+  five percent a step. Both are modest on purpose: larger drift makes
+  boundaries flicker between regimes from step to step and blurs the
+  accumulated fields into an average instead of a record.
+- `PlateEvolutionInputs.kinematics` is still the initial motion, and
+  `PlateEvolution` now returns the motion the run ended on. The viewer's
+  `TectonicsWorld` stores that one and does not keep the initial motion at
+  all; geology's hotspot trails and the viewer's motion arrows read it.
+  Evolution also reads the kinematics config, for the speed bounds the drift
+  clamps into.
+- The rotation is the tangent half-angle form, which is now
+  `Vec3::rotated_toward` in `procgen-core`; the crack walk's private copy is
+  gone. Nothing on the drift path calls libm, so the integer boundary classes
+  the drifted vectors decide stay exact across machines.
+- At the viewer's defaults, boundary edges after nine steps are 3302
+  convergent, 3576 divergent, and 3132 transform, against 3297, 3706, and 3103
+  without drift: the totals barely move, which is the point — drift changes
+  which edges hold which regime rather than how many of each there are.
+  Migration events go from 5752 over 4494 distinct cells to 5666 over 4387,
+  and crust-creation events from 1847 to 1902. Of the edges that were ever a
+  boundary during the run — 21,133 without drift and 20,965 with — those that
+  held more than one regime go from 1370 to 5813, a little over four times as
+  many. Accumulated deformation spans -0.168 to 0.334 with a mean of 0.029
+  over 37,731 affected cells, against -0.173 to 0.344 over 37,079.
+- Carried risk: the viewer's small-mesh fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
-  moves which seeds those are. Two changed here, three in slice 2, four in
-  slice 1. The fix
+  moves which seeds those are. One changed here, two in slice 3, three in
+  slice 2, four in slice 1. The fix
   belongs in the fixture — a mesh coarse enough to be fast but not so coarse
   that coupling is marginal — rather than in each slice's seed list.
 
@@ -257,7 +296,7 @@ seafloor age from birth, base elevation reading true age.
 Per-step deformation increments into a persistent field; the final-boundary
 derivation removed.
 
-### Drifting poles.
+### Drifting poles. Landed.
 
 Bounded per-step change of each plate's rotation vector.
 

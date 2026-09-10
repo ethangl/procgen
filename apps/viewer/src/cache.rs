@@ -386,7 +386,8 @@ struct_codec! {
     CrustClassificationConfig { target_ocean_fraction, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     PlateMigrationConfig { minimum_convergence }
-    PlateEvolutionConfig { step_count, step_duration, migration, deformation }
+    PoleDriftConfig { axis_drift_rate, speed_drift_rate }
+    PlateEvolutionConfig { seed, step_count, step_duration, migration, deformation, pole_drift }
     CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { continental_base, ridge_elevation, deep_ocean_elevation, cooling_age }
     BoundaryEffect { offset, depth }

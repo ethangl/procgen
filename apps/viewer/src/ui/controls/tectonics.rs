@@ -6,7 +6,7 @@ use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
     DEFAULT_STEP_DURATION, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlatePartitionConfig,
+    PlatePartitionConfig, PoleDriftConfig,
 };
 
 // The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
@@ -27,6 +27,16 @@ const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 // ten cells per step on the default mesh, past which a step skips terrain it
 // should have crossed.
 const STEP_DURATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=DEFAULT_STEP_DURATION * 10.0;
+// Drift rates are per unit time, so both ranges are stated as the change one
+// default step may make and divided back out. The tops sit where a boundary
+// starts changing regime within a step or two, which blurs the accumulated
+// fields instead of recording them.
+const MAXIMUM_AXIS_DRIFT_PER_STEP: f32 = 0.5;
+const AXIS_DRIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
+    0.0..=MAXIMUM_AXIS_DRIFT_PER_STEP / DEFAULT_STEP_DURATION;
+const MAXIMUM_SPEED_DRIFT_PER_STEP: f32 = 0.25;
+const SPEED_DRIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
+    0.0..=MAXIMUM_SPEED_DRIFT_PER_STEP / DEFAULT_STEP_DURATION;
 const CRUST_BIRTH_PRIOR_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 // A boundary reaches its full profile in one default step at the bottom and
@@ -187,6 +197,29 @@ fn evolution_controls(
         "Minimum convergence",
         &mut config.migration.minimum_convergence,
         0.0..=kinematics.maximum_convergence(WORLD_RADIUS),
+    );
+    pole_drift_controls(ui, &mut config.pole_drift);
+    drag_value(
+        ui,
+        "Evolution seed",
+        &mut config.seed,
+        u64::MIN..=u64::MAX,
+        1.0,
+    );
+}
+
+fn pole_drift_controls(ui: &mut egui::Ui, config: &mut PoleDriftConfig) {
+    slider(
+        ui,
+        "Axis drift",
+        &mut config.axis_drift_rate,
+        AXIS_DRIFT_RATE_RANGE,
+    );
+    slider(
+        ui,
+        "Speed drift",
+        &mut config.speed_drift_rate,
+        SPEED_DRIFT_RATE_RANGE,
     );
 }
 
