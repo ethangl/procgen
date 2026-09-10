@@ -58,8 +58,8 @@ pub use migration::{
     CellMigration, PlateMigration, PlateMigrationConfig, PlateMigrationError, migrate_plates_once,
 };
 pub use motion::{
-    PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, generate_plate_kinematics,
-    generate_random_plate_kinematics,
+    FlowField, PlateKinematics, PlateKinematicsConfig, PlateKinematicsError,
+    generate_plate_kinematics, generate_random_plate_kinematics,
 };
 pub use partition::{
     MAX_GROWTH_ROUGHNESS, PlatePartition, PlatePartitionConfig, PlatePartitionError,

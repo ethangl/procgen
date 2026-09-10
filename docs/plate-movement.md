@@ -19,7 +19,8 @@ them.
 
 All five slices — coherent kinematics, displacement-proportional migration,
 accumulated deformation, drifting Euler poles, and plate lifecycle — have
-landed.
+landed, and so has the interior relief that follows them; see the last section
+for that one.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
@@ -440,3 +441,99 @@ Bounded per-step change of each plate's rotation vector.
 
 Rifting along new cracks, suturing of converged continental pairs, plate-set
 compaction, config and viewer controls, docs.
+
+## Interior relief
+
+A sixth slice, after the five above and small beside them. Nothing in the five
+acts on a plate interior: boundary deformation reaches three to five cells from
+a boundary, the cratons of the geology phase flatten toward a constant, and
+base elevation gave every continental cell one number. A plate wider than about
+ten cells was flat by construction. Two low-frequency fields are added to base
+elevation, neither replacing anything.
+
+- **Dynamic topography.** Where mantle flow converges the surface sags and
+  where it diverges it swells. Slice 1's flow field already stands in for
+  mantle flow, so the term is its divergence over the mesh, negated, divided by
+  a fixed scale, times `dynamic_topography_amplitude`. It applies to oceanic
+  and continental crust alike. The divergence is the discrete divergence
+  theorem over each cell's Voronoi polygon, on `SphereMesh` beside
+  `cell_gradients`: the field at each edge's midpoint direction dotted with the
+  outward edge normal, times the edge's chord, summed over the cell's corners
+  and divided by its area.
+- **Continental basement.** Crust thickness varies between old shields and
+  younger provinces. Three octaves of the fixed-polynomial gradient noise at
+  `basement_frequency * 2^k`, amplitudes halving, normalised by the amplitude
+  sum and scaled by `basement_amplitude`, on continental cells only. Its keys
+  come from a new `PLATE_BASEMENT` stream on base elevation's own new seed.
+
+`derive_base_elevation` therefore reads the mesh, the final seafloor age, the
+final cell crust, and the flow field. `flow_field_keys` and `flow_velocity`
+became the public `FlowField`, built once from `PlateKinematicsConfig`, so the
+kinematics fit and base elevation sample one field from one config; the fit's
+output did not change, which its pinned fingerprints prove.
+
+Defaults are `dynamic_topography_amplitude` 0.03, `basement_amplitude` 0.05,
+and `basement_frequency` 3.0. A lattice feature spans about two lattice cells,
+so the basement's longest wavelength is two thirds of a model unit — a tenth of
+a great circle, or some 48 cells of the default mesh — and its shortest, two
+octaves up, about a dozen. The amplitudes are bounded so interior relief cannot
+drown a continent on its own: `0.65 - 0.03 - 0.05` is 0.57, above the 0.5 of
+`SEA_LEVEL`. That arithmetic is nominal rather than a bound, because the
+dynamic term is normalised by the divergence field's RMS and not its peak.
+Measured, the lowest continental base elevation is 0.516 at the viewer's
+defaults and 0.532 at the reference world, so it holds with a thinner margin
+than 0.57 suggests. A coast still moves only through the oceanic side, which
+the dynamic term alone touches: land cells go from 17,957 to 18,096 at the
+viewer's defaults and from 17,927 to 18,079 at the reference world.
+
+`DIVERGENCE_SCALE` is 1.2, the RMS of the divergence field measured once at the
+viewer's defaults, where it spans -3.38 to 5.53 with an RMS of 1.206. Dividing
+by the RMS makes the amplitude the swell a typical divergence raises. The peak
+is 4.6 times the RMS, so the term reaches several times its amplitude at the
+most divergent cells, which is why base elevation now clamps to `[0, 1]` as the
+composition stage does. Only the deep floor at 0.08 can reach that clamp: no
+cell of the 65,536 does at the viewer's defaults, and 55 do at the reference
+world, the lowest unclamped value being -0.022.
+
+Measured at the viewer's defaults — sampling seed 7, jitter 0.8, 15 steps — and
+at the reference world of sampling seed 9, subdivided faces 0.2, and 30 steps:
+
+| | viewer defaults | reference world |
+| --- | --- | --- |
+| dynamic topography | -0.138 to 0.084 | -0.125 to 0.082 |
+| basement, continental cells | -0.026 to 0.027 | -0.024 to 0.025 |
+| base elevation | 0.014 to 0.744, mean 0.297 | 0.000 to 0.733, mean 0.247 |
+| base elevation before | 0.088 to 0.650, mean 0.297 | 0.080 to 0.650, mean 0.247 |
+| tectonic elevation | 0.071 to 1.000, mean 0.401 | 0.000 to 1.000, mean 0.335 |
+| continental interior, five hops in | 0.465 to 1.000 | 0.399 to 1.000 |
+| the same before | 0.491 to 1.000 | 0.371 to 1.000 |
+
+The basement reaches about half its amplitude because three octaves rarely
+align. The dynamic term is the larger of the two everywhere, and the term that
+gives the deep ocean the gradient it never had.
+
+The geology phase's craton flattening now reads
+`base_elevation.cell_elevations[cell]` instead of the tectonics config's
+`continental_base`, so a shield keeps the dynamic topography and basement its
+own interior carries rather than levelling to one number. Isostasy's
+`continental_support` stays a constant: it is the support continental crust has
+away from every other effect, not the elevation a particular cell would stand
+at.
+
+No integer fingerprint moved. The only fingerprint over base elevation is now
+taken with both amplitudes zero, which is what says the two terms are the whole
+of the change, and every geology and climate pin downstream reads a synthetic
+elevation field rather than an evolved one.
+
+Carried risk. The 65,536-cell mesh has about 180 cells whose Voronoi corner
+ring is locally inverted — 69 of them with no jitter at all, so it is the f32
+circumcenter of a near-degenerate Fibonacci-lattice triangle rather than the
+jitter. No boundary integral over an inverted ring can be right, and those
+cells are where the divergence field's peak of 4.6 RMS comes from: on a
+4096-cell mesh, which has none, the worst cell of a rigid-rotation field
+measures 0.04 against an exact zero. The visible effect is a few dozen isolated
+cells carrying up to 0.14 of dynamic topography instead of the 0.03 the field
+around them carries. Fixing it belongs in the triangulation, not here.
+
+Erosion is the next stage, and it is the reason this one exists: it needs
+slopes to move material down, and until now a plate interior had none.

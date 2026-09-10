@@ -242,6 +242,28 @@ impl SphereMesh {
             .collect()
     }
 
+    /// Discrete surface divergence of a tangent vector field, one value per
+    /// cell, from the divergence theorem over the cell's Voronoi polygon: the
+    /// outward flux through the polygon's edges divided by its area. Each edge
+    /// contributes the field at the midpoint direction of the two cell centers
+    /// it separates, projected onto the outward edge normal in the cell's
+    /// tangent plane, times the chord between the edge's two Voronoi vertices.
+    ///
+    /// The result is in field units per model length, so it scales inversely
+    /// with mesh radius. Add, multiply, divide, and square root only: no libm
+    /// call sits between the field and what a comparison on this decides.
+    ///
+    /// One field sample per cell corner is six or so per cell, and a caller's
+    /// field is usually noise, so the pass is threaded above the same cell
+    /// count the areas are.
+    pub fn cell_divergence(&self, field: impl Fn(Vec3) -> Vec3 + Sync) -> Vec<f32> {
+        (0..self.cell_count())
+            .into_par_iter()
+            .with_min_len(PARALLEL_THRESHOLD)
+            .map(|cell| cell_divergence(self, &field, cell))
+            .collect()
+    }
+
     /// Returns the cell's corners clockwise when viewed from outside the
     /// sphere. The cell center, each corner's successor, and that corner
     /// therefore form an outward-facing triangle fan.
@@ -315,6 +337,28 @@ fn cell_gradient(mesh: &SphereMesh, values: &[f32], cell: usize) -> Vec3 {
     let eastward = (yy * bx - xy * by) / determinant;
     let northward = (xx * by - xy * bx) / determinant;
     east * eastward as f32 + north * northward as f32
+}
+
+fn cell_divergence(mesh: &SphereMesh, field: &impl Fn(Vec3) -> Vec3, cell: usize) -> f32 {
+    let center = mesh.cell_centers[cell];
+    let normal = center.normalized();
+    let flux: f32 = mesh
+        .cell_corners(cell)
+        .iter()
+        .map(|corner| {
+            let neighbor = mesh.cell_centers[corner.neighbor];
+            // Two distinct points of equal length never differ along their own
+            // radius, so the projected direction is never degenerate.
+            let toward = neighbor - center;
+            let outward = (toward - normal * toward.dot(normal)).normalized();
+            let midpoint = (center + neighbor).normalized();
+            let [start, end] = mesh.edges[corner.edge]
+                .vertices
+                .map(|vertex| mesh.vertices[vertex]);
+            field(midpoint).dot(outward) * (end - start).length()
+        })
+        .sum();
+    flux / mesh.cell_areas[cell]
 }
 
 fn local_tangent_basis(normal: Vec3) -> (Vec3, Vec3) {
@@ -422,6 +466,31 @@ fn spherical_polygon_area(center: Vec3, polygon: &[CellCorner], vertices: &[Vec3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build_sphere_mesh;
+    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
+
+    /// Worst per-cell error the divergence tests allow. One field sample per
+    /// edge makes the operator first order in cell width, so the bound is a
+    /// round number a little above what the mesh below measures: 0.04 for the
+    /// rigid rotation and 0.06 against the flow-toward-a-pole solution.
+    const DIVERGENCE_TOLERANCE: f32 = 0.1;
+
+    /// A mesh fine enough for the divergence operator's error to be small.
+    /// Meshes an order of magnitude finer are not usable here: a handful of
+    /// their cells have a locally inverted Voronoi ring, which no boundary
+    /// integral over the ring can be right about.
+    fn fibonacci_mesh(count: usize, radius: f32) -> SphereMesh {
+        build_sphere_mesh(
+            fibonacci_sphere(FibonacciConfig {
+                count,
+                jitter: 0.5,
+                seed: 7,
+            })
+            .unwrap(),
+            radius,
+        )
+        .unwrap()
+    }
 
     fn tetrahedron() -> SphereMesh {
         let points = [
@@ -468,6 +537,52 @@ mod tests {
         for (cell, gradient) in mesh.cell_gradients(&values).iter().enumerate() {
             assert!(gradient.length() > 0.0);
             assert!(gradient.dot(mesh.cell_centers[cell].normalized()).abs() <= 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn cell_divergence_of_a_rigid_rotation_vanishes_on_every_cell() {
+        let mesh = fibonacci_mesh(4096, 1.0);
+        let rotation = Vec3::new(0.3, -0.7, 0.5);
+
+        for (cell, &divergence) in mesh
+            .cell_divergence(|position| rotation.cross(position))
+            .iter()
+            .enumerate()
+        {
+            assert!(
+                divergence.abs() < DIVERGENCE_TOLERANCE,
+                "cell {cell}: {divergence}"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_divergence_of_a_flow_toward_a_pole_sinks_there_and_scales_with_radius() {
+        let pole = Vec3::new(0.2, 0.9, -0.3).normalized();
+        // The tangential part of a fixed direction is `-sin(t)` along the
+        // meridian away from the pole, whose surface divergence on a unit
+        // sphere is `-2 cos(t)`: flow into the pole on its own hemisphere and
+        // out of the antipode on the other.
+        let toward_pole = |position: Vec3| pole - position * pole.dot(position);
+        let unit = fibonacci_mesh(4096, 1.0);
+        let doubled = fibonacci_mesh(4096, 2.0);
+        let unit_divergence = unit.cell_divergence(toward_pole);
+        let doubled_divergence = doubled.cell_divergence(toward_pole);
+
+        for (cell, &divergence) in unit_divergence.iter().enumerate() {
+            let cosine = pole.dot(unit.cell_centers[cell].normalized());
+            assert!(
+                (divergence + 2.0 * cosine).abs() < DIVERGENCE_TOLERANCE,
+                "cell {cell}: {divergence} against {}",
+                -2.0 * cosine
+            );
+            // Flux per unit area is a length reciprocal, so twice the radius
+            // is half the divergence.
+            assert!(
+                (doubled_divergence[cell] * 2.0 - divergence).abs() < DIVERGENCE_TOLERANCE,
+                "cell {cell} does not halve with radius"
+            );
         }
     }
 

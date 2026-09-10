@@ -5,7 +5,7 @@ use crate::{
     },
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{CoarseElevation, FieldSummary};
+use procgen_tectonics::{BaseElevation, CoarseElevation, FieldSummary};
 
 /// Configuration for the ordered coarse geological-elevation composition.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -14,7 +14,8 @@ pub struct GeologicalElevationConfig {
     pub hotspot_uplift: f32,
     /// Maximum normalized uplift contributed by a full-strength volcanic arc.
     pub volcanic_arc_uplift: f32,
-    /// Fraction of the distance toward `continental_base` applied at full craton strength.
+    /// Fraction of the distance toward the cell's own base elevation applied
+    /// at full craton strength.
     pub craton_flattening: f32,
     /// Fraction of the distance toward a basin's component floor.
     pub basin_flattening: f32,
@@ -38,8 +39,12 @@ pub struct GeologicalElevationInputs<'a> {
     pub volcanic_arcs: &'a VolcanicArcField,
     pub cratons: &'a CratonField,
     pub basins: &'a SedimentaryBasinField,
-    /// Validated normalized continental base used by tectonic base elevation.
-    pub continental_base: f32,
+    /// Tectonic base elevation, which a craton flattens toward: the elevation
+    /// its cell would stand at with nothing acting on it. Reading the field
+    /// rather than the configured continental base keeps a shield on the
+    /// dynamic topography and continental basement its interior carries
+    /// instead of levelling every craton to one number.
+    pub base_elevation: &'a BaseElevation,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -104,7 +109,7 @@ pub fn compose_geological_elevation(
         |cell, elevation| {
             lerp(
                 elevation,
-                inputs.continental_base,
+                inputs.base_elevation.cell_elevations[cell],
                 inputs.cratons.cell_strengths[cell] * config.craton_flattening,
             )
         },
@@ -139,12 +144,12 @@ fn validate_inputs(
         || !unit_interval(config.volcanic_arc_uplift)
         || !unit_interval(config.craton_flattening)
         || !unit_interval(config.basin_flattening)
-        || !unit_interval(inputs.continental_base)
     {
         return Err(GeologyStageError::InvalidConfig);
     }
 
     inputs.tectonic_elevation.validate(mesh)?;
+    inputs.base_elevation.validate(mesh)?;
     inputs.hotspots.validate(mesh)?;
     inputs.volcanic_arcs.validate(mesh)?;
     inputs.cratons.validate(mesh)?;
@@ -165,6 +170,7 @@ mod tests {
     #[derive(Clone)]
     struct Fixture {
         tectonic_elevation: CoarseElevation,
+        base_elevation: BaseElevation,
         hotspots: HotspotField,
         volcanic_arcs: VolcanicArcField,
         cratons: CratonField,
@@ -179,6 +185,10 @@ mod tests {
                     cell_elevations: elevations,
                     diagnostics: Default::default(),
                 },
+                base_elevation: BaseElevation {
+                    cell_elevations: vec![0.0; cell_count],
+                    diagnostics: Default::default(),
+                },
                 hotspots: empty_hotspots(cell_count),
                 volcanic_arcs: empty_volcanic_arcs(cell_count),
                 cratons: empty_cratons(cell_count),
@@ -186,10 +196,23 @@ mod tests {
             }
         }
 
+        /// Composes over a uniform base elevation, which is what a craton
+        /// used to flatten toward before the field varied over a plate.
         fn compose(
             &self,
             mesh: &SphereMesh,
             continental_base: f32,
+            config: GeologicalElevationConfig,
+        ) -> Result<GeologicalElevation, GeologyStageError> {
+            let mut fixture = self.clone();
+            fixture.base_elevation.cell_elevations =
+                vec![continental_base; self.tectonic_elevation.cell_elevations.len()];
+            fixture.compose_over_its_base(mesh, config)
+        }
+
+        fn compose_over_its_base(
+            &self,
+            mesh: &SphereMesh,
             config: GeologicalElevationConfig,
         ) -> Result<GeologicalElevation, GeologyStageError> {
             compose_geological_elevation(
@@ -200,7 +223,7 @@ mod tests {
                     volcanic_arcs: &self.volcanic_arcs,
                     cratons: &self.cratons,
                     basins: &self.basins,
-                    continental_base,
+                    base_elevation: &self.base_elevation,
                 },
                 config,
             )
@@ -258,6 +281,26 @@ mod tests {
                     .map(|value| u64::from(value.to_bits()))
             ),
             14_138_733_168_948_866_849
+        );
+    }
+
+    #[test]
+    fn a_craton_flattens_toward_its_own_cell_of_the_base_field() {
+        let mesh = mesh(4);
+        let mut fixture = Fixture::new(vec![0.9; 4]);
+        // Full strength and full flattening, so each cell lands exactly on
+        // its own base elevation and nothing else can move it.
+        fixture.cratons.cell_strengths = vec![1.0; 4];
+        fixture.base_elevation.cell_elevations = vec![0.60, 0.65, 0.70, 0.75];
+        let config = GeologicalElevationConfig {
+            craton_flattening: 1.0,
+            ..GeologicalElevationConfig::default()
+        };
+
+        let result = fixture.compose_over_its_base(&mesh, config).unwrap();
+        assert_eq!(
+            result.cell_elevations,
+            fixture.base_elevation.cell_elevations
         );
     }
 
@@ -336,6 +379,13 @@ mod tests {
             Err(GeologyStageError::Input(StageInputError::Elevation))
         );
         fixture.tectonic_elevation.cell_elevations.push(0.5);
+
+        fixture.base_elevation.cell_elevations.pop();
+        assert_eq!(
+            fixture.compose_over_its_base(&mesh, GeologicalElevationConfig::default()),
+            Err(GeologyStageError::Input(StageInputError::BaseElevation))
+        );
+        fixture.base_elevation.cell_elevations.push(0.5);
 
         fixture.hotspots.cell_intensities.pop();
         assert_eq!(

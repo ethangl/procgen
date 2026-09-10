@@ -6,7 +6,7 @@ use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 use crate::field::{DEFAULT_STEP_DURATION, mean_cell_width};
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
-    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
+    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig, FlowField,
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
     PlateKinematicsConfig, PlateLifecycleConfig, PlateMigrationConfig, PlatePartition,
     PlatePartitionConfig, PoleDriftConfig, classify_boundaries, classify_crust,
@@ -17,6 +17,9 @@ use crate::{
 /// is 0.157 against the default mesh's 0.0138, so a step here has to be about
 /// eleven times longer to move a plate the same one cell.
 pub const REFERENCE_STEP_DURATION: f32 = 0.15;
+
+/// Kinematics seed of the reference fixtures, and so of their flow field.
+const REFERENCE_MOTION_SEED: u64 = 7;
 
 /// No pole drift, for the fixtures whose assertions are about what one fixed
 /// motion does over several steps. Their steps are long enough that the
@@ -69,6 +72,12 @@ pub fn reference_partition() -> (SphereMesh, PlatePartition) {
     let mesh = mesh(512);
     let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
     (mesh, partition)
+}
+
+/// The flow field the reference fixtures' plates were fitted to, for the
+/// stages downstream of a run that read the same field the fit did.
+pub fn reference_flow_field() -> FlowField {
+    FlowField::new(&PlateKinematicsConfig::new(REFERENCE_MOTION_SEED))
 }
 
 pub fn reference_evolution_config() -> PlateEvolutionConfig {
@@ -139,9 +148,13 @@ impl EvolutionFixture {
 pub fn evolution_fixture() -> EvolutionFixture {
     let (mesh, partition) = reference_partition();
     let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
-    let kinematics =
-        generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
-            .unwrap();
+    let kinematics = generate_plate_kinematics(
+        &mesh,
+        &partition,
+        &crust,
+        PlateKinematicsConfig::new(REFERENCE_MOTION_SEED),
+    )
+    .unwrap();
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,
