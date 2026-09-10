@@ -195,7 +195,7 @@ pub fn rift_config(step_count: usize) -> PlateEvolutionConfig {
 /// A run on the two-plate fixture that isolates pole drift: migration is off
 /// and the step is far too short for a cell to travel a cell width, so
 /// nothing but the drifting motion can change what the boundaries are. The
-/// default rates over a step this long turn an axis about nine degrees.
+/// default rates over a step this long turn an axis about seventeen degrees.
 pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
     PlateEvolutionConfig {
         step_count,

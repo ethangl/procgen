@@ -130,16 +130,16 @@ migration, accumulated deformation, and drifting Euler poles — have landed.
   piles every plate against one of them; a band around the fitted speed keeps
   drift the perturbation of the flow field's answer that it is meant to be,
   and evolution needs nothing from the kinematics stage but its result.
-- `axis_drift_rate` defaults to 8.0 and `speed_drift_rate` to 3.5, both per
-  unit time, and `speed_drift_limit` to 0.25. At `DEFAULT_STEP_DURATION` the
-  first turns an axis 0.112 radians a step, so `0.112 * sqrt(9)` is about
-  twenty degrees of expected wander over a default nine-step run, and the
-  second changes a speed by at most about five percent a step, whose expected
-  nine-step excursion is about nine percent. A quarter therefore bounds the
-  tail of the speed walk without shaping its bulk: one of the 57 plates at
-  the viewer's defaults reaches the band edge. The rates are modest on
-  purpose: larger drift makes boundaries flicker between regimes from step to
-  step and blurs the accumulated fields into an average instead of a record.
+- `axis_drift_rate` defaults to 15.0 and `speed_drift_rate` to 7.5, both per
+  unit time, and `speed_drift_limit` to 0.5. At `DEFAULT_STEP_DURATION` the
+  first turns an axis 0.21 radians a step, so `0.21 * sqrt(15)` is about
+  forty-seven degrees of expected wander over a default fifteen-step run, and
+  the second changes a speed by at most about a tenth a step, whose expected
+  fifteen-step excursion is about a quarter. A half therefore bounds the tail
+  of the speed walk without shaping its bulk: five of the 111 plates at the
+  viewer's defaults reach the band edge. The rates stay bounded on purpose:
+  larger drift makes boundaries flicker between regimes from step to step and
+  blurs the accumulated fields into an average instead of a record.
 - `PlateEvolutionInputs.kinematics` is still the initial motion, and
   `PlateEvolution` now returns the motion the run ended on. The viewer's
   `TectonicsWorld` stores that one and does not keep the initial motion at
@@ -148,16 +148,31 @@ migration, accumulated deformation, and drifting Euler poles — have landed.
   `Vec3::rotated_toward` in `procgen-core`; the crack walk's private copy is
   gone. Nothing on the drift path calls libm, so the integer boundary classes
   the drifted vectors decide stay exact across machines.
-- At the viewer's defaults, boundary edges after nine steps are 3302
-  convergent, 3580 divergent, and 3121 transform, against 3297, 3706, and 3103
-  without drift: the totals barely move, which is the point — drift changes
-  which edges hold which regime rather than how many of each there are.
-  Migration events go from 5752 over 4494 distinct cells to 5728 over 4468,
-  and crust-creation events from 1847 to 1918. Of the edges that were ever a
-  boundary during the run — 21,133 without drift and 21,108 with — those that
-  held more than one regime go from 1370 to 5798, a little over four times as
-  many. Accumulated deformation spans -0.166 to 0.336 with a mean of 0.029
-  over 37,710 affected cells, against -0.173 to 0.344 over 37,079.
+- The defaults of every earlier stage were retuned in the same change, so the
+  numbers below are measured at the retuned ones and are not comparable with
+  the slice 2 and 3 figures above. Mesh jitter 0.5 to 0.8; crack arcs 40 to
+  16, curvature 2 to 8, and subdivided faces 0.4 to 0.8, which together give
+  111 plates against 57 from fewer, larger crack faces split more often;
+  oceanic speed factor 1.4 to 1.5 and continental 0.7 to 1.0, so crust class
+  separates speeds less; evolution steps 9 to 15 and minimum convergence 0.3
+  to 0.5; and the convergent profile's depth 3 to 6, for wider belts.
+- At the viewer's retuned defaults, boundary edges after fifteen steps are
+  5326 convergent, 5896 divergent, and 5326 transform, against 4842, 5660,
+  and 4914 without drift. Migration events go from 9219 over 6878 distinct
+  cells to 18,107 over 11,257, and crust-creation events from 5715 to 6369:
+  unlike at the previous defaults, drift now moves substantially more,
+  because a minimum convergence of 0.5 sits inside the range a drifting speed
+  crosses rather than below it. Of the edges that were ever a boundary during
+  the run — 30,583 without drift and 46,054 with — those that held more than
+  one regime go from 2081 to 17,911. Accumulated deformation spans -0.249 to
+  0.500 with a mean of 0.105 over 61,554 affected cells, against -0.287 to
+  0.500 over 60,109.
+- `full_deformation_time` still defaults to nine default steps while the run
+  is now fifteen, so a boundary that holds one regime throughout raises more
+  than the full profile and `maximum_magnitude` clamps it. That is a bound
+  biting rather than a saturated field: 284 of the 65,536 cells reach it,
+  0.4 percent. Raising `full_deformation_time` to the run length would undo
+  it, at the cost of thinner belts everywhere.
 - Carried risk: the viewer's small-mesh fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
   moves which seeds those are. Five changed here, two in slice 3, three in

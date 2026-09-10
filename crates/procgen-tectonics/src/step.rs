@@ -73,21 +73,21 @@ pub struct PoleDriftConfig {
 impl Default for PoleDriftConfig {
     fn default() -> Self {
         Self {
-            // A default nine-step run at `DEFAULT_STEP_DURATION` turns an axis
-            // by `8 * 0.014 = 0.112` radians per step, and `0.112 * sqrt(9)`
-            // is 0.34 radians: about twenty degrees of expected total wander,
-            // enough for boundaries to change regime and little enough that
-            // they do not flicker.
-            axis_drift_rate: 8.0,
-            // `3.5 * 0.014` is 0.049, so a step changes a plate's speed by at
-            // most about five percent.
-            speed_drift_rate: 3.5,
-            // A step's expected change is `0.049 / sqrt(3)`, so a default
-            // nine-step walk is expected to stray about nine percent. At a
-            // quarter the band bounds the tail of that walk without shaping
-            // the bulk of it: one of the 57 plates at the viewer's defaults
-            // reaches the edge over nine steps, and a long run stays inside.
-            speed_drift_limit: 0.25,
+            // A default fifteen-step run at `DEFAULT_STEP_DURATION` turns an
+            // axis by `15 * 0.014 = 0.21` radians per step, and
+            // `0.21 * sqrt(15)` is 0.81 radians: about forty-seven degrees of
+            // expected total wander, enough for boundaries to change regime
+            // several times and little enough that they do not flicker.
+            axis_drift_rate: 15.0,
+            // `7.5 * 0.014` is 0.105, so a step changes a plate's speed by at
+            // most about a tenth.
+            speed_drift_rate: 7.5,
+            // A step's expected change is `0.105 / sqrt(3)`, so a default
+            // fifteen-step walk is expected to stray about a quarter. At a
+            // half the band bounds the tail of that walk without shaping the
+            // bulk of it: five of the 111 plates at the viewer's defaults
+            // reach the edge over fifteen steps, and a long run stays inside.
+            speed_drift_limit: 0.5,
         }
     }
 }
@@ -301,7 +301,7 @@ impl<'a> EvolvingWorld<'a> {
     /// The turn is the half-angle tangent form, so it costs only add,
     /// multiply, and divide. Half the intended angle stands in for its
     /// tangent, which is the same number to third order: at the default rate
-    /// the realized turn is one part in a thousand short of the configured
+    /// the realized turn is four parts in a thousand short of the configured
     /// one, and nothing downstream resolves that. Taking the tangent for real
     /// would put libm back on the path the boundary classes come off.
     pub(crate) fn drift(&mut self, step: i32) {

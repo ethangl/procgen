@@ -15,7 +15,7 @@ pub struct PlateMigrationConfig {
 impl Default for PlateMigrationConfig {
     fn default() -> Self {
         Self {
-            minimum_convergence: 0.3,
+            minimum_convergence: 0.5,
         }
     }
 }
@@ -281,7 +281,7 @@ mod tests {
                 .iter()
                 .map(|&plate| plate as u64),
         );
-        assert_eq!(fingerprint, 15_263_581_697_152_949_382);
+        assert_eq!(fingerprint, 4_842_646_029_839_611_517);
     }
 
     #[test]

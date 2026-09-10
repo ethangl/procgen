@@ -325,14 +325,14 @@ mod tests {
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
         assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
-        assert_eq!(first.diagnostics.proposal_count, 173);
-        assert_eq!(first.diagnostics.contested_cell_count, 22);
-        assert_eq!(first.diagnostics.migrated_cell_count, 150);
-        assert_eq!(first.diagnostics.born_cell_count, 46);
+        assert_eq!(first.diagnostics.proposal_count, 196);
+        assert_eq!(first.diagnostics.contested_cell_count, 25);
+        assert_eq!(first.diagnostics.migrated_cell_count, 169);
+        assert_eq!(first.diagnostics.born_cell_count, 81);
         // Convergence is a float reduction, so machines differ in the last bits.
-        assert!((first.diagnostics.maximum_convergence - 1.703_729_4).abs() < 1.0e-3);
-        assert_eq!(ownership_fingerprint(&first), 5_571_765_873_672_641_021);
-        assert_eq!(birth_fingerprint(&first), 3_874_420_673_332_482_514);
+        assert!((first.diagnostics.maximum_convergence - 1.729_143_5).abs() < 1.0e-3);
+        assert_eq!(ownership_fingerprint(&first), 7_861_530_542_741_843_693);
+        assert_eq!(birth_fingerprint(&first), 17_900_964_807_056_914_166);
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.
@@ -372,8 +372,11 @@ mod tests {
         assert_eq!(evolution.kinematics, fixture.kinematics);
         // The state a run with no drift reaches is the state this slice
         // inherited, so these are the fingerprints pinned before it.
-        assert_eq!(ownership_fingerprint(&evolution), 3_267_391_620_510_768_872);
-        assert_eq!(birth_fingerprint(&evolution), 8_599_187_947_100_659_055);
+        assert_eq!(
+            ownership_fingerprint(&evolution),
+            14_527_926_896_356_991_964
+        );
+        assert_eq!(birth_fingerprint(&evolution), 10_036_958_955_164_647_054);
     }
 
     #[test]
@@ -432,18 +435,28 @@ mod tests {
         // thing that can reclassify an edge.
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
         let config = drift_config(24);
-        let evolution = fixture.evolve(config);
-
-        assert_eq!(evolution.partition, fixture.partition);
         let convergent: Vec<_> = (0..fixture.mesh.edge_count())
             .filter(|&edge| fixture.boundaries.edge_classes[edge] == BoundaryClass::Convergent)
             .collect();
         assert!(!convergent.is_empty(), "the fixture must start convergent");
+
+        // A regime the run passes through, not the one it happens to stop on:
+        // the walk is free to bring an axis back to where it started, so the
+        // end state alone would be a coin toss.
+        let mut changed = false;
+        for step_count in 1..=config.step_count {
+            let run = fixture.evolve(PlateEvolutionConfig {
+                step_count,
+                ..config
+            });
+            assert_eq!(run.partition, fixture.partition);
+            changed |= convergent
+                .iter()
+                .any(|&edge| run.boundaries.edge_classes[edge] != BoundaryClass::Convergent);
+        }
         assert!(
-            convergent.iter().any(|&edge| {
-                evolution.boundaries.edge_classes[edge] != BoundaryClass::Convergent
-            }),
-            "no convergent edge changed regime over {} steps",
+            changed,
+            "no convergent edge held another regime over {} steps",
             config.step_count
         );
     }

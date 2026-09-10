@@ -31,7 +31,7 @@ impl Default for TectonicsSettings {
     fn default() -> Self {
         Self {
             fibonacci: FibonacciConfig {
-                jitter: 0.5,
+                jitter: 0.8,
                 seed: 7,
                 ..FibonacciConfig::new(65_536)
             },
@@ -47,7 +47,7 @@ impl Default for TectonicsSettings {
             birth_prior: CrustBirthPriorConfig::default(),
             evolution: PlateEvolutionConfig {
                 seed: 7,
-                step_count: 9,
+                step_count: 15,
                 ..Default::default()
             },
             base_elevation: BaseElevationConfig::default(),

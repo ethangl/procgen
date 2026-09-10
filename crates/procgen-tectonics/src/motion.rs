@@ -72,8 +72,8 @@ impl PlateKinematicsConfig {
             maximum_angular_speed: 1.0,
             flow_frequency: 1.0,
             coherence: 0.85,
-            oceanic_speed_factor: 1.4,
-            continental_speed_factor: 0.7,
+            oceanic_speed_factor: 1.5,
+            continental_speed_factor: 1.0,
         }
     }
 

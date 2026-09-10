@@ -64,14 +64,18 @@ pub struct BoundaryDeformationConfig {
     /// Model time over which a saturated boundary raises its full profile
     /// offset. Each step adds the profile scaled by the step's duration over
     /// this time, so the default of nine default steps
-    /// (`9 * DEFAULT_STEP_DURATION`) makes the viewer's nine-step defaults
-    /// reproduce the magnitudes the removed final-boundary stage produced, at
-    /// a boundary that converged for the whole run.
+    /// (`9 * DEFAULT_STEP_DURATION`) is the time a boundary needs to hold one
+    /// regime to reach the magnitudes the removed final-boundary stage
+    /// produced. The viewer's run is longer than that, so a boundary that
+    /// converges throughout raises more and [`Self::maximum_magnitude`]
+    /// catches the few cells that saturate.
     pub full_deformation_time: f32,
     /// Magnitude the accumulated field is clamped to. The default is the
     /// largest offset the default profiles can raise — the collision centre at
     /// 0.5, against 0.4 for the convergent, transform, and rift centres and
-    /// 0.2 for the trench — so the clamp does not bite at the defaults.
+    /// 0.2 for the trench — so it bites only where a boundary held one regime
+    /// for longer than [`Self::full_deformation_time`]: 284 of the 65,536
+    /// cells at the viewer's defaults.
     pub maximum_magnitude: f32,
 }
 
@@ -80,7 +84,7 @@ impl Default for BoundaryDeformationConfig {
         Self {
             convergent: BoundaryEffect {
                 offset: 0.4,
-                depth: 3,
+                depth: 6,
             },
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
