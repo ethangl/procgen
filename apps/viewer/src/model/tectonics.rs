@@ -4,12 +4,12 @@ use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation, CellCrust,
     CoarseElevation, CoarseElevationConfig, CrustBirthPrior, CrustBirthPriorConfig,
-    CrustBirthPriorDiagnostics, CrustClassification, CrustClassificationConfig, FlowField,
-    PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionInputs,
-    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, SeafloorAge,
-    classify_boundaries, classify_crust, compose_coarse_elevation, derive_base_elevation,
-    derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
-    generate_plate_kinematics, partition_plates,
+    CrustBirthPriorDiagnostics, CrustClassificationConfig, CrustClassificationDiagnostics,
+    FlowField, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
+    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlatePartition,
+    PlatePartitionConfig, SeafloorAge, classify_boundaries, classify_crust,
+    compose_coarse_elevation, derive_base_elevation, derive_crust_birth_prior, derive_seafloor_age,
+    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 use std::error::Error;
 
@@ -41,7 +41,10 @@ impl Default for TectonicsSettings {
                 ..PlatePartitionConfig::default()
             },
             crust: CrustClassificationConfig {
-                target_ocean_fraction: 0.75,
+                // Slightly more ocean than the crate's default, which is the
+                // ocean fraction this phase asked for before crust was a
+                // per-cell field.
+                continental_fraction: 0.25,
                 ..CrustClassificationConfig::new(7)
             },
             kinematics: PlateKinematicsConfig::new(7),
@@ -61,10 +64,10 @@ impl Default for TectonicsSettings {
 pub struct TectonicsWorld {
     pub voronoi: SphereMesh,
     pub plates: PlatePartition,
-    /// Crust class per plate of the final plate set. The classification the
-    /// run started from is not kept: evolution rifts and sutures plates, so
-    /// that one describes a plate set the world no longer holds.
-    pub crust: CrustClassification,
+    /// What the initial classification achieved. The mask itself is not kept:
+    /// the birth prior turned it into the birth field before step zero, and
+    /// `cell_birth` is the per-cell answer from then on.
+    pub crust: CrustClassificationDiagnostics,
     /// Plate motion after evolution's last pole drift. The motion the fit
     /// produced is not kept: everything downstream of a run reads the motion
     /// the run ended on, because that is what its final boundaries express.
@@ -109,9 +112,7 @@ impl TectonicsWorld {
         let initial_plates = timings.record("Plate partition", || {
             partition_plates(&voronoi, config.plates)
         })?;
-        let initial_crust = timings.record("Crust", || {
-            classify_crust(&voronoi, &initial_plates, config.crust)
-        })?;
+        let initial_crust = timings.record("Crust", || classify_crust(&voronoi, config.crust))?;
         let initial_kinematics = timings.record("Plate kinematics", || {
             generate_plate_kinematics(&voronoi, &initial_plates, &initial_crust, config.kinematics)
         })?;
@@ -132,7 +133,6 @@ impl TectonicsWorld {
                 &voronoi,
                 PlateEvolutionInputs {
                     partition: &initial_plates,
-                    crust: &initial_crust,
                     kinematics: &initial_kinematics,
                     boundaries: &initial_boundaries,
                     birth_prior: &birth_prior,
@@ -145,7 +145,6 @@ impl TectonicsWorld {
         })?;
         let PlateEvolution {
             partition: plates,
-            crust,
             kinematics,
             boundaries,
             cell_birth,
@@ -177,7 +176,7 @@ impl TectonicsWorld {
         Ok(Self {
             voronoi,
             plates,
-            crust,
+            crust: initial_crust.diagnostics,
             kinematics,
             boundaries,
             cell_birth,
@@ -192,8 +191,7 @@ impl TectonicsWorld {
         })
     }
 
-    /// Per-cell crust after evolution. Plate crust classes describe plates,
-    /// not the cells they currently own.
+    /// Per-cell crust after evolution, the one answer to what a cell carries.
     pub fn cell_crust(&self) -> CellCrust<'_> {
         CellCrust {
             cell_birth: &self.cell_birth,
@@ -208,7 +206,6 @@ impl TectonicsWorld {
 
         mesh.validate()?;
         self.plates.validate(mesh)?;
-        self.crust.validate(&self.plates)?;
         self.kinematics.validate(&self.plates)?;
         self.boundaries.validate(mesh)?;
         self.cell_crust().validate(mesh)?;
@@ -223,15 +220,15 @@ impl TectonicsWorld {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{tectonics_settings, tectonics_world};
-    use procgen_tectonics::CrustClass;
 
     #[test]
     fn tectonics_runs_without_the_later_phases() {
         let world = tectonics_world(tectonics_settings(128, 7));
 
         world.validate().unwrap();
-        assert!(world.crust.plate_count(CrustClass::Oceanic) > 0);
-        assert!(world.crust.plate_count(CrustClass::Continental) > 0);
+        let [oceanic, continental] = world.cell_crust().cell_counts();
+        assert!(oceanic > 0 && continental > 0);
+        assert!(world.crust.component_count >= 1);
         assert!(world.evolution.migrated_cell_count > 0);
         assert!(world.seafloor_age.diagnostics.oceanic_cell_count > 0);
         assert!(world.deformation.diagnostics.affected_cell_count() > 0);

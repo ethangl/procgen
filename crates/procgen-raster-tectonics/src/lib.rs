@@ -20,7 +20,9 @@ mod partition;
 mod pipeline;
 
 pub use device::{MAX_TECTONIC_RESOLUTION, PipelineTuning, RasterTectonicsError};
-pub use evolution::{ANGULAR_VELOCITY_STEPS_PER_UNIT, RasterEvolutionConfig};
+pub use evolution::{
+    ANGULAR_VELOCITY_STEPS_PER_UNIT, RasterCrustClassificationConfig, RasterEvolutionConfig,
+};
 pub use field::{
     AREA_UNITS_PER_STERADIAN, BOUNDARY_CLASS_BITS, BOUNDARY_CLASS_MASK, CELL_PLATE_BITS,
     CELL_PLATE_MASK, MAX_GROWTH_COST, MAX_PLATE_COUNT, PLATE_ID_COUNT, PLATE_LABEL_BITS,

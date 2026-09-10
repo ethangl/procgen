@@ -1,18 +1,20 @@
 //! Data contracts for the raster plate evolution.
 //!
-//! Crust, motion, boundary classification, and migration keep the mesh
-//! pipeline's definitions, so their configuration types are reused rather than
-//! restated. What this module owns is the configuration itself and the
-//! per-plate inputs the host computes for the kernels; how their results are
-//! packed is [`crate::field`]'s.
+//! Motion, boundary classification, and migration keep the mesh pipeline's
+//! definitions, so their configuration types are reused rather than restated.
+//! Crust no longer can: the mesh path classifies crust per cell, and the
+//! pilot's kernel still flips whole plates until a target ocean area is met,
+//! so the pilot owns [`RasterCrustClassificationConfig`] the way it already
+//! owns its partition config, until its own crust slice. What this module owns
+//! is the configuration itself and the per-plate inputs the host computes for
+//! the kernels; how their results are packed is [`crate::field`]'s.
 
 use crate::device::RasterTectonicsError;
 use crate::field::{PLATE_ID_COUNT, RasterPlate};
 use procgen_core::{RandomStream, random_streams::CRUST_PLATE_ORDER};
 use procgen_cubesphere::NO_RASTER_CELL;
 use procgen_tectonics::{
-    CrustClassificationConfig, PlateKinematicsConfig, PlateMigrationConfig,
-    generate_random_plate_kinematics,
+    PlateKinematicsConfig, PlateMigrationConfig, generate_random_plate_kinematics,
 };
 
 /// Steps per unit an angular-velocity component is quantized to before upload.
@@ -22,13 +24,34 @@ use procgen_tectonics::{
 /// and no ulp difference between platforms reaches a kernel.
 pub const ANGULAR_VELOCITY_STEPS_PER_UNIT: f32 = (1 << 20) as f32;
 
+/// Configuration of the pilot's per-plate crust classification.
+///
+/// Plates are visited in a seeded order and flipped to oceanic while that
+/// moves the achieved ocean fraction closer to the target. The mesh path grew
+/// past this in the per-cell crust slice; the pilot keeps it until its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RasterCrustClassificationConfig {
+    /// Desired fraction of the sphere's surface covered by oceanic crust.
+    pub target_ocean_fraction: f32,
+    pub seed: u64,
+}
+
+impl RasterCrustClassificationConfig {
+    pub const fn new(seed: u64) -> Self {
+        Self {
+            target_ocean_fraction: 0.7,
+            seed,
+        }
+    }
+}
+
 /// Configuration of the raster plate evolution.
 ///
 /// Every field carries the mesh pipeline's meaning unchanged, so the shared
 /// configuration types are reused as data contracts.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterEvolutionConfig {
-    pub crust: CrustClassificationConfig,
+    pub crust: RasterCrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
     pub migration: PlateMigrationConfig,
     /// Complete boundary-classification and migration transitions.
@@ -38,9 +61,9 @@ pub struct RasterEvolutionConfig {
 impl Default for RasterEvolutionConfig {
     fn default() -> Self {
         Self {
-            crust: CrustClassificationConfig {
+            crust: RasterCrustClassificationConfig {
                 target_ocean_fraction: 0.75,
-                ..CrustClassificationConfig::new(0)
+                ..RasterCrustClassificationConfig::new(0)
             },
             kinematics: PlateKinematicsConfig::new(0),
             migration: PlateMigrationConfig::default(),
@@ -151,7 +174,7 @@ mod tests {
         for target in [-0.1, 1.1, f32::NAN] {
             assert_eq!(
                 RasterEvolutionConfig {
-                    crust: CrustClassificationConfig {
+                    crust: RasterCrustClassificationConfig {
                         target_ocean_fraction: target,
                         ..config.crust
                     },

@@ -93,6 +93,11 @@ What exists to build on:
   noise and terrain agreement tests.
 - Bevy 0.18 re-exports its wgpu, so a crate built on plain `wgpu` at the same
   version shares the viewer's device.
+- The mesh path now classifies crust per cell, growing continental nuclei to a
+  target area across plate boundaries, while the pilot's kernel still flips
+  whole plates to oceanic until a target ocean fraction is met; the pilot owns
+  `RasterCrustClassificationConfig` for that until its own crust slice, so the
+  two paths disagree about crust by design.
 
 ## Measured so far
 

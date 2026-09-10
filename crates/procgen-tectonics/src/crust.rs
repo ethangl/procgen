@@ -1,6 +1,36 @@
-use crate::{PlatePartition, StageInputError};
-use procgen_core::{RandomStream, random_streams::CRUST_PLATE_ORDER};
-use procgen_sphere_mesh::SphereMesh;
+//! Continental crust as a per-cell property of the mesh, independent of the
+//! plate partition.
+//!
+//! `nucleus_count` nuclei are placed farthest-first from one hashed cell, and
+//! the partition's shortest-arrival growth spreads them over per-edge integer
+//! costs until the settled area reaches `continental_fraction` of the sphere.
+//! Growth is bounded by nothing: it crosses plate boundaries freely, so a
+//! continent's edge falls wherever it falls relative to them. An edge inside a
+//! plate is a passive margin and one on a boundary is an active margin, and
+//! both arise without a rule for either.
+//!
+//! Cells growth reached are continental and every other cell is oceanic. That
+//! is the initial condition alone: from step zero onward a cell's crust is
+//! read from the step its crust was created, through [`CellCrust`], so a
+//! rifting continent grows an oceanic margin and an overridden cell takes the
+//! overriding material's class without anything storing a second answer.
+//! Plates have no crust class; the readers that want a plate-level number
+//! take [`CrustClassification::plate_continental_fraction`].
+//!
+//! Determinism: the nuclei are hashes and squared chord distances compared by
+//! `total_cmp`, the arrival costs are integers, and the area budget is an f64
+//! sum compared against an f64 target, so the mask is bit-identical across
+//! machines.
+
+use crate::{
+    MAX_GROWTH_ROUGHNESS, PlatePartition, StageInputError,
+    partition::{GrowthBounds, GrowthCosts, PlateGrowth, farthest_first},
+};
+use procgen_core::{
+    RandomStream,
+    random_streams::{CRUST_GROWTH_COST, CRUST_NUCLEUS},
+};
+use procgen_sphere_mesh::{SphereMesh, connected_components};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,51 +46,76 @@ impl CrustClass {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrustClassificationConfig {
-    /// Desired fraction of the sphere's surface covered by oceanic crust.
-    pub target_ocean_fraction: f32,
+    /// Target fraction of the sphere's surface covered by continental crust.
+    pub continental_fraction: f32,
+    /// Continental nuclei growth starts from, the order of Earth's cratonic
+    /// assemblies. Must be at least one and at most the mesh's cell count.
+    pub nucleus_count: usize,
+    /// Maximum percentage that an edge's deterministic traversal cost varies
+    /// above or below the baseline, in the partition's units and bounded by
+    /// `MAX_GROWTH_ROUGHNESS`. Zero grows round continents.
+    pub growth_roughness: u32,
     pub seed: u64,
 }
 
 impl CrustClassificationConfig {
     pub const fn new(seed: u64) -> Self {
         Self {
-            target_ocean_fraction: 0.7,
+            continental_fraction: 0.3,
+            nucleus_count: 8,
+            growth_roughness: MAX_GROWTH_ROUGHNESS,
             seed,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CrustClassificationDiagnostics {
+    /// Continental share of the sphere's area the growth achieved, which
+    /// exceeds the target by at most one cell's area.
+    pub continental_fraction: f32,
+    /// Connected components of continental crust, which is fewer than
+    /// `nucleus_count` when two nuclei grew together.
+    pub component_count: usize,
+}
+
+/// Per-cell crust class before step zero.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CrustClassification {
-    pub plate_classes: Vec<CrustClass>,
+    pub cell_classes: Vec<CrustClass>,
+    pub diagnostics: CrustClassificationDiagnostics,
 }
 
 impl CrustClassification {
-    /// Validates that every stable plate identity has one crust class.
-    pub fn validate(&self, partition: &PlatePartition) -> Result<(), StageInputError> {
-        if self.plate_classes.len() != partition.plate_count {
-            return Err(StageInputError::Plates);
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        if self.cell_classes.len() != mesh.cell_count() {
+            return Err(StageInputError::CrustClasses);
         }
         Ok(())
     }
 
-    pub fn plate_count(&self, class: CrustClass) -> usize {
-        self.plate_classes
-            .iter()
-            .filter(|&&candidate| candidate == class)
-            .count()
+    pub fn class(&self, cell: usize) -> CrustClass {
+        self.cell_classes[cell]
     }
 
-    /// Derives the current area-weighted ocean fraction from cell ownership.
-    pub fn ocean_fraction(&self, mesh: &SphereMesh, partition: &PlatePartition) -> f32 {
-        let areas = partition.plate_areas(mesh);
-        let ocean_area: f64 = areas
-            .iter()
-            .zip(&self.plate_classes)
-            .filter(|(_, class)| **class == CrustClass::Oceanic)
-            .map(|(&area, _)| area)
-            .sum();
-        (ocean_area / mesh.total_area()) as f32
+    /// Area-weighted continental share of each plate, for the readers that
+    /// want a plate-level number out of a per-cell fact. Every plate owns a
+    /// cell, so every share is defined.
+    pub fn plate_continental_fraction(
+        &self,
+        mesh: &SphereMesh,
+        partition: &PlatePartition,
+    ) -> Vec<f64> {
+        let mut continental = vec![0.0; partition.plate_count];
+        for (cell, &plate) in partition.cell_plates.iter().enumerate() {
+            if self.cell_classes[cell] == CrustClass::Continental {
+                continental[plate] += f64::from(mesh.cell_areas[cell]);
+            }
+        }
+        for (share, area) in continental.iter_mut().zip(partition.plate_areas(mesh)) {
+            *share /= area;
+        }
+        continental
     }
 }
 
@@ -68,10 +123,8 @@ impl CrustClassification {
 /// cell's crust was created: crust with a birth step is oceanic, crust with
 /// none is original continental crust that has never been re-made.
 ///
-/// This is the only per-cell answer once evolution has run. A plate's class in
-/// [`CrustClassification`] describes the plate, not the cells it currently
-/// owns: a continental plate that rifts grows an oceanic margin, and a cell
-/// overridden at a subduction zone takes the overriding material's class.
+/// This is the only per-cell answer from step zero onward.
+/// [`CrustClassification`] is the initial condition it starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellCrust<'a> {
     pub cell_birth: &'a [Option<i32>],
@@ -107,100 +160,225 @@ impl CellCrust<'_> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrustClassificationError {
-    InvalidOceanFraction,
-    CellCountMismatch,
+    InvalidContinentalFraction,
+    InvalidNucleusCount,
+    InvalidGrowthRoughness,
 }
 
 impl fmt::Display for CrustClassificationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidOceanFraction => {
-                formatter.write_str("target ocean fraction must be finite and between 0 and 1")
+            Self::InvalidContinentalFraction => {
+                formatter.write_str("continental fraction must be finite and between 0 and 1")
             }
-            Self::CellCountMismatch => {
-                formatter.write_str("plate assignments must match the mesh cell count")
-            }
+            Self::InvalidNucleusCount => formatter
+                .write_str("nucleus count must be at least one and at most the mesh cell count"),
+            Self::InvalidGrowthRoughness => write!(
+                formatter,
+                "crust growth roughness cannot exceed {MAX_GROWTH_ROUGHNESS}%"
+            ),
         }
     }
 }
 
 impl std::error::Error for CrustClassificationError {}
 
-/// Assigns one immutable crust class to each plate. Plate candidates are
-/// visited in a seeded, deterministic order and selected only when their
-/// complete surface area moves the achieved ocean fraction closer to the
-/// requested target.
+/// Grows continental nuclei to a target share of the sphere and calls every
+/// cell they reached continental.
+///
+/// The nuclei are one hashed cell and then the cells farthest from those
+/// already chosen, so they spread over the sphere without reference to plates.
+/// Growth settles the cheapest arrival until the settled area passes the
+/// target, so the achieved area overshoots by at most one cell.
 pub fn classify_crust(
     mesh: &SphereMesh,
-    partition: &PlatePartition,
     config: CrustClassificationConfig,
 ) -> Result<CrustClassification, CrustClassificationError> {
-    if !config.target_ocean_fraction.is_finite()
-        || !(0.0..=1.0).contains(&config.target_ocean_fraction)
+    if !config.continental_fraction.is_finite()
+        || !(0.0..=1.0).contains(&config.continental_fraction)
     {
-        return Err(CrustClassificationError::InvalidOceanFraction);
+        return Err(CrustClassificationError::InvalidContinentalFraction);
     }
-    if partition.cell_plates.len() != mesh.cell_count() {
-        return Err(CrustClassificationError::CellCountMismatch);
+    if config.nucleus_count == 0 || config.nucleus_count > mesh.cell_count() {
+        return Err(CrustClassificationError::InvalidNucleusCount);
     }
-
-    let plate_count = partition.plate_count;
-    let plate_areas = partition.plate_areas(mesh);
-
-    let target_area = mesh.total_area() * f64::from(config.target_ocean_fraction);
-    let random = RandomStream::new(config.seed, CRUST_PLATE_ORDER);
-    let mut plate_order: Vec<_> = (0..plate_count).collect();
-    plate_order.sort_unstable_by_key(|&plate| (random.sample_u64(plate as u64, 0), plate));
-
-    let mut ocean_area = 0.0_f64;
-    let mut plate_classes = vec![CrustClass::Continental; plate_count];
-    for plate in plate_order {
-        let candidate_area = ocean_area + plate_areas[plate];
-        if (candidate_area - target_area).abs() < (ocean_area - target_area).abs() {
-            plate_classes[plate] = CrustClass::Oceanic;
-            ocean_area = candidate_area;
-        }
+    if config.growth_roughness > MAX_GROWTH_ROUGHNESS {
+        return Err(CrustClassificationError::InvalidGrowthRoughness);
     }
 
-    Ok(CrustClassification { plate_classes })
+    let mut growth = PlateGrowth::new(
+        mesh,
+        GrowthBounds::WholeSphere,
+        GrowthCosts {
+            roughness: config.growth_roughness,
+            stream: RandomStream::new(config.seed, CRUST_GROWTH_COST),
+        },
+    );
+    for (nucleus, &cell) in crust_nuclei(mesh, config).iter().enumerate() {
+        growth.seed(cell, nucleus);
+    }
+    let continental_area =
+        growth.grow_to_area(f64::from(config.continental_fraction) * mesh.total_area());
+
+    let cell_classes: Vec<_> = (0..mesh.cell_count())
+        .map(|cell| match growth.reached(cell) {
+            true => CrustClass::Continental,
+            false => CrustClass::Oceanic,
+        })
+        .collect();
+    let component_count = connected_components(
+        mesh,
+        |cell| cell_classes[cell] == CrustClass::Continental,
+        |_, _| true,
+    )
+    .len();
+    Ok(CrustClassification {
+        cell_classes,
+        diagnostics: CrustClassificationDiagnostics {
+            continental_fraction: (continental_area / mesh.total_area()) as f32,
+            component_count,
+        },
+    })
+}
+
+/// The cells the continents grow from: one hashed cell, then the cells
+/// farthest from those already chosen. `nucleus_count` is at most the cell
+/// count, so every nucleus is a distinct cell.
+pub(crate) fn crust_nuclei(mesh: &SphereMesh, config: CrustClassificationConfig) -> Vec<usize> {
+    let cells: Vec<usize> = (0..mesh.cell_count()).collect();
+    let first =
+        RandomStream::new(config.seed, CRUST_NUCLEUS).sample_u64(0, 0) % mesh.cell_count() as u64;
+    farthest_first(mesh, &cells, first as usize, config.nucleus_count)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::reference_partition;
+    use crate::test_support::{fingerprint, mesh, reference_partition};
+
+    fn class_fingerprint(crust: &CrustClassification) -> u64 {
+        fingerprint(crust.cell_classes.iter().map(|&class| class as u8 as u64))
+    }
 
     #[test]
     fn classification_is_deterministic_and_seeded() {
-        let (mesh, partition) = reference_partition();
+        let mesh = mesh(512);
         let config = CrustClassificationConfig::new(17);
-        let first = classify_crust(&mesh, &partition, config).unwrap();
+        let first = classify_crust(&mesh, config).unwrap();
 
-        assert_eq!(first, classify_crust(&mesh, &partition, config).unwrap());
+        assert_eq!(first, classify_crust(&mesh, config).unwrap());
         assert_ne!(
-            first.plate_classes,
-            classify_crust(
-                &mesh,
-                &partition,
-                CrustClassificationConfig { seed: 18, ..config }
-            )
-            .unwrap()
-            .plate_classes
+            first.cell_classes,
+            classify_crust(&mesh, CrustClassificationConfig { seed: 18, ..config })
+                .unwrap()
+                .cell_classes
         );
     }
 
     #[test]
-    fn plate_area_drives_the_achieved_ocean_fraction() {
-        let (mesh, partition) = reference_partition();
-        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
+    fn reference_classification_has_stable_fingerprint() {
+        let mesh = mesh(512);
+        let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
 
-        assert_eq!(crust.plate_classes.len(), partition.plate_count);
-        assert!((crust.ocean_fraction(&mesh, &partition) - 0.7).abs() < 0.1);
+        // Hashes, integer arrival costs, and f64 area sums only, so this value
+        // is expected to match on both the macOS and the Windows development
+        // machine.
+        assert_eq!(class_fingerprint(&crust), 18_098_810_093_538_859_437);
+    }
+
+    #[test]
+    fn growth_stops_within_one_cell_of_the_target_area() {
+        let mesh = mesh(512);
+        // One cell's area is about a five-hundredth of the sphere, so the
+        // largest cell bounds the overshoot at every fraction.
+        let widest_cell =
+            f64::from(mesh.cell_areas.iter().copied().fold(f32::MIN, f32::max)) / mesh.total_area();
+        for fraction in [0.1, 0.3, 0.6] {
+            let crust = classify_crust(
+                &mesh,
+                CrustClassificationConfig {
+                    continental_fraction: fraction,
+                    ..CrustClassificationConfig::new(17)
+                },
+            )
+            .unwrap();
+            let achieved = f64::from(crust.diagnostics.continental_fraction);
+            assert!(
+                achieved >= f64::from(fraction) && achieved - f64::from(fraction) <= widest_cell,
+                "fraction {fraction} achieved {achieved}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_continental_cell_grew_from_a_nucleus() {
+        let mesh = mesh(512);
+        let config = CrustClassificationConfig::new(17);
+        let crust = classify_crust(&mesh, config).unwrap();
+        let nuclei = crust_nuclei(&mesh, config);
+
+        let components = connected_components(
+            &mesh,
+            |cell| crust.class(cell) == CrustClass::Continental,
+            |_, _| true,
+        );
+        assert_eq!(components.len(), crust.diagnostics.component_count);
+        assert!(crust.diagnostics.component_count >= 1);
+        assert!(crust.diagnostics.component_count <= config.nucleus_count);
+        // Every component holds a nucleus and every continental cell is in a
+        // component, so each grew from a nucleus through continental crust
+        // alone. Two nuclei in one component are two continents that met.
+        for component in &components {
+            assert!(
+                component.iter().any(|cell| nuclei.contains(cell)),
+                "a continent with no nucleus"
+            );
+        }
+        assert_eq!(
+            components.iter().map(Vec::len).sum::<usize>(),
+            crust
+                .cell_classes
+                .iter()
+                .filter(|&&class| class == CrustClass::Continental)
+                .count()
+        );
+        assert!(
+            nuclei
+                .iter()
+                .all(|&cell| crust.class(cell) == CrustClass::Continental)
+        );
+    }
+
+    #[test]
+    fn plate_shares_average_to_the_achieved_fraction() {
+        let (mesh, partition) = reference_partition();
+        let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
+
+        let shares = crust.plate_continental_fraction(&mesh, &partition);
+        assert_eq!(shares.len(), partition.plate_count);
+        assert!(shares.iter().all(|share| (0.0..=1.0).contains(share)));
+        // A continent that ends inside a plate leaves that plate partly
+        // continental, which is the passive margin the stage exists for.
+        assert!(
+            shares.iter().any(|&share| share > 0.0 && share < 1.0),
+            "no plate carries both crusts"
+        );
+        let weighted: f64 = shares
+            .iter()
+            .zip(partition.plate_areas(&mesh))
+            .map(|(share, area)| share * area)
+            .sum();
+        assert!(
+            (weighted / mesh.total_area() - f64::from(crust.diagnostics.continental_fraction))
+                .abs()
+                < 1.0e-6,
+            "plate shares do not sum to the achieved fraction"
+        );
     }
 
     #[test]
     fn cell_crust_reads_the_birth_step_and_not_plate_ownership() {
-        let mesh = crate::test_support::mesh(32);
+        let mesh = mesh(32);
         let cell_birth: Vec<_> = (0..mesh.cell_count())
             .map(|cell| (cell % 3 != 0).then_some(-(cell as i32)))
             .collect();
@@ -225,72 +403,105 @@ mod tests {
     }
 
     #[test]
-    fn fraction_extremes_classify_every_plate() {
-        let (mesh, partition) = reference_partition();
+    fn fraction_extremes_classify_every_cell() {
+        let mesh = mesh(512);
+        let config = CrustClassificationConfig::new(1);
         let continental = classify_crust(
             &mesh,
-            &partition,
             CrustClassificationConfig {
-                target_ocean_fraction: 0.0,
-                seed: 1,
+                continental_fraction: 1.0,
+                ..config
             },
         )
         .unwrap();
         let oceanic = classify_crust(
             &mesh,
-            &partition,
             CrustClassificationConfig {
-                target_ocean_fraction: 1.0,
-                seed: 1,
+                continental_fraction: 0.0,
+                ..config
             },
         )
         .unwrap();
 
         assert!(
             continental
-                .plate_classes
+                .cell_classes
                 .iter()
                 .all(|&class| class == CrustClass::Continental)
         );
-        assert!(
+        assert_eq!(continental.diagnostics.component_count, 1);
+        // The nuclei themselves are settled before the budget is consulted, so
+        // a zero fraction leaves exactly them continental.
+        assert_eq!(
             oceanic
-                .plate_classes
+                .cell_classes
                 .iter()
-                .all(|&class| class == CrustClass::Oceanic)
+                .filter(|&&class| class == CrustClass::Continental)
+                .count(),
+            config.nucleus_count
         );
-        assert_eq!(continental.ocean_fraction(&mesh, &partition), 0.0);
-        assert_eq!(oceanic.ocean_fraction(&mesh, &partition), 1.0);
     }
 
     #[test]
-    fn rejects_invalid_inputs() {
-        let (mesh, partition) = reference_partition();
-        for target in [-0.1, 1.1, f32::NAN] {
-            assert_eq!(
-                classify_crust(
-                    &mesh,
-                    &partition,
-                    CrustClassificationConfig {
-                        target_ocean_fraction: target,
-                        seed: 0,
-                    },
-                ),
-                Err(CrustClassificationError::InvalidOceanFraction)
-            );
+    fn rejects_invalid_configurations() {
+        let mesh = mesh(64);
+        let valid = CrustClassificationConfig::new(0);
+        for (config, expected) in [
+            (
+                CrustClassificationConfig {
+                    continental_fraction: -0.1,
+                    ..valid
+                },
+                CrustClassificationError::InvalidContinentalFraction,
+            ),
+            (
+                CrustClassificationConfig {
+                    continental_fraction: 1.1,
+                    ..valid
+                },
+                CrustClassificationError::InvalidContinentalFraction,
+            ),
+            (
+                CrustClassificationConfig {
+                    continental_fraction: f32::NAN,
+                    ..valid
+                },
+                CrustClassificationError::InvalidContinentalFraction,
+            ),
+            (
+                CrustClassificationConfig {
+                    nucleus_count: 0,
+                    ..valid
+                },
+                CrustClassificationError::InvalidNucleusCount,
+            ),
+            (
+                CrustClassificationConfig {
+                    nucleus_count: mesh.cell_count() + 1,
+                    ..valid
+                },
+                CrustClassificationError::InvalidNucleusCount,
+            ),
+            (
+                CrustClassificationConfig {
+                    growth_roughness: MAX_GROWTH_ROUGHNESS + 1,
+                    ..valid
+                },
+                CrustClassificationError::InvalidGrowthRoughness,
+            ),
+        ] {
+            assert_eq!(classify_crust(&mesh, config), Err(expected));
         }
 
-        let mut short_partition = partition.clone();
-        short_partition.cell_plates.pop();
+        let crust = classify_crust(&mesh, valid).unwrap();
+        assert_eq!(crust.validate(&mesh), Ok(()));
         assert_eq!(
-            classify_crust(
-                &mesh,
-                &short_partition,
-                CrustClassificationConfig {
-                    target_ocean_fraction: 0.7,
-                    seed: 0,
-                }
-            ),
-            Err(CrustClassificationError::CellCountMismatch)
+            CrustClassification {
+                cell_classes: crust.cell_classes[1..].to_vec(),
+                ..crust
+            }
+            .validate(&mesh),
+            Err(StageInputError::CrustClasses)
         );
     }
 }

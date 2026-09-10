@@ -24,8 +24,8 @@
 //! crust starts flat and born now.
 
 use crate::{
-    BoundaryClass, BoundaryClassification, CellCrust, CrustClassification, PlateEvolutionConfig,
-    PlateEvolutionInputs, PlateKinematics, PlateMigration, PlateMigrationError, PlatePartition,
+    BoundaryClass, BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs,
+    PlateKinematics, PlateMigration, PlateMigrationError, PlatePartition,
     deformation::accumulate_boundary_deformation, field::mean_cell_width, migrate_plates_once,
     migration::accumulate_closing_distances,
 };
@@ -154,11 +154,6 @@ pub(crate) struct EvolvingWorld<'a> {
     pub(crate) kinematics: PlateKinematics,
     /// Read between steps to reclassify, and taken when the run ends.
     pub(crate) partition: PlatePartition,
-    /// The plate classes the run reads and grows. Rifting appends one and
-    /// suturing empties one, so the classes the input handed over belong to a
-    /// plate set the run has left behind; migration precedence and the
-    /// lifecycle both read this copy.
-    pub(crate) crust: CrustClassification,
     /// Taken when the run ends; the two fields it holds are the run's output.
     pub(crate) carried: CarriedFields,
     /// Model time each adjacent continental pair has spent in collision,
@@ -192,11 +187,18 @@ impl<'a> EvolvingWorld<'a> {
             kinematics: inputs.kinematics.clone(),
             cell_width: mean_cell_width(mesh),
             partition: inputs.partition.clone(),
-            crust: inputs.crust.clone(),
             carried: CarriedFields::new(inputs.birth_prior.cell_birth.clone()),
             collisions: BTreeMap::new(),
             edge_closing: vec![0.0; mesh.edge_count()],
             cell_travel: vec![0.0; mesh.cell_count()],
+        }
+    }
+
+    /// What crust every cell carries as the run stands: the one per-cell
+    /// answer, which every substep that asks about crust reads.
+    pub(crate) fn cell_crust(&self) -> CellCrust<'_> {
+        CellCrust {
+            cell_birth: &self.carried.birth,
         }
     }
 
@@ -211,6 +213,8 @@ impl<'a> EvolvingWorld<'a> {
         accumulate_boundary_deformation(
             self.mesh,
             &self.partition,
+            // Spelled out rather than through `cell_crust`, so the borrow is
+            // of the birth column alone and deformation stays mutable.
             CellCrust {
                 cell_birth: &self.carried.birth,
             },
@@ -238,7 +242,7 @@ impl<'a> EvolvingWorld<'a> {
         let migration = migrate_plates_once(
             self.mesh,
             &self.partition,
-            &self.crust,
+            self.cell_crust(),
             boundaries,
             &self.edge_closing,
             self.cell_width,

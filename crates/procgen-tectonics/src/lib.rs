@@ -1,8 +1,8 @@
 //! Deterministic tectonic state derived from spherical mesh topology.
 //!
 //! Plate partitioning, flow-field-fitted rigid plate motion, static boundary
-//! classification, static per-plate crust classification, one-step plate
-//! migration, deterministic multi-step evolution of ownership, of the plate
+//! classification, per-cell continental crust grown from nuclei to a target
+//! area, one-step plate migration, deterministic multi-step evolution of ownership, of the plate
 //! set itself as plates rift and suture, and of what the cells carry — crust
 //! birth and the deformation the boundaries raise on them step by step —
 //! seafloor age in evolution steps, oceanic bathymetric base
@@ -38,7 +38,7 @@ pub use boundaries::{
 };
 pub use crust::{
     CellCrust, CrustClass, CrustClassification, CrustClassificationConfig,
-    CrustClassificationError, classify_crust,
+    CrustClassificationDiagnostics, CrustClassificationError, classify_crust,
 };
 pub use deformation::{
     BoundaryDeformation, BoundaryDeformationConfig, BoundaryDeformationDiagnostics,

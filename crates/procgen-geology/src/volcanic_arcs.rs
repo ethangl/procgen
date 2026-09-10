@@ -187,7 +187,7 @@ pub fn derive_volcanic_arc_field(
     let mut segments: Vec<_> = groups
         .into_iter()
         .filter_map(|group| {
-            let segment = derive_segment(mesh, plates, &boundary.claims, config, group);
+            let segment = derive_segment(mesh, plates, crust, &boundary.claims, config, group);
             discarded_landlocked_segment_count += usize::from(segment.is_none());
             segment
         })
@@ -327,6 +327,7 @@ fn group_boundaries(
 fn derive_segment(
     mesh: &SphereMesh,
     plates: &PlatePartition,
+    crust: CellCrust<'_>,
     boundary_claims: &[Option<InlandClaim>],
     config: VolcanicArcFieldConfig,
     group: BoundaryGroup,
@@ -334,6 +335,7 @@ fn derive_segment(
     let (arc_cells, inland_depth) = walk_inland(
         mesh,
         plates,
+        crust,
         boundary_claims,
         group.overriding_plate,
         &group.boundary_cells,
@@ -350,9 +352,13 @@ fn derive_segment(
     })
 }
 
+/// Steps the strongest claim inland cell by cell, over the overriding plate's
+/// own continental crust: an arc sits on the continent the trench is eating
+/// under, so the walk stops at the plate's coast as well as at its boundary.
 fn walk_inland(
     mesh: &SphereMesh,
     plates: &PlatePartition,
+    crust: CellCrust<'_>,
     boundary_claims: &[Option<InlandClaim>],
     overriding_plate: usize,
     boundary_cells: &[usize],
@@ -372,7 +378,10 @@ fn walk_inland(
         for &(cell, claim) in &frontier {
             for corner in mesh.cell_corners(cell) {
                 let neighbor = corner.neighbor;
-                if visited[neighbor] || plates.cell_plates[neighbor] != overriding_plate {
+                if visited[neighbor]
+                    || plates.cell_plates[neighbor] != overriding_plate
+                    || crust.class(neighbor) != CrustClass::Continental
+                {
                     continue;
                 }
                 touched.push(neighbor);
@@ -435,7 +444,7 @@ fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::plate_cell_birth;
+    use crate::test_support::classified_cell_birth;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
@@ -443,6 +452,7 @@ mod tests {
         CrustClassificationConfig, PlateKinematicsConfig, PlatePartitionConfig,
         classify_boundaries, classify_crust, generate_plate_kinematics, partition_plates,
     };
+    use std::collections::BTreeSet;
 
     fn crust(cell_birth: &[Option<i32>]) -> CellCrust<'_> {
         CellCrust { cell_birth }
@@ -477,20 +487,12 @@ mod tests {
             },
         )
         .unwrap();
-        let crust = classify_crust(
-            &mesh,
-            &plates,
-            CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 17,
-            },
-        )
-        .unwrap();
+        let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
         let kinematics =
             generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
                 .unwrap();
         let boundaries = classify_boundaries(&mesh, &plates, &kinematics).unwrap();
-        let cell_birth = plate_cell_birth(&plates, &crust.plate_classes);
+        let cell_birth = classified_cell_birth(&crust);
         (mesh, plates, cell_birth, boundaries)
     }
 
@@ -560,6 +562,63 @@ mod tests {
         }
     }
 
+    /// Grouping follows the cell, not the plate: with crust that ignores the
+    /// partition, one plate overrides along part of a boundary and is
+    /// overridden along another part of it.
+    #[test]
+    fn mixed_crust_plates_group_by_their_continental_side() {
+        let (mesh, plates, _, boundaries) = fixture(1_024);
+        // Every segment kept, so the roles below are the grouping's own answer
+        // rather than what survived the length filter.
+        let config = VolcanicArcFieldConfig {
+            minimum_boundary_edges: 1,
+            ..VolcanicArcFieldConfig::default()
+        };
+        let cell_birth: Vec<_> = mesh
+            .cell_centers
+            .iter()
+            .map(|center| (center.z < 0.0).then_some(0))
+            .collect();
+
+        let field =
+            derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
+                .unwrap();
+
+        assert!(!field.segments.is_empty());
+        let mut overriding = BTreeSet::new();
+        for segment in &field.segments {
+            overriding.insert(segment.overriding_plate);
+            for &cell in &segment.boundary_cells {
+                assert_eq!(crust(&cell_birth).class(cell), CrustClass::Continental);
+                assert_eq!(plates.cell_plates[cell], segment.overriding_plate);
+            }
+            for arc_cell in &segment.arc_cells {
+                assert_eq!(
+                    crust(&cell_birth).class(arc_cell.cell),
+                    CrustClass::Continental,
+                    "an arc left the continent it belongs to"
+                );
+            }
+        }
+
+        let mut overridden = BTreeSet::new();
+        for (edge_index, edge) in mesh.edges.iter().enumerate() {
+            if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent {
+                continue;
+            }
+            let classes = edge.cells.map(|cell| crust(&cell_birth).class(cell));
+            if classes[0] == classes[1] {
+                continue;
+            }
+            let oceanic = usize::from(classes[0] == CrustClass::Continental);
+            overridden.insert(plates.cell_plates[edge.cells[oceanic]]);
+        }
+        assert!(
+            overriding.intersection(&overridden).next().is_some(),
+            "no plate both overrides and is overridden"
+        );
+    }
+
     #[test]
     fn reference_field_has_stable_fingerprint() {
         let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
@@ -592,7 +651,7 @@ mod tests {
             .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
-        assert_eq!(fingerprint(values), 1_919_727_539_941_111_965);
+        assert_eq!(fingerprint(values), 6_421_090_429_058_538_957);
     }
 
     #[test]

@@ -402,11 +402,6 @@ mod tests {
     };
     use crate::{BoundaryClass, PlateEvolutionConfig, PlateMigrationConfig};
 
-    /// Cell crust laid out by plate, for the hand-built two-plate fixtures.
-    fn plate_crust(partition: &PlatePartition, plate_classes: &[CrustClass]) -> Vec<Option<i32>> {
-        plate_cell_birth(partition, plate_classes)
-    }
-
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
         mesh: &SphereMesh,
@@ -455,7 +450,7 @@ mod tests {
     fn a_step_adds_its_scaled_profile_and_clamps_the_running_total() {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
-        let cell_birth = plate_crust(&partition, &[CrustClass::Continental; 2]);
+        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
@@ -494,7 +489,7 @@ mod tests {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
         let mut cell_birth =
-            plate_crust(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
+            plate_cell_birth(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
@@ -524,7 +519,7 @@ mod tests {
     fn continental_rift_uses_normal_strength_and_transform_uses_shear() {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
-        let cell_birth = plate_crust(&partition, &[CrustClass::Continental; 2]);
+        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
         let config = BoundaryDeformationConfig {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
@@ -566,7 +561,7 @@ mod tests {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
         let mut cell_birth =
-            plate_crust(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
+            plate_cell_birth(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
         boundaries.edge_normal_speeds[edge_index] = [-1.0, -1.0];
@@ -656,7 +651,7 @@ mod tests {
     fn propagation_is_bounded_to_the_current_plate() {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
-        let cell_birth = plate_crust(&partition, &[CrustClass::Continental; 2]);
+        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];

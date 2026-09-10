@@ -173,16 +173,16 @@ pub fn classify_boundaries(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{reference_partition, two_plate_boundary_partition};
-    use crate::{
-        CrustClassificationConfig, PlateKinematicsConfig, classify_crust, generate_plate_kinematics,
+    use crate::test_support::{
+        reference_crust_config, reference_partition, two_plate_boundary_partition,
     };
+    use crate::{PlateKinematicsConfig, classify_crust, generate_plate_kinematics};
     use procgen_core::Vec3;
 
     #[test]
     fn classification_is_deterministic_complete_and_static() {
         let (mesh, partition) = reference_partition();
-        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
+        let crust = classify_crust(&mesh, reference_crust_config()).unwrap();
         let kinematics =
             generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
                 .unwrap();
