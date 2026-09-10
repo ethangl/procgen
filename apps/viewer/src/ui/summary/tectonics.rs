@@ -28,7 +28,7 @@ fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             "Grown continent area",
             format!("{:.2}%", world.crust.continental_fraction * 100.0),
         );
-        stat(ui, "Nuclei", world.crust.nucleus_count);
+        stat(ui, "Nuclei", world.config.crust.nucleus_count);
         stat(ui, "Continents", world.crust.component_count);
         let [oceanic_cells, continental_cells] = world.cell_crust().cell_counts();
         stat(ui, "Oceanic cells", oceanic_cells);

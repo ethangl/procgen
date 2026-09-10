@@ -74,9 +74,8 @@ pub struct CrustClassificationDiagnostics {
     /// Continental share of the sphere's area the growth achieved, which
     /// exceeds the target by at most one cell's area.
     pub continental_fraction: f32,
-    pub nucleus_count: usize,
-    /// Connected components of continental crust, which is fewer than the
-    /// nuclei when two of them grew together.
+    /// Connected components of continental crust, which is fewer than
+    /// `nucleus_count` when two nuclei grew together.
     pub component_count: usize,
 }
 
@@ -237,7 +236,6 @@ pub fn classify_crust(
         cell_classes,
         diagnostics: CrustClassificationDiagnostics {
             continental_fraction: (continental_area / mesh.total_area()) as f32,
-            nucleus_count: config.nucleus_count,
             component_count,
         },
     })
@@ -407,11 +405,12 @@ mod tests {
     #[test]
     fn fraction_extremes_classify_every_cell() {
         let mesh = mesh(512);
+        let config = CrustClassificationConfig::new(1);
         let continental = classify_crust(
             &mesh,
             CrustClassificationConfig {
                 continental_fraction: 1.0,
-                ..CrustClassificationConfig::new(1)
+                ..config
             },
         )
         .unwrap();
@@ -419,7 +418,7 @@ mod tests {
             &mesh,
             CrustClassificationConfig {
                 continental_fraction: 0.0,
-                ..CrustClassificationConfig::new(1)
+                ..config
             },
         )
         .unwrap();
@@ -439,7 +438,7 @@ mod tests {
                 .iter()
                 .filter(|&&class| class == CrustClass::Continental)
                 .count(),
-            oceanic.diagnostics.nucleus_count
+            config.nucleus_count
         );
     }
 

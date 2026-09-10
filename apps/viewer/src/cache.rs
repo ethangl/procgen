@@ -419,7 +419,7 @@ struct_codec! {
     CellCorner { vertex, neighbor, edge }
     SphereMesh { radius, cell_centers, cell_offsets, corners, cell_areas, vertices, vertex_cells, vertex_neighbors, edges }
     PlatePartition { cell_plates, plate_count }
-    CrustClassificationDiagnostics { continental_fraction, nucleus_count, component_count }
+    CrustClassificationDiagnostics { continental_fraction, component_count }
     PlateKinematics { angular_velocities }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
     PlateEvolutionDiagnostics { active_step_count, proposal_count, contested_cell_count, migrated_cell_count, born_cell_count, maximum_convergence, rift_count, failed_rift_count, suture_count }

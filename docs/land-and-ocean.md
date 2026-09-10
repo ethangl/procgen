@@ -214,11 +214,14 @@ below (eighteen plates) still rifts once. Lowering that default to about 0.01
 would restore it; a default retune is its own change with its own
 measurements.
 
-**Measured.** Both worlds are the viewer's defaults at 65,536 cells with
-`continental_fraction` 0.25 — the ocean fraction the phase asked for before —
-15 evolution steps for the first and the reference world's sampling seed 9,
-subdivided faces 0.2, and 30 steps for the second. "Plate" is the per-plate
-classification this slice replaced, run through the same pipeline.
+**Measured.** Both worlds are the viewer's defaults at 65,536 cells: 15
+evolution steps for the first, and the reference world's sampling seed 9,
+subdivided faces 0.2, and 30 steps for the second. Both use the viewer's
+`continental_fraction` of 0.25 rather than the crate default of 0.3, which is
+the same 0.05 the viewer took off the crate's ocean fraction before, so the
+table isolates the change of algorithm from a change of target area. "Plate"
+is the per-plate classification this slice replaced, run through the same
+pipeline.
 
 | Measure                       | Defaults, plate | Defaults, cell | Reference, plate | Reference, cell |
 | ----------------------------- | --------------- | -------------- | ---------------- | --------------- |
