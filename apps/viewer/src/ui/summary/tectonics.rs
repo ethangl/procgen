@@ -160,6 +160,16 @@ fn base_elevation_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             "Continental cells",
             world.base_elevation.diagnostics.continental_cell_count,
         );
+        stat(
+            ui,
+            "Margin cells",
+            world.base_elevation.diagnostics.margin_cell_count,
+        );
+        stat(
+            ui,
+            "Margin depth",
+            format_field_range(&world.base_elevation.diagnostics.margin_depth),
+        );
     });
 }
 

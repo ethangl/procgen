@@ -369,22 +369,22 @@ mod tests {
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
         assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
-        assert_eq!(first.diagnostics.proposal_count, 254);
-        assert_eq!(first.diagnostics.contested_cell_count, 35);
-        assert_eq!(first.diagnostics.migrated_cell_count, 218);
-        assert_eq!(first.diagnostics.born_cell_count, 91);
+        assert_eq!(first.diagnostics.proposal_count, 261);
+        assert_eq!(first.diagnostics.contested_cell_count, 36);
+        assert_eq!(first.diagnostics.migrated_cell_count, 225);
+        assert_eq!(first.diagnostics.born_cell_count, 101);
         // No plate of the reference world holds the minimum continental area
-        // a rift needs, so the run draws for none; two pairs merge, and
-        // migration empties another seven of the thirty-three plates it
-        // started with. Compaction removes every id left owning nothing.
+        // a rift needs, so the run draws for none; one pair merges, and
+        // migration empties another four of the thirty-three plates it started
+        // with. Compaction removes every id left owning nothing.
         assert_eq!(first.diagnostics.rift_count, 0);
         assert_eq!(first.diagnostics.failed_rift_count, 0);
-        assert_eq!(first.diagnostics.suture_count, 2);
-        assert_eq!(first.partition.plate_count, 24);
+        assert_eq!(first.diagnostics.suture_count, 1);
+        assert_eq!(first.partition.plate_count, 28);
         // Convergence is a float reduction, so machines differ in the last bits.
-        assert!((first.diagnostics.maximum_convergence - 1.888_276).abs() < 1.0e-3);
-        assert_eq!(ownership_fingerprint(&first), 7_170_806_501_219_680_347);
-        assert_eq!(birth_fingerprint(&first), 79_680_054_031_572_845);
+        assert!((first.diagnostics.maximum_convergence - 1.875_788).abs() < 1.0e-3);
+        assert_eq!(ownership_fingerprint(&first), 9_507_204_561_242_162_617);
+        assert_eq!(birth_fingerprint(&first), 11_187_235_701_870_888_513);
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.
@@ -451,14 +451,15 @@ mod tests {
                 .iter()
                 .all(|rotation| fixture.kinematics.angular_velocities.contains(rotation))
         );
-        // Both are re-pinned by per-cell crust: the initial mask the birth
-        // prior reads decides which cells are oceanic, and migration
-        // precedence reads the crust each cell carries.
+        // Both are re-pinned by the margin taper's `continental_fraction`
+        // retune: the initial mask the birth prior reads decides which cells
+        // are oceanic, and migration precedence reads the crust each cell
+        // carries.
         assert_eq!(
             ownership_fingerprint(&evolution),
-            13_410_965_268_103_457_864
+            13_576_351_451_921_853_964
         );
-        assert_eq!(birth_fingerprint(&evolution), 16_031_270_688_342_511_348);
+        assert_eq!(birth_fingerprint(&evolution), 17_689_040_188_053_531_059);
     }
 
     #[test]

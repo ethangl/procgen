@@ -47,6 +47,12 @@ impl CrustClass {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrustClassificationConfig {
     /// Target fraction of the sphere's surface covered by continental crust.
+    ///
+    /// Not the land fraction: base elevation's margin taper leaves the
+    /// outermost continental cells below the default sea level, so the land a
+    /// world shows is smaller than this. The default is the value that leaves
+    /// the viewer's land count where it stood before the taper existed; see
+    /// `docs/land-and-ocean.md` for the measurement.
     pub continental_fraction: f32,
     /// Continental nuclei growth starts from, the order of Earth's cratonic
     /// assemblies. Must be at least one and at most the mesh's cell count.
@@ -61,7 +67,7 @@ pub struct CrustClassificationConfig {
 impl CrustClassificationConfig {
     pub const fn new(seed: u64) -> Self {
         Self {
-            continental_fraction: 0.3,
+            continental_fraction: 0.347,
             nucleus_count: 8,
             growth_roughness: MAX_GROWTH_ROUGHNESS,
             seed,
@@ -283,7 +289,7 @@ mod tests {
         // Hashes, integer arrival costs, and f64 area sums only, so this value
         // is expected to match on both the macOS and the Windows development
         // machine.
-        assert_eq!(class_fingerprint(&crust), 18_098_810_093_538_859_437);
+        assert_eq!(class_fingerprint(&crust), 2_400_858_071_643_495_252);
     }
 
     #[test]

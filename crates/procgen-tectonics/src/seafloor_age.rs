@@ -247,20 +247,20 @@ mod tests {
                 hops: FieldSummary {
                     minimum: 0.0,
                     maximum: 9.0,
-                    mean: 1.666_666_6,
+                    mean: 1.801_775_1,
                 },
-                oceanic_cell_count: 363,
-                ridge_cell_count: 114,
-                ridge_plate_count: 30,
+                oceanic_cell_count: 338,
+                ridge_cell_count: 103,
+                ridge_plate_count: 29,
                 // One plate of the reference world owns oceanic crust with no
                 // ridge of its own, so its cells take the fallback age.
                 ridge_less_plate_count: 1,
-                fallback_cell_count: 4,
+                fallback_cell_count: 7,
             }
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            17_712_315_253_162_049_905
+            7_279_187_007_399_044_302
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0),
@@ -456,7 +456,7 @@ mod tests {
                     .iter()
                     .map(|age| age.map_or(u64::MAX, |age| age as u64))
             ),
-            18_353_142_277_564_956_787
+            18_163_853_424_571_989_242
         );
     }
 

@@ -390,7 +390,7 @@ struct_codec! {
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_edges }
     PlateEvolutionConfig { seed, step_count, step_duration, migration, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
-    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency }
+    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width_hops, margin_edge_elevation }
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
     BoundaryDeformationConfig { convergent, rift, transform, collision, trench, saturation_speed, full_deformation_time, maximum_magnitude }
@@ -427,7 +427,7 @@ struct_codec! {
     CrustBirthPriorDiagnostics { hops, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
     SeafloorAgeDiagnostics { summary, oceanic_cell_count }
     SeafloorAge { cell_ages, diagnostics }
-    BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, oceanic_cell_count, continental_cell_count }
+    BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, margin_depth, oceanic_cell_count, continental_cell_count, margin_cell_count }
     BaseElevation { cell_elevations, diagnostics }
     BoundaryDeformationDiagnostics { summary, source_cell_count, uplifted_cell_count, subsided_cell_count }
     BoundaryDeformation { cell_deformation, diagnostics }
