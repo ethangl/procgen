@@ -77,8 +77,8 @@ Completed foundations:
   velocities are only where a run starts: every evolution step ends by
   drifting each plate's rotation vector, turning its axis through a fixed
   angle toward a fresh hashed direction and scaling its speed by a hashed
-  fraction within the configured speed bounds, so boundaries change regime
-  during a run. It
+  fraction, bounded to a band around the speed the plate started with, so
+  boundaries change regime during a run. It
   repeatedly reclassifies current boundaries and applies deterministic,
   simultaneous ownership migration and crust advection for a configured step
   count, each proportional to speed times step duration and each spending a

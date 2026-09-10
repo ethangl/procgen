@@ -20,12 +20,10 @@
 use crate::{
     BoundaryClassification, BoundaryClassificationError, BoundaryDeformation,
     BoundaryDeformationConfig, BoundaryDeformationDiagnostics, BoundaryDeformationError, CellCrust,
-    CrustBirthPrior, CrustClassification, PlateKinematics, PlateKinematicsConfig,
-    PlateKinematicsError, PlateMigration, PlateMigrationConfig, PlateMigrationError,
-    PlatePartition, PoleDriftConfig, StageInputError, classify_boundaries,
+    CrustBirthPrior, CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
+    PlateMigrationError, PlatePartition, PoleDriftConfig, StageInputError, classify_boundaries,
     deformation::validate_config,
     field::DEFAULT_STEP_DURATION,
-    motion::validate_config as validate_kinematics_config,
     step::{CarriedFields, EvolvingWorld},
 };
 use procgen_sphere_mesh::SphereMesh;
@@ -106,12 +104,10 @@ impl PlateEvolutionDiagnostics {
 pub struct PlateEvolutionInputs<'a> {
     pub partition: &'a PlatePartition,
     pub crust: &'a CrustClassification,
-    /// Plate motion before step zero. A run drifts its own copy of it and
+    /// Plate motion before step zero. A run drifts its own copy of it,
+    /// bounds each plate's speed relative to the speed it holds here, and
     /// returns the motion it ended on.
     pub kinematics: &'a PlateKinematics,
-    /// The config `kinematics` was fitted under. Drift reads its angular
-    /// speed bounds, which are the band a plate's speed may not leave.
-    pub kinematics_config: PlateKinematicsConfig,
     /// Boundaries classified from `partition`, which the first step reads.
     pub boundaries: &'a BoundaryClassification,
     /// Crust birth from before step zero.
@@ -160,8 +156,8 @@ pub enum PlateEvolutionError {
     InvalidStepDuration,
     InvalidMinimumConvergence,
     InvalidPoleDriftRate,
+    InvalidSpeedDriftLimit,
     Deformation(BoundaryDeformationError),
-    Kinematics(PlateKinematicsError),
     Input(StageInputError),
     Boundary(BoundaryClassificationError),
     Migration(PlateMigrationError),
@@ -179,8 +175,10 @@ impl fmt::Display for PlateEvolutionError {
             Self::InvalidPoleDriftRate => {
                 formatter.write_str("pole drift rates must be finite and non-negative")
             }
+            Self::InvalidSpeedDriftLimit => {
+                formatter.write_str("speed drift limit must be finite and between 0 and 1")
+            }
             Self::Deformation(error) => error.fmt(formatter),
-            Self::Kinematics(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
             Self::Boundary(error) => error.fmt(formatter),
             Self::Migration(error) => error.fmt(formatter),
@@ -193,12 +191,6 @@ impl std::error::Error for PlateEvolutionError {}
 impl From<BoundaryDeformationError> for PlateEvolutionError {
     fn from(error: BoundaryDeformationError) -> Self {
         Self::Deformation(error)
-    }
-}
-
-impl From<PlateKinematicsError> for PlateEvolutionError {
-    fn from(error: PlateKinematicsError) -> Self {
-        Self::Kinematics(error)
     }
 }
 
@@ -247,9 +239,10 @@ pub fn evolve_plate_ownership(
     {
         return Err(PlateEvolutionError::InvalidPoleDriftRate);
     }
+    if !drift.speed_drift_limit.is_finite() || !(0.0..=1.0).contains(&drift.speed_drift_limit) {
+        return Err(PlateEvolutionError::InvalidSpeedDriftLimit);
+    }
     validate_config(config.deformation)?;
-    // Drift clamps into this config's speed band, which has to be a band.
-    validate_kinematics_config(inputs.kinematics_config)?;
     inputs.partition.validate(mesh)?;
     inputs.crust.validate(inputs.partition)?;
     inputs.kinematics.validate(inputs.partition)?;
@@ -295,13 +288,12 @@ pub fn evolve_plate_ownership(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::deformation::accumulate_boundary_deformation;
     use crate::test_support::{
-        EvolutionFixture, NO_POLE_DRIFT, drift_config, empty_boundaries, evolution_fixture,
-        fingerprint, opposed_kinematics, reference_evolution_config, rift_config,
-        two_plate_boundary_partition, two_plate_fixture,
+        NO_POLE_DRIFT, drift_config, empty_boundaries, evolution_fixture, fingerprint,
+        opposed_kinematics, reference_evolution_config, rift_config,
+        single_edge_convergent_fixture, two_plate_boundary_partition, two_plate_fixture,
     };
-    use crate::{BoundaryClass, BoundaryEffect, ContinentalRiftProfile, CrustClass};
+    use crate::{BoundaryClass, CrustClass};
     use procgen_core::Vec3;
 
     fn ownership_fingerprint(evolution: &PlateEvolution) -> u64 {
@@ -333,14 +325,14 @@ mod tests {
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
         assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
-        assert_eq!(first.diagnostics.proposal_count, 169);
-        assert_eq!(first.diagnostics.contested_cell_count, 21);
-        assert_eq!(first.diagnostics.migrated_cell_count, 147);
-        assert_eq!(first.diagnostics.born_cell_count, 48);
+        assert_eq!(first.diagnostics.proposal_count, 173);
+        assert_eq!(first.diagnostics.contested_cell_count, 22);
+        assert_eq!(first.diagnostics.migrated_cell_count, 150);
+        assert_eq!(first.diagnostics.born_cell_count, 46);
         // Convergence is a float reduction, so machines differ in the last bits.
         assert!((first.diagnostics.maximum_convergence - 1.703_729_4).abs() < 1.0e-3);
-        assert_eq!(ownership_fingerprint(&first), 12_907_953_100_457_322_682);
-        assert_eq!(birth_fingerprint(&first), 4_497_592_397_856_616_623);
+        assert_eq!(ownership_fingerprint(&first), 5_571_765_873_672_641_021);
+        assert_eq!(birth_fingerprint(&first), 3_874_420_673_332_482_514);
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.
@@ -391,8 +383,7 @@ mod tests {
         // The drifted speed is realized by scaling the rotation vector by a
         // ratio, so it lands a few ulps either side of the clamped value.
         let slack = 1.0e-6;
-        let bounds = fixture.kinematics_config.minimum_angular_speed - slack
-            ..=fixture.kinematics_config.maximum_angular_speed + slack;
+        let limit = config.pole_drift.speed_drift_limit;
 
         for step_count in [1, 2, 5, 13] {
             let evolution = fixture.evolve(PlateEvolutionConfig {
@@ -400,9 +391,11 @@ mod tests {
                 ..config
             });
             for (plate, rotation) in evolution.kinematics.angular_velocities.iter().enumerate() {
+                let started = fixture.kinematics.angular_velocities[plate].length();
+                let bounds = started * (1.0 - limit) - slack..=started * (1.0 + limit) + slack;
                 assert!(
                     bounds.contains(&rotation.length()),
-                    "plate {plate} left the speed bounds after {step_count} steps: {}",
+                    "plate {plate} left its band after {step_count} steps: {} against {bounds:?}",
                     rotation.length()
                 );
             }
@@ -518,49 +511,6 @@ mod tests {
                 "cell {cell} sits on a plate boundary"
             );
         }
-    }
-
-    /// The first step at which a convergent edge closing at `convergence` has
-    /// paid for a whole cell width.
-    fn paying_step(cell_width: f32, convergence: f32, step_duration: f32) -> usize {
-        (1..)
-            .find(|steps| *steps as f32 * convergence * step_duration >= cell_width)
-            .unwrap()
-    }
-
-    fn strongest_convergence(fixture: &EvolutionFixture) -> f32 {
-        (0..fixture.mesh.edge_count())
-            .map(|edge| fixture.boundaries.convergence(edge))
-            .fold(f32::MIN, f32::max)
-    }
-
-    fn single_edge_convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
-        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
-        let convergence = strongest_convergence(&fixture);
-        // Only the strongest edge clears the minimum, so exactly one cell can
-        // ever migrate and its debt is the whole schedule.
-        let config = PlateEvolutionConfig {
-            step_count: 0,
-            step_duration: 0.1,
-            migration: PlateMigrationConfig {
-                minimum_convergence: convergence * 0.999,
-            },
-            // The debt schedule below is the whole point of the fixture, and
-            // drift would change the closing speed it is computed from.
-            pole_drift: NO_POLE_DRIFT,
-            ..PlateEvolutionConfig::default()
-        };
-        let qualifying = (0..fixture.mesh.edge_count())
-            .filter(|&edge| fixture.boundaries.convergence(edge) >= convergence * 0.999)
-            .count();
-        assert_eq!(qualifying, 1);
-        let steps = paying_step(
-            crate::field::mean_cell_width(&fixture.mesh),
-            convergence,
-            config.step_duration,
-        );
-        assert!(steps > 1, "the debt must take more than one step to pay");
-        (fixture, config, steps)
     }
 
     #[test]
@@ -709,22 +659,23 @@ mod tests {
                 "{pole_drift:?}"
             );
         }
-        assert_eq!(
-            evolve_plate_ownership(
-                &fixture.mesh,
-                PlateEvolutionInputs {
-                    kinematics_config: PlateKinematicsConfig {
-                        minimum_angular_speed: 2.0,
-                        ..fixture.kinematics_config
-                    },
-                    ..fixture.inputs()
-                },
-                reference_evolution_config()
-            ),
-            Err(PlateEvolutionError::Kinematics(
-                PlateKinematicsError::InvalidAngularSpeedRange
-            ))
-        );
+        for speed_drift_limit in [-0.1, 1.5, f32::NAN] {
+            assert_eq!(
+                evolve_plate_ownership(
+                    &fixture.mesh,
+                    fixture.inputs(),
+                    PlateEvolutionConfig {
+                        pole_drift: PoleDriftConfig {
+                            speed_drift_limit,
+                            ..PoleDriftConfig::default()
+                        },
+                        ..reference_evolution_config()
+                    }
+                ),
+                Err(PlateEvolutionError::InvalidSpeedDriftLimit),
+                "{speed_drift_limit}"
+            );
+        }
         assert_eq!(
             evolve_plate_ownership(
                 &fixture.mesh,
@@ -771,167 +722,6 @@ mod tests {
                 reference_evolution_config()
             ),
             Err(PlateEvolutionError::Input(StageInputError::Boundaries))
-        );
-    }
-
-    /// A convergent two-plate run whose boundary never moves: migration is off
-    /// and the step is far too short for any cell to travel a cell width, so
-    /// every step classifies the same boundaries and raises the same profile.
-    fn static_boundary_fixture(
-        step_count: usize,
-        maximum_magnitude: f32,
-    ) -> (EvolutionFixture, PlateEvolutionConfig) {
-        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
-        let config = PlateEvolutionConfig {
-            step_count,
-            step_duration: 0.1,
-            migration: PlateMigrationConfig {
-                minimum_convergence: f32::MAX,
-            },
-            deformation: BoundaryDeformationConfig {
-                // A tenth of the profile per step, and every boundary here
-                // closes far faster than this, so every source saturates.
-                full_deformation_time: 1.0,
-                saturation_speed: 0.1,
-                maximum_magnitude,
-                ..BoundaryDeformationConfig::default()
-            },
-            // Every step must classify the same boundaries, which drifting
-            // motion is precisely what stops happening.
-            pole_drift: NO_POLE_DRIFT,
-            ..PlateEvolutionConfig::default()
-        };
-        (fixture, config)
-    }
-
-    #[test]
-    fn a_boundary_that_stays_put_adds_the_same_increment_every_step_until_the_clamp() {
-        let limit = 0.12;
-        let (fixture, config) = static_boundary_fixture(1, limit);
-        let single = fixture.evolve(config).deformation.cell_deformation;
-        assert_eq!(single[fixture.mesh.edges[0].cells[0]], 0.05);
-
-        for step_count in 1..=6 {
-            let run = fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..config
-            });
-            assert_eq!(
-                run.partition, fixture.partition,
-                "nothing may move, or the increments would differ between steps"
-            );
-            assert_eq!(run.cell_birth, fixture.birth_prior.cell_birth);
-            for (cell, &value) in run.deformation.cell_deformation.iter().enumerate() {
-                let expected = (step_count as f32 * single[cell]).clamp(-limit, limit);
-                // Summing an increment n times and multiplying it by n round
-                // differently in the last bits.
-                assert!(
-                    (value - expected).abs() < 1.0e-6,
-                    "cell {cell} after {step_count} steps: {value} against {expected}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn deformation_reaches_no_further_than_the_profiles_propagate() {
-        let depth = 2;
-        let (fixture, config) = static_boundary_fixture(4, 1.0);
-        let effect = BoundaryEffect { offset: 0.5, depth };
-        // Every profile reaches exactly `depth` hops: a linear effect decays to
-        // zero one hop past its own, and a rift one hop past its decay depth.
-        let run = fixture.evolve(PlateEvolutionConfig {
-            deformation: BoundaryDeformationConfig {
-                convergent: effect,
-                transform: effect,
-                collision: effect,
-                trench: BoundaryEffect {
-                    offset: -0.2,
-                    depth,
-                },
-                rift: ContinentalRiftProfile {
-                    decay_depth: depth + 1,
-                    ..config.deformation.rift
-                },
-                ..config.deformation
-            },
-            ..config
-        });
-
-        let mut reached: Vec<_> = (0..fixture.mesh.cell_count())
-            .map(|cell| {
-                fixture.mesh.cell_corners(cell).iter().any(|corner| {
-                    fixture.partition.cell_plates[corner.neighbor]
-                        != fixture.partition.cell_plates[cell]
-                })
-            })
-            .collect();
-        for _ in 0..depth {
-            reached = (0..fixture.mesh.cell_count())
-                .map(|cell| {
-                    reached[cell]
-                        || fixture
-                            .mesh
-                            .cell_corners(cell)
-                            .iter()
-                            .any(|corner| reached[corner.neighbor])
-                })
-                .collect();
-        }
-
-        assert!(
-            reached.iter().any(|within| !within),
-            "the test needs cells the profiles cannot reach"
-        );
-        for (cell, &value) in run.deformation.cell_deformation.iter().enumerate() {
-            if !reached[cell] {
-                assert_eq!(
-                    value, 0.0,
-                    "cell {cell} is further than {depth} hops from the boundary"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_boundary_that_has_moved_on_leaves_its_deformation_behind() {
-        let (fixture, config, steps) = single_edge_convergent_fixture();
-        let config = PlateEvolutionConfig {
-            step_count: steps,
-            deformation: BoundaryDeformationConfig {
-                full_deformation_time: 1.0,
-                ..BoundaryDeformationConfig::default()
-            },
-            ..config
-        };
-        let run = fixture.evolve(config);
-
-        // The overridden cell was the whole of its plate, so the boundary that
-        // deformed these cells no longer exists anywhere.
-        assert_eq!(run.diagnostics.migrated_cell_count, 1);
-        assert!(
-            run.boundaries
-                .edge_classes
-                .iter()
-                .all(|class| *class == BoundaryClass::Interior)
-        );
-        let mut current = vec![0.0; fixture.mesh.cell_count()];
-        accumulate_boundary_deformation(
-            &fixture.mesh,
-            &run.partition,
-            run.cell_crust(),
-            &run.boundaries,
-            &config.deformation,
-            1.0,
-            &mut current,
-        );
-        assert!(current.iter().all(|&value| value == 0.0));
-        assert!(
-            run.deformation
-                .cell_deformation
-                .iter()
-                .any(|&value| value != 0.0),
-            "the suture the vanished boundary left must survive it"
         );
     }
 

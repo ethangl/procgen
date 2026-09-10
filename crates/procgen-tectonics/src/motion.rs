@@ -215,7 +215,7 @@ pub fn generate_random_plate_kinematics(
     })
 }
 
-pub(crate) fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
+fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
     if !config.minimum_angular_speed.is_finite()
         || !config.maximum_angular_speed.is_finite()
         || config.minimum_angular_speed < 0.0

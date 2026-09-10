@@ -114,11 +114,8 @@ mod tests {
 
     #[test]
     fn climate_runs_on_the_upstream_phases_alone() {
-        // Coupling reaches its fixed point at this seed and this cell count;
-        // moving the terrain moves which seeds those are, and pole drift moved
-        // this one from 13.
-        let tectonics = tectonics_world(tectonics_settings(128, 15));
-        let geology = GeologyWorld::generate(&tectonics, geology_settings(15)).unwrap();
+        let tectonics = tectonics_world(tectonics_settings(128, 13));
+        let geology = GeologyWorld::generate(&tectonics, geology_settings(13)).unwrap();
         let climate =
             ClimateWorld::generate(&tectonics, &geology, ClimateSettings::default()).unwrap();
 

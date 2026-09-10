@@ -2,7 +2,7 @@ pub use procgen_core::fingerprint;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
-use crate::field::DEFAULT_STEP_DURATION;
+use crate::field::{DEFAULT_STEP_DURATION, mean_cell_width};
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
     CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
@@ -23,6 +23,7 @@ pub const REFERENCE_STEP_DURATION: f32 = 0.15;
 pub const NO_POLE_DRIFT: PoleDriftConfig = PoleDriftConfig {
     axis_drift_rate: 0.0,
     speed_drift_rate: 0.0,
+    speed_drift_limit: 0.0,
 };
 
 pub fn mesh(cell_count: usize) -> SphereMesh {
@@ -68,6 +69,7 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
             // reference run the per-step wander the viewer's defaults produce.
             axis_drift_rate: default.pole_drift.axis_drift_rate * time_scale,
             speed_drift_rate: default.pole_drift.speed_drift_rate * time_scale,
+            ..default.pole_drift
         },
         deformation: BoundaryDeformationConfig {
             // The whole reference run, so a boundary that converged throughout
@@ -85,9 +87,6 @@ pub struct EvolutionFixture {
     pub partition: PlatePartition,
     pub crust: CrustClassification,
     pub kinematics: PlateKinematics,
-    /// The bounds a run's drift clamps back into. Fixtures whose rotations are
-    /// hand-built rather than fitted still need a band to stay inside.
-    pub kinematics_config: PlateKinematicsConfig,
     pub boundaries: BoundaryClassification,
     pub birth_prior: CrustBirthPrior,
 }
@@ -98,7 +97,6 @@ impl EvolutionFixture {
             partition: &self.partition,
             crust: &self.crust,
             kinematics: &self.kinematics,
-            kinematics_config: self.kinematics_config,
             boundaries: &self.boundaries,
             birth_prior: &self.birth_prior,
         }
@@ -112,9 +110,9 @@ impl EvolutionFixture {
 pub fn evolution_fixture() -> EvolutionFixture {
     let (mesh, partition) = reference_partition();
     let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
-    let kinematics_config = PlateKinematicsConfig::new(7);
     let kinematics =
-        generate_plate_kinematics(&mesh, &partition, &crust, kinematics_config).unwrap();
+        generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
+            .unwrap();
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,
@@ -129,7 +127,6 @@ pub fn evolution_fixture() -> EvolutionFixture {
         partition,
         crust,
         kinematics,
-        kinematics_config,
         boundaries,
         birth_prior,
     }
@@ -160,13 +157,6 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
     let (mesh, edge, partition) = two_plate_boundary_partition();
     let crust = CrustClassification { plate_classes };
     let kinematics = opposed_kinematics(&mesh, edge, outward);
-    // `opposed_kinematics` builds unit-speed rotations, so the band has to
-    // reach one for a drifted speed to have anywhere to go.
-    let kinematics_config = PlateKinematicsConfig {
-        minimum_angular_speed: 0.0,
-        maximum_angular_speed: 1.0,
-        ..PlateKinematicsConfig::new(7)
-    };
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,
@@ -181,7 +171,6 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
         partition,
         crust,
         kinematics,
-        kinematics_config,
         boundaries,
         birth_prior,
     }
@@ -216,6 +205,52 @@ pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
         },
         ..PlateEvolutionConfig::default()
     }
+}
+
+/// The first step at which a convergent edge closing at `convergence` has
+/// paid for a whole cell width.
+fn paying_step(cell_width: f32, convergence: f32, step_duration: f32) -> usize {
+    (1..)
+        .find(|steps| *steps as f32 * convergence * step_duration >= cell_width)
+        .unwrap()
+}
+
+fn strongest_convergence(fixture: &EvolutionFixture) -> f32 {
+    (0..fixture.mesh.edge_count())
+        .map(|edge| fixture.boundaries.convergence(edge))
+        .fold(f32::MIN, f32::max)
+}
+
+/// A two-plate world in which exactly one edge clears the migration minimum,
+/// so one cell can ever migrate and the whole schedule is that edge's debt.
+/// Returns the fixture, its config, and the step at which the debt pays.
+pub fn single_edge_convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
+    let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+    let convergence = strongest_convergence(&fixture);
+    // Only the strongest edge clears the minimum, so exactly one cell can
+    // ever migrate and its debt is the whole schedule.
+    let config = PlateEvolutionConfig {
+        step_count: 0,
+        step_duration: 0.1,
+        migration: PlateMigrationConfig {
+            minimum_convergence: convergence * 0.999,
+        },
+        // The debt schedule below is the whole point of the fixture, and
+        // drift would change the closing speed it is computed from.
+        pole_drift: NO_POLE_DRIFT,
+        ..PlateEvolutionConfig::default()
+    };
+    let qualifying = (0..fixture.mesh.edge_count())
+        .filter(|&edge| fixture.boundaries.convergence(edge) >= convergence * 0.999)
+        .count();
+    assert_eq!(qualifying, 1);
+    let steps = paying_step(
+        mean_cell_width(&fixture.mesh),
+        convergence,
+        config.step_duration,
+    );
+    assert!(steps > 1, "the debt must take more than one step to pay");
+    (fixture, config, steps)
 }
 
 pub fn two_plate_boundary_partition() -> (SphereMesh, usize, PlatePartition) {

@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn regenerating_a_phase_drops_the_downstream_results() {
         let (cache_dir, cache) = test_cache("phase-drop");
-        let mut app = app_with(cache, test_settings(32, 53));
+        let mut app = app_with(cache, test_settings(32, 56));
         generate(&mut app, GenerateRequest::AllPhases);
         assert!(
             Phase::ALL
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn generating_every_phase_replaces_the_cached_snapshot() {
         let (cache_dir, cache) = test_cache("regenerate");
-        let previous = Fixture::generate(test_settings(32, 55));
+        let previous = Fixture::generate(test_settings(32, 59));
         cache.store(previous.complete()).unwrap();
         let mut app = app_with(cache.clone(), GenerationSettings::default());
         let requested = test_settings(64, 59);

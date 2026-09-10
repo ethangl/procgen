@@ -386,7 +386,7 @@ struct_codec! {
     CrustClassificationConfig { target_ocean_fraction, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     PlateMigrationConfig { minimum_convergence }
-    PoleDriftConfig { axis_drift_rate, speed_drift_rate }
+    PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
     PlateEvolutionConfig { seed, step_count, step_duration, migration, deformation, pole_drift }
     CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { continental_base, ridge_elevation, deep_ocean_elevation, cooling_age }
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn invalid_topology_sparse_indices_and_field_lengths_are_rejected() {
-        let mut fixture = Fixture::new(32, 14);
+        let mut fixture = Fixture::new(32, 21);
         let cell_count = fixture.tectonics.voronoi.cell_count();
         fixture.tectonics.voronoi.edges[0].cells[0] = cell_count;
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn successful_store_atomically_replaces_previous_snapshot() {
         let (cache_dir, cache) = test_cache("replace");
-        let first = Fixture::new(32, 26);
+        let first = Fixture::new(32, 29);
         let second = Fixture::new(48, 27);
         cache.store(first.complete()).unwrap();
         cache.store(second.complete()).unwrap();
@@ -774,7 +774,7 @@ mod tests {
     #[test]
     fn failed_atomic_write_preserves_previous_snapshot() {
         let (cache_dir, cache) = test_cache("failed-replace");
-        let fixture = Fixture::new(32, 22);
+        let fixture = Fixture::new(32, 23);
         cache.store(fixture.complete()).unwrap();
         let original = fs::read(&cache.path).unwrap();
 

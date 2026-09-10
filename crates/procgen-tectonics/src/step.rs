@@ -36,7 +36,8 @@ use procgen_sphere_mesh::SphereMesh;
 /// four samples.
 const DRIFT_DRAWS_PER_STEP: u64 = 4;
 
-/// How far a plate's rotation vector moves per unit of model time.
+/// How far a plate's rotation vector moves per unit of model time, and how
+/// far from the motion it started with it may end up.
 ///
 /// Both rates are per unit time rather than per step, so changing the step
 /// duration changes how many steps a given amount of wander takes rather than
@@ -57,9 +58,16 @@ pub struct PoleDriftConfig {
     pub axis_drift_rate: f32,
     /// Fractional change of angular speed per unit time. One step multiplies
     /// the speed by `1 + s * rate * step_duration` for a hashed `s` in
-    /// `[-1, 1)`, and clamps the result to the kinematics config's speed
-    /// bounds.
+    /// `[-1, 1)`.
     pub speed_drift_rate: f32,
+    /// Fraction either side of the speed a plate began the run with that its
+    /// drifted speed may reach. The band is relative to the fitted motion
+    /// rather than to the global angular-speed range, because a random walk
+    /// against fixed global limits eventually piles every plate against one
+    /// of them, where a band around the fitted speed keeps drift the
+    /// perturbation of the flow field's answer that it is meant to be. At one
+    /// the band reaches zero; a plate can slow to a stop but never reverse.
+    pub speed_drift_limit: f32,
 }
 
 impl Default for PoleDriftConfig {
@@ -74,6 +82,12 @@ impl Default for PoleDriftConfig {
             // `3.5 * 0.014` is 0.049, so a step changes a plate's speed by at
             // most about five percent.
             speed_drift_rate: 3.5,
+            // A step's expected change is `0.049 / sqrt(3)`, so a default
+            // nine-step walk is expected to stray about nine percent. At a
+            // quarter the band bounds the tail of that walk without shaping
+            // the bulk of it: one of the 57 plates at the viewer's defaults
+            // reaches the edge over nine steps, and a long run stays inside.
+            speed_drift_limit: 0.25,
         }
     }
 }
@@ -124,9 +138,10 @@ pub(crate) struct EvolvingWorld<'a> {
     mesh: &'a SphereMesh,
     crust: &'a CrustClassification,
     config: PlateEvolutionConfig,
-    /// Bounds every drifted angular speed is clamped back into, so drift
-    /// cannot walk a plate outside the band the fit produced it in.
-    speed_bounds: std::ops::RangeInclusive<f32>,
+    /// The motion the run started from, kept beside the copy that drifts:
+    /// each plate's drifted speed is bounded relative to the speed it began
+    /// with.
+    initial_kinematics: &'a PlateKinematics,
     /// The one distance every accumulated displacement is measured against.
     cell_width: f32,
     /// Read between steps to reclassify, and taken when the run ends. The
@@ -155,8 +170,7 @@ impl<'a> EvolvingWorld<'a> {
             mesh,
             crust: inputs.crust,
             config,
-            speed_bounds: inputs.kinematics_config.minimum_angular_speed
-                ..=inputs.kinematics_config.maximum_angular_speed,
+            initial_kinematics: inputs.kinematics,
             kinematics: inputs.kinematics.clone(),
             cell_width: mean_cell_width(mesh),
             partition: inputs.partition.clone(),
@@ -281,7 +295,8 @@ impl<'a> EvolvingWorld<'a> {
 
     /// Steps every plate's rotation vector once: a turn of the axis through a
     /// fixed angle toward a fresh hashed perpendicular direction, and a
-    /// hashed change of speed clamped back into the kinematics bounds.
+    /// hashed change of speed bounded to a band around the speed the plate
+    /// started the run with.
     ///
     /// The turn is the half-angle tangent form, so it costs only add,
     /// multiply, and divide. Half the intended angle stands in for its
@@ -299,12 +314,13 @@ impl<'a> EvolvingWorld<'a> {
         let half_tangent = 0.5 * config.axis_drift_rate * self.config.step_duration;
         let speed_span = config.speed_drift_rate * self.config.step_duration;
         let stream = RandomStream::new(self.config.seed, PLATE_POLE_DRIFT);
+        let initial = &self.initial_kinematics.angular_velocities;
 
         for (plate, rotation) in self.kinematics.angular_velocities.iter_mut().enumerate() {
             let speed = rotation.length();
             if speed == 0.0 {
-                // A plate the bounds allowed to stop has no axis to turn and
-                // no speed to scale.
+                // A plate that started the run at rest, or that the band let
+                // slow to one, has no axis to turn and no speed to scale.
                 continue;
             }
             let item = plate as u64;
@@ -319,8 +335,11 @@ impl<'a> EvolvingWorld<'a> {
             // length, which is what makes the turn preserve that length.
             let perpendicular = (hashed - axis * hashed.dot(axis)).normalized() * speed;
             let turned = rotation.rotated_toward(perpendicular, half_tangent);
-            let drifted = (speed * (1.0 + stream.signed_f32(item, sample + 3) * speed_span))
-                .clamp(*self.speed_bounds.start(), *self.speed_bounds.end());
+            let started = initial[plate].length();
+            let drifted = (speed * (1.0 + stream.signed_f32(item, sample + 3) * speed_span)).clamp(
+                started * (1.0 - config.speed_drift_limit),
+                started * (1.0 + config.speed_drift_limit),
+            );
             *rotation = turned * (drifted / speed);
         }
     }

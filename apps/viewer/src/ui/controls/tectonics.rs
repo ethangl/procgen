@@ -221,6 +221,13 @@ fn pole_drift_controls(ui: &mut egui::Ui, config: &mut PoleDriftConfig) {
         &mut config.speed_drift_rate,
         SPEED_DRIFT_RATE_RANGE,
     );
+    // One is the whole of a plate's fitted speed: the band then reaches zero.
+    slider(
+        ui,
+        "Speed drift band",
+        &mut config.speed_drift_limit,
+        0.0..=1.0,
+    );
 }
 
 fn birth_prior_controls(ui: &mut egui::Ui, config: &mut CrustBirthPriorConfig) {

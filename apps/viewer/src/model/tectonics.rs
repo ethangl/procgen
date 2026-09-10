@@ -130,7 +130,6 @@ impl TectonicsWorld {
                     partition: &initial_plates,
                     crust: &crust,
                     kinematics: &initial_kinematics,
-                    kinematics_config: config.kinematics,
                     boundaries: &initial_boundaries,
                     birth_prior: &birth_prior,
                 },
