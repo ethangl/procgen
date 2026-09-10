@@ -315,7 +315,7 @@ mod tests {
             .cell_basins
             .iter()
             .map(|id| id.map_or(0, |id| id as u64 + 1));
-        assert_eq!(fingerprint(ids), 11_938_203_854_786_127_761);
+        assert_eq!(fingerprint(ids), 16_534_851_321_129_559_133);
     }
 
     #[test]

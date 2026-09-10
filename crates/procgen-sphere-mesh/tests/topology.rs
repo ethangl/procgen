@@ -3,9 +3,13 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay, TopologyError, build_sphere_mesh};
 
 fn points(count: usize, jitter: f32) -> Vec<Vec3> {
+    seeded_points(count, jitter, 42)
+}
+
+fn seeded_points(count: usize, jitter: f32, seed: u64) -> Vec<Vec3> {
     let config = FibonacciConfig {
         jitter,
-        seed: 42,
+        seed,
         ..FibonacciConfig::new(count)
     };
     fibonacci_sphere(config).unwrap()
@@ -27,8 +31,12 @@ fn assert_cell_rings_clockwise(mesh: &SphereMesh) {
         for corner in 0..corners.len() {
             let current = mesh.vertices[corners[corner].vertex];
             let next = mesh.vertices[corners[(corner + 1) % corners.len()].vertex];
+            // Two Voronoi vertices closer together than an f32 step round to
+            // one position, which leaves a corner that turns neither way.
+            // It spans no arc, so it carries no flux and encloses no area,
+            // and every other corner has to turn clockwise.
             assert!(
-                (current - center).cross(next - center).dot(center) < 0.0,
+                (current - center).cross(next - center).dot(center) < 0.0 || current == next,
                 "cell {cell}, corner {corner}"
             );
         }
@@ -102,7 +110,20 @@ fn voronoi_cell_rings_are_clockwise_from_outside() {
     .map(Vec3::normalized)
     .collect();
 
-    for sample in [tetrahedron, points(128, 0.5)] {
+    // The last two samples are the count and jitter the viewer runs at. A
+    // ring inverts where two cells sit close enough together that rounding
+    // decides which side of a hull plane one of them falls on, and a lattice
+    // this fine is the first that holds such a pair: seed 7 is the viewer's
+    // own, and seed 42 is one whose closest pair rounds to a single Voronoi
+    // vertex.
+    let samples = [
+        tetrahedron,
+        points(128, 0.5),
+        seeded_points(65_536, 0.8, 7),
+        seeded_points(65_536, 0.8, 42),
+    ];
+
+    for sample in samples {
         let mesh = build_sphere_mesh(sample, 1.0).unwrap();
         assert_cell_rings_clockwise(&mesh);
     }

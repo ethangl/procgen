@@ -632,7 +632,7 @@ mod tests {
                 stale_entity,
             );
 
-        app.insert_resource(Fixture::new(64, 71).into_world());
+        app.insert_resource(Fixture::new(64, 72).into_world());
         app.update();
         let second = app.world().resource::<TerrainGpuResources>();
         let second_tile_assets = app.world().resource::<TerrainTileAssets>();
