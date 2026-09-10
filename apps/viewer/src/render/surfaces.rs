@@ -1,6 +1,9 @@
 use super::{
     SURFACE_RADIUS,
-    palette::{INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, opaque_color, piecewise_lerp},
+    palette::{
+        HOTSPOT_COLOR_STOPS, INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, opaque_color,
+        piecewise_lerp,
+    },
     to_bevy,
 };
 use crate::model::{ClimateWorld, GeologyWorld, TectonicsWorld};
@@ -64,6 +67,21 @@ pub(super) fn insolation_colors(_: &TectonicsWorld, climate: &ClimateWorld) -> V
         .daily_mean_insolation
         .iter()
         .map(|value| opaque_color(piecewise_lerp(value * reciprocal, INSOLATION_COLOR_STOPS)))
+        .collect()
+}
+
+/// Trails and flood basalt provinces in one layer, each cell taking whichever
+/// of the two reaches further. They never mean the same thing on one cell: a
+/// trail is a narrow decaying streak and a province a broad plateau.
+pub(super) fn hotspot_colors(_: &TectonicsWorld, geology: &GeologyWorld) -> Vec<Color> {
+    geology
+        .hotspots
+        .cell_intensities
+        .iter()
+        .zip(&geology.hotspots.cell_plateau)
+        .map(|(&intensity, &plateau)| {
+            opaque_color(piecewise_lerp(intensity.max(plateau), HOTSPOT_COLOR_STOPS))
+        })
         .collect()
 }
 

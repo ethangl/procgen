@@ -542,5 +542,83 @@ or seed tried, and a rigid rotation's divergence peaks at 0.024 there against
 the 4096-cell mesh's 0.040. `tests/topology.rs` asserts the ring invariant at
 the count and jitter the viewer runs at.
 
+### Continental flood basalt provinces
+
+A second interior source, in geology rather than base elevation. The hotspot
+stage already traces each plume's trail of up to eight cells opposite its
+plate's motion, so every hotspot was a point feature a few cells long. On Earth
+a plume under a continent does something else as well: it floods a broad,
+flat-topped plateau hundreds of kilometres across in a few million years, as
+the Deccan Traps and the Columbia River basalts did. That plateau is one of the
+few sources of relief a continental interior has away from any boundary, and
+the pipeline had nothing like it.
+
+A hotspot is a candidate when its source cell's crust is continental, read from
+the evolution's `CellCrust`, which the hotspot stage now takes. Each candidate
+rolls one hashed draw from a new `HOTSPOT_PROVINCE` stream on the hotspot seed
+against `province_fraction`. A province is every cell within
+`province_radius_hops` mesh hops of the source, walking only through cells that
+are continental and on the source's plate, so it stops at a coast and at a
+plate boundary. Weight is one within `province_radius_hops - province_rim_hops`
+hops and falls linearly toward zero at the radius: a flat top with a sloped
+rim, which is the shape of a flood basalt pile at this scale. The radius is
+where that fall reaches zero, so the ring at it is outside the province and
+every cell of one carries a positive weight. Weights are rationals
+of two integers and hop distances are integers, so the cells and the profile
+are bit-identical across machines. `HotspotField` carries them as
+`cell_plateau`, the maximum province weight over every province covering a
+cell, resolving overlaps by maximum as the intensity field does. Composition
+adds `plateau_uplift` times that weight in the same pass as hotspot uplift,
+before craton flattening, so a craton partly flattens an old province — which
+is acceptable, since a real one erodes too.
+
+Defaults are `province_fraction` 0.4, `province_radius_hops` 5, and
+`province_rim_hops` 2. Five hops is about 440 km at Earth scale, so a plateau
+spans roughly 900 km. `plateau_uplift` is 0.06, comparable to the Deccan's
+height above the Indian shield in normalised units.
+
+The fraction is 0.4 rather than the third a "few plumes in a few tens of
+millions of years" reading suggests, because the candidate pool is smaller than
+it looks. Twenty hotspots put only four sources on continental crust at the
+viewer's defaults and three at the reference world. A quarter of the sphere is
+continental, so five is the expectation and three or four an ordinary draw.
+At 0.3 none of those seven draws fires: the lowest are 0.378 and 0.340, so both
+worlds get their first province just above 0.34 and neither has one at 0.3.
+Raising the fraction to 0.4 buys one province at the viewer's defaults and two
+at the reference world, which is the "a couple per world" this is aiming at,
+without making a province the normal fate of a continental plume.
+
+| | viewer defaults | reference world |
+| --- | --- | --- |
+| continental sources, of twenty | 4 | 3 |
+| provinces | 1 | 2 |
+| plateau cells | 79 | 120 |
+| cells whose elevation moved | 79 | 120 |
+| the same, continental interior | 23 | 120 |
+| largest uplift applied | 0.060 | 0.030 |
+| provinces at fraction 1.0 | 4 | 3 |
+| plateau cells at fraction 1.0 | 192 | 190 |
+| continental interior, five hops in | 0.421 to 0.888 | 0.399 to 0.900 |
+| the same before | 0.421 to 0.888 | 0.399 to 0.900 |
+| land cells | 18,539 | 18,157 |
+| land cells before | 18,539 | 18,157 |
+
+The continental interior here is every continental cell at least five hops from
+a plate boundary, 6,650 cells at the viewer's defaults and 12,628 at the
+reference world, measured on geological elevation. Its range does not move: a
+province is a couple of hundred cells and its 0.06 never reaches either extreme
+of six thousand, and no coast moves either, because a province stops at one.
+What moves is inside the range. The reference world's largest uplift is 0.030,
+exactly half the amplitude, because both of its provinces sit on a
+full-strength craton and `craton_flattening` is 0.5 — the flattening the model
+accepts. Every plateau cell moves at the default, which is what says no cell of
+a province is dead weight; only at fraction 1.0 do the counts part, where four
+of the viewer's 192 plateau cells already stood at one and clamp.
+
+Zero fraction reproduces the field exactly, which a test asserts against the
+pre-slice fingerprint. No integer pin moved: every geology and climate pin
+downstream reads a synthetic elevation field or a fixture too small to hold a
+province.
+
 Erosion is the next stage, and it is the reason this one exists: it needs
 slopes to move material down, and until now a plate interior had none.

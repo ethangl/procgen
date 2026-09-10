@@ -61,7 +61,7 @@ pub(crate) fn geology_settings(seed: u64) -> GeologySettings {
         hotspots: HotspotFieldConfig {
             hotspot_count: 3,
             maximum_trail_cells: 4,
-            seed,
+            ..HotspotFieldConfig::new(seed)
         },
         oceanic_peaks: OceanicPeakFieldConfig::new(seed),
         ..GeologySettings::default()

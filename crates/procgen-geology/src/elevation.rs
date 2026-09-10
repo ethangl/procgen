@@ -12,6 +12,9 @@ use procgen_tectonics::{BaseElevation, CoarseElevation, FieldSummary};
 pub struct GeologicalElevationConfig {
     /// Maximum normalized uplift contributed by a full-strength hotspot.
     pub hotspot_uplift: f32,
+    /// Normalized height a full-weight flood basalt plateau stands above the
+    /// continental base around it.
+    pub plateau_uplift: f32,
     /// Maximum normalized uplift contributed by a full-strength volcanic arc.
     pub volcanic_arc_uplift: f32,
     /// Fraction of the distance toward the cell's own base elevation applied
@@ -25,6 +28,7 @@ impl Default for GeologicalElevationConfig {
     fn default() -> Self {
         Self {
             hotspot_uplift: 0.08,
+            plateau_uplift: 0.06,
             volcanic_arc_uplift: 0.12,
             craton_flattening: 0.5,
             basin_flattening: 0.65,
@@ -72,7 +76,8 @@ impl GeologicalElevation {
 }
 
 /// Composes a new normalized geological elevation field in this stable order:
-/// hotspot uplift, volcanic-arc uplift, craton flattening, then basin flattening.
+/// hotspot and plateau uplift, volcanic-arc uplift, craton flattening, then
+/// basin flattening.
 ///
 /// Basin floors are the deterministic component minima captured by the basin
 /// field from the input tectonic elevation. No input field is modified, and
@@ -91,7 +96,12 @@ pub fn compose_geological_elevation(
         &mut cell_elevations,
         &mut diagnostics.hotspots,
         |cell, elevation| {
-            (elevation + inputs.hotspots.cell_intensities[cell] * config.hotspot_uplift)
+            // Both plume products in one pass. Craton flattening below then
+            // partly levels a province that sits on a shield, which is
+            // acceptable: a real flood basalt erodes too.
+            (elevation
+                + inputs.hotspots.cell_intensities[cell] * config.hotspot_uplift
+                + inputs.hotspots.cell_plateau[cell] * config.plateau_uplift)
                 .clamp(0.0, 1.0)
         },
     );
@@ -141,6 +151,7 @@ fn validate_inputs(
     config: GeologicalElevationConfig,
 ) -> Result<(), GeologyStageError> {
     if !unit_interval(config.hotspot_uplift)
+        || !unit_interval(config.plateau_uplift)
         || !unit_interval(config.volcanic_arc_uplift)
         || !unit_interval(config.craton_flattening)
         || !unit_interval(config.basin_flattening)
@@ -305,6 +316,21 @@ mod tests {
     }
 
     #[test]
+    fn a_flood_basalt_province_adds_its_weight_times_the_plateau_uplift() {
+        let mesh = mesh(4);
+        let mut fixture = Fixture::new(vec![0.6; 4]);
+        fixture.hotspots.cell_plateau = vec![1.0, 0.5, 0.0, 0.0];
+        let config = GeologicalElevationConfig {
+            plateau_uplift: 0.06,
+            ..GeologicalElevationConfig::default()
+        };
+
+        let result = fixture.compose(&mesh, 0.6, config).unwrap();
+        assert_eq!(result.cell_elevations, vec![0.66, 0.63, 0.6, 0.6]);
+        assert_eq!(result.diagnostics.hotspots.affected_cell_count, 2);
+    }
+
+    #[test]
     fn overlapping_effects_follow_the_documented_stable_order() {
         let mesh = mesh(4);
         let mut fixture = Fixture::new(vec![0.6, 0.4, 0.8, 0.2]);
@@ -320,6 +346,7 @@ mod tests {
         }];
         let config = GeologicalElevationConfig {
             hotspot_uplift: 0.5,
+            plateau_uplift: 0.0,
             volcanic_arc_uplift: 0.2,
             craton_flattening: 0.5,
             basin_flattening: 0.5,
@@ -417,6 +444,15 @@ mod tests {
 
         let invalid = GeologicalElevationConfig {
             hotspot_uplift: f32::NAN,
+            ..Default::default()
+        };
+        assert_eq!(
+            fixture.compose(&mesh, 0.6, invalid),
+            Err(GeologyStageError::InvalidConfig)
+        );
+
+        let invalid = GeologicalElevationConfig {
+            plateau_uplift: 1.5,
             ..Default::default()
         };
         assert_eq!(

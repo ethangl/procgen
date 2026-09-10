@@ -378,6 +378,7 @@ mod tests {
                     hotspots: vec![],
                     cell_intensities: vec![0.0; cells],
                     cell_hotspots: vec![None; cells],
+                    cell_plateau: vec![0.0; cells],
                     diagnostics: HotspotDiagnostics::default(),
                 },
                 peaks: OceanicPeakField {
@@ -573,6 +574,7 @@ mod tests {
                 cell,
                 intensity: 1.0,
             }],
+            province_cell_count: 0,
         });
         fixture.hotspots.cell_intensities[cell] = 1.0;
         fixture.hotspots.cell_hotspots[cell] = Some(0);

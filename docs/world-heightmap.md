@@ -123,8 +123,11 @@ Completed foundations:
   completed tectonic state without feeding changes back into tectonics. Seeded
   mantle hotspots have bounded decaying trails opposite final-owner plate
   motion, constrained to final plate ownership with stable max-intensity overlap
-  resolution. Volcanic arcs group final mixed-crust convergent boundaries by
-  overriding continental plate, walk a bounded distance inland, and retain
+  resolution, and a hashed subset of those whose source sits on continental
+  crust also floods a flat-topped, sloped-rim flood basalt province out to a
+  fixed hop radius through continental cells of the source's own plate.
+  Volcanic arcs group final mixed-crust convergent boundaries by overriding
+  continental plate, walk a bounded distance inland, and retain
   strength-ranked peak candidates with stable segment, peak, and overlap
   ordering. Craton strength applies only to above-sea-level continental cells
   and ramps with graph distance from final plate boundaries. It reads but never
@@ -138,9 +141,10 @@ Completed foundations:
   bounded inside their source cells and strength-scaled diagnostic heights; it
   does not stamp cones, mutate elevation, or produce a dense terrain field. A
   separate geological elevation stage copies coarse tectonic elevation, then
-  applies hotspot uplift, volcanic-arc uplift, craton flattening toward each
-  cell's own tectonic base elevation, and basin flattening toward each component's
-  original deterministic minimum, in that stable order. It reports the
+  applies hotspot and flood basalt plateau uplift, volcanic-arc uplift, craton
+  flattening toward each cell's own tectonic base elevation, and basin
+  flattening toward each component's original deterministic minimum, in that
+  stable order. It reports the
   aggregate actual delta of each effect and does not consume the sparse oceanic
   peaks or mutate any input field. A final deterministic isostatic stage derives
   per-cell support from current-owner continental crust, convergent and divergent

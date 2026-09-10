@@ -9,6 +9,8 @@ use procgen_tectonics::{PlateKinematicsConfig, SEA_LEVEL};
 
 const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+const HOTSPOT_PROVINCE_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+const HOTSPOT_PROVINCE_RADIUS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
@@ -59,6 +61,27 @@ fn hotspot_controls(ui: &mut egui::Ui, config: &mut HotspotFieldConfig) {
         "Maximum trail cells",
         &mut config.maximum_trail_cells,
         HOTSPOT_TRAIL_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Province fraction",
+        &mut config.province_fraction,
+        HOTSPOT_PROVINCE_FRACTION_RANGE,
+    );
+    drag_value(
+        ui,
+        "Province radius hops",
+        &mut config.province_radius_hops,
+        HOTSPOT_PROVINCE_RADIUS_RANGE,
+        1.0,
+    );
+    // The rim slopes back down inside the radius, so it cannot outrun it.
+    drag_value(
+        ui,
+        "Province rim hops",
+        &mut config.province_rim_hops,
+        0..=config.province_radius_hops,
         1.0,
     );
     drag_value(
@@ -186,6 +209,7 @@ fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig) {
 
 fn geological_elevation_controls(ui: &mut egui::Ui, config: &mut GeologicalElevationConfig) {
     slider(ui, "Hotspot uplift", &mut config.hotspot_uplift, 0.0..=1.0);
+    slider(ui, "Plateau uplift", &mut config.plateau_uplift, 0.0..=1.0);
     slider(
         ui,
         "Volcanic-arc uplift",

@@ -326,6 +326,7 @@ mod tests {
             hotspots: Vec::new(),
             cell_intensities: intensities,
             cell_hotspots: vec![None; mesh.cell_count()],
+            cell_plateau: vec![0.0; mesh.cell_count()],
             diagnostics: Default::default(),
         };
         let seafloor_age = SeafloorAge {
