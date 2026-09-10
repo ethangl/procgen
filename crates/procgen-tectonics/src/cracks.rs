@@ -6,6 +6,10 @@
 //! face they touch most, and faces that are too small or too thin merge into
 //! a neighbor.
 //!
+//! The walk itself is reusable: [`Cracks::walk_arc`] takes the rule for which
+//! cells an arc may enter, so the partition passes "not another arc's wall"
+//! and evolution's rifting passes "owned by the plate that is splitting".
+//!
 //! Face ids decide integers every later stage reports, so the walk is
 //! libm-free: add, multiply, divide, and square root on `f32`, the polynomial
 //! gradient noise, and integer hashes are all IEEE-exact, and point location
@@ -48,12 +52,21 @@ pub(crate) fn crack_faces(
     curvature: f32,
 ) -> CrackFaces {
     let mut cracks = Cracks::new(mesh, seed, curvature);
+    // Owning arc per wall cell.
+    let mut cell_arcs: Vec<Option<usize>> = vec![None; mesh.cell_count()];
     for arc in 0..arc_count {
-        cracks.walk_arc(arc);
+        let start = cracks.hashed_start(arc);
+        // An arc that starts on an existing wall has nothing of its own to
+        // walk, so it is skipped rather than merged into the wall it landed on.
+        if cell_arcs[start].is_some() {
+            continue;
+        }
+        for cell in cracks.walk_arc(arc, start, |cell| cell_arcs[cell].is_none()) {
+            cell_arcs[cell] = Some(arc);
+        }
     }
 
-    let components =
-        connected_components(mesh, |cell| cracks.cell_arcs[cell].is_none(), |_, _| true);
+    let components = connected_components(mesh, |cell| cell_arcs[cell].is_none(), |_, _| true);
     if components.is_empty() {
         // Every cell is a wall, so the walls themselves are the only face.
         return CrackFaces {
@@ -68,7 +81,7 @@ pub(crate) fn crack_faces(
             cell_faces[cell] = Some(face);
         }
     }
-    adopt_wall_cells(mesh, &mut cell_faces);
+    adopt_unassigned_cells(mesh, &mut cell_faces, |_| true);
     let cell_faces: Vec<usize> = cell_faces
         .into_iter()
         .map(|face| face.expect("every wall cell reaches a face"))
@@ -77,10 +90,11 @@ pub(crate) fn crack_faces(
     merge_faces(mesh, cell_faces, components.len())
 }
 
-struct Cracks<'mesh> {
+/// One arc's walk over the mesh, reusable by anything that needs a crack
+/// line. It holds the walk's parameters and its point-location hint; where
+/// the wall it produces is recorded belongs to the caller.
+pub(crate) struct Cracks<'mesh> {
     mesh: &'mesh SphereMesh,
-    /// Owning arc per wall cell.
-    cell_arcs: Vec<Option<usize>>,
     triangle_hint: usize,
     step: f32,
     curvature: f32,
@@ -89,11 +103,10 @@ struct Cracks<'mesh> {
 }
 
 impl<'mesh> Cracks<'mesh> {
-    fn new(mesh: &'mesh SphereMesh, seed: u64, curvature: f32) -> Self {
+    pub(crate) fn new(mesh: &'mesh SphereMesh, seed: u64, curvature: f32) -> Self {
         let spacing = (4.0 * std::f32::consts::PI / mesh.cell_count() as f32).sqrt();
         Self {
             mesh,
-            cell_arcs: vec![None; mesh.cell_count()],
             triangle_hint: 0,
             step: STEP_SPACING * spacing,
             curvature,
@@ -102,16 +115,25 @@ impl<'mesh> Cracks<'mesh> {
         }
     }
 
-    /// Walks one arc outward from a hashed start cell in both directions. An
-    /// arc that starts on an existing wall is skipped.
-    fn walk_arc(&mut self, arc: usize) {
-        let item = arc as u64;
-        let start = (self.arcs.sample_u64(item, 0) % self.mesh.cell_count() as u64) as usize;
-        if self.cell_arcs[start].is_some() {
-            return;
-        }
-        self.cell_arcs[start] = Some(arc);
+    /// The cell one arc starts from when nothing else chooses it.
+    fn hashed_start(&self, arc: usize) -> usize {
+        (self.arcs.sample_u64(arc as u64, 0) % self.mesh.cell_count() as u64) as usize
+    }
 
+    /// Walks one arc outward from `start` in both directions and returns each
+    /// cell it crossed once, `start` first and then each direction in walk
+    /// order. A direction ends at the first cell `allowed` rejects, so the
+    /// caller's rule is what bounds the arc: the partition rejects another
+    /// arc's wall, and a rift rejects anything the splitting plate does not
+    /// own. An arc that curves back over its own wall carries on rather than
+    /// stopping.
+    pub(crate) fn walk_arc(
+        &mut self,
+        arc: usize,
+        start: usize,
+        allowed: impl Fn(usize) -> bool,
+    ) -> Vec<usize> {
+        let item = arc as u64;
         let center = self.mesh.cell_centers[start].normalized();
         let hashed = Vec3::new(
             self.arcs.signed_f32(item, 1),
@@ -127,11 +149,25 @@ impl<'mesh> Cracks<'mesh> {
             .rotated_toward(center.cross(tangent), self.arcs.signed_f32(item, 4))
             .normalized();
 
-        self.walk(arc, start, center, tangent);
-        self.walk(arc, start, center, -tangent);
+        let mut wall = Wall {
+            cells: vec![start],
+            entered: vec![false; self.mesh.cell_count()],
+            allowed,
+        };
+        wall.entered[start] = true;
+        self.walk(arc, start, center, tangent, &mut wall);
+        self.walk(arc, start, center, -tangent, &mut wall);
+        wall.cells
     }
 
-    fn walk(&mut self, arc: usize, start: usize, mut position: Vec3, mut tangent: Vec3) {
+    fn walk(
+        &mut self,
+        arc: usize,
+        start: usize,
+        mut position: Vec3,
+        mut tangent: Vec3,
+        wall: &mut Wall<impl Fn(usize) -> bool>,
+    ) {
         let noise_key = fold_seed_u64_to_u32(self.seed.wrapping_add(arc as u64));
         let half_step = 0.5 * self.step;
         let mut previous = start;
@@ -155,7 +191,7 @@ impl<'mesh> Cracks<'mesh> {
             if cell == previous {
                 continue;
             }
-            if self.claim_step(arc, previous, cell).is_break() {
+            if self.claim_step(previous, cell, wall).is_break() {
                 return;
             }
             previous = cell;
@@ -164,8 +200,14 @@ impl<'mesh> Cracks<'mesh> {
 
     /// Claims every cell one step entered, bridging the cell a step skipped
     /// over so the wall stays connected. Breaks when the step cannot be
-    /// bridged or ran into another arc, either of which ends this direction.
-    fn claim_step(&mut self, arc: usize, previous: usize, cell: usize) -> ControlFlow<()> {
+    /// bridged or reached a cell the caller disallows, either of which ends
+    /// this direction.
+    fn claim_step(
+        &self,
+        previous: usize,
+        cell: usize,
+        wall: &mut Wall<impl Fn(usize) -> bool>,
+    ) -> ControlFlow<()> {
         if !self.mesh.are_adjacent(previous, cell) {
             match self
                 .mesh
@@ -174,21 +216,11 @@ impl<'mesh> Cracks<'mesh> {
                 .map(|corner| corner.neighbor)
                 .find(|&between| self.mesh.are_adjacent(between, cell))
             {
-                Some(between) => self.claim(arc, between)?,
+                Some(between) => wall.claim(between)?,
                 None => return ControlFlow::Break(()),
             }
         }
-        self.claim(arc, cell)
-    }
-
-    fn claim(&mut self, arc: usize, cell: usize) -> ControlFlow<()> {
-        match self.cell_arcs[cell] {
-            Some(owner) if owner != arc => ControlFlow::Break(()),
-            _ => {
-                self.cell_arcs[cell] = Some(arc);
-                ControlFlow::Continue(())
-            }
-        }
+        wall.claim(cell)
     }
 
     /// Returns the Voronoi cell holding `position`: among the located
@@ -208,14 +240,45 @@ impl<'mesh> Cracks<'mesh> {
     }
 }
 
-/// Wall cells join the neighboring face they share the most edges with,
-/// repeating until the whole mesh is covered. Ties go to the lower face id.
-fn adopt_wall_cells(mesh: &SphereMesh, cell_faces: &mut Vec<Option<usize>>) {
+/// One arc's wall as it is built: the cells entered in walk order, and the
+/// membership test that keeps the walk from stopping on its own cells.
+struct Wall<Allowed> {
+    cells: Vec<usize>,
+    entered: Vec<bool>,
+    allowed: Allowed,
+}
+
+impl<Allowed: Fn(usize) -> bool> Wall<Allowed> {
+    fn claim(&mut self, cell: usize) -> ControlFlow<()> {
+        if self.entered[cell] {
+            // The arc has curved back over its own wall. It carries on, and
+            // the cell is already recorded.
+            return ControlFlow::Continue(());
+        }
+        if !(self.allowed)(cell) {
+            return ControlFlow::Break(());
+        }
+        self.entered[cell] = true;
+        self.cells.push(cell);
+        ControlFlow::Continue(())
+    }
+}
+
+/// Unassigned cells join the neighboring group they share the most edges
+/// with, repeating until nothing more can be assigned. Ties go to the lower
+/// group id. Cells `eligible` rejects are left alone, which is how a rift
+/// confines the adoption to the plate it is splitting; a cell no group ever
+/// reaches keeps `None`.
+pub(crate) fn adopt_unassigned_cells(
+    mesh: &SphereMesh,
+    cell_faces: &mut Vec<Option<usize>>,
+    eligible: impl Fn(usize) -> bool,
+) {
     loop {
         let mut next = cell_faces.clone();
         let mut changed = false;
         for cell in 0..mesh.cell_count() {
-            if cell_faces[cell].is_some() {
+            if cell_faces[cell].is_some() || !eligible(cell) {
                 continue;
             }
             let mut tally: Vec<(usize, usize)> = Vec::new();
@@ -375,9 +438,9 @@ mod tests {
         let cell_count = 4_096;
         let mesh = mesh(cell_count);
         let mut cracks = Cracks::new(&mesh, 7, 0.0);
-        cracks.walk_arc(0);
-        let wall: Vec<Vec3> = (0..mesh.cell_count())
-            .filter(|&cell| cracks.cell_arcs[cell] == Some(0))
+        let wall: Vec<Vec3> = cracks
+            .walk_arc(0, cracks.hashed_start(0), |_| true)
+            .into_iter()
             .map(|cell| mesh.cell_centers[cell].normalized())
             .collect();
 

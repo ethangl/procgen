@@ -396,9 +396,9 @@ fn propagate_boundary_effects(
 mod tests {
     use super::*;
     use crate::test_support::{
-        EvolutionFixture, NO_POLE_DRIFT, empty_boundaries, final_state_fixture, mesh as test_mesh,
-        plate_cell_birth, single_edge_convergent_fixture, two_plate_boundary_partition,
-        two_plate_fixture,
+        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, empty_boundaries, final_state_fixture,
+        mesh as test_mesh, plate_cell_birth, single_edge_convergent_fixture,
+        two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::{BoundaryClass, PlateEvolutionConfig, PlateMigrationConfig};
 
@@ -833,8 +833,9 @@ mod tests {
                 ..BoundaryDeformationConfig::default()
             },
             // Every step must classify the same boundaries, which drifting
-            // motion is precisely what stops happening.
+            // motion and a splitting plate are precisely what stop happening.
             pole_drift: NO_POLE_DRIFT,
+            lifecycle: NO_LIFECYCLE,
             ..PlateEvolutionConfig::default()
         };
         (fixture, config)

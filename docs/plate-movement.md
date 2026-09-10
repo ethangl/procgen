@@ -17,8 +17,9 @@ them.
 
 ## Current state
 
-Slices 1, 2, 3, and 4 — coherent kinematics, displacement-proportional
-migration, accumulated deformation, and drifting Euler poles — have landed.
+All five slices — coherent kinematics, displacement-proportional migration,
+accumulated deformation, drifting Euler poles, and plate lifecycle — have
+landed.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
@@ -173,12 +174,110 @@ migration, accumulated deformation, and drifting Euler poles — have landed.
   biting rather than a saturated field: 284 of the 65,536 cells reach it,
   0.4 percent. Raising `full_deformation_time` to the run length would undo
   it, at the cost of thinner belts everywhere.
+- The plate set itself now changes during a run. `lifecycle.rs` owns the two
+  events, and they happen at the end of a step, after the poles drift and
+  before the next classification, so the next step's boundaries are the ones
+  the new plate set implies. `EvolvingWorld` therefore owns plate classes and
+  the plate count as well as ownership and motion; the classification the run
+  was handed describes a plate set the run leaves behind, and
+  `PlateEvolution::crust` is the final one every consumer downstream reads.
+- Rifting: each step, every continental plate above
+  `rift_minimum_area_fraction` of the sphere draws against
+  `rift_rate * step_duration` on a `PLATE_RIFT` stream. A plate that rifts
+  walks one arc of `cracks.rs` from a hashed cell of its own, in both
+  directions, and the walk stops as soon as it leaves the plate, so the arc
+  runs from boundary to boundary and the cells it crossed are the wall. The
+  two largest connected components of non-wall cells beside the arc are the
+  halves; the wall and any leftover component join the half they share the
+  most edges with, which is `cracks.rs`'s own adoption rule and keeps both
+  halves connected. Fewer than two components beside the arc means the rift
+  separated nothing: the plate is left exactly as it was and the attempt is
+  counted as a failed rift. The larger half keeps the plate's id and the
+  smaller takes `plate_count`. Both halves are continental, and both keep the
+  birth and deformation their cells carried, because a rift is a line in the
+  crust rather than new crust: the ridge it becomes makes ocean cell by cell
+  through the existing rebirth rule over the steps that follow.
+- The halves start from the parent's rotation vector plus and minus
+  `rift_opening_speed * normalize(n x m)`, for the wall's plane normal `n` and
+  its mean center `m`. That axis is the one whose velocity at the rift is
+  normal to the rift — `(n x m) x m = m (n . m) - n (m . m)`, and the wall lies
+  in its own plane, so the velocity at `m` is `-n |m|²` — which makes the
+  relative motion across the new boundary pure opening. `n` comes off a cross
+  product, so its sign is fixed against the side of the plane the first half's
+  own rift front sits on. A closed arc is the one degenerate case: its wall's
+  mean center is the sphere's own, which leaves the opening direction
+  undefined, so a rift is only well posed on a plate an arc can cross rather
+  than circle.
+- Suturing: each step counts, for every adjacent continental pair, the shared
+  edges that are convergent with continental crust on both sides. A pair at or
+  above `suture_minimum_shared_edges` grows its collision time by the step; a
+  pair below it starts over, the same convention the closing debt uses for an
+  edge that stopped converging. At `suture_time` the plate with more area
+  absorbs the other: every cell takes the absorber's id, the absorber's
+  rotation vector becomes the area-weighted mean of the two, and the absorbed
+  id is left owning nothing. The merged plate's drift band restarts around the
+  mean, because leaving it around the absorber's original speed would snap the
+  merge's own motion straight back.
+- The run ends by compacting: every plate id owning no cell is removed and
+  ownership, the rotation vectors, and the plate classes are remapped to
+  `0..live_count` in id order. `PlatePartition::validate` now requires that
+  every id below `plate_count` owns a cell. Compaction removes the ids
+  migration empties as well as the ones suturing does — migration could
+  already wipe out a plate before this slice — so plate ids are no longer
+  stable across a run, and a run's output plate count differs from the
+  partition stage's in both directions.
+- `PlateLifecycleConfig` sits under `PlateEvolutionConfig` beside
+  `PlateMigrationConfig` and `PoleDriftConfig`. A `rift_rate` of zero and a
+  `suture_time` of infinity each disable their event; `test_support`'s
+  `NO_LIFECYCLE` is both, as `NO_POLE_DRIFT` is for drift.
+- Defaults: `rift_rate` 4.5 per unit time, `rift_minimum_area_fraction` 0.04,
+  `rift_curvature` 8.0 (the partition's own), `rift_opening_speed` 0.33,
+  `suture_time` eight default steps, and `suture_minimum_shared_edges` 20.
+  They were calibrated by running the viewer's defaults over nine, fifteen,
+  and thirty steps and sweeping the two knobs that matter. The area fraction
+  is one of them: the largest continental plate at the viewer's defaults
+  covers 0.044 of the sphere, so 0.05 makes nobody eligible and 0.04 makes one
+  or two. The rift rate saturates above three or so, because both halves of a
+  rift fall below the minimum area and cannot rift again. The shared-edge
+  count is the other: at eight the viewer's defaults suture six times over
+  fifteen steps, at sixteen three times, and at twenty once. The opening speed
+  is a third of the default maximum angular speed, which clears the default
+  minimum convergence of 0.5 across the rift on its own.
+- At the viewer's defaults a fifteen-step run produces 1 rift, 0 failed rifts,
+  1 suture, and 111 final plates, from the 111 the partition made: the rift
+  and the suture cancel. Boundary edges after the run are 5303 convergent,
+  5869 divergent, and 5269 transform, against 5326, 5896, and 5326 with the
+  events disabled, and crust-creation events 6426 against 6369, over 18,190
+  migration events against 18,107. A nine-step run gives 1 rift and 1 suture;
+  thirty steps give 1 rift, 1 failed rift, and 3 sutures. The events are a
+  small perturbation of the aggregate at these defaults, which is the point:
+  they change the plate set's history rather than its statistics.
+- Integer pins that moved. The reference fixture's run now rifts once and
+  sutures three times, so its ownership and birth fingerprints, and the base
+  elevation and seafloor age fingerprints derived from them, were all
+  re-pinned, along with the proposal, migration, and crust-creation counts.
+  The ownership fingerprint of a run with neither drift nor lifecycle moved
+  too, for a separate reason: compaction now removes the ids migration
+  emptied, which renumbers every plate above them. That run's birth
+  fingerprint is unchanged and is still the value pinned before this slice,
+  which is what says the cells this slice moves and the crust it makes are
+  otherwise the same.
+- `Cracks::walk_arc` in `cracks.rs` is now the reusable single-arc walk: it
+  takes the start cell and a rule for which cells the arc may enter, and
+  returns the cells it crossed in walk order. The partition passes "not
+  another arc's wall" and records the wall itself; the rift passes "owned by
+  the plate that is splitting". `adopt_wall_cells` became
+  `adopt_unassigned_cells` with an eligibility predicate, so the rift can run
+  the same adoption confined to one plate. Neither generalisation changed the
+  walk's output: the partition fingerprints pinned before this slice pass
+  unchanged, which is the test that says so.
 - Carried risk: the viewer's small-mesh fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
   moves which seeds those are. Five changed here, two in slice 3, three in
   slice 2, four in slice 1. The fix
   belongs in the fixture — a mesh coarse enough to be fast but not so coarse
-  that coupling is marginal — rather than in each slice's seed list.
+  that coupling is marginal — rather than in each slice's seed list. One more
+  changed here.
 
 ## Design
 
@@ -256,6 +355,14 @@ changes during evolution, so plate ids, crust classes, and kinematics have to
 be carried through a merge and a split. This is the most involved slice and
 the least certain, and it lands last.
 
+Two things came out differently from the intent above. Plate ids stop being
+stable across a run: compaction has to renumber, and migration could already
+empty a plate on its own, so the rule that every id owns a cell forces the
+renumbering on every run rather than only on one that sutured. And a rift arc
+is only well posed on a plate an arc can cross rather than circle, because a
+closed arc's wall has its mean center at the sphere's own, which leaves the
+opening direction undefined.
+
 ## Determinism
 
 Kinematics is a float result and always was; the raster pilot already
@@ -274,6 +381,14 @@ machines, that is the first thing to replace, with a normalized triple of
 integers or exact multiples of the step length. Accumulated deformation is a
 float field and is tested for run-to-run equality and invariants only, never
 pinned across machines.
+
+Slice 5 adds the arc walk, connected components, integer edge tallies, and
+area sums, all of which are exact, plus one plane fit and one cross product
+that use add, multiply, and square root alone. The floats that decide an
+integer there are area comparisons, which every stage that weights by area
+already depends on. Nothing on the lifecycle path calls libm, so the plate ids
+it produces and the boundary classes the new rotation vectors decide stay
+bit-identical across the two development machines.
 
 ## Decisions
 
@@ -321,6 +436,7 @@ derivation removed.
 
 Bounded per-step change of each plate's rotation vector.
 
-### Lifecycle.
+### Lifecycle. Landed.
 
-Rifting along new cracks and suturing of converged continental pairs.
+Rifting along new cracks, suturing of converged continental pairs, plate-set
+compaction, config and viewer controls, docs.

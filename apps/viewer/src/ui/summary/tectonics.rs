@@ -15,7 +15,9 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
 }
 
 fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
-    stat_grid(ui, "Static crust", "crust", |ui| {
+    // Not static any more: plates rift and suture, so these describe the
+    // plate set the run ended with rather than the one it classified.
+    stat_grid(ui, "Plate crust", "crust", |ui| {
         stat(
             ui,
             "Target ocean area",
@@ -23,7 +25,7 @@ fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         );
         stat(
             ui,
-            "Achieved ocean area",
+            "Final ocean area",
             format!(
                 "{:.2}%",
                 world.crust.ocean_fraction(&world.voronoi, &world.plates) * 100.0
@@ -76,6 +78,9 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             "Strongest migration",
             format!("{:.3}", world.evolution.maximum_convergence),
         );
+        stat(ui, "Rifts", world.evolution.rift_count);
+        stat(ui, "Failed rifts", world.evolution.failed_rift_count);
+        stat(ui, "Sutures", world.evolution.suture_count);
     });
 }
 

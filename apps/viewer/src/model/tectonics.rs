@@ -60,6 +60,9 @@ impl Default for TectonicsSettings {
 pub struct TectonicsWorld {
     pub voronoi: SphereMesh,
     pub plates: PlatePartition,
+    /// Crust class per plate of the final plate set. The classification the
+    /// run started from is not kept: evolution rifts and sutures plates, so
+    /// that one describes a plate set the world no longer holds.
     pub crust: CrustClassification,
     /// Plate motion after evolution's last pole drift. The motion the fit
     /// produced is not kept: everything downstream of a run reads the motion
@@ -105,11 +108,11 @@ impl TectonicsWorld {
         let initial_plates = timings.record("Plate partition", || {
             partition_plates(&voronoi, config.plates)
         })?;
-        let crust = timings.record("Crust", || {
+        let initial_crust = timings.record("Crust", || {
             classify_crust(&voronoi, &initial_plates, config.crust)
         })?;
         let initial_kinematics = timings.record("Plate kinematics", || {
-            generate_plate_kinematics(&voronoi, &initial_plates, &crust, config.kinematics)
+            generate_plate_kinematics(&voronoi, &initial_plates, &initial_crust, config.kinematics)
         })?;
         let initial_boundaries = timings.record("Boundary classification", || {
             classify_boundaries(&voronoi, &initial_plates, &initial_kinematics)
@@ -118,7 +121,7 @@ impl TectonicsWorld {
             derive_crust_birth_prior(
                 &voronoi,
                 &initial_plates,
-                &crust,
+                &initial_crust,
                 &initial_boundaries,
                 config.birth_prior,
             )
@@ -128,7 +131,7 @@ impl TectonicsWorld {
                 &voronoi,
                 PlateEvolutionInputs {
                     partition: &initial_plates,
-                    crust: &crust,
+                    crust: &initial_crust,
                     kinematics: &initial_kinematics,
                     boundaries: &initial_boundaries,
                     birth_prior: &birth_prior,
@@ -141,6 +144,7 @@ impl TectonicsWorld {
         })?;
         let PlateEvolution {
             partition: plates,
+            crust,
             kinematics,
             boundaries,
             cell_birth,

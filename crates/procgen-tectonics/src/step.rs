@@ -1,12 +1,14 @@
-//! One evolution step: the state it advances and the four moves it makes.
+//! One evolution step: the state it advances and the five moves it makes.
 //!
 //! A step raises deformation along the boundaries it starts from, moves
 //! ownership across the edges whose closing debt has paid for a cell, pulls
-//! what the cells carry one cell upstream, and finally drifts every plate's
-//! rotation vector. The first happens before the next two because uplift
-//! happens at the boundary and the material moves afterwards; the drift
-//! happens last, so a step's three moves all read the motion the step began
-//! with and the next classification reads the drifted motion.
+//! what the cells carry one cell upstream, drifts every plate's rotation
+//! vector, and finally rifts and sutures plates. The first happens before the
+//! next two because uplift happens at the boundary and the material moves
+//! afterwards; the drift happens fourth, so a step's three moves all read the
+//! motion the step began with and the next classification reads the drifted
+//! motion; the lifecycle in [`crate::lifecycle`] happens last, so the next
+//! classification also reads the new plate set.
 //!
 //! Kinematics is therefore per-step state like ownership and the carried
 //! fields, not a fixed input. Without the drift every step would classify the
@@ -29,6 +31,7 @@ use crate::{
 };
 use procgen_core::{RandomStream, Vec3, random_streams::PLATE_POLE_DRIFT};
 use procgen_sphere_mesh::SphereMesh;
+use std::collections::BTreeMap;
 
 /// Draws one plate takes from the drift stream in one step: three for the
 /// hashed direction the axis turns toward and one for the change of speed.
@@ -135,13 +138,15 @@ impl CarriedFields {
 /// place keeps the per-step solves in `migration.rs` pure functions of the
 /// current state rather than functions that also return several vectors.
 pub(crate) struct EvolvingWorld<'a> {
-    mesh: &'a SphereMesh,
-    crust: &'a CrustClassification,
-    config: PlateEvolutionConfig,
-    /// The motion the run started from, kept beside the copy that drifts:
-    /// each plate's drifted speed is bounded relative to the speed it began
-    /// with.
-    initial_kinematics: &'a PlateKinematics,
+    pub(crate) mesh: &'a SphereMesh,
+    pub(crate) config: PlateEvolutionConfig,
+    /// Angular speed each plate began with, kept beside the motion that
+    /// drifts: a plate's drifted speed is bounded relative to this rather
+    /// than to the kinematics config's global range. "Began" is the run's
+    /// start for a plate the partition made, and the step it came into being
+    /// for one a rift or a suture made, so a plate the lifecycle creates
+    /// drifts around the speed it was created with.
+    pub(crate) starting_speeds: Vec<f32>,
     /// The one distance every accumulated displacement is measured against.
     cell_width: f32,
     /// Read between steps to reclassify, and taken when the run ends. The
@@ -149,8 +154,17 @@ pub(crate) struct EvolvingWorld<'a> {
     pub(crate) kinematics: PlateKinematics,
     /// Read between steps to reclassify, and taken when the run ends.
     pub(crate) partition: PlatePartition,
+    /// The plate classes the run reads and grows. Rifting appends one and
+    /// suturing empties one, so the classes the input handed over belong to a
+    /// plate set the run has left behind; migration precedence and the
+    /// lifecycle both read this copy.
+    pub(crate) crust: CrustClassification,
     /// Taken when the run ends; the two fields it holds are the run's output.
     pub(crate) carried: CarriedFields,
+    /// Model time each adjacent continental pair has spent in collision,
+    /// keyed by the pair in ascending id order. A pair that stops colliding
+    /// drops out and starts over.
+    pub(crate) collisions: BTreeMap<(usize, usize), f32>,
     /// Closing distance accumulated per boundary edge, in model units.
     edge_closing: Vec<f32>,
     /// Distance travelled per cell since its last pull, in model units.
@@ -168,13 +182,19 @@ impl<'a> EvolvingWorld<'a> {
     ) -> Self {
         Self {
             mesh,
-            crust: inputs.crust,
             config,
-            initial_kinematics: inputs.kinematics,
+            starting_speeds: inputs
+                .kinematics
+                .angular_velocities
+                .iter()
+                .map(|rotation| rotation.length())
+                .collect(),
             kinematics: inputs.kinematics.clone(),
             cell_width: mean_cell_width(mesh),
             partition: inputs.partition.clone(),
+            crust: inputs.crust.clone(),
             carried: CarriedFields::new(inputs.birth_prior.cell_birth.clone()),
+            collisions: BTreeMap::new(),
             edge_closing: vec![0.0; mesh.edge_count()],
             cell_travel: vec![0.0; mesh.cell_count()],
         }
@@ -218,7 +238,7 @@ impl<'a> EvolvingWorld<'a> {
         let migration = migrate_plates_once(
             self.mesh,
             &self.partition,
-            self.crust,
+            &self.crust,
             boundaries,
             &self.edge_closing,
             self.cell_width,
@@ -314,8 +334,7 @@ impl<'a> EvolvingWorld<'a> {
         let half_tangent = 0.5 * config.axis_drift_rate * self.config.step_duration;
         let speed_span = config.speed_drift_rate * self.config.step_duration;
         let stream = RandomStream::new(self.config.seed, PLATE_POLE_DRIFT);
-        let initial = &self.initial_kinematics.angular_velocities;
-
+        let starting = &self.starting_speeds;
         for (plate, rotation) in self.kinematics.angular_velocities.iter_mut().enumerate() {
             let speed = rotation.length();
             if speed == 0.0 {
@@ -335,7 +354,7 @@ impl<'a> EvolvingWorld<'a> {
             // length, which is what makes the turn preserve that length.
             let perpendicular = (hashed - axis * hashed.dot(axis)).normalized() * speed;
             let turned = rotation.rotated_toward(perpendicular, half_tangent);
-            let started = initial[plate].length();
+            let started = starting[plate];
             let drifted = (speed * (1.0 + stream.signed_f32(item, sample + 3) * speed_span)).clamp(
                 started * (1.0 - config.speed_drift_limit),
                 started * (1.0 + config.speed_drift_limit),
@@ -349,7 +368,7 @@ impl<'a> EvolvingWorld<'a> {
 mod tests {
     use super::*;
     use crate::CrustClass;
-    use crate::test_support::{drift_config, rift_config, two_plate_fixture};
+    use crate::test_support::{drift_config, opening_config, two_plate_fixture};
 
     /// Birth out of every cell's reach, so a cell carrying it was reborn rather
     /// than handed it by a neighbour.
@@ -360,7 +379,7 @@ mod tests {
         // Driven a substep at a time: the rule is about what one advection does
         // to one cell, which a whole run's boundaries would bury.
         let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
-        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), rift_config(1));
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), opening_config(1));
         // Stamp each cell with its own index in both fields, so where a value
         // ends up names the cell it came from.
         for cell in 0..fixture.mesh.cell_count() {
