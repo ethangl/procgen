@@ -17,6 +17,7 @@ mod deformation;
 mod elevation;
 mod evolution;
 mod field;
+mod interior_relief;
 mod lifecycle;
 mod migration;
 mod motion;

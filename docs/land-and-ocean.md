@@ -10,7 +10,7 @@ configured value in the first step of this work; this document is about the
 second: crust that belongs to cells rather than plates, so that a plate can
 carry a continent and an ocean, a continent's edge is a shelf that floods and
 drains with sea level, and the ocean fraction is something the world has
-rather than something the settings ask for.
+rather than something the settings ask for. All three slices have landed.
 
 The measure of success is visual and mechanical at once: passive margins
 inside plates, continental shelves that appear when sea level rises a little
@@ -29,10 +29,11 @@ real one.
   evolution is read from its birth step: `Some` is oceanic, `None` is original
   continental crust. The classification is now purely the initial condition
   the birth prior reads, and evolution takes no classification at all.
-- Base elevation gives every continental cell `continental_base` plus the
-  interior relief terms, so a continent is a plateau with a cliff at its edge.
-  There is no shelf: a coast is a one-cell step from about 0.65 to the
-  cooling curve.
+- Base elevation tapers `continental_base` down to `margin_edge_elevation`
+  over the outermost `margin_width_hops` continental cells before it adds the
+  interior relief terms, so a continent ends in a shelf that the sea-level
+  datum floods and drains one hop at a time. That was the third slice of this
+  work; the measurements are below.
 - Sea level is a configured datum carried by every elevation field. The
   borrowed `ElevationField` view pairs a stage's normalized elevations with the
   datum they were composed against, geological elevation and isostatic
@@ -83,8 +84,9 @@ plates entirely.
 
 **Growth.** The nuclei grow by the partition's shortest-arrival growth with
 per-edge integer costs and the configured roughness, with no face mask, until
-the continental area reaches `continental_fraction` of the sphere (default
-0.3, matching the current default ocean fraction of 0.7). Growth stops at the
+the continental area reaches `continental_fraction` of the sphere (0.3 when
+this slice landed, matching the ocean fraction of 0.7 it replaced; slice 3
+retuned it to 0.347 to pay for the shelf it floods). Growth stops at the
 first settled cell that carries the total past the target, so the achieved
 area overshoots by at most one cell. Cells the growth never reached are
 oceanic. This gives blobby continents with rough coasts whose edges fall
@@ -119,22 +121,25 @@ plate". Cratons, basins, hotspots, and deformation already read cell crust.
 continental area. Land fraction at the current sea level is reported by the
 elevation field, where it already is.
 
-### 3. Continental margins
+### 3. Continental margins (landed)
 
 A continent's edge is a shelf, not a cliff. Base elevation lowers
 `continental_base` toward the ocean over the outermost `margin_width_hops`
-continental cells (default 2), reaching `margin_edge_elevation` at the coast
-(default about 0.45, so the outermost cell sits just below the default sea
-level and the next one just above it). Hop distance from the nearest oceanic
-cell comes from `multi_source_distances` seeded on every oceanic cell,
-restricted to nothing, since a shelf may span a plate boundary. The taper is
-linear in hops and exact.
+continental cells (three as shipped, not the two this design sketched),
+reaching `margin_edge_elevation` at the coast (0.46, not the 0.45 sketched
+here). Hop distance from the nearest oceanic cell comes from
+`multi_source_distances` seeded on every oceanic cell, restricted to nothing,
+since a shelf may span a plate boundary. The taper is linear in hops and
+exact.
 
-With the datum at 0.5 the shelf's outer cell is flooded and the coast sits one
-cell inland of the crust boundary. Raising sea level to 0.55 floods the second
-cell and the low interiors dynamic topography made; lowering it to 0.45
-exposes the shelf so the coast and the crust boundary coincide. That is the
-behaviour the sea-level slider was for.
+Three hops at an edge of 0.46 put the margin cells at 0.46, 0.5233 and
+0.5867 against a `continental_base` of 0.65. With the datum at 0.5 the
+shelf's outer cell is flooded and the coast sits one cell inland of the crust
+boundary. Raising sea level to 0.55 floods the second cell as well, and the
+low interiors dynamic topography made; lowering it to 0.45 exposes the whole
+shelf so the coast and the crust boundary coincide. That is the behaviour the
+sea-level slider was for. `is_land` is strict, so a cell exactly at the datum
+is ocean.
 
 Interior relief, deformation, and geology apply on top as they do now; a
 shelf under a convergent boundary still gets its collision profile.
@@ -240,8 +245,80 @@ by about eighteen percent, because the achieved area is a share of the sphere
 and the grown continents take in more small cells than whole plates did.
 Slice 3's margin taper lowers it again; that retune belongs to slice 3.
 
-### Continental margins.
+### Continental margins. (landed)
 
-The base-elevation taper over the outermost continental cells, its two
-config values, and the measured coast movement at sea levels 0.45, 0.50, and
-0.55 on the reference world (sampling seed 9, subdivided faces 0.2, 30 steps).
+`BaseElevationConfig` gained `margin_width_hops` (3) and
+`margin_edge_elevation` (0.46). `derive_base_elevation` seeds
+`multi_source_distances` on every oceanic cell of the final `CellCrust`,
+restricted by nothing, and a continental cell at hop `h` in `1..=width` takes
+`edge + (base - edge) * (h - 1) / width` in place of `continental_base`
+before the dynamic topography and basement terms are added, so a shelf
+carries the same interior relief as the plateau behind it. Because the
+distance is measured against the final cell crust rather than the initial
+classification, the ocean a rift opened during the run gets shelves on both
+of its sides like any other coast, which a test asserts. Width zero restores
+the pre-slice cliff exactly, including its fingerprint. The interior relief
+terms moved to their own `interior_relief` module in the same change to keep
+`base_elevation.rs` under a thousand lines.
+
+`BaseElevationDiagnostics` gained `margin_cell_count` and a `margin_depth`
+summary of how far below `continental_base` the taper put each margin cell.
+The viewer gained a margin width drag value and a margin edge slider in the
+base elevation section, and both diagnostics in its summary.
+
+**The land the shelf floods was paid for.** Flooding the outer shelf cell
+removes a ring of land around every continent, so `continental_fraction` was
+retuned by the 0.047 that restores the land count: the crate default from 0.3
+to 0.347 and the viewer's setting from 0.25 to 0.297, keeping the same 0.05
+the viewer has always taken off the crate.
+
+**Measured.** Both worlds are 65,536 cells at the viewer's defaults: sampling
+seed 7 and 15 evolution steps for the first, and the reference world's
+sampling seed 9, subdivided faces 0.2, and 30 steps for the second. "Before"
+is the pre-slice pipeline — no taper, `continental_fraction` 0.25 — and
+"after" is what shipped. Land counts are on tectonic elevation, which is
+where the viewer reports them.
+
+| Measure                      | Defaults, before | Defaults, after | Reference, before | Reference, after |
+| ---------------------------- | ---------------- | --------------- | ----------------- | ---------------- |
+| `continental_fraction`       | 0.25             | 0.297           | 0.25              | 0.297            |
+| Continental cells            | 14,316           | 17,046          | 14,192            | 18,111           |
+| Margin cells                 | 0                | 12,417          | 0                 | 10,491           |
+| Land cells at sea level 0.45 | 16,692           | 17,790          | 16,900            | 19,371           |
+| Land cells at sea level 0.50 | 15,421           | 15,379          | 15,699            | 17,311           |
+| Land cells at sea level 0.55 | 14,484           | 12,956          | 14,443            | 15,220           |
+| Rifts / sutures              | 0 / 3            | 0 / 3           | 1 / 1             | 2 / 2            |
+
+The retune was set at the viewer's defaults, where land at the datum lands
+within 0.3 percent of where it stood: 15,379 against 15,421. The reference
+world is 10 percent over its own before-figure, because a target area is a
+share of the sphere and eighteen large plates hold their extra continent
+differently from a hundred small ones; the retune restores one world exactly
+and the other approximately, which is what one knob can do.
+
+The datum now does visible work. Across the three datums land moves by 4,834
+cells at the defaults and 4,151 at the reference world, against 2,208 and
+2,457 before — and before, almost all of that movement was on the oceanic
+side, because a continent was a cliff.
+
+**Every coast edge's landward cell is a margin cell** where the taper alone
+decides the coast: on base elevation with interior relief off, 8,156 of 8,156
+coast edges at the defaults and 6,784 of 6,784 at the reference world. With
+interior relief on it is 8,373 of 8,467 and 7,170 of 7,170; the ninety-four
+exceptions are inland lows the basement dug below the datum. On tectonic
+elevation, after deformation and smoothing, it is 9,477 of 11,229 and 8,024
+of 10,483, because a trench floods land the taper never reached and an
+orogenic belt pushes a coast out to sea. The margin depth spans 0.0633 to
+0.19 at both worlds, the full drop from `continental_base` to the shelf edge.
+
+**Integer pins re-set.** The `continental_fraction` retune moves everything
+downstream of the crust mask, once: the crust classification fingerprint, the
+birth prior's diagnostics and fingerprint, seafloor age, ownership and birth
+after a run and after a run without drift or lifecycle, one migration step,
+and geology's craton, volcanic-arc, and hotspot-province fingerprints. The
+reference run's aggregates moved with them — 261 proposals over 225 migrated
+cells against 254 over 218, one suture rather than two, 28 final plates
+rather than 24 — and the hotspot fixture now draws three provinces over 22
+cells rather than two over 13. Base elevation's own fingerprint did not move:
+it is pinned at width zero and the pre-slice `continental_fraction`, which is
+the test that proves the taper is the only change to the field.

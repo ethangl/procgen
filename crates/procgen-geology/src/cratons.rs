@@ -273,7 +273,7 @@ mod tests {
             .iter()
             .map(|strength| u64::from(strength.to_bits()));
 
-        assert_eq!(fingerprint(values), 8_813_300_208_932_561_958);
+        assert_eq!(fingerprint(values), 1_466_492_961_036_760_163);
     }
 
     #[test]

@@ -41,10 +41,10 @@ impl Default for TectonicsSettings {
                 ..PlatePartitionConfig::default()
             },
             crust: CrustClassificationConfig {
-                // Slightly more ocean than the crate's default, which is the
-                // ocean fraction this phase asked for before crust was a
-                // per-cell field.
-                continental_fraction: 0.25,
+                // The same 0.05 more ocean than the crate's default that this
+                // phase has always taken, which was the ocean fraction it
+                // asked for before crust was a per-cell field.
+                continental_fraction: 0.297,
                 ..CrustClassificationConfig::new(7)
             },
             kinematics: PlateKinematicsConfig::new(7),

@@ -79,6 +79,14 @@ const INTERIOR_RELIEF_AMPLITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.1
 // feature across most of a great circle and the top puts the third octave at
 // four or five cells of the default mesh, the shortest wavelength it carries.
 const BASEMENT_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.5..=8.0;
+// Zero is the cliff a continent's edge was before the shelf existed; the top
+// is a shelf as wide as the few cells a boundary deforms, past which the
+// taper, not the crust mask, would decide where a continent is.
+const MARGIN_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 0..=8;
+// The shelf edge spans the deep floor at 0.08 up to the continental base,
+// which the stage rejects being above; the bottom lets a shelf drop to the
+// ocean it meets and the top collapses the taper back to a cliff.
+const MARGIN_EDGE_RANGE: std::ops::RangeInclusive<f32> = 0.08..=0.65;
 
 pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     section(ui, "Sampling", |ui| {
@@ -372,6 +380,19 @@ fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) 
         &mut config.seed,
         u64::MIN..=u64::MAX,
         1.0,
+    );
+    drag_value(
+        ui,
+        "Margin width",
+        &mut config.margin_width_hops,
+        MARGIN_WIDTH_RANGE,
+        1.0,
+    );
+    slider(
+        ui,
+        "Margin edge",
+        &mut config.margin_edge_elevation,
+        MARGIN_EDGE_RANGE,
     );
 }
 

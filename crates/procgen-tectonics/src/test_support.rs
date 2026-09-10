@@ -5,12 +5,13 @@ use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
 use crate::field::{DEFAULT_STEP_DURATION, mean_cell_width};
 use crate::{
-    BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
-    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
-    CrustClassificationDiagnostics, FlowField, PlateEvolution, PlateEvolutionConfig,
-    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlateLifecycleConfig,
-    PlateMigrationConfig, PlatePartition, PlatePartitionConfig, PoleDriftConfig,
-    classify_boundaries, classify_crust, derive_crust_birth_prior, evolve_plate_ownership,
+    BaseElevation, BaseElevationConfig, BoundaryClass, BoundaryClassification,
+    BoundaryDeformationConfig, CellCrust, CrustBirthPrior, CrustBirthPriorConfig, CrustClass,
+    CrustClassification, CrustClassificationConfig, CrustClassificationDiagnostics, FlowField,
+    PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
+    PlateKinematicsConfig, PlateLifecycleConfig, PlateMigrationConfig, PlatePartition,
+    PlatePartitionConfig, PoleDriftConfig, SeafloorAge, classify_boundaries, classify_crust,
+    derive_base_elevation, derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
     generate_plate_kinematics, partition_plates,
 };
 
@@ -146,8 +147,12 @@ impl EvolutionFixture {
 }
 
 pub fn evolution_fixture() -> EvolutionFixture {
+    fixture_over_crust(reference_crust_config())
+}
+
+fn fixture_over_crust(crust_config: CrustClassificationConfig) -> EvolutionFixture {
     let (mesh, partition) = reference_partition();
-    let crust = classify_crust(&mesh, reference_crust_config()).unwrap();
+    let crust = classify_crust(&mesh, crust_config).unwrap();
     let kinematics = generate_plate_kinematics(
         &mesh,
         &partition,
@@ -177,9 +182,69 @@ pub fn evolution_fixture() -> EvolutionFixture {
 /// The reference world after a default evolution run, for the stages that read
 /// only its end state.
 pub fn final_state_fixture() -> (SphereMesh, CrustClassification, PlateEvolution) {
-    let fixture = evolution_fixture();
+    final_state_fixture_with_crust(reference_crust_config())
+}
+
+fn final_state_fixture_with_crust(
+    crust_config: CrustClassificationConfig,
+) -> (SphereMesh, CrustClassification, PlateEvolution) {
+    let fixture = fixture_over_crust(crust_config);
     let evolution = fixture.evolve(reference_evolution_config());
     (fixture.mesh, fixture.crust, evolution)
+}
+
+/// A mesh, the reference world's final age and crust over it, and the default
+/// flow field: everything base elevation and its interior relief terms read.
+pub struct BaseElevationFixture {
+    pub mesh: SphereMesh,
+    pub age: SeafloorAge,
+    pub cell_birth: Vec<Option<i32>>,
+    pub flow: FlowField,
+}
+
+impl BaseElevationFixture {
+    pub fn derive(&self, config: BaseElevationConfig) -> BaseElevation {
+        derive_base_elevation(
+            &self.mesh,
+            &self.age,
+            CellCrust {
+                cell_birth: &self.cell_birth,
+            },
+            &self.flow,
+            config,
+        )
+        .unwrap()
+    }
+}
+
+pub fn base_elevation_fixture() -> BaseElevationFixture {
+    base_elevation_fixture_with_crust(reference_crust_config())
+}
+
+/// The same over a chosen crust classification, for the field pinned at the
+/// `continental_fraction` the margin taper retuned away from.
+pub fn base_elevation_fixture_with_crust(
+    crust_config: CrustClassificationConfig,
+) -> BaseElevationFixture {
+    let (mesh, _, evolution) = final_state_fixture_with_crust(crust_config);
+    let age =
+        derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count).unwrap();
+    BaseElevationFixture {
+        mesh,
+        age,
+        cell_birth: evolution.cell_birth,
+        flow: reference_flow_field(),
+    }
+}
+
+/// Interior relief switched off, so that a continental cell stands at the
+/// margin taper's answer and nothing else.
+pub fn no_interior_relief() -> BaseElevationConfig {
+    BaseElevationConfig {
+        dynamic_topography_amplitude: 0.0,
+        basement_amplitude: 0.0,
+        ..BaseElevationConfig::default()
+    }
 }
 
 /// Rigid rotations that carry the two cells of `edge` along their own

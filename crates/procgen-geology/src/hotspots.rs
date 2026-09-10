@@ -752,9 +752,9 @@ mod tests {
             })
             .chain(covered);
 
-        assert_eq!(fingerprint(values), 4_852_758_932_337_177_982);
-        assert_eq!(field.diagnostics.province_count, 2);
-        assert_eq!(field.diagnostics.province_cell_count, 13);
+        assert_eq!(fingerprint(values), 17_700_700_707_790_126_781);
+        assert_eq!(field.diagnostics.province_count, 3);
+        assert_eq!(field.diagnostics.province_cell_count, 22);
     }
 
     #[test]

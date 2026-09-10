@@ -113,7 +113,12 @@ Completed foundations:
   deterministic configured fallback age. Seafloor age is then the steps elapsed
   since each cell's birth. Base elevation keeps continental cells at their
   configured base and maps oceanic age through a configurable square-root
-  ridge-to-deep cooling curve. Onto that curve it adds two low-frequency
+  ridge-to-deep cooling curve. The continental base is tapered down to a
+  configured shelf edge over the outermost few continental cells, measured as
+  hop distance from the nearest oceanic cell of the final crust and bounded by
+  nothing, so a continent ends in a margin that the datum floods and drains
+  one hop at a time rather than in a cliff. Onto that curve it adds two
+  low-frequency
   interior-relief fields, both bounded well below the continental base's margin
   over the default sea level: dynamic topography, the negated divergence of the
   same flow

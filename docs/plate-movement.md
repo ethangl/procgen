@@ -152,12 +152,14 @@ for that one.
   the drifted vectors decide stay exact across machines.
 - The defaults of every earlier stage were retuned in the same change, so the
   numbers below are measured at the retuned ones and are not comparable with
-  the slice 2 and 3 figures above. Mesh jitter 0.5 to 0.8; crack arcs 40 to
-  16, curvature 2 to 8, and subdivided faces 0.4 to 0.8, which together give
-  111 plates against 57 from fewer, larger crack faces split more often;
-  oceanic speed factor 1.4 to 1.5 and continental 0.7 to 1.0, so crust class
-  separates speeds less; evolution steps 9 to 15 and minimum convergence 0.3
-  to 0.5; and the convergent profile's depth 3 to 6, for wider belts.
+  the slice 2 and 3 figures above. Each pair below is the old value then the
+  one that stands today. Mesh jitter from 0.5 to 0.8; crack arcs from 40 to
+  16, curvature from 2 to 8, and subdivided faces from 0.4 to 0.8, which
+  together give 111 plates at sampling seed 7 against 57 from fewer, larger
+  crack faces split more often; oceanic speed factor from 1.4 to 1.5 and
+  continental from 0.7 to 1.0, so crust class separates speeds less; evolution
+  steps from 9 to 15 and minimum convergence from 0.3 to 0.5; and the
+  convergent profile's depth from 3 to 6, for wider belts.
 - At the viewer's retuned defaults, boundary edges after fifteen steps are
   5326 convergent, 5896 divergent, and 5326 transform, against 4842, 5660,
   and 4914 without drift. Migration events go from 9219 over 6878 distinct
