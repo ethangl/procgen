@@ -525,15 +525,22 @@ taken with both amplitudes zero, which is what says the two terms are the whole
 of the change, and every geology and climate pin downstream reads a synthetic
 elevation field rather than an evolved one.
 
-Carried risk. The 65,536-cell mesh has about 180 cells whose Voronoi corner
-ring is locally inverted — 69 of them with no jitter at all, so it is the f32
-circumcenter of a near-degenerate Fibonacci-lattice triangle rather than the
-jitter. No boundary integral over an inverted ring can be right, and those
-cells are where the divergence field's peak of 4.6 RMS comes from: on a
-4096-cell mesh, which has none, the worst cell of a rigid-rotation field
-measures 0.04 against an exact zero. The visible effect is a few dozen isolated
-cells carrying up to 0.14 of dynamic topography instead of the 0.03 the field
-around them carries. Fixing it belongs in the triangulation, not here.
+Retired risk. The 65,536-cell mesh had about 180 cells whose Voronoi corner
+ring was locally inverted, and they were where the divergence field's peak of
+4.6 RMS came from. The circumcenter was not the cause. Two of the three causes
+were in the hull: its visibility predicate read a plane distance as the
+difference of two f32 quantities of magnitude one, which cannot resolve the
+sign for a near-cocircular quadruple of points and left the triangulation
+locally non-Delaunay at 84 edges; and it read the f32 points themselves, whose
+6e-8 radial error a hull takes for a weight, which tilts the plane between two
+cells a few ten-thousandths apart far enough to leave one of them outside its
+own cell. The circumcenter mattered only once those two were fixed, because a
+triangle spanning such a pair has a normal that swings by a few percent of a
+cell width per f32 step. `SphericalDelaunay` now decides all three in f64 on
+unit directions, no cell of the mesh has an inverted ring at any count, jitter,
+or seed tried, and a rigid rotation's divergence peaks at 0.024 there against
+the 4096-cell mesh's 0.040. `tests/topology.rs` asserts the ring invariant at
+the count and jitter the viewer runs at.
 
 Erosion is the next stage, and it is the reason this one exists: it needs
 slopes to move material down, and until now a plate interior had none.

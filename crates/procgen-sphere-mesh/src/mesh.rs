@@ -475,10 +475,11 @@ mod tests {
     /// rigid rotation and 0.06 against the flow-toward-a-pole solution.
     const DIVERGENCE_TOLERANCE: f32 = 0.1;
 
-    /// A mesh fine enough for the divergence operator's error to be small.
-    /// Meshes an order of magnitude finer are not usable here: a handful of
-    /// their cells have a locally inverted Voronoi ring, which no boundary
-    /// integral over the ring can be right about.
+    /// A mesh fine enough for the divergence operator's error to be small,
+    /// and coarse enough to build quickly. A mesh an order of magnitude finer
+    /// measures a smaller error still — 0.024 against the rigid rotation —
+    /// now that no cell of one has an inverted Voronoi ring; the ring
+    /// invariant itself is asserted at that size in `tests/topology.rs`.
     fn fibonacci_mesh(count: usize, radius: f32) -> SphereMesh {
         build_sphere_mesh(
             fibonacci_sphere(FibonacciConfig {
