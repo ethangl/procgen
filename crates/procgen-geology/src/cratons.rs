@@ -260,20 +260,36 @@ mod tests {
     #[test]
     fn reference_field_has_stable_fingerprint() {
         let (mesh, plates, cell_birth, elevations) = fixture(1_024, 6);
+        let config = CratonFieldConfig::default();
         let field = derive_craton_field(
             &mesh,
             &plates,
             crust(&cell_birth),
             elevation(&elevations),
-            CratonFieldConfig::default(),
+            config,
         )
         .unwrap();
-        let values = field
+
+        // Every strength is `(hops - minimum) / ramp_width` capped at one, a
+        // rational of two small integers, so scaling by the width recovers the
+        // ramp step the hop distance chose and rounding absorbs the single
+        // division's last bit. The step is the integer the algorithm decided;
+        // a hash over the float bits would pin the toolchain's divide instead.
+        // Zero covers a cell that is ineligible as well as one inside the
+        // minimum distance, which is what the field itself says about both.
+        let steps: Vec<_> = field
             .cell_strengths
             .iter()
-            .map(|strength| u64::from(strength.to_bits()));
-
-        assert_eq!(fingerprint(values), 1_466_492_961_036_760_163);
+            .map(|strength| (strength * config.ramp_width as f32).round() as u64)
+            .collect();
+        assert!(
+            steps.iter().all(|&step| step <= config.ramp_width as u64),
+            "a strength left the ramp"
+        );
+        assert_eq!(
+            fingerprint(steps.iter().copied()),
+            7_493_909_529_293_082_038
+        );
     }
 
     #[test]

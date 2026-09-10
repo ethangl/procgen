@@ -184,9 +184,11 @@ for that one.
   the plate count as well as ownership and motion; the classification the run
   was handed describes a plate set the run leaves behind, and
   `PlateEvolution::crust` is the final one every consumer downstream reads.
-- Rifting: each step, every continental plate above
+- Rifting: each step, every plate whose continental area exceeds
   `rift_minimum_area_fraction` of the sphere draws against
-  `rift_rate * step_duration` on a `PLATE_RIFT` stream. A plate that rifts
+  `rift_rate * step_duration` on a `PLATE_RIFT` stream. It was every plate
+  wholly continental above that fraction of total area until per-cell crust;
+  see the bullet below for what the change did to the default world. A plate that rifts
   walks one arc of `cracks.rs` from a hashed cell of its own, in both
   directions, and the walk stops as soon as it leaves the plate, so the arc
   runs from boundary to boundary and the cells it crossed are the wall. The
@@ -238,23 +240,35 @@ for that one.
   `suture_time` eight default steps, and `suture_minimum_shared_edges` 20.
   They were calibrated by running the viewer's defaults over nine, fifteen,
   and thirty steps and sweeping the two knobs that matter. The area fraction
-  is one of them: the largest continental plate at the viewer's defaults
-  covers 0.044 of the sphere, so 0.05 makes nobody eligible and 0.04 makes one
-  or two. The rift rate saturates above three or so, because both halves of a
-  rift fall below the minimum area and cannot rift again. The shared-edge
-  count is the other: at eight the viewer's defaults suture six times over
-  fifteen steps, at sixteen three times, and at twenty once. The opening speed
-  is a third of the default maximum angular speed, which clears the default
-  minimum convergence of 0.5 across the rift on its own.
-- At the viewer's defaults a fifteen-step run produces 1 rift, 0 failed rifts,
-  1 suture, and 111 final plates, from the 111 the partition made: the rift
-  and the suture cancel. Boundary edges after the run are 5303 convergent,
-  5869 divergent, and 5269 transform, against 5326, 5896, and 5326 with the
-  events disabled, and crust-creation events 6426 against 6369, over 18,190
-  migration events against 18,107. A nine-step run gives 1 rift and 1 suture;
-  thirty steps give 1 rift, 1 failed rift, and 3 sutures. The events are a
-  small perturbation of the aggregate at these defaults, which is the point:
-  they change the plate set's history rather than its statistics.
+  is one of them: the largest continental plate covered 0.044 of the sphere
+  when whole plates were continental, so 0.05 made nobody eligible and 0.04
+  made one or two. The rift rate saturates above three or so, because both
+  halves of a rift fall below the minimum area and cannot rift again. The
+  shared-edge count is the other: at eight the viewer's defaults suture six
+  times over fifteen steps, at sixteen three times, and at twenty once. The
+  opening speed is a third of the default maximum angular speed, which clears
+  the default minimum convergence of 0.5 across the rift on its own.
+- That area calibration no longer describes the default world. Per-cell crust
+  made rift eligibility a plate's *continental* area rather than its total,
+  and the largest continental area any plate holds at the viewer's defaults is
+  0.0127 of the sphere against a minimum of 0.04, so nothing is eligible and
+  the default world does not rift at any step count. The measurements below
+  are re-measured at that state; `docs/land-and-ocean.md` records the change
+  and the numbers behind it. Lowering the minimum to about 0.01 would restore
+  rifting at the defaults, which is its own change with its own pins. The
+  reference world of eighteen larger plates still rifts, twice over thirty
+  steps.
+- At the viewer's defaults a fifteen-step run produces 0 rifts, 0 failed
+  rifts, 3 sutures, and 108 final plates, from the 111 the partition made:
+  three merges and nothing migration emptied, since the run with the events
+  disabled ends on all 111. Boundary edges after the run are 5678 convergent,
+  6408 divergent, and 5654 transform, against 5806, 6497, and 5738 with the
+  events disabled, and crust-creation events 6107 against 6116, over 17,555
+  migration events against 17,588. A nine-step run gives 0 rifts and 2
+  sutures, ending on 109 plates; thirty steps give 0 rifts, 0 failed rifts,
+  and 3 sutures, ending on 106 because migration empties two more. Suturing is
+  a small perturbation of the aggregate at these defaults, which is the point:
+  it changes the plate set's history rather than its statistics.
 - Integer pins that moved. The reference fixture's run now rifts once and
   sutures three times, so its ownership and birth fingerprints, and the base
   elevation and seafloor age fingerprints derived from them, were all
