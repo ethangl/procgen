@@ -23,7 +23,7 @@ use crate::{
     CrustBirthPrior, CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
     PlateMigrationError, PlatePartition, StageInputError, classify_boundaries,
     deformation::validate_config,
-    field::{DEFAULT_STEP_DURATION, mean_cell_width},
+    field::DEFAULT_STEP_DURATION,
     step::{CarriedFields, EvolvingWorld},
 };
 use procgen_sphere_mesh::SphereMesh;
@@ -212,17 +212,7 @@ pub fn evolve_plate_ownership(
     inputs.boundaries.validate(mesh)?;
     inputs.birth_prior.validate(mesh)?;
 
-    let mut world = EvolvingWorld {
-        mesh,
-        crust: inputs.crust,
-        kinematics: inputs.kinematics,
-        config,
-        cell_width: mean_cell_width(mesh),
-        partition: inputs.partition.clone(),
-        carried: CarriedFields::new(inputs.birth_prior.cell_birth.clone()),
-        edge_closing: vec![0.0; mesh.edge_count()],
-        cell_travel: vec![0.0; mesh.cell_count()],
-    };
+    let mut world = EvolvingWorld::new(mesh, inputs, config);
     let mut boundaries = inputs.boundaries.clone();
     let mut diagnostics = PlateEvolutionDiagnostics::default();
     let mut source_cell_count = 0;

@@ -16,8 +16,8 @@
 
 use crate::{
     BoundaryClass, BoundaryClassification, CellCrust, CrustClassification, PlateEvolutionConfig,
-    PlateKinematics, PlateMigration, PlateMigrationError, PlatePartition,
-    deformation::accumulate_boundary_deformation, migrate_plates_once,
+    PlateEvolutionInputs, PlateKinematics, PlateMigration, PlateMigrationError, PlatePartition,
+    deformation::accumulate_boundary_deformation, field::mean_cell_width, migrate_plates_once,
     migration::accumulate_closing_distances,
 };
 use procgen_sphere_mesh::SphereMesh;
@@ -65,21 +65,44 @@ impl CarriedFields {
 /// place keeps the per-step solves in `migration.rs` pure functions of the
 /// current state rather than functions that also return several vectors.
 pub(crate) struct EvolvingWorld<'a> {
-    pub(crate) mesh: &'a SphereMesh,
-    pub(crate) crust: &'a CrustClassification,
-    pub(crate) kinematics: &'a PlateKinematics,
-    pub(crate) config: PlateEvolutionConfig,
+    mesh: &'a SphereMesh,
+    crust: &'a CrustClassification,
+    kinematics: &'a PlateKinematics,
+    config: PlateEvolutionConfig,
     /// The one distance every accumulated displacement is measured against.
-    pub(crate) cell_width: f32,
+    cell_width: f32,
+    /// Read between steps to reclassify, and taken when the run ends.
     pub(crate) partition: PlatePartition,
+    /// Taken when the run ends; the two fields it holds are the run's output.
     pub(crate) carried: CarriedFields,
     /// Closing distance accumulated per boundary edge, in model units.
-    pub(crate) edge_closing: Vec<f32>,
+    edge_closing: Vec<f32>,
     /// Distance travelled per cell since its last pull, in model units.
-    pub(crate) cell_travel: Vec<f32>,
+    cell_travel: Vec<f32>,
 }
 
-impl EvolvingWorld<'_> {
+impl<'a> EvolvingWorld<'a> {
+    /// The world before step zero: the given ownership and birth prior, no
+    /// deformation, and no debt. `inputs` must already have been validated
+    /// against `mesh`.
+    pub(crate) fn new(
+        mesh: &'a SphereMesh,
+        inputs: PlateEvolutionInputs<'a>,
+        config: PlateEvolutionConfig,
+    ) -> Self {
+        Self {
+            mesh,
+            crust: inputs.crust,
+            kinematics: inputs.kinematics,
+            config,
+            cell_width: mean_cell_width(mesh),
+            partition: inputs.partition.clone(),
+            carried: CarriedFields::new(inputs.birth_prior.cell_birth.clone()),
+            edge_closing: vec![0.0; mesh.edge_count()],
+            cell_travel: vec![0.0; mesh.cell_count()],
+        }
+    }
+
     /// Raises this step's share of the boundary profiles onto the cells the
     /// current boundaries run through, and returns how many cells sourced one.
     ///
@@ -198,7 +221,6 @@ impl EvolvingWorld<'_> {
 mod tests {
     use super::*;
     use crate::CrustClass;
-    use crate::field::mean_cell_width;
     use crate::test_support::{rift_config, two_plate_fixture};
 
     /// Birth out of every cell's reach, so a cell carrying it was reborn rather
@@ -210,17 +232,7 @@ mod tests {
         // Driven a substep at a time: the rule is about what one advection does
         // to one cell, which a whole run's boundaries would bury.
         let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
-        let mut world = EvolvingWorld {
-            mesh: &fixture.mesh,
-            crust: &fixture.crust,
-            kinematics: &fixture.kinematics,
-            config: rift_config(1),
-            cell_width: mean_cell_width(&fixture.mesh),
-            partition: fixture.partition.clone(),
-            carried: CarriedFields::new(fixture.birth_prior.cell_birth.clone()),
-            edge_closing: vec![0.0; fixture.mesh.edge_count()],
-            cell_travel: vec![0.0; fixture.mesh.cell_count()],
-        };
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), rift_config(1));
         // Stamp each cell with its own index in both fields, so where a value
         // ends up names the cell it came from.
         for cell in 0..fixture.mesh.cell_count() {
