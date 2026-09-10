@@ -10,7 +10,11 @@ pub struct BaseElevationConfig {
     /// Minimum elevation reached by sufficiently old oceanic crust.
     pub deep_ocean_elevation: f32,
     /// Seafloor age in evolution steps at which oceanic crust reaches the
-    /// deep-ocean floor.
+    /// deep-ocean floor. Age spans one step, for crust born at a ridge during
+    /// the run, to the prior's hop age plus the whole run for crust that
+    /// predates it, so this belongs near the top of that span: below it the
+    /// whole ocean sits on the deep floor and only crust made during the run
+    /// carries any gradient.
     pub cooling_age: usize,
 }
 
@@ -20,7 +24,7 @@ impl Default for BaseElevationConfig {
             continental_base: 0.65,
             ridge_elevation: 0.30,
             deep_ocean_elevation: 0.08,
-            cooling_age: 8,
+            cooling_age: 40,
         }
     }
 }
@@ -154,7 +158,7 @@ mod tests {
                     .iter()
                     .map(|value| value.to_bits() as u64)
             ),
-            706_985_520_184_562_176
+            7_480_106_659_402_858_283
         );
     }
 

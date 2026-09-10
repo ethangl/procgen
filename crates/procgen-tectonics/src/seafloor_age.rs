@@ -153,8 +153,8 @@ impl SeafloorAge {
 /// Derives seafloor age from crust birth: the steps that have elapsed since
 /// each cell's crust was created.
 ///
-/// `elapsed_steps` is the step count the evolution ran, so no cell can have
-/// been born after it.
+/// `elapsed_steps` is the step count the evolution ran, so a birth after it
+/// means the two do not describe the same run and is rejected.
 pub fn derive_seafloor_age(
     mesh: &SphereMesh,
     evolution: &PlateEvolution,
@@ -163,15 +163,18 @@ pub fn derive_seafloor_age(
     evolution.validate(mesh)?;
 
     let elapsed = elapsed_steps as i32;
+    if evolution
+        .cell_birth
+        .iter()
+        .flatten()
+        .any(|&birth| birth > elapsed)
+    {
+        return Err(StageInputError::CrustBirthAfterRun);
+    }
     let cell_ages: Vec<_> = evolution
         .cell_birth
         .iter()
-        .map(|birth| {
-            birth.map(|birth| {
-                debug_assert!(birth <= elapsed, "crust cannot be born after the run ends");
-                (elapsed - birth) as usize
-            })
-        })
+        .map(|birth| birth.map(|birth| (elapsed - birth) as usize))
         .collect();
     let oceanic_ages: Vec<_> = cell_ages.iter().flatten().map(|&age| age as f32).collect();
 
@@ -422,7 +425,7 @@ mod tests {
         for (cell, age) in first.cell_ages.iter().enumerate() {
             assert_eq!(
                 age.is_some(),
-                evolution.cell_class(cell) == CrustClass::Oceanic
+                evolution.cell_crust().class(cell) == CrustClass::Oceanic
             );
             if let (Some(age), Some(birth)) = (age, evolution.cell_birth[cell]) {
                 assert_eq!(*age as i32, elapsed as i32 - birth);
@@ -440,6 +443,29 @@ mod tests {
                     .map(|age| age.map_or(u64::MAX, |age| age as u64))
             ),
             4_314_310_674_976_984_011
+        );
+    }
+
+    #[test]
+    fn an_elapsed_count_shorter_than_the_run_is_rejected() {
+        let (mesh, _, evolution) = final_state_fixture();
+        let latest = evolution
+            .cell_birth
+            .iter()
+            .flatten()
+            .max()
+            .copied()
+            .unwrap();
+        assert!(latest > 0, "the reference run creates crust");
+
+        assert_eq!(
+            derive_seafloor_age(&mesh, &evolution, latest as usize - 1),
+            Err(StageInputError::CrustBirthAfterRun)
+        );
+        assert!(derive_seafloor_age(&mesh, &evolution, latest as usize).is_ok());
+        assert_eq!(
+            StageInputError::CrustBirthAfterRun.to_string(),
+            "no crust can be born after the run's last step"
         );
     }
 

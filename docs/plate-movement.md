@@ -77,8 +77,20 @@ have landed.
   against 3978, 4593, and 3922: proportional migration moves less and leaves
   smoother boundaries than the binary gate did. Seafloor age spans 1 to 45
   steps with a mean of 15, where the prior alone spanned 0 to 36 hops.
+- `BaseElevationConfig::cooling_age` moves from 8 to 40, because the number it
+  reads changed unit. It was hops from the final ridge, spanning 0 to 36; it is
+  now steps since birth, and every cell that predates the run also ages by the
+  whole run, spanning 1 to 45 with a mean of 15. At 8 that put 92.6 percent of
+  oceanic cells flat on the deep floor, leaving only crust made during the run
+  with any gradient at all. At 40 it is 0.5 percent, and mean oceanic base
+  elevation rises from 0.084 to 0.169.
 - `derive_boundary_deformation` is still a profile around the final boundary
   scaled by final strength, and still sees no earlier step. Slice 3 replaces it.
+- Carried risk: the viewer's 32-cell cache fixtures each use a seed at which
+  climate coupling reaches its fixed point, and every slice that moves terrain
+  moves which seeds those are. Three changed here, four in slice 1. The fix
+  belongs in the fixture — a mesh coarse enough to be fast but not so coarse
+  that coupling is marginal — rather than in each slice's seed list.
 
 ## Design
 

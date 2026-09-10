@@ -39,16 +39,9 @@ fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             "Continental plates",
             world.crust.plate_count(CrustClass::Continental),
         );
-        stat(
-            ui,
-            "Oceanic cells",
-            world.cell_crust().cell_count(CrustClass::Oceanic),
-        );
-        stat(
-            ui,
-            "Continental cells",
-            world.cell_crust().cell_count(CrustClass::Continental),
-        );
+        let [oceanic_cells, continental_cells] = world.cell_crust().cell_counts();
+        stat(ui, "Oceanic cells", oceanic_cells);
+        stat(ui, "Continental cells", continental_cells);
     });
 }
 

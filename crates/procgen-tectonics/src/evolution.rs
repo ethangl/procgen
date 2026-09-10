@@ -19,7 +19,7 @@
 
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryClassificationError, CellCrust, CrustBirthPrior,
-    CrustClass, CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
+    CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
     PlateMigrationError, PlatePartition, StageInputError, classify_boundaries,
     field::mean_cell_width, migrate_plates_once, migration::accumulate_closing_distances,
 };
@@ -125,10 +125,6 @@ impl PlateEvolution {
         CellCrust {
             cell_birth: &self.cell_birth,
         }
-    }
-
-    pub fn cell_class(&self, cell: usize) -> CrustClass {
-        self.cell_crust().class(cell)
     }
 }
 
@@ -353,7 +349,7 @@ mod tests {
         EvolutionFixture, empty_boundaries, evolution_fixture, fingerprint,
         reference_evolution_config, two_plate_boundary_partition,
     };
-    use crate::{CrustBirthPriorConfig, derive_crust_birth_prior};
+    use crate::{CrustBirthPriorConfig, CrustClass, derive_crust_birth_prior};
     use procgen_core::Vec3;
 
     fn ownership_fingerprint(evolution: &PlateEvolution) -> u64 {
@@ -490,7 +486,7 @@ mod tests {
                 (0..config.step_count as i32).contains(&birth),
                 "cell {cell} was born during the run"
             );
-            assert_eq!(evolution.cell_class(cell), CrustClass::Oceanic);
+            assert_eq!(evolution.cell_crust().class(cell), CrustClass::Oceanic);
             assert!(
                 fixture.mesh.cell_corners(cell).iter().any(|corner| {
                     evolution.partition.cell_plates[corner.neighbor]
@@ -588,8 +584,8 @@ mod tests {
 
         assert_eq!(after.cell_birth[migrated], before.cell_birth[advancing]);
         assert_eq!(
-            after.cell_class(migrated),
-            before.cell_class(advancing),
+            after.cell_crust().class(migrated),
+            before.cell_crust().class(advancing),
             "the overriding plate's material now covers the cell"
         );
         assert_ne!(after.cell_birth[migrated], before.cell_birth[migrated]);
@@ -604,7 +600,7 @@ mod tests {
         assert_eq!(fixture.crust.plate_classes, original_classes);
         assert!(
             (0..fixture.mesh.cell_count()).any(|cell| {
-                evolution.cell_class(cell)
+                evolution.cell_crust().class(cell)
                     != fixture.crust.plate_classes[evolution.partition.cell_plates[cell]]
             }),
             "a rifted cell's crust must not follow its plate's class"
@@ -614,7 +610,7 @@ mod tests {
                 Some(_) => CrustClass::Oceanic,
                 None => CrustClass::Continental,
             };
-            assert_eq!(evolution.cell_class(cell), expected);
+            assert_eq!(evolution.cell_crust().class(cell), expected);
         }
     }
 

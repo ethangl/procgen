@@ -44,7 +44,7 @@ pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     section(ui, "Plate kinematics", |ui| {
         kinematics_controls(ui, &mut settings.kinematics)
     });
-    section(ui, "Crust birth prior", |ui| {
+    section(ui, "Seafloor age", |ui| {
         birth_prior_controls(ui, &mut settings.birth_prior)
     });
     section(ui, "Plate evolution", |ui| {

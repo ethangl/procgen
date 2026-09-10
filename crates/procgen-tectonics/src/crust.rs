@@ -92,10 +92,16 @@ impl CellCrust<'_> {
         }
     }
 
-    pub fn cell_count(&self, class: CrustClass) -> usize {
-        (0..self.cell_birth.len())
-            .filter(|&cell| self.class(cell) == class)
-            .count()
+    /// Cells of each crust class, in [`CrustClass::ALL`] order. Both counts
+    /// come from one scan, because a consumer showing either usually shows
+    /// both.
+    pub fn cell_counts(&self) -> [usize; CrustClass::ALL.len()] {
+        let oceanic = self
+            .cell_birth
+            .iter()
+            .filter(|birth| birth.is_some())
+            .count();
+        [oceanic, self.cell_birth.len() - oceanic]
     }
 }
 
@@ -205,10 +211,10 @@ mod tests {
         assert_eq!(crust.validate(&mesh), Ok(()));
         assert_eq!(crust.class(0), CrustClass::Continental);
         assert_eq!(crust.class(1), CrustClass::Oceanic);
-        assert_eq!(
-            crust.cell_count(CrustClass::Continental) + crust.cell_count(CrustClass::Oceanic),
-            mesh.cell_count()
-        );
+        // Two cells in three are oceanic, so the counts also pin their order.
+        let [oceanic, continental] = crust.cell_counts();
+        assert_eq!(oceanic + continental, mesh.cell_count());
+        assert!(oceanic > continental);
         assert_eq!(
             CellCrust {
                 cell_birth: &cell_birth[1..]
