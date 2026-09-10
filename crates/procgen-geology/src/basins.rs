@@ -1,11 +1,12 @@
 use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, connected_components};
-use procgen_tectonics::{CellCrust, CoarseElevation, CrustClass, SEA_LEVEL, StageInputError};
+use procgen_tectonics::{CellCrust, CoarseElevation, CrustClass, StageInputError};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SedimentaryBasinFieldConfig {
-    /// Candidate continental land must lie strictly below this normalized elevation.
+    /// Candidate continental land must lie strictly below this normalized
+    /// elevation, which cannot sit below the elevation field's own sea level.
     pub maximum_elevation: f32,
     pub minimum_cell_count: usize,
     /// Maximum fraction of external component-neighbor incidences that may face ocean.
@@ -223,7 +224,7 @@ fn validate_inputs(
     config: SedimentaryBasinFieldConfig,
 ) -> Result<(), SedimentaryBasinFieldError> {
     if !config.maximum_elevation.is_finite()
-        || config.maximum_elevation < SEA_LEVEL
+        || config.maximum_elevation < elevation.sea_level
         || config.maximum_elevation > 1.0
     {
         return Err(SedimentaryBasinFieldError::InvalidMaximumElevation);
@@ -247,6 +248,7 @@ mod tests {
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::{build_sphere_mesh, multi_source_distances};
+    use procgen_tectonics::CoarseElevationConfig;
 
     /// An all-continental world: every cell without a birth step.
     fn fixture(cell_count: usize) -> (SphereMesh, Vec<Option<i32>>) {
@@ -264,10 +266,19 @@ mod tests {
     }
 
     fn elevation(values: Vec<f32>) -> CoarseElevation {
+        elevation_at(values, default_sea_level())
+    }
+
+    fn elevation_at(values: Vec<f32>, sea_level: f32) -> CoarseElevation {
         CoarseElevation {
             cell_elevations: values,
+            sea_level,
             diagnostics: Default::default(),
         }
+    }
+
+    fn default_sea_level() -> f32 {
+        CoarseElevationConfig::default().sea_level
     }
 
     fn connected_cells(mesh: &SphereMesh, count: usize) -> Vec<usize> {
@@ -414,7 +425,7 @@ mod tests {
             maximum_ocean_perimeter_fraction: 1.0,
             ..Default::default()
         };
-        for value in [SEA_LEVEL, config.maximum_elevation] {
+        for value in [default_sea_level(), config.maximum_elevation] {
             let mut values = vec![0.7; mesh.cell_count()];
             values[cell] = value;
             let field = derive_sedimentary_basin_field(
@@ -430,7 +441,7 @@ mod tests {
         }
 
         let mut values = vec![0.7; mesh.cell_count()];
-        values[cell] = SEA_LEVEL + 0.01;
+        values[cell] = default_sea_level() + 0.01;
         cell_birth[cell] = Some(0);
         let field = derive_sedimentary_basin_field(
             &mesh,
@@ -492,6 +503,39 @@ mod tests {
                 Err(expected)
             );
         }
+    }
+
+    #[test]
+    fn a_maximum_elevation_below_the_fields_datum_is_rejected() {
+        let (mesh, cell_birth) = fixture(32);
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
+        let config = SedimentaryBasinFieldConfig::default();
+        // The default maximum sits above the default datum and below a raised
+        // one, so the same config is accepted by one field and rejected by the
+        // other.
+        assert!(
+            derive_sedimentary_basin_field(
+                &mesh,
+                crust,
+                &elevation(vec![0.7; mesh.cell_count()]),
+                config,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            derive_sedimentary_basin_field(
+                &mesh,
+                crust,
+                &elevation_at(
+                    vec![0.7; mesh.cell_count()],
+                    config.maximum_elevation + 0.01
+                ),
+                config,
+            ),
+            Err(SedimentaryBasinFieldError::InvalidMaximumElevation)
+        );
     }
 
     #[test]

@@ -53,8 +53,10 @@ pub struct CryosphereInputs<'a> {
     pub orbital_period_days: f64,
     /// Existing precipitation climatology, held constant within the annual cycle.
     pub precipitation_kg_per_m2_per_day: &'a [f32],
-    /// The existing sea-level predicate applied to this field is the ocean mask.
+    /// The sea-level predicate applied to this field is the ocean mask.
     pub final_elevation: &'a [f32],
+    /// Sea-level datum the elevation field was composed against.
+    pub sea_level: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -270,7 +272,7 @@ pub fn derive_cryosphere(
         let temperatures = &inputs.annual_temperature_samples_kelvin
             [cell * inputs.annual_sample_count..(cell + 1) * inputs.annual_sample_count];
         let precipitation = f64::from(inputs.precipitation_kg_per_m2_per_day[cell]);
-        let surface = Surface::from_elevation(inputs.final_elevation[cell]);
+        let surface = Surface::from_elevation(inputs.final_elevation[cell], inputs.sea_level);
         results.push(match surface {
             Surface::Land => solve_land_cell(
                 temperatures,
@@ -701,6 +703,12 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
+    /// The datum the tectonic pipeline defaults to, which these synthetic
+    /// elevation fields are written against.
+    fn default_sea_level() -> f32 {
+        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    }
+
     fn mesh() -> SphereMesh {
         let points = fibonacci_sphere(FibonacciConfig::new(64)).unwrap();
         let delaunay = SphericalDelaunay::build(points).unwrap();
@@ -723,6 +731,7 @@ mod tests {
                 orbital_period_days: 360.0,
                 precipitation_kg_per_m2_per_day: &precipitation,
                 final_elevation: &elevation,
+                sea_level: default_sea_level(),
             },
             CryosphereConfig::EARTHLIKE,
         )

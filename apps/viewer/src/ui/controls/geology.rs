@@ -5,7 +5,7 @@ use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
-use procgen_tectonics::{PlateKinematicsConfig, SEA_LEVEL};
+use procgen_tectonics::PlateKinematicsConfig;
 
 const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
@@ -19,11 +19,13 @@ const BOUNDARY_DISTANCE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
 const BASIN_CELL_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=256;
 
 /// Plate kinematics come from the tectonics phase, which bounds the strengths
-/// arc segments can reach.
+/// arc segments can reach, and so does the sea-level datum a basin's maximum
+/// elevation cannot sit below.
 pub(super) fn controls(
     ui: &mut egui::Ui,
     settings: &mut GeologySettings,
     kinematics: PlateKinematicsConfig,
+    sea_level: f32,
 ) {
     section(ui, "Mantle hotspots", |ui| {
         hotspot_controls(ui, &mut settings.hotspots)
@@ -38,7 +40,7 @@ pub(super) fn controls(
         craton_controls(ui, &mut settings.cratons)
     });
     section(ui, "Sedimentary basins", |ui| {
-        basin_controls(ui, &mut settings.basins)
+        basin_controls(ui, &mut settings.basins, sea_level)
     });
     section(ui, "Geological elevation", |ui| {
         geological_elevation_controls(ui, &mut settings.geological_elevation)
@@ -185,12 +187,12 @@ fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
     );
 }
 
-fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig) {
+fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig, sea_level: f32) {
     slider(
         ui,
         "Maximum elevation",
         &mut config.maximum_elevation,
-        SEA_LEVEL..=1.0,
+        sea_level..=1.0,
     );
     drag_value(
         ui,

@@ -15,7 +15,7 @@ use residency::{ResidentTile, TileResidency};
 
 use super::{
     DiagnosticLayer, ReliefSettings, SURFACE_RADIUS, SurfaceSelection,
-    palette::ELEVATION_COLOR_STOPS,
+    palette::{ELEVATION_STOP_COUNT, elevation_color_stops},
 };
 use crate::model::GeneratedWorld;
 use bevy::{
@@ -51,7 +51,6 @@ const NEW_TERRAIN_TILES_PER_FRAME: usize = 8;
 /// Radial skirt depth in units of the tile's nominal vertex spacing.
 const TERRAIN_SKIRT_DEPTH_SPACINGS: f32 = 2.0;
 const TERRAIN_SAMPLE_CAPACITY: usize = MAX_RESIDENT_TILES * TERRAIN_TILE_SAMPLE_COUNT;
-const ELEVATION_PALETTE_STOP_COUNT: usize = ELEVATION_COLOR_STOPS.len();
 const TERRAIN_SLOT_BITS: u32 = MAX_RESIDENT_TILES.trailing_zeros();
 const TERRAIN_SLOT_MASK: u32 = MAX_RESIDENT_TILES as u32 - 1;
 const TERRAIN_MORPH_BITS: u32 = u32::BITS - 2 * TERRAIN_SLOT_BITS;
@@ -71,7 +70,7 @@ struct TerrainDisplayParameters {
 
 #[derive(Clone, Copy, Debug, ShaderType)]
 struct TerrainElevationPalette {
-    stops: [Vec4; ELEVATION_PALETTE_STOP_COUNT],
+    stops: [Vec4; ELEVATION_STOP_COUNT],
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, TypePath)]
@@ -214,7 +213,7 @@ fn initialize_grid_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>
 
 fn register_shaders(app: &mut App) {
     let vertex_constants = format!(
-        "const TERRAIN_ELEVATION_PALETTE_STOP_COUNT: u32 = {ELEVATION_PALETTE_STOP_COUNT}u;\n\
+        "const TERRAIN_ELEVATION_PALETTE_STOP_COUNT: u32 = {ELEVATION_STOP_COUNT}u;\n\
          const TERRAIN_SKIRT_DEPTH_SPACINGS: f32 = {TERRAIN_SKIRT_DEPTH_SPACINGS};\n\
          const TERRAIN_SLOT_BITS: u32 = {TERRAIN_SLOT_BITS}u;\n\
          const TERRAIN_SLOT_MASK: u32 = {TERRAIN_SLOT_MASK}u;\n\
@@ -279,10 +278,12 @@ fn initialize_gpu_world(
     };
     let controls = pack_control_bake(&geology.terrain_control_bake);
     let stamps = pack_stamps(&geology.terrain_controls.stamps);
+    let sea_level = tectonics.elevation.sea_level;
     let parameters = TerrainGpuParameters::new(
         &geology.terrain_control_bake,
         &geology.terrain_controls.stamps,
         TerrainNoiseKeys::new(tectonics.config.fibonacci.seed),
+        sea_level,
         TerrainHeightConfig::default(),
     );
     let controls = assets.buffers.add(ShaderStorageBuffer::new(
@@ -327,7 +328,7 @@ fn initialize_gpu_world(
                 surface_radius: SURFACE_RADIUS,
                 padding: Vec2::ZERO,
             },
-            palette: elevation_palette(),
+            palette: elevation_palette(sea_level),
         },
     });
     assets.commands.insert_resource(TerrainGpuResources {
@@ -343,12 +344,10 @@ fn initialize_gpu_world(
         .insert_resource(TerrainTileAssets { material });
 }
 
-fn elevation_palette() -> TerrainElevationPalette {
+fn elevation_palette(sea_level: f32) -> TerrainElevationPalette {
+    let stops = elevation_color_stops(sea_level);
     TerrainElevationPalette {
-        stops: std::array::from_fn(|index| {
-            let (value, color) = ELEVATION_COLOR_STOPS[index];
-            Vec4::new(color.x, color.y, color.z, value)
-        }),
+        stops: stops.map(|(value, color)| Vec4::new(color.x, color.y, color.z, value)),
     }
 }
 

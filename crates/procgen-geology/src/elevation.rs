@@ -176,7 +176,7 @@ mod tests {
         test_support::{empty_basins, empty_cratons, empty_hotspots, empty_volcanic_arcs, mesh},
     };
     use procgen_core::fingerprint;
-    use procgen_tectonics::StageInputError;
+    use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
     struct Fixture {
@@ -194,6 +194,7 @@ mod tests {
             Self {
                 tectonic_elevation: CoarseElevation {
                     cell_elevations: elevations,
+                    sea_level: CoarseElevationConfig::default().sea_level,
                     diagnostics: Default::default(),
                 },
                 base_elevation: BaseElevation {

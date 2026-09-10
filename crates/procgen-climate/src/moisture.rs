@@ -62,6 +62,8 @@ pub struct MoistureTransportInputs<'a> {
     pub planet: Planet,
     pub selected_temperature_kelvin: &'a [f32],
     pub final_elevation: &'a [f32],
+    /// Sea-level datum the elevation field was composed against.
+    pub sea_level: f32,
     pub cell_wind_meters_per_second: &'a [Vec3],
 }
 
@@ -219,7 +221,11 @@ impl CellModel {
             .final_elevation
             .iter()
             .map(|&elevation| {
-                land_elevation_meters(elevation, inputs.planet.maximum_land_elevation_meters) as f32
+                land_elevation_meters(
+                    elevation,
+                    inputs.sea_level,
+                    inputs.planet.maximum_land_elevation_meters,
+                ) as f32
             })
             .collect::<Vec<_>>();
         let elevation_gradients = mesh.cell_gradients(&elevation_meters);
@@ -244,7 +250,7 @@ impl CellModel {
             capacity_mass.push(capacity * areas[cell]);
             capacity_kg_per_m2.push(capacity as f32);
 
-            let land = is_land(inputs.final_elevation[cell]);
+            let land = is_land(inputs.final_elevation[cell], inputs.sea_level);
             evaporation_fraction.push(if land {
                 0.0
             } else {
@@ -588,6 +594,12 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
+    /// The datum the tectonic pipeline defaults to, which these synthetic
+    /// elevation fields are written against.
+    fn default_sea_level() -> f32 {
+        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    }
+
     fn mesh(count: usize) -> SphereMesh {
         let points = fibonacci_sphere(FibonacciConfig::new(count)).unwrap();
         let delaunay = SphericalDelaunay::build(points).unwrap();
@@ -607,6 +619,7 @@ mod tests {
                 planet: Planet::EARTH,
                 selected_temperature_kelvin: temperature,
                 final_elevation: elevation,
+                sea_level: default_sea_level(),
                 cell_wind_meters_per_second: wind,
             },
             config,
@@ -638,6 +651,7 @@ mod tests {
                     planet,
                     selected_temperature_kelvin: temperature,
                     final_elevation: elevation,
+                    sea_level: default_sea_level(),
                     cell_wind_meters_per_second: wind,
                 },
                 config,
@@ -905,7 +919,7 @@ mod tests {
             MoistureTransportConfig::EARTHLIKE,
         );
         for (cell, &height) in elevation.iter().enumerate() {
-            if is_land(height) {
+            if is_land(height, default_sea_level()) {
                 assert_eq!(result.cell_humidity_kg_per_m2[cell], 0.0);
                 assert_eq!(result.cell_precipitation_kg_per_m2_per_day[cell], 0.0);
             }

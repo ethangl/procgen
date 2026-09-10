@@ -223,6 +223,10 @@ impl From<TerrainStampError> for TerrainHeightError {
 pub struct TerrainHeightInputs<'a> {
     pub direction: Vec3,
     pub controls: &'a TerrainControlBake,
+    /// Sea-level datum the baked base elevation was composed against. Coast
+    /// taper and warp are measured from it, so it comes from the coarse world
+    /// rather than from terrain's own configuration.
+    pub sea_level: f32,
     pub stamps: &'a [TerrainStampInput],
     pub noise_keys: TerrainNoiseKeys,
 }
@@ -264,6 +268,7 @@ pub(crate) fn terrain_height_with_lod(
     let TerrainHeightInputs {
         direction,
         controls,
+        sea_level,
         stamps,
         noise_keys,
     } = inputs;
@@ -274,7 +279,7 @@ pub(crate) fn terrain_height_with_lod(
     );
 
     let original = sample_controls(controls, direction);
-    let coast_taper = coast_taper(original.base_elevation, config.coast.half_width);
+    let coast_taper = coast_taper(original.base_elevation, sea_level, config.coast.half_width);
     let warp = coast_warp(
         direction,
         noise_keys.coast_warp,
@@ -349,11 +354,10 @@ mod tests {
     use super::*;
     use crate::{
         TerrainCellControls, TerrainStampKind,
-        test_support::{TERRAIN_TEST_SEED, constant_bake, height_inputs, stamp},
+        test_support::{TERRAIN_TEST_SEED, constant_bake, height_inputs, stamp, test_sea_level},
     };
     use procgen_cubesphere::{CubeFace, FaceCoordinates, face_to_direction};
     use procgen_noise::{derivative_damped_fbm_3d, ridged_multifractal_3d};
-    use procgen_tectonics::SEA_LEVEL;
 
     fn varying_bake() -> TerrainControlBake {
         let resolution = 16;
@@ -363,7 +367,7 @@ mod tests {
                     (0..resolution).map(move |x| {
                         let u = 2.0 * (x as f32 + 0.5) / resolution as f32 - 1.0;
                         let v = 2.0 * (y as f32 + 0.5) / resolution as f32 - 1.0;
-                        let base = SEA_LEVEL + 0.02 + 0.01 * u - 0.015 * v;
+                        let base = test_sea_level() + 0.02 + 0.01 * u - 0.015 * v;
                         TerrainCellControls {
                             base_elevation: base,
                             detail_amplitude: 0.015 + 0.004 * u,
@@ -595,19 +599,36 @@ mod tests {
     #[test]
     fn coast_taper_reaches_zero_and_warp_stays_within_its_tangent_bound() {
         let config = TerrainHeightConfig::default();
-        let at_coast = constant_bake(TerrainCellControls {
-            base_elevation: SEA_LEVEL,
-            detail_amplitude: 1.0,
-            ridge_weight: 0.0,
-            octave_gain: 0.5,
-            abyssal_amplitude: 1.0,
-        });
-        let sample = terrain_height(
-            height_inputs(direction(), &at_coast, &[]),
-            config.validate().unwrap(),
-        );
-        assert_eq!(sample.value, SEA_LEVEL);
-        assert_eq!(sample.derivative, Vec3::ZERO);
+        // The taper is measured from the datum the inputs carry, so a bake
+        // sitting on any datum returns it unchanged, and the same bake read
+        // against a different datum does not.
+        for sea_level in [test_sea_level(), 0.35] {
+            let at_coast = constant_bake(TerrainCellControls {
+                base_elevation: sea_level,
+                detail_amplitude: 1.0,
+                ridge_weight: 0.0,
+                octave_gain: 0.5,
+                abyssal_amplitude: 1.0,
+            });
+            let sample = terrain_height(
+                TerrainHeightInputs {
+                    sea_level,
+                    ..height_inputs(direction(), &at_coast, &[])
+                },
+                config.validate().unwrap(),
+            );
+            assert_eq!(sample.value, sea_level);
+            assert_eq!(sample.derivative, Vec3::ZERO);
+
+            let shifted = terrain_height(
+                TerrainHeightInputs {
+                    sea_level: sea_level + config.coast.half_width,
+                    ..height_inputs(direction(), &at_coast, &[])
+                },
+                config.validate().unwrap(),
+            );
+            assert_ne!(shifted.value, sea_level);
+        }
 
         for direction in [
             Vec3::X,

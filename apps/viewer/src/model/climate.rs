@@ -60,6 +60,7 @@ impl ClimateWorld {
                     solar_forcing: &solar_forcing,
                     solar_forcing_config: config.solar_forcing,
                     final_elevation: &geology.isostasy.cell_elevations,
+                    sea_level: tectonics.elevation.sea_level,
                 },
                 config.coupling,
             )

@@ -103,6 +103,13 @@ impl GeneratedWorld {
         })
     }
 
+    /// The sea-level datum the generated elevation field was composed against,
+    /// absent until tectonics has run. Every phase downstream reads the same
+    /// datum, because it travels with the field they all descend from.
+    pub fn sea_level(&self) -> Option<f32> {
+        Some(self.tectonics.as_ref()?.elevation.sea_level)
+    }
+
     /// The most refined elevation the generated phases offer, with the phase it
     /// comes from: the isostatically adjusted elevation once geology has run,
     /// and tectonic elevation before that.

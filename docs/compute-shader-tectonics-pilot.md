@@ -342,9 +342,9 @@ Metal on macOS and Vulkan on Windows, and every pipeline must run on both.
 - `procgen-raster-tectonics` is new and owns the pipeline: checked-in WGSL
   kernels, buffer layouts, config packing, dispatch sequencing against a
   `wgpu::Device`, and the pilot-owned distance-unit configs. It depends on
-  `wgpu`, not Bevy, and on `procgen-tectonics` for shared config types and
-  constants such as `SEA_LEVEL`. Generation logic lives here, never in the
-  app.
+  `wgpu`, not Bevy, and on `procgen-tectonics` for shared config types such as
+  `CoarseElevationConfig`, which carries the sea-level datum. Generation logic
+  lives here, never in the app.
 - `procgen-gpu-tests` gains `tectonics_pipeline.rs`.
 - `apps/raster-viewer` is the pilot application and the intended successor to
   the current viewer. It passes Bevy's device to the pipeline and renders six

@@ -4,11 +4,11 @@ use super::assets::{
 };
 use super::palette::{
     ALBEDO_COLOR_STOPS, CORIOLIS_COLOR_STOPS, CRATON_COLOR_STOPS, DEFORMATION_COLOR_STOPS,
-    ELEVATION_COLOR_STOPS, FRACTION_COLOR_STOPS, HUMIDITY_COLOR_STOPS, LAND_ICE_COLOR_STOPS,
-    OCEANIC_PEAK_COLOR_STOPS, PRECIPITATION_COLOR_STOPS, PRESSURE_ACCELERATION_COLOR_STOPS,
-    SEA_ICE_COLOR_STOPS, SNOW_COVER_COLOR_STOPS, TEMPERATURE_AMPLITUDE_COLOR_STOPS,
-    TEMPERATURE_COLOR_STOPS, TEMPERATURE_GRADIENT_COLOR_STOPS, VOLCANIC_ARC_COLOR_STOPS,
-    WIND_SPEED_COLOR_STOPS, opaque_color, piecewise_lerp,
+    FRACTION_COLOR_STOPS, HUMIDITY_COLOR_STOPS, LAND_ICE_COLOR_STOPS, OCEANIC_PEAK_COLOR_STOPS,
+    PRECIPITATION_COLOR_STOPS, PRESSURE_ACCELERATION_COLOR_STOPS, SEA_ICE_COLOR_STOPS,
+    SNOW_COVER_COLOR_STOPS, TEMPERATURE_AMPLITUDE_COLOR_STOPS, TEMPERATURE_COLOR_STOPS,
+    TEMPERATURE_GRADIENT_COLOR_STOPS, VOLCANIC_ARC_COLOR_STOPS, WIND_SPEED_COLOR_STOPS,
+    elevation_color_stops, opaque_color, piecewise_lerp,
 };
 use super::surfaces::{
     basin_colors, cell_surface_mesh, crust_colors, hotspot_colors, insolation_colors, plate_colors,
@@ -144,6 +144,23 @@ impl<T> Clone for BuildSource<T> {
 
 impl<T> Copy for BuildSource<T> {}
 
+/// Where a scalar layer's colour stops come from. Elevation stops are built
+/// against the generated world's sea-level datum, so they cannot be static.
+#[derive(Clone, Copy)]
+pub(super) enum ScalarPalette {
+    Fixed(&'static [(f32, Vec3)]),
+    Elevation,
+}
+
+impl ScalarPalette {
+    fn stops(self, sea_level: f32) -> Vec<(f32, Vec3)> {
+        match self {
+            Self::Fixed(stops) => stops.to_vec(),
+            Self::Elevation => elevation_color_stops(sea_level).to_vec(),
+        }
+    }
+}
+
 enum LayerSpec {
     Fill {
         label: &'static str,
@@ -165,9 +182,13 @@ pub(super) struct GizmoSpec {
 
 impl LayerSpec {
     fn scalar(label: &'static str, values: ValueSource, stops: &'static [(f32, Vec3)]) -> Self {
+        Self::palette(label, values, ScalarPalette::Fixed(stops))
+    }
+
+    fn palette(label: &'static str, values: ValueSource, palette: ScalarPalette) -> Self {
         Self::Fill {
             label,
-            surface: SurfaceSource::Scalar { values, stops },
+            surface: SurfaceSource::Scalar { values, palette },
             gizmo: None,
         }
     }
@@ -181,7 +202,10 @@ impl LayerSpec {
     ) -> Self {
         Self::Fill {
             label,
-            surface: SurfaceSource::Scalar { values, stops },
+            surface: SurfaceSource::Scalar {
+                values,
+                palette: ScalarPalette::Fixed(stops),
+            },
             gizmo: Some(GizmoSpec::new(line_width, overlay)),
         }
     }
@@ -254,7 +278,7 @@ impl GizmoSpec {
 pub(super) enum SurfaceSource {
     Scalar {
         values: ValueSource,
-        stops: &'static [(f32, Vec3)],
+        palette: ScalarPalette,
     },
     Colors(BuildSource<Vec<Color>>),
 }
@@ -268,12 +292,16 @@ impl SurfaceSource {
     }
 
     pub(super) fn build(self, world: &GeneratedWorld, relief_exaggeration: f32) -> Option<Mesh> {
+        let sea_level = world.sea_level()?;
         let colors = match self {
-            Self::Scalar { values, stops } => values
-                .read(world)?
-                .iter()
-                .map(|&value| opaque_color(piecewise_lerp(value, stops)))
-                .collect(),
+            Self::Scalar { values, palette } => {
+                let stops = palette.stops(sea_level);
+                values
+                    .read(world)?
+                    .iter()
+                    .map(|&value| opaque_color(piecewise_lerp(value, &stops)))
+                    .collect()
+            }
             Self::Colors(colors) => colors.build(world)?,
         };
         let (_, elevations) = world.surface_elevations()?;
@@ -281,6 +309,7 @@ impl SurfaceSource {
             &world.tectonics()?.voronoi,
             &colors,
             elevations,
+            sea_level,
             relief_exaggeration,
         ))
     }
@@ -414,35 +443,35 @@ impl DiagnosticLayer {
             Self::SeafloorAge => {
                 LayerSpec::colors("Seafloor age", TectonicsBuild(seafloor_age_colors), None)
             }
-            Self::BaseElevation => LayerSpec::scalar(
+            Self::BaseElevation => LayerSpec::palette(
                 "Base elevation",
                 Tectonics(|world| &world.base_elevation.cell_elevations),
-                ELEVATION_COLOR_STOPS,
+                ScalarPalette::Elevation,
             ),
             Self::Deformation => LayerSpec::scalar(
                 "Boundary deformation",
                 Tectonics(|world| &world.deformation.cell_deformation),
                 DEFORMATION_COLOR_STOPS,
             ),
-            Self::Elevation => LayerSpec::scalar(
+            Self::Elevation => LayerSpec::palette(
                 "Tectonic elevation",
                 Tectonics(|world| &world.elevation.cell_elevations),
-                ELEVATION_COLOR_STOPS,
+                ScalarPalette::Elevation,
             ),
-            Self::GeologicalElevation => LayerSpec::scalar(
+            Self::GeologicalElevation => LayerSpec::palette(
                 "Geological elevation",
                 Geology(|world| &world.geological_elevation.cell_elevations),
-                ELEVATION_COLOR_STOPS,
+                ScalarPalette::Elevation,
             ),
-            Self::IsostaticSupport => LayerSpec::scalar(
+            Self::IsostaticSupport => LayerSpec::palette(
                 "Isostatic support",
                 Geology(|world| &world.isostasy.cell_support),
-                ELEVATION_COLOR_STOPS,
+                ScalarPalette::Elevation,
             ),
-            Self::IsostaticElevation => LayerSpec::scalar(
+            Self::IsostaticElevation => LayerSpec::palette(
                 "Adjusted elevation",
                 Geology(|world| &world.isostasy.cell_elevations),
-                ELEVATION_COLOR_STOPS,
+                ScalarPalette::Elevation,
             ),
             Self::Insolation => LayerSpec::colors(
                 "Daily-mean insolation",

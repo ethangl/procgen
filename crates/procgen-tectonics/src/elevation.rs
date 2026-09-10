@@ -2,19 +2,21 @@ use crate::{BaseElevation, BoundaryDeformation, FieldSummary, StageInputError};
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
-/// Normalized elevation at the ocean/land boundary.
-pub const SEA_LEVEL: f32 = 0.5;
-
-/// Uses the pipeline-wide strict boundary: sea level itself is ocean.
-pub const fn is_land(elevation: f32) -> bool {
-    elevation > SEA_LEVEL
+/// Classifies one normalized elevation against a sea-level datum, using the
+/// pipeline-wide strict boundary: the datum itself is ocean.
+pub const fn is_land(elevation: f32, sea_level: f32) -> bool {
+    elevation > sea_level
 }
 
-/// Converts normalized land elevation to physical meters. Ocean and sea-level
-/// cells have zero land height.
-pub fn land_elevation_meters(elevation: f32, maximum_land_elevation_meters: f64) -> f64 {
-    if is_land(elevation) {
-        (f64::from(elevation) - f64::from(SEA_LEVEL)) / (1.0 - f64::from(SEA_LEVEL))
+/// Converts normalized land elevation to physical meters against a sea-level
+/// datum. Ocean and sea-level cells have zero land height.
+pub fn land_elevation_meters(
+    elevation: f32,
+    sea_level: f32,
+    maximum_land_elevation_meters: f64,
+) -> f64 {
+    if is_land(elevation, sea_level) {
+        (f64::from(elevation) - f64::from(sea_level)) / (1.0 - f64::from(sea_level))
             * maximum_land_elevation_meters
     } else {
         0.0
@@ -25,6 +27,9 @@ pub fn land_elevation_meters(elevation: f32, maximum_land_elevation_meters: f64)
 pub struct CoarseElevationConfig {
     pub smoothing_passes: usize,
     pub smoothing_weight: f32,
+    /// Normalized elevation of the ocean/land boundary. Raising it floods low
+    /// margins and interiors; lowering it exposes them.
+    pub sea_level: f32,
 }
 
 impl Default for CoarseElevationConfig {
@@ -32,13 +37,22 @@ impl Default for CoarseElevationConfig {
         Self {
             smoothing_passes: 2,
             smoothing_weight: 0.2,
+            sea_level: 0.5,
         }
     }
 }
 
+/// Normalized coarse elevation together with the datum it was composed
+/// against.
+///
+/// The datum is part of the field rather than an echo of a knob: an elevation
+/// field is not interpretable without knowing where its ocean ends, the same
+/// way a [`SphereMesh`] is not interpretable without its radius. Every reader
+/// either holds this field and asks it, or is handed `sea_level` explicitly.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoarseElevation {
     pub cell_elevations: Vec<f32>,
+    pub sea_level: f32,
     pub diagnostics: FieldSummary,
 }
 
@@ -51,13 +65,21 @@ impl CoarseElevation {
     }
 
     pub fn is_land(&self, cell: usize) -> bool {
-        is_land(self.cell_elevations[cell])
+        is_land(self.cell_elevations[cell], self.sea_level)
+    }
+
+    /// Cells standing strictly above the field's own datum.
+    pub fn land_cell_count(&self) -> usize {
+        (0..self.cell_elevations.len())
+            .filter(|&cell| self.is_land(cell))
+            .count()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoarseElevationError {
     InvalidConfig,
+    InvalidSeaLevel,
     FieldCountMismatch,
 }
 
@@ -66,6 +88,9 @@ impl fmt::Display for CoarseElevationError {
         match self {
             Self::InvalidConfig => {
                 formatter.write_str("smoothing weight must be finite and between 0 and 1")
+            }
+            Self::InvalidSeaLevel => {
+                formatter.write_str("sea level must be finite and strictly between 0 and 1")
             }
             Self::FieldCountMismatch => formatter
                 .write_str("base elevation and deformation values must match the mesh cell count"),
@@ -80,7 +105,9 @@ impl std::error::Error for CoarseElevationError {}
 ///
 /// Base elevation and deformation are added once, smoothed simultaneously, and
 /// clamped. Ownership evolution, seafloor age, and boundary derivation remain
-/// separate stages with no elevation history or inter-step state.
+/// separate stages with no elevation history or inter-step state. The
+/// configured sea level does not enter the arithmetic; it travels with the
+/// composed field so its readers agree on where its ocean ends.
 pub fn compose_coarse_elevation(
     mesh: &SphereMesh,
     base_elevation: &BaseElevation,
@@ -110,6 +137,7 @@ pub fn compose_coarse_elevation(
     let diagnostics = FieldSummary::from_values(&elevation);
     Ok(CoarseElevation {
         cell_elevations: elevation,
+        sea_level: config.sea_level,
         diagnostics,
     })
 }
@@ -117,6 +145,9 @@ pub fn compose_coarse_elevation(
 fn validate_config(config: CoarseElevationConfig) -> Result<(), CoarseElevationError> {
     if !config.smoothing_weight.is_finite() || !(0.0..=1.0).contains(&config.smoothing_weight) {
         return Err(CoarseElevationError::InvalidConfig);
+    }
+    if !config.sea_level.is_finite() || config.sea_level <= 0.0 || config.sea_level >= 1.0 {
+        return Err(CoarseElevationError::InvalidSeaLevel);
     }
     Ok(())
 }
@@ -162,6 +193,11 @@ mod tests {
         derive_seafloor_age,
     };
 
+    /// The datum the pipeline defaults to, which several cases here vary from.
+    fn default_sea_level() -> f32 {
+        CoarseElevationConfig::default().sea_level
+    }
+
     fn final_fixture() -> (SphereMesh, BaseElevation, BoundaryDeformation) {
         let (mesh, _, evolution) = final_state_fixture();
         let age = derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count)
@@ -180,28 +216,85 @@ mod tests {
     }
 
     #[test]
-    fn coarse_elevation_owns_land_classification_and_shape_validation() {
+    fn coarse_elevation_classifies_land_against_its_own_datum() {
         let (mesh, _, _) = two_plate_boundary_partition();
-        let mut elevation = CoarseElevation {
-            cell_elevations: vec![SEA_LEVEL; mesh.cell_count()],
-            diagnostics: Default::default(),
-        };
-        assert_eq!(elevation.validate(&mesh), Ok(()));
-        assert!(!elevation.is_land(0));
-        assert!(!is_land(SEA_LEVEL));
+        for sea_level in [0.3, default_sea_level(), 0.7] {
+            let mut elevation = CoarseElevation {
+                cell_elevations: vec![sea_level; mesh.cell_count()],
+                sea_level,
+                diagnostics: Default::default(),
+            };
+            assert_eq!(elevation.validate(&mesh), Ok(()));
+            assert!(!elevation.is_land(0));
+            assert_eq!(elevation.land_cell_count(), 0);
 
-        elevation.cell_elevations[0] = SEA_LEVEL + 0.01;
-        assert!(elevation.is_land(0));
-        elevation.cell_elevations.pop();
-        assert_eq!(elevation.validate(&mesh), Err(StageInputError::Elevation));
+            elevation.cell_elevations[0] = sea_level + 0.01;
+            assert!(elevation.is_land(0));
+            assert_eq!(elevation.land_cell_count(), 1);
+            elevation.cell_elevations.pop();
+            assert_eq!(elevation.validate(&mesh), Err(StageInputError::Elevation));
+        }
     }
 
     #[test]
     fn normalized_land_elevation_has_one_canonical_physical_scale() {
-        assert_eq!(land_elevation_meters(SEA_LEVEL, 10_000.0), 0.0);
-        assert_eq!(land_elevation_meters(0.75, 10_000.0), 5_000.0);
-        assert_eq!(land_elevation_meters(1.0, 10_000.0), 10_000.0);
-        assert_eq!(land_elevation_meters(0.25, 10_000.0), 0.0);
+        // Both datums and their midpoints are exact in binary32, so the scale
+        // is asserted exactly rather than within a tolerance.
+        for sea_level in [default_sea_level(), 0.25] {
+            assert_eq!(land_elevation_meters(0.0, sea_level, 10_000.0), 0.0);
+            assert_eq!(land_elevation_meters(sea_level, sea_level, 10_000.0), 0.0);
+            assert_eq!(
+                land_elevation_meters((1.0 + sea_level) / 2.0, sea_level, 10_000.0),
+                5_000.0
+            );
+            assert_eq!(land_elevation_meters(1.0, sea_level, 10_000.0), 10_000.0);
+        }
+    }
+
+    #[test]
+    fn raising_the_datum_only_floods_and_lowering_it_only_exposes() {
+        let (mesh, base, deformation) = final_fixture();
+        let counts: Vec<_> = [0.45, default_sea_level(), 0.55]
+            .into_iter()
+            .map(|sea_level| {
+                compose_coarse_elevation(
+                    &mesh,
+                    &base,
+                    &deformation,
+                    CoarseElevationConfig {
+                        sea_level,
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .land_cell_count()
+            })
+            .collect();
+
+        assert!(counts[0] > counts[1], "{counts:?}");
+        assert!(counts[1] > counts[2], "{counts:?}");
+    }
+
+    #[test]
+    fn the_datum_changes_classification_without_changing_the_field() {
+        let (mesh, base, deformation) = final_fixture();
+        let default =
+            compose_coarse_elevation(&mesh, &base, &deformation, CoarseElevationConfig::default())
+                .unwrap();
+        let flooded = compose_coarse_elevation(
+            &mesh,
+            &base,
+            &deformation,
+            CoarseElevationConfig {
+                sea_level: 0.55,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(default.cell_elevations, flooded.cell_elevations);
+        assert_eq!(default.diagnostics, flooded.diagnostics);
+        assert_eq!(flooded.sea_level, 0.55);
     }
 
     #[test]
@@ -290,6 +383,7 @@ mod tests {
             CoarseElevationConfig {
                 smoothing_passes: 1,
                 smoothing_weight: 1.0,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -312,6 +406,22 @@ mod tests {
             ),
             Err(CoarseElevationError::InvalidConfig)
         );
+
+        for sea_level in [0.0, 1.0, -0.1, 1.1, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                compose_coarse_elevation(
+                    &mesh,
+                    &base,
+                    &deformation,
+                    CoarseElevationConfig {
+                        sea_level,
+                        ..Default::default()
+                    }
+                ),
+                Err(CoarseElevationError::InvalidSeaLevel),
+                "sea level {sea_level}"
+            );
+        }
 
         let short_base = BaseElevation {
             cell_elevations: base.cell_elevations[..mesh.cell_count() - 1].to_vec(),

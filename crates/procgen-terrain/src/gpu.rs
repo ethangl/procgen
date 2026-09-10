@@ -104,7 +104,9 @@ pub struct TerrainGpuParameters {
     pub coast_half_width: f32,
     pub coast_warp_frequency: f32,
     pub coast_maximum_warp: f32,
-    pub padding_1: f32,
+    /// The datum the canonical CPU height function reads, uploaded from the
+    /// same value so the two agree.
+    pub sea_level: f32,
     pub stamp_profiles: [TerrainGpuStampProfile; 4],
 }
 
@@ -113,6 +115,7 @@ impl TerrainGpuParameters {
         controls: &TerrainControlBake,
         stamps: &[TerrainStampInput],
         noise_keys: TerrainNoiseKeys,
+        sea_level: f32,
         config: TerrainHeightConfig,
     ) -> Self {
         config
@@ -141,7 +144,7 @@ impl TerrainGpuParameters {
             coast_half_width: config.coast.half_width,
             coast_warp_frequency: config.coast.warp_frequency,
             coast_maximum_warp: config.coast.maximum_warp,
-            padding_1: 0.0,
+            sea_level,
             stamp_profiles: TerrainStampKind::ALL.map(|kind| {
                 let profile = profiles.profile(kind);
                 TerrainGpuStampProfile {

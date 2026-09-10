@@ -20,7 +20,8 @@
 //! Both new fields are broad and gentle by design, so that interior relief
 //! cannot drown continental crust on its own: with both terms nominally full
 //! against it a continental cell stands at `0.65 - 0.03 - 0.05`, which is 0.57
-//! and still above the 0.5 of [`crate::SEA_LEVEL`]. That nominal is not a
+//! and still above the default sea level of 0.5 that
+//! [`crate::CoarseElevationConfig`] carries. That nominal is not a
 //! bound, because the dynamic term is normalised by the divergence field's
 //! root-mean-square rather than its peak; the measured margin is thinner, and
 //! `docs/plate-movement.md` records it. A coast therefore moves only through
@@ -339,8 +340,8 @@ mod tests {
     use super::*;
     use crate::test_support::{final_state_fixture, fingerprint, reference_evolution_config};
     use crate::{
-        PlateKinematicsConfig, SeafloorAgeDiagnostics, derive_seafloor_age, is_land,
-        test_support::mesh,
+        CoarseElevationConfig, PlateKinematicsConfig, SeafloorAgeDiagnostics, derive_seafloor_age,
+        is_land, test_support::mesh,
     };
 
     /// A mesh, the reference world's final age and crust over it, and the
@@ -582,11 +583,15 @@ mod tests {
     fn the_default_field_is_normalized_and_leaves_every_continent_above_sea_level() {
         let fixture = reference_fixture();
         let base = fixture.derive(BaseElevationConfig::default());
+        let sea_level = CoarseElevationConfig::default().sea_level;
 
         for (cell, &elevation) in base.cell_elevations.iter().enumerate() {
             assert!((0.0..=1.0).contains(&elevation), "cell {cell}: {elevation}");
             if fixture.age.cell_ages[cell].is_none() {
-                assert!(is_land(elevation), "continental cell {cell}: {elevation}");
+                assert!(
+                    is_land(elevation, sea_level),
+                    "continental cell {cell}: {elevation}"
+                );
             }
         }
         assert!(base.diagnostics.summary.minimum < base.diagnostics.summary.maximum);

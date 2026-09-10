@@ -62,11 +62,11 @@ effective radiative-equilibrium temperatures from those fields using explicit
 per-cell albedo and uniform emissivity. The viewer selects the Earth and Earthlike
 presets by default; neither stage consumes elevation or models atmospheric or
 surface dynamics.
-A third climate stage uses the final adjusted elevation and sea level to choose
-explicit land or ocean surface heat capacity, then solves each cell's isolated
-energy balance onto a periodic seasonal cycle. It produces selected-phase,
-annual-mean, minimum, maximum, and amplitude temperatures without lateral heat
-transport or persistent state.
+A third climate stage uses the final adjusted elevation and the elevation
+field's sea-level datum to choose explicit land or ocean surface heat capacity,
+then solves each cell's isolated energy balance onto a periodic seasonal cycle.
+It produces selected-phase, annual-mean, minimum, maximum, and amplitude
+temperatures without lateral heat transport or persistent state.
 A fourth climate stage fits local temperature gradients on the spherical mesh,
 then derives finite tangent surface winds from explicit planetary radius,
 rotation, atmospheric gas constant, linear drag, and bounded terrain steering.
@@ -102,11 +102,12 @@ cover. Delaunay, Voronoi, and final-boundary diagnostics remain edge overlays;
 cell centers remain markers; wind and plate motion remain vectors. The viewer
 also reports aggregate statistics and stage timings.
 Filled fields retain each cell's exact diagnostic color while viewer-only
-terrain relief radially displaces cell centers from sea level using final
-adjusted elevation. Shared corner heights are the deterministic mean of their
-three incident cells, keeping adjacent fans watertight. Relief exaggeration and
-directional-light azimuth, elevation, illuminance, and ambient fill are display
-controls only; they do not alter generation, solar forcing, or climate.
+terrain relief radially displaces cell centers from the sea-level datum using
+final adjusted elevation. Shared corner heights are the deterministic mean of
+their three incident cells, keeping adjacent fans watertight. Relief
+exaggeration and directional-light azimuth, elevation, illuminance, and ambient
+fill are display controls only; they do not alter generation, solar forcing, or
+climate.
 At camera distances at or below 1.75 radii, only the adjusted-elevation surface
 switches to camera-visible adaptive terrain tiles through level 12. A WGSL
 compute pass generates at most eight 65-by-65 core height-and-derivative grids
