@@ -17,6 +17,10 @@ use wgpu::util::DeviceExt;
 
 const TEST_SEED: u64 = 0x6d2b_79f5_1234_abcd;
 
+/// A second datum, well away from the default, at which the same CPU and WGSL
+/// height functions must still agree. The coast bake straddles both.
+const RAISED_SEA_LEVEL: f32 = 0.62;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Output {
@@ -59,6 +63,7 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
     let left_inputs = TerrainTileInputs {
         address: left_address,
         controls: &bake,
+        sea_level: default_sea_level(),
         stamps: &stamps,
         noise_keys: keys,
     };
@@ -75,6 +80,19 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
     };
     let (_, coast_divergence) = compare_tile(&device, &queue, coast_inputs, config);
     maximum.include(coast_divergence);
+
+    // The datum reaches the shader through the parameter buffer, so the
+    // agreement contract has to hold at more than the value the mirror used to
+    // hardcode. Both bakes are re-read against a raised datum.
+    for controls in [&bake, &coast_bake] {
+        let raised_inputs = TerrainTileInputs {
+            controls,
+            sea_level: RAISED_SEA_LEVEL,
+            ..left_inputs
+        };
+        let (_, raised_divergence) = compare_tile(&device, &queue, raised_inputs, config);
+        maximum.include(raised_divergence);
+    }
 
     for address in [
         TileAddress::new(CubeFace::PositiveX, 1, 1, 0).unwrap(),
@@ -95,6 +113,7 @@ fn wgsl_terrain_tiles_agree_with_canonical_cpu_and_share_edges() {
         let inputs = TerrainTileInputs {
             address,
             controls: &bake,
+            sea_level: default_sea_level(),
             stamps: &[],
             noise_keys: keys,
         };
@@ -215,6 +234,10 @@ fn assert_agreement(
     maximum
 }
 
+fn default_sea_level() -> f32 {
+    procgen_tectonics::CoarseElevationConfig::default().sea_level
+}
+
 fn varying_bake() -> TerrainControlBake {
     let resolution = 16;
     let faces = CubeFace::ALL.map(|face| {
@@ -303,8 +326,13 @@ fn dispatch_tile(
     inputs: TerrainTileInputs<'_>,
     config: TerrainHeightConfig,
 ) -> Vec<Output> {
-    let parameters =
-        TerrainGpuParameters::new(inputs.controls, inputs.stamps, inputs.noise_keys, config);
+    let parameters = TerrainGpuParameters::new(
+        inputs.controls,
+        inputs.stamps,
+        inputs.noise_keys,
+        inputs.sea_level,
+        config,
+    );
     let controls = pack_control_bake(inputs.controls);
     let stamps = pack_stamps(inputs.stamps);
     let controls_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

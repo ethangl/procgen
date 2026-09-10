@@ -26,6 +26,8 @@ const CULL_ROUNDING_MARGIN: f32 = 16.0 * f32::EPSILON;
 pub struct TerrainTileInputs<'a> {
     pub address: TileAddress,
     pub controls: &'a TerrainControlBake,
+    /// Sea-level datum the baked base elevation was composed against.
+    pub sea_level: f32,
     /// Validated terrain stamps in their established stable order.
     pub stamps: &'a [TerrainStampInput],
     pub noise_keys: TerrainNoiseKeys,
@@ -114,6 +116,7 @@ pub fn generate_terrain_tile(
                 TerrainHeightInputs {
                     direction,
                     controls: inputs.controls,
+                    sea_level: inputs.sea_level,
                     stamps: &stamps,
                     noise_keys: inputs.noise_keys,
                 },

@@ -113,12 +113,17 @@ Completed foundations:
   configured base and maps oceanic age through a configurable square-root
   ridge-to-deep cooling curve. Onto that curve it adds two low-frequency
   interior-relief fields, both bounded well below the continental base's margin
-  over sea level: dynamic topography, the negated divergence of the same flow
+  over the default sea level: dynamic topography, the negated divergence of the
+  same flow
   field the plates were fitted to, normalized by that field's measured
   root-mean-square and applied to every cell, and a continental basement of
   three halving octaves of gradient noise on continental cells alone. Tectonic
   elevation composes that base with boundary deformation once before
-  simultaneous smoothing and clamping.
+  simultaneous smoothing and clamping. Sea level is a configured datum rather
+  than a fixed value: the composition config carries it, the composed field
+  carries it onward, and land is elevation strictly above that datum, so
+  raising it floods low margins and interiors and lowering it exposes them
+  without changing the elevation field itself.
 - `procgen-geology`: deterministic present-day geological fields derived from
   completed tectonic state without feeding changes back into tectonics. Seeded
   mantle hotspots have bounded decaying trails opposite final-owner plate
@@ -129,8 +134,9 @@ Completed foundations:
   Volcanic arcs group final mixed-crust convergent boundaries by overriding
   continental plate, walk a bounded distance inland, and retain
   strength-ranked peak candidates with stable segment, peak, and overlap
-  ordering. Craton strength applies only to above-sea-level continental cells
-  and ramps with graph distance from final plate boundaries. It reads but never
+  ordering. Craton strength applies only to continental cells above the
+  elevation field's own sea-level datum, and ramps with graph distance from
+  final plate boundaries. It reads but never
   mutates tectonic elevation and does not infer plate-continuity history.
   Sedimentary basins are compact, stable connected-component IDs for low-lying
   continental land, filtered by size and ocean-facing perimeter. The stage
@@ -181,7 +187,8 @@ Completed foundations:
   albedo, emissivity, and Stefan-Boltzmann radiation. Earthlike values exist only
   as a caller-selected preset. A third stage solves an isolated local seasonal
   surface-energy balance over a periodic orbit using explicit land and ocean
-  heat capacities selected from final elevation and sea level. It reports the
+  heat capacities selected from final elevation and the elevation field's
+  sea-level datum. It reports the
   selected phase plus annual mean, extrema, amplitude, and convergence
   diagnostics. A fourth independent stage derives coarse finite tangent winds
   from selected seasonal-temperature gradients, explicit planetary rotation

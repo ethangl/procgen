@@ -10,9 +10,12 @@ use bevy_egui::egui;
 pub(super) fn phase_controls(ui: &mut egui::Ui, phase: Phase, settings: &mut GenerationSettings) {
     match phase {
         Phase::Tectonics => tectonics::controls(ui, &mut settings.tectonics),
-        Phase::Geology => {
-            geology::controls(ui, &mut settings.geology, settings.tectonics.kinematics)
-        }
+        Phase::Geology => geology::controls(
+            ui,
+            &mut settings.geology,
+            settings.tectonics.kinematics,
+            settings.tectonics.elevation.sea_level,
+        ),
         Phase::Climate => climate::controls(ui, &mut settings.climate),
     }
 }

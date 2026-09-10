@@ -4,14 +4,14 @@ use std::{error::Error, fmt};
 
 use procgen_core::{ScalarFieldSample3, Vec3};
 use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, gradient_noise_3d};
-use procgen_tectonics::SEA_LEVEL;
 
 const SQRT_3: f32 = 1.732_050_8;
 const GRADIENT_NOISE_VECTOR_BOUND: f32 = SQRT_3 * GRADIENT_NOISE_VALUE_BOUND;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainCoastConfig {
-    /// Half-width of the normalized-elevation band affected by coast behavior.
+    /// Half-width of the normalized-elevation band around sea level affected
+    /// by coast behavior.
     pub half_width: f32,
     /// Frequency of the three scalar fields forming the tangent-space warp.
     pub warp_frequency: f32,
@@ -105,9 +105,13 @@ fn transpose_product(rows: [Vec3; 3], vector: Vec3) -> Vec3 {
     rows[0] * vector.x + rows[1] * vector.y + rows[2] * vector.z
 }
 
-pub(crate) fn coast_taper(base: ScalarFieldSample3, half_width: f32) -> ScalarFieldSample3 {
+pub(crate) fn coast_taper(
+    base: ScalarFieldSample3,
+    sea_level: f32,
+    half_width: f32,
+) -> ScalarFieldSample3 {
     let signed = ScalarFieldSample3 {
-        value: base.value - SEA_LEVEL,
+        value: base.value - sea_level,
         derivative: base.derivative,
     };
     let distance = if signed.value > 0.0 { signed } else { -signed };

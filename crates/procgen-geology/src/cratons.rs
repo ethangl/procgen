@@ -131,7 +131,7 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
     use procgen_tectonics::{
-        CrustClassificationConfig, PlatePartitionConfig, SEA_LEVEL, classify_crust,
+        CoarseElevationConfig, CrustClassificationConfig, PlatePartitionConfig, classify_crust,
         partition_plates,
     };
 
@@ -192,6 +192,7 @@ mod tests {
     fn flat_elevation(cell_count: usize) -> CoarseElevation {
         CoarseElevation {
             cell_elevations: vec![0.65; cell_count],
+            sea_level: CoarseElevationConfig::default().sea_level,
             diagnostics: Default::default(),
         }
     }
@@ -305,7 +306,7 @@ mod tests {
             .max_by_key(|(_, distance)| *distance)
             .map(|(cell, _)| cell)
             .unwrap();
-        elevation.cell_elevations[boundary_cell] = SEA_LEVEL;
+        elevation.cell_elevations[boundary_cell] = elevation.sea_level;
         cell_birth[interior_cell] = Some(0);
 
         let ramped = derive_craton_field(

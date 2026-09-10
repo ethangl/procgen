@@ -14,7 +14,7 @@ use bevy::{
     prelude::{Color, ColorToComponents, Mesh, Vec3},
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{CrustClass, SEA_LEVEL};
+use procgen_tectonics::CrustClass;
 use procgen_viewer_support::id_color;
 
 pub(super) fn empty_surface_mesh() -> Mesh {
@@ -94,10 +94,15 @@ pub(super) fn basin_colors(_: &TectonicsWorld, geology: &GeologyWorld) -> Vec<Co
         .collect()
 }
 
+/// Builds the displaced fan mesh for one coloured elevation field.
+///
+/// `sea_level` is the datum the field was composed against; relief is measured
+/// from it, so the ocean surface stays at the nominal radius as the datum moves.
 pub(super) fn cell_surface_mesh(
     sphere: &SphereMesh,
     colors: &[Color],
     cell_elevations: &[f32],
+    sea_level: f32,
     relief_exaggeration: f32,
 ) -> Mesh {
     assert_eq!(colors.len(), sphere.cell_count());
@@ -117,7 +122,7 @@ pub(super) fn cell_surface_mesh(
         .iter()
         .zip(cell_elevations)
         .map(|(&center, &elevation)| {
-            displaced_position(to_bevy(center), elevation, relief_exaggeration)
+            displaced_position(to_bevy(center), elevation, sea_level, relief_exaggeration)
         })
         .collect::<Vec<_>>();
     let corner_positions = sphere
@@ -125,7 +130,7 @@ pub(super) fn cell_surface_mesh(
         .iter()
         .zip(&corner_elevations)
         .map(|(&corner, &elevation)| {
-            displaced_position(to_bevy(corner), elevation, relief_exaggeration)
+            displaced_position(to_bevy(corner), elevation, sea_level, relief_exaggeration)
         })
         .collect::<Vec<_>>();
     let mut center_normals = vec![Vec3::ZERO; sphere.cell_count()];
@@ -179,17 +184,26 @@ pub(super) fn cell_surface_mesh(
         .with_inserted_indices(Indices::U32(indices))
 }
 
-fn displaced_position(direction: Vec3, elevation: f32, relief_exaggeration: f32) -> Vec3 {
-    direction.normalize() * surface_radius(elevation, relief_exaggeration)
+fn displaced_position(
+    direction: Vec3,
+    elevation: f32,
+    sea_level: f32,
+    relief_exaggeration: f32,
+) -> Vec3 {
+    direction.normalize() * surface_radius(elevation, sea_level, relief_exaggeration)
 }
 
-fn surface_radius(elevation: f32, relief_exaggeration: f32) -> f32 {
-    SURFACE_RADIUS + (elevation - SEA_LEVEL) * relief_exaggeration
+fn surface_radius(elevation: f32, sea_level: f32, relief_exaggeration: f32) -> f32 {
+    SURFACE_RADIUS + (elevation - sea_level) * relief_exaggeration
 }
 
-pub(super) fn maximum_surface_radius(cell_elevations: &[f32], relief_exaggeration: f32) -> f32 {
-    let maximum_elevation = cell_elevations.iter().copied().fold(SEA_LEVEL, f32::max);
-    surface_radius(maximum_elevation, relief_exaggeration)
+pub(super) fn maximum_surface_radius(
+    cell_elevations: &[f32],
+    sea_level: f32,
+    relief_exaggeration: f32,
+) -> f32 {
+    let maximum_elevation = cell_elevations.iter().copied().fold(sea_level, f32::max);
+    surface_radius(maximum_elevation, sea_level, relief_exaggeration)
 }
 
 #[cfg(test)]
@@ -198,6 +212,10 @@ mod tests {
     use bevy::mesh::{MeshVertexAttribute, VertexAttributeValues};
     use procgen_core::Vec3 as SphereVec3;
     use procgen_sphere_mesh::build_sphere_mesh;
+
+    /// These meshes assert geometric invariants only, so the datum is
+    /// deliberately not the pipeline default: nothing here may depend on it.
+    const TEST_SEA_LEVEL: f32 = 0.4;
 
     fn tetrahedron_mesh() -> SphereMesh {
         build_sphere_mesh(
@@ -248,7 +266,13 @@ mod tests {
     #[test]
     fn zero_exaggeration_leaves_every_vertex_at_surface_radius() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.0);
+        let mesh = cell_surface_mesh(
+            &sphere,
+            &[Color::WHITE; 4],
+            &[0.0, 0.3, 0.7, 1.0],
+            TEST_SEA_LEVEL,
+            0.0,
+        );
 
         let positions = float3_attribute(&mesh, Mesh::ATTRIBUTE_POSITION);
         assert!(positions.iter().all(|position| {
@@ -259,7 +283,13 @@ mod tests {
     #[test]
     fn incident_fans_share_identical_displaced_corner_positions() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.3);
+        let mesh = cell_surface_mesh(
+            &sphere,
+            &[Color::WHITE; 4],
+            &[0.0, 0.3, 0.7, 1.0],
+            TEST_SEA_LEVEL,
+            0.3,
+        );
         let positions = float3_attribute(&mesh, Mesh::ATTRIBUTE_POSITION);
         assert_shared_corner_values(corner_copies(&sphere, positions));
     }
@@ -267,7 +297,13 @@ mod tests {
     #[test]
     fn displaced_triangle_fans_remain_finite_and_outward() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &[0.0, 0.3, 0.7, 1.0], 0.4);
+        let mesh = cell_surface_mesh(
+            &sphere,
+            &[Color::WHITE; 4],
+            &[0.0, 0.3, 0.7, 1.0],
+            TEST_SEA_LEVEL,
+            0.4,
+        );
 
         assert_eq!(
             mesh.count_vertices(),
@@ -297,8 +333,20 @@ mod tests {
     fn normals_are_recomputed_from_displaced_geometry() {
         let sphere = tetrahedron_mesh();
         let elevations = [0.0, 0.3, 0.7, 1.0];
-        let flat = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &elevations, 0.0);
-        let relief = cell_surface_mesh(&sphere, &[Color::WHITE; 4], &elevations, 0.4);
+        let flat = cell_surface_mesh(
+            &sphere,
+            &[Color::WHITE; 4],
+            &elevations,
+            TEST_SEA_LEVEL,
+            0.0,
+        );
+        let relief = cell_surface_mesh(
+            &sphere,
+            &[Color::WHITE; 4],
+            &elevations,
+            TEST_SEA_LEVEL,
+            0.4,
+        );
         let flat_normals = float3_attribute(&flat, Mesh::ATTRIBUTE_NORMAL);
         let relief_positions = float3_attribute(&relief, Mesh::ATTRIBUTE_POSITION);
         let relief_normals = float3_attribute(&relief, Mesh::ATTRIBUTE_NORMAL);

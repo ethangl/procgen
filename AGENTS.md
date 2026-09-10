@@ -85,8 +85,9 @@ reviews. Treat them as the default bar for new work.
   deterministic mixers in `procgen-core`, crate-wide machinery in the crate's
   `field.rs`, fixtures in `test_support`. The second copy of anything is the
   signal to extract it.
-- Constants two layers must agree on (sea level, slider ranges, tolerances,
-  stream ids, radii) are exported by the crate that owns the concept. The
+- Values two layers must agree on (the sea-level datum, slider ranges,
+  tolerances, stream ids, radii) are owned by the crate that owns the concept,
+  as a constant it exports or as a field on the result that carries it. The
   viewer reads them and never restates them as literals.
 - The viewer is a pure consumer. Generation sequencing, derived statistics,
   physics-derived bounds, and world validation belong in the crates or on the
@@ -224,7 +225,10 @@ The coarse pipeline described in `docs/world-heightmap.md` is in place on a
 topology, tectonics through tectonic elevation, whose evolution changes the
 plate set as continents rift and suture, geology through isostatic adjustment,
 and climate (solar forcing, radiative equilibrium, seasonal thermal response,
-circulation, moisture transport, cryosphere, and bounded coupling).
+circulation, moisture transport, cryosphere, and bounded coupling). Sea level
+is a configured datum the composed elevation field carries, so land is
+elevation above that datum rather than above a constant; per-cell continental
+crust is the next step in that story.
 The viewer consumes every stage, caches complete generated worlds keyed on the
 generator build identity, and draws a displaced fan mesh with relief and
 lighting controls. It runs tectonics, geology, and climate as separately

@@ -33,8 +33,10 @@ pub enum Surface {
 }
 
 impl Surface {
-    pub fn from_elevation(elevation: f32) -> Self {
-        if is_land(elevation) {
+    /// Classifies one normalized elevation against the sea-level datum the
+    /// elevation field was composed against.
+    pub fn from_elevation(elevation: f32, sea_level: f32) -> Self {
+        if is_land(elevation, sea_level) {
             Self::Land
         } else {
             Self::Ocean
@@ -86,15 +88,20 @@ pub(crate) fn area_weighted_rms_difference(mesh: &SphereMesh, left: &[f32], righ
 #[cfg(test)]
 mod tests {
     use super::*;
-    use procgen_tectonics::SEA_LEVEL;
+    use procgen_tectonics::CoarseElevationConfig;
 
     #[test]
     fn surface_uses_the_authoritative_elevation_boundary() {
-        assert_eq!(Surface::from_elevation(SEA_LEVEL), Surface::Ocean);
-        assert_eq!(
-            Surface::from_elevation(f32::from_bits(SEA_LEVEL.to_bits() + 1)),
-            Surface::Land
-        );
+        for sea_level in [CoarseElevationConfig::default().sea_level, 0.3, 0.7] {
+            assert_eq!(
+                Surface::from_elevation(sea_level, sea_level),
+                Surface::Ocean
+            );
+            assert_eq!(
+                Surface::from_elevation(f32::from_bits(sea_level.to_bits() + 1), sea_level),
+                Surface::Land
+            );
+        }
     }
 
     #[test]

@@ -394,7 +394,7 @@ struct_codec! {
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
     BoundaryDeformationConfig { convergent, rift, transform, collision, trench, saturation_speed, full_deformation_time, maximum_magnitude }
-    CoarseElevationConfig { smoothing_passes, smoothing_weight }
+    CoarseElevationConfig { smoothing_passes, smoothing_weight, sea_level }
     HotspotFieldConfig { hotspot_count, maximum_trail_cells, province_fraction, province_radius_hops, province_rim_hops, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }
     VolcanicArcFieldConfig { minimum_boundary_edges, inland_offset_cells, peak_density_divisor, strength_saturation }
@@ -431,7 +431,7 @@ struct_codec! {
     BaseElevation { cell_elevations, diagnostics }
     BoundaryDeformationDiagnostics { summary, source_cell_count, uplifted_cell_count, subsided_cell_count }
     BoundaryDeformation { cell_deformation, diagnostics }
-    CoarseElevation { cell_elevations, diagnostics }
+    CoarseElevation { cell_elevations, sea_level, diagnostics }
     HotspotTrailCell { cell, intensity }
     Hotspot { mantle_position, source_cell, plate, trail, province_cell_count }
     HotspotDiagnostics { trail_cell_count, affected_cell_count, overlap_cell_count, stationary_source_count, shortest_trail_cells, longest_trail_cells, province_count, province_cell_count }

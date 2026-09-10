@@ -2,7 +2,6 @@
 // Consumers provide cubesphere_load_field_texel, terrain_load_stamp, and
 // terrain_parameters so this source does not own a wgpu bind-group layout.
 
-const TERRAIN_SEA_LEVEL: f32 = 0.5;
 const TERRAIN_NOISE_VECTOR_BOUND: f32 = 3.4641016;
 const TERRAIN_STAMP_CAP_CUBIC: u32 = 3u;
 
@@ -46,7 +45,7 @@ struct TerrainParameters {
     coast_half_width: f32,
     coast_warp_frequency: f32,
     coast_maximum_warp: f32,
-    padding_3: f32,
+    sea_level: f32,
     stamp_profiles: array<TerrainStampProfile, 4>,
 }
 
@@ -76,8 +75,8 @@ fn terrain_sample_controls(direction: vec3<f32>) -> TerrainControlSample {
     );
 }
 
-fn terrain_coast_taper(base: ScalarFieldSample3, half_width: f32) -> ScalarFieldSample3 {
-    var distance = ScalarFieldSample3(base.value - TERRAIN_SEA_LEVEL, base.derivative);
+fn terrain_coast_taper(base: ScalarFieldSample3, sea_level: f32, half_width: f32) -> ScalarFieldSample3 {
+    var distance = ScalarFieldSample3(base.value - sea_level, base.derivative);
     if distance.value < 0.0 { distance = neg_sample(distance); }
     if distance.value >= half_width { return ScalarFieldSample3(1.0, vec3(0.0)); }
     let t = scale_sample(distance, 1.0 / half_width);
@@ -167,7 +166,7 @@ fn terrain_height_gpu(direction: vec3<f32>, tile_level: u32) -> ScalarFieldSampl
         minimum_wavelength,
     );
     let original = terrain_sample_controls(direction);
-    let taper = terrain_coast_taper(original.base_elevation, parameters.coast_half_width);
+    let taper = terrain_coast_taper(original.base_elevation, parameters.sea_level, parameters.coast_half_width);
     let warp = terrain_coast_warp(direction, sub_sample(ScalarFieldSample3(1.0, vec3(0.0)), taper));
     let controls = terrain_pullback_controls(warp, terrain_sample_controls(warp.direction));
     let gain = controls.octave_gain.value;

@@ -52,6 +52,8 @@ pub struct SeasonalThermalInputs<'a> {
     pub solar_forcing: SolarForcingConfig,
     pub emissivity: f64,
     pub final_elevation: &'a [f32],
+    /// Sea-level datum the elevation field was composed against.
+    pub sea_level: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -353,6 +355,7 @@ pub fn derive_seasonal_thermal_response(
         solar_forcing,
         emissivity,
         final_elevation,
+        sea_level,
     } = inputs;
     planet.validate()?;
     solar_forcing.validate()?;
@@ -376,7 +379,7 @@ pub fn derive_seasonal_thermal_response(
         .zip(&mesh.cell_areas)
         .zip(cell_albedo)
     {
-        let surface = Surface::from_elevation(elevation);
+        let surface = Surface::from_elevation(elevation, sea_level);
         let heat_capacity = config.heat_capacity(surface);
         let latitude_sine = f64::from(center.y / mesh.radius);
         let target = |state| {
@@ -547,6 +550,12 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
+    /// The datum the tectonic pipeline defaults to, which these synthetic
+    /// elevation fields are written against.
+    fn default_sea_level() -> f32 {
+        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    }
+
     fn mesh(count: usize) -> SphereMesh {
         let points = fibonacci_sphere(FibonacciConfig::new(count)).unwrap();
         let delaunay = SphericalDelaunay::build(points).unwrap();
@@ -580,6 +589,7 @@ mod tests {
                 },
                 emissivity: 1.0,
                 final_elevation: elevations,
+                sea_level: default_sea_level(),
             },
             config,
             &albedo,
@@ -801,6 +811,7 @@ mod tests {
                     solar_forcing: SolarForcingConfig::default(),
                     emissivity: 1.0,
                     final_elevation: &elevations,
+                    sea_level: default_sea_level(),
                 },
                 config,
                 &vec![0.3; mesh.cell_count()],
@@ -845,6 +856,7 @@ mod tests {
                     },
                     emissivity: 1.0,
                     final_elevation: &elevations,
+                    sea_level: default_sea_level(),
                 },
                 SeasonalThermalConfig::EARTHLIKE,
                 &vec![0.3; mesh.cell_count()],

@@ -1,19 +1,35 @@
 use bevy::prelude::{Color, Vec3};
-use procgen_tectonics::SEA_LEVEL;
 
 pub(super) const DEFORMATION_COLOR_STOPS: &[(f32, Vec3)] = &[
     (-0.5, Vec3::new(0.08, 0.35, 0.95)),
     (0.0, Vec3::new(0.12, 0.12, 0.16)),
     (0.5, Vec3::new(1.0, 0.38, 0.08)),
 ];
-pub(super) const ELEVATION_COLOR_STOPS: &[(f32, Vec3)] = &[
-    (0.0, Vec3::new(0.02, 0.08, 0.3)),
-    (SEA_LEVEL, Vec3::new(0.08, 0.65, 0.85)),
-    // Duplicate sea-level stop deliberately separates water from land.
-    (SEA_LEVEL, Vec3::new(0.16, 0.55, 0.18)),
-    (0.75, Vec3::new(0.55, 0.38, 0.16)),
-    (1.0, Vec3::new(0.96, 0.96, 0.94)),
-];
+
+/// Stops in an elevation palette, whose ocean-to-land break follows the world's
+/// sea-level datum rather than a fixed value.
+pub(super) const ELEVATION_STOP_COUNT: usize = 5;
+
+/// Builds the elevation palette against one sea-level datum.
+///
+/// The shallow-water and lowland stops both sit exactly on the datum, so the
+/// colour break is a step at the coast and the ocean and land ramps stretch
+/// with the slider instead of drifting away from it.
+pub(super) fn elevation_color_stops(sea_level: f32) -> [(f32, Vec3); ELEVATION_STOP_COUNT] {
+    [
+        (0.0, Vec3::new(0.02, 0.08, 0.3)),
+        (sea_level, Vec3::new(0.08, 0.65, 0.85)),
+        // Duplicate sea-level stop deliberately separates water from land.
+        (sea_level, Vec3::new(0.16, 0.55, 0.18)),
+        // The brown-to-snow half of the ramp keeps its share of the land band.
+        (
+            sea_level + (1.0 - sea_level) / 2.0,
+            Vec3::new(0.55, 0.38, 0.16),
+        ),
+        (1.0, Vec3::new(0.96, 0.96, 0.94)),
+    ]
+}
+
 pub(super) const TEMPERATURE_COLOR_STOPS: &[(f32, Vec3)] = &[
     (0.0, Vec3::new(0.015, 0.02, 0.08)),
     (180.0, Vec3::new(0.08, 0.16, 0.46)),

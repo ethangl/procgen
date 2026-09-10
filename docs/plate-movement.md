@@ -477,8 +477,8 @@ and `basement_frequency` 3.0. A lattice feature spans about two lattice cells,
 so the basement's longest wavelength is two thirds of a model unit — a tenth of
 a great circle, or some 48 cells of the default mesh — and its shortest, two
 octaves up, about a dozen. The amplitudes are bounded so interior relief cannot
-drown a continent on its own: `0.65 - 0.03 - 0.05` is 0.57, above the 0.5 of
-`SEA_LEVEL`. That arithmetic is nominal rather than a bound, because the
+drown a continent on its own: `0.65 - 0.03 - 0.05` is 0.57, above the default
+sea level of 0.5. That arithmetic is nominal rather than a bound, because the
 dynamic term is normalised by the divergence field's RMS and not its peak.
 Measured, the lowest continental base elevation is 0.516 at the viewer's
 defaults and 0.532 at the reference world, so it holds with a thinner margin
@@ -622,3 +622,30 @@ province.
 
 Erosion is the next stage, and it is the reason this one exists: it needs
 slopes to move material down, and until now a plate interior had none.
+
+## Sea level
+
+Sea level was the constant `SEA_LEVEL`, 0.5, and it is now a datum
+`CoarseElevationConfig` carries and the composed `CoarseElevation` carries
+onward, defaulting to the same 0.5. Every reader either holds the field and
+asks `CoarseElevation::is_land`, or is handed the datum explicitly:
+`is_land(elevation, sea_level)`, the climate stages' `sea_level` input, the
+terrain height and tile inputs, and the terrain shader's parameter buffer. The
+elevation field is not interpretable without it, the same way a `SphereMesh` is
+not interpretable without its radius, which is why it travels with the field
+rather than being read back out of a config.
+
+The composition arithmetic does not change, so at the default the whole
+pipeline is bit-identical and no fingerprint moved. What the knob does is move
+the coast: at the reference world of sampling seed 9, subdivided faces 0.2, and
+30 steps, tectonic elevation holds 19,311 land cells at a datum of 0.45, 18,150
+at 0.50, and 17,249 at 0.55 out of 65,536. Raising the datum can only flood and
+lowering it can only expose, which a test asserts at those three values.
+
+That knob floods and exposes whatever the elevation field happens to put near
+the datum, which is a margin only where the field already has one. Continental
+crust is still classified per plate, so a continent is a plate-shaped patch of
+the configured continental base and its coast is wherever interior relief and
+deformation carry that patch across the datum. Replacing per-plate crust
+classification with per-cell continental nuclei is the next step, and it is
+what gives a margin its own shape for this datum to cut.

@@ -62,6 +62,11 @@ const FULL_DEFORMATION_TIME_RANGE: std::ops::RangeInclusive<f32> =
 // the unit range, so a clamp above one could never bite.
 const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+// The datum must stay strictly inside the unit range the field is clamped to.
+// The bottom leaves only the deep floor at 0.08 under water and the top drowns
+// the continental base at 0.65, so the range spans an almost fully exposed
+// world to one where only orogenic belts are left standing.
+const SEA_LEVEL_RANGE: std::ops::RangeInclusive<f32> = 0.2..=0.8;
 // Interior relief is broad and gentle on purpose. At the top of this range one
 // term alone spans a third of the way from the continental base to sea level,
 // which is where the two stop being relief on a plate and start deciding where
@@ -407,6 +412,7 @@ fn continental_rift_controls(ui: &mut egui::Ui, profile: &mut ContinentalRiftPro
 }
 
 fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
+    slider(ui, "Sea level", &mut config.sea_level, SEA_LEVEL_RANGE);
     drag_value(
         ui,
         "Smoothing passes",
