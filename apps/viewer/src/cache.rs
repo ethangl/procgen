@@ -386,12 +386,12 @@ struct_codec! {
     CrustClassificationConfig { target_ocean_fraction, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     PlateMigrationConfig { minimum_convergence }
-    PlateEvolutionConfig { step_count, step_duration, migration }
+    PlateEvolutionConfig { step_count, step_duration, migration, deformation }
     CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { continental_base, ridge_elevation, deep_ocean_elevation, cooling_age }
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
-    BoundaryDeformationConfig { convergent, rift, transform, collision, trench, saturation_speed }
+    BoundaryDeformationConfig { convergent, rift, transform, collision, trench, saturation_speed, full_deformation_time, maximum_magnitude }
     CoarseElevationConfig { smoothing_passes, smoothing_weight }
     HotspotFieldConfig { hotspot_count, maximum_trail_cells, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }
@@ -409,7 +409,7 @@ struct_codec! {
     MoistureTransportConfig { step_count, step_seconds, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
     CryosphereConfig { maximum_iterations, closure_tolerance, snowfall_temperature_kelvin, melt_temperature_kelvin, full_snow_cover_kg_per_m2, seasonal_snow_capacity_kg_per_m2, snow_melt_kg_per_m2_per_kelvin_day, land_ice_melt_kg_per_m2_per_kelvin_day, sea_ice_growth_fraction_per_kelvin_day, sea_ice_melt_fraction_per_kelvin_day }
     ClimateCouplingConfig { maximum_iterations, under_relaxation, albedo_tolerance, temperature_tolerance_kelvin, precipitation_tolerance_kg_per_m2_per_day, cover_fraction_tolerance, albedo, radiative_equilibrium, seasonal_thermal, atmospheric_circulation, moisture_transport, cryosphere }
-    TectonicsSettings { fibonacci, plates, crust, kinematics, birth_prior, evolution, base_elevation, deformation, elevation }
+    TectonicsSettings { fibonacci, plates, crust, kinematics, birth_prior, evolution, base_elevation, elevation }
     GeologySettings { hotspots, oceanic_peaks, volcanic_arcs, cratons, basins, geological_elevation, isostasy, terrain_controls }
     ClimateSettings { planet, solar_forcing, coupling }
 
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn failed_atomic_write_preserves_previous_snapshot() {
         let (cache_dir, cache) = test_cache("failed-replace");
-        let fixture = Fixture::new(32, 21);
+        let fixture = Fixture::new(32, 22);
         cache.store(fixture.complete()).unwrap();
         let original = fs::read(&cache.path).unwrap();
 

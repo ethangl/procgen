@@ -115,7 +115,7 @@ fn deformation_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         field_summary_stats(ui, &world.deformation.diagnostics.summary);
         stat(
             ui,
-            "Sources",
+            "Source cell events",
             world.deformation.diagnostics.source_cell_count,
         );
         stat(
