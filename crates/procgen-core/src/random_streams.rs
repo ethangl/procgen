@@ -17,6 +17,7 @@ pub const PLATE_CRACK_ARC: u64 = 13;
 pub const PLATE_FACE_SUBDIVISION: u64 = 14;
 pub const PLATE_FLOW_FIELD: u64 = 15;
 pub const PLATE_POLE_DRIFT: u64 = 16;
+pub const PLATE_RIFT: u64 = 17;
 
 #[cfg(test)]
 mod tests {
@@ -42,6 +43,7 @@ mod tests {
             PLATE_FACE_SUBDIVISION,
             PLATE_FLOW_FIELD,
             PLATE_POLE_DRIFT,
+            PLATE_RIFT,
         ];
         ids.sort_unstable();
         assert!(ids.windows(2).all(|pair| pair[0] != pair[1]));

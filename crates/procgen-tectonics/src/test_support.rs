@@ -1,3 +1,4 @@
+use procgen_core::Vec3;
 pub use procgen_core::fingerprint;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
@@ -7,9 +8,9 @@ use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
     CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
-    PlateKinematicsConfig, PlateMigrationConfig, PlatePartition, PlatePartitionConfig,
-    PoleDriftConfig, classify_boundaries, classify_crust, derive_crust_birth_prior,
-    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
+    PlateKinematicsConfig, PlateLifecycleConfig, PlateMigrationConfig, PlatePartition,
+    PlatePartitionConfig, PoleDriftConfig, classify_boundaries, classify_crust,
+    derive_crust_birth_prior, evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
@@ -24,6 +25,18 @@ pub const NO_POLE_DRIFT: PoleDriftConfig = PoleDriftConfig {
     axis_drift_rate: 0.0,
     speed_drift_rate: 0.0,
     speed_drift_limit: 0.0,
+};
+
+/// No rifting and no suturing, for the fixtures whose assertions are about a
+/// fixed plate set. A zero rift rate never draws and an infinite suture time
+/// is never reached, so the remaining fields cannot be read.
+pub const NO_LIFECYCLE: PlateLifecycleConfig = PlateLifecycleConfig {
+    rift_rate: 0.0,
+    rift_minimum_area_fraction: 0.0,
+    rift_curvature: 0.0,
+    rift_opening_speed: 0.0,
+    suture_time: f32::INFINITY,
+    suture_minimum_shared_edges: 0,
 };
 
 pub fn mesh(cell_count: usize) -> SphereMesh {
@@ -76,6 +89,22 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
             // reaches its full profile offset, as the viewer's defaults do.
             full_deformation_time: default.step_count as f32 * REFERENCE_STEP_DURATION,
             ..BoundaryDeformationConfig::default()
+        },
+        lifecycle: PlateLifecycleConfig {
+            // A rate per unit time and a time, scaled by the same ratio as
+            // the drift rates, so the reference run sees the events at about
+            // the density the viewer's defaults produce.
+            rift_rate: default.lifecycle.rift_rate * time_scale,
+            // Roughly the share of the run the default eight steps are of the
+            // viewer's fifteen, so a collision can still merge inside a
+            // reference run of five.
+            suture_time: 3.0 * REFERENCE_STEP_DURATION,
+            // A collision front is a length, and an edge count for a fixed
+            // area fraction goes as the square root of the cell count: this
+            // mesh has an eighth of the default's cells per plate, so a front
+            // here is about a tenth of the edges.
+            suture_minimum_shared_edges: 2,
+            ..default.lifecycle
         },
         ..default
     }
@@ -180,7 +209,7 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
 /// migration off: the one-cell plate the rifting fixture opens from would
 /// otherwise be swallowed by its own convergent edge before it opened
 /// anything.
-pub fn rift_config(step_count: usize) -> PlateEvolutionConfig {
+pub fn opening_config(step_count: usize) -> PlateEvolutionConfig {
     PlateEvolutionConfig {
         step_count,
         step_duration: 0.7,
@@ -188,6 +217,7 @@ pub fn rift_config(step_count: usize) -> PlateEvolutionConfig {
             minimum_convergence: f32::MAX,
         },
         pole_drift: NO_POLE_DRIFT,
+        lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
     }
 }
@@ -203,6 +233,7 @@ pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
         migration: PlateMigrationConfig {
             minimum_convergence: f32::MAX,
         },
+        lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
     }
 }
@@ -236,8 +267,10 @@ pub fn single_edge_convergent_fixture() -> (EvolutionFixture, PlateEvolutionConf
             minimum_convergence: convergence * 0.999,
         },
         // The debt schedule below is the whole point of the fixture, and
-        // drift would change the closing speed it is computed from.
+        // drift or a split plate would change the closing speed it is
+        // computed from.
         pole_drift: NO_POLE_DRIFT,
+        lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
     };
     let qualifying = (0..fixture.mesh.edge_count())
@@ -285,4 +318,186 @@ pub fn plate_cell_birth(
         .iter()
         .map(|&plate| (plate_classes[plate] == CrustClass::Oceanic).then_some(0))
         .collect()
+}
+
+/// A world whose continental plate is a large cap, and a run that rifts it on
+/// its first step.
+///
+/// The cap is wide enough that a rift arc across it runs from one side of its
+/// boundary to the other, and open enough that the arc does not close on
+/// itself: a closed arc's wall has its mean center at the sphere's own, which
+/// leaves the opening direction undefined. The draw always passes, and after
+/// the split each half is below the minimum area, so the plate breaks up
+/// exactly once. The step is long enough for the parting halves to travel a
+/// cell width of this mesh in a few steps, so the ridge the rift opened has
+/// time to make crust.
+pub fn forced_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
+    let mesh = mesh(256);
+    let partition = PlatePartition {
+        cell_plates: mesh
+            .cell_centers
+            .iter()
+            .map(|center| usize::from(center.z < CONTINENT_EDGE))
+            .collect(),
+        plate_count: 2,
+    };
+    // Both plates at rest, so the opening term is the whole of the halves'
+    // motion and the rift is the only boundary the run can open.
+    let kinematics = PlateKinematics {
+        angular_velocities: vec![Vec3::ZERO; 2],
+    };
+    let config = PlateEvolutionConfig {
+        step_count: 6,
+        step_duration: 0.25,
+        pole_drift: NO_POLE_DRIFT,
+        lifecycle: PlateLifecycleConfig {
+            // A chance of two against a draw in [0, 1): certain.
+            rift_rate: 8.0,
+            // Only the whole cap passes, so neither half rifts again.
+            rift_minimum_area_fraction: 0.5,
+            // A great circle, so the arc stays in the plane the halves part
+            // across and the boundary it leaves is a clean one.
+            rift_curvature: 0.0,
+            suture_time: f32::INFINITY,
+            ..PlateLifecycleConfig::default()
+        },
+        ..PlateEvolutionConfig::default()
+    };
+    (
+        fixture_over(
+            mesh,
+            partition,
+            vec![CrustClass::Continental, CrustClass::Oceanic],
+            kinematics,
+        ),
+        config,
+    )
+}
+
+/// Height above which the forced-rift fixture's cap is continental: about
+/// three fifths of the sphere, so an arc across it is long but open.
+const CONTINENT_EDGE: f32 = -0.2;
+
+/// A world whose only continental plate is a single cell, and a run that tries
+/// to rift it every step. The arc leaves the plate on its first step, so the
+/// wall is the whole plate and there is nothing for it to separate.
+pub fn failed_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
+    let (mesh, _, partition) = two_plate_boundary_partition();
+    let kinematics = PlateKinematics {
+        angular_velocities: vec![Vec3::ZERO; 2],
+    };
+    let config = PlateEvolutionConfig {
+        step_count: 1,
+        step_duration: 0.1,
+        pole_drift: NO_POLE_DRIFT,
+        lifecycle: PlateLifecycleConfig {
+            rift_rate: 20.0,
+            // Any plate with area at all, so one cell is enough to be drawn.
+            rift_minimum_area_fraction: 0.0,
+            suture_time: f32::INFINITY,
+            ..PlateLifecycleConfig::default()
+        },
+        ..PlateEvolutionConfig::default()
+    };
+    (
+        fixture_over(
+            mesh,
+            partition,
+            vec![CrustClass::Oceanic, CrustClass::Continental],
+            kinematics,
+        ),
+        config,
+    )
+}
+
+/// A world of one continental plate covering the sphere, and a run that tries
+/// to rift it. The arc meets nothing to stop it, so it closes on itself, and
+/// its wall's mean center is the sphere's own: the halves have no direction to
+/// part in.
+pub fn closed_arc_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
+    let mesh = mesh(256);
+    let partition = PlatePartition {
+        cell_plates: vec![0; mesh.cell_count()],
+        plate_count: 1,
+    };
+    let kinematics = PlateKinematics {
+        angular_velocities: vec![Vec3::ZERO],
+    };
+    let config = PlateEvolutionConfig {
+        step_count: 1,
+        step_duration: 0.1,
+        pole_drift: NO_POLE_DRIFT,
+        lifecycle: PlateLifecycleConfig {
+            rift_rate: 20.0,
+            rift_minimum_area_fraction: 0.5,
+            rift_curvature: 0.0,
+            suture_time: f32::INFINITY,
+            ..PlateLifecycleConfig::default()
+        },
+        ..PlateEvolutionConfig::default()
+    };
+    (
+        fixture_over(mesh, partition, vec![CrustClass::Continental], kinematics),
+        config,
+    )
+}
+
+/// Two continental plates in sustained head-on convergence, and the run that
+/// merges them. Returns the fixture, its config, and the step at which the
+/// collision time reaches `suture_time`.
+///
+/// Migration is off and the step is far too short to advect anything, so the
+/// pair's collision is the only thing the run advances.
+pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
+    let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental; 2]);
+    let steps = 3;
+    let step_duration = 0.02;
+    let config = PlateEvolutionConfig {
+        step_count: steps,
+        step_duration,
+        migration: PlateMigrationConfig {
+            minimum_convergence: f32::MAX,
+        },
+        pole_drift: NO_POLE_DRIFT,
+        lifecycle: PlateLifecycleConfig {
+            rift_rate: 0.0,
+            // Half a step short of `steps` steps of collision, so the merge
+            // lands on that step whatever the last bits of the sum do.
+            suture_time: (steps as f32 - 0.5) * step_duration,
+            // The one-cell plate shares five or six edges with its neighbour;
+            // every convergent one of them counts.
+            suture_minimum_shared_edges: 1,
+            ..PlateLifecycleConfig::default()
+        },
+        ..PlateEvolutionConfig::default()
+    };
+    (fixture, config, steps)
+}
+
+/// The boundaries, crust, and kinematics a hand-built ownership implies, for
+/// the fixtures whose plate classes and motion are chosen rather than fitted.
+fn fixture_over(
+    mesh: SphereMesh,
+    partition: PlatePartition,
+    plate_classes: Vec<CrustClass>,
+    kinematics: PlateKinematics,
+) -> EvolutionFixture {
+    let crust = CrustClassification { plate_classes };
+    let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
+    let birth_prior = derive_crust_birth_prior(
+        &mesh,
+        &partition,
+        &crust,
+        &boundaries,
+        CrustBirthPriorConfig::default(),
+    )
+    .unwrap();
+    EvolutionFixture {
+        mesh,
+        partition,
+        crust,
+        kinematics,
+        boundaries,
+        birth_prior,
+    }
 }

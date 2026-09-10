@@ -5,12 +5,14 @@
 //! this module owns the run: its config, its inputs, the totals it keeps, and
 //! the state it hands on.
 //!
-//! Five things survive a step: ownership, the two fields each cell carries —
-//! its birth step and the deformation the boundaries have raised on it — and
-//! the closing and travel debts. Crust class is not one of them. It is read
-//! from birth, so a continental plate that rifts grows an oceanic margin and an
-//! overridden cell takes the overriding material's class without anything
-//! storing a second answer to the question.
+//! What survives a step: ownership, the plate set itself — its count, its
+//! crust classes, and its motion — the two fields each cell carries, its birth
+//! step and the deformation the boundaries have raised on it, the closing and
+//! travel debts, and how long each continental pair has been colliding. A
+//! cell's crust class is not one of them. It is read from birth, so a
+//! continental plate that rifts grows an oceanic margin and an overridden cell
+//! takes the overriding material's class without anything storing a second
+//! answer to the question.
 //!
 //! Deformation therefore records where the boundaries have been as well as
 //! where they are: belts widen where a boundary converged for many steps, a
@@ -20,10 +22,12 @@
 use crate::{
     BoundaryClassification, BoundaryClassificationError, BoundaryDeformation,
     BoundaryDeformationConfig, BoundaryDeformationDiagnostics, BoundaryDeformationError, CellCrust,
-    CrustBirthPrior, CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
-    PlateMigrationError, PlatePartition, PoleDriftConfig, StageInputError, classify_boundaries,
+    CrustBirthPrior, CrustClassification, PlateKinematics, PlateLifecycleConfig, PlateMigration,
+    PlateMigrationConfig, PlateMigrationError, PlatePartition, PoleDriftConfig, StageInputError,
+    classify_boundaries,
     deformation::validate_config,
     field::DEFAULT_STEP_DURATION,
+    lifecycle::{self, LifecycleEvents},
     step::{CarriedFields, EvolvingWorld},
 };
 use procgen_sphere_mesh::SphereMesh;
@@ -53,6 +57,9 @@ pub struct PlateEvolutionConfig {
     pub deformation: BoundaryDeformationConfig,
     /// How far each plate's rotation vector moves at the end of a step.
     pub pole_drift: PoleDriftConfig,
+    /// How the plate set itself changes: rifting of large continental plates
+    /// and suturing of the continental pairs that have collided long enough.
+    pub lifecycle: PlateLifecycleConfig,
 }
 
 impl Default for PlateEvolutionConfig {
@@ -64,6 +71,7 @@ impl Default for PlateEvolutionConfig {
             migration: PlateMigrationConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             pole_drift: PoleDriftConfig::default(),
+            lifecycle: PlateLifecycleConfig::default(),
         }
     }
 }
@@ -83,6 +91,13 @@ pub struct PlateEvolutionDiagnostics {
     /// steps. A cell can be reborn more than once.
     pub born_cell_count: usize,
     pub maximum_convergence: f32,
+    /// Continental plates that split in two across all steps.
+    pub rift_count: usize,
+    /// Rift arcs that failed to separate a plate into two pieces, which left
+    /// the plate exactly as it was.
+    pub failed_rift_count: usize,
+    /// Continental pairs that merged across all steps.
+    pub suture_count: usize,
 }
 
 impl PlateEvolutionDiagnostics {
@@ -96,6 +111,12 @@ impl PlateEvolutionDiagnostics {
             .maximum_convergence
             .max(migration.maximum_convergence());
         migrated_cell_count
+    }
+
+    fn record_lifecycle(&mut self, events: LifecycleEvents) {
+        self.rift_count += events.rift_count;
+        self.failed_rift_count += events.failed_rift_count;
+        self.suture_count += events.suture_count;
     }
 }
 
@@ -118,6 +139,11 @@ pub struct PlateEvolutionInputs<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlateEvolution {
     pub partition: PlatePartition,
+    /// Crust class per plate of the final plate set. Rifting appends a
+    /// continental plate and suturing removes an absorbed one, so the
+    /// classification the run was handed describes a plate set that no longer
+    /// exists once either has happened.
+    pub crust: CrustClassification,
     /// Plate motion after the last step's drift. Every consumer that reads
     /// plate motion after evolution reads this rather than the initial
     /// motion, because the boundaries and the fields the run produced were
@@ -138,6 +164,7 @@ impl PlateEvolution {
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
         self.partition.validate(mesh)?;
         self.kinematics.validate(&self.partition)?;
+        self.crust.validate(&self.partition)?;
         self.boundaries.validate(mesh)?;
         self.deformation.validate(mesh)?;
         self.cell_crust().validate(mesh)
@@ -157,6 +184,11 @@ pub enum PlateEvolutionError {
     InvalidMinimumConvergence,
     InvalidPoleDriftRate,
     InvalidSpeedDriftLimit,
+    InvalidRiftRate,
+    InvalidRiftAreaFraction,
+    InvalidRiftCurvature,
+    InvalidRiftOpeningSpeed,
+    InvalidSutureTime,
     Deformation(BoundaryDeformationError),
     Input(StageInputError),
     Boundary(BoundaryClassificationError),
@@ -177,6 +209,21 @@ impl fmt::Display for PlateEvolutionError {
             }
             Self::InvalidSpeedDriftLimit => {
                 formatter.write_str("speed drift limit must be finite and between 0 and 1")
+            }
+            Self::InvalidRiftRate => {
+                formatter.write_str("rift rate must be finite and non-negative")
+            }
+            Self::InvalidRiftAreaFraction => {
+                formatter.write_str("minimum rift area fraction must lie in [0, 1]")
+            }
+            Self::InvalidRiftCurvature => {
+                formatter.write_str("rift curvature must be finite and non-negative")
+            }
+            Self::InvalidRiftOpeningSpeed => {
+                formatter.write_str("rift opening speed must be finite and non-negative")
+            }
+            Self::InvalidSutureTime => {
+                formatter.write_str("suture time must be non-negative; infinity disables suturing")
             }
             Self::Deformation(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
@@ -243,6 +290,7 @@ pub fn evolve_plate_ownership(
         return Err(PlateEvolutionError::InvalidSpeedDriftLimit);
     }
     validate_config(config.deformation)?;
+    lifecycle::validate_config(config.lifecycle)?;
     inputs.partition.validate(mesh)?;
     inputs.crust.validate(inputs.partition)?;
     inputs.kinematics.validate(inputs.partition)?;
@@ -262,8 +310,13 @@ pub fn evolve_plate_ownership(
         diagnostics.active_step_count +=
             usize::from(migrated_cell_count > 0 || born_cell_count > 0);
         world.drift(step as i32);
+        diagnostics.record_lifecycle(world.lifecycle(&boundaries, step as i32));
         boundaries = classify_boundaries(mesh, &world.partition, &world.kinematics)?;
     }
+    // Compaction is a bijection on the ids that own cells and carries each
+    // plate's motion and class with it, so the boundaries the loop left behind
+    // describe the same edges either side of it and are not reclassified.
+    world.compact();
 
     let CarriedFields {
         birth: cell_birth,
@@ -271,6 +324,7 @@ pub fn evolve_plate_ownership(
     } = world.carried;
     Ok(PlateEvolution {
         partition: world.partition,
+        crust: world.crust,
         kinematics: world.kinematics,
         boundaries,
         cell_birth,
@@ -289,8 +343,8 @@ pub fn evolve_plate_ownership(
 mod tests {
     use super::*;
     use crate::test_support::{
-        NO_POLE_DRIFT, drift_config, empty_boundaries, evolution_fixture, fingerprint,
-        opposed_kinematics, reference_evolution_config, rift_config,
+        NO_LIFECYCLE, NO_POLE_DRIFT, drift_config, empty_boundaries, evolution_fixture,
+        fingerprint, opening_config, opposed_kinematics, reference_evolution_config,
         single_edge_convergent_fixture, two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::{BoundaryClass, CrustClass};
@@ -325,14 +379,21 @@ mod tests {
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
         assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
-        assert_eq!(first.diagnostics.proposal_count, 196);
+        assert_eq!(first.diagnostics.proposal_count, 193);
         assert_eq!(first.diagnostics.contested_cell_count, 25);
-        assert_eq!(first.diagnostics.migrated_cell_count, 169);
-        assert_eq!(first.diagnostics.born_cell_count, 81);
+        assert_eq!(first.diagnostics.migrated_cell_count, 166);
+        assert_eq!(first.diagnostics.born_cell_count, 79);
+        // The reference run splits one plate and merges three pairs, and
+        // migration empties another seven of the thirty-three it started with;
+        // compaction removes every id left owning nothing.
+        assert_eq!(first.diagnostics.rift_count, 1);
+        assert_eq!(first.diagnostics.failed_rift_count, 0);
+        assert_eq!(first.diagnostics.suture_count, 3);
+        assert_eq!(first.partition.plate_count, 23);
         // Convergence is a float reduction, so machines differ in the last bits.
         assert!((first.diagnostics.maximum_convergence - 1.729_143_5).abs() < 1.0e-3);
-        assert_eq!(ownership_fingerprint(&first), 7_861_530_542_741_843_693);
-        assert_eq!(birth_fingerprint(&first), 17_900_964_807_056_914_166);
+        assert_eq!(ownership_fingerprint(&first), 9_198_011_102_207_064_475);
+        assert_eq!(birth_fingerprint(&first), 3_857_604_465_067_072_587);
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.
@@ -345,6 +406,20 @@ mod tests {
                 .iter()
                 .all(|value| value.abs() <= config.deformation.maximum_magnitude)
         );
+    }
+
+    /// The reference run with nothing in it that can renumber a plate: no
+    /// lifecycle to split or merge one and no migration to empty one, so an id
+    /// means the same plate either side of the run and a per-plate comparison
+    /// is well defined.
+    fn fixed_plate_set_config() -> PlateEvolutionConfig {
+        PlateEvolutionConfig {
+            migration: PlateMigrationConfig {
+                minimum_convergence: f32::MAX,
+            },
+            lifecycle: NO_LIFECYCLE,
+            ..reference_evolution_config()
+        }
     }
 
     /// The angle one step turns an axis through, recovered from the
@@ -362,19 +437,36 @@ mod tests {
     }
 
     #[test]
-    fn without_drift_the_run_ends_on_the_motion_it_started_from() {
+    fn without_drift_or_lifecycle_the_run_keeps_the_motion_it_started_from() {
         let fixture = evolution_fixture();
         let evolution = fixture.evolve(PlateEvolutionConfig {
             pole_drift: NO_POLE_DRIFT,
+            lifecycle: NO_LIFECYCLE,
             ..reference_evolution_config()
         });
 
-        assert_eq!(evolution.kinematics, fixture.kinematics);
-        // The state a run with no drift reaches is the state this slice
-        // inherited, so these are the fingerprints pinned before it.
+        // Nothing drifts and nothing splits, so every plate that survived the
+        // run holds exactly the rotation vector it started with. Compaction
+        // drops the ids migration emptied, so the list is shorter rather than
+        // equal.
+        assert_eq!(
+            evolution.kinematics.angular_velocities.len(),
+            evolution.partition.plate_count
+        );
+        assert!(
+            evolution
+                .kinematics
+                .angular_velocities
+                .iter()
+                .all(|rotation| fixture.kinematics.angular_velocities.contains(rotation))
+        );
+        // The cells this run moves and the crust it makes are the state this
+        // slice inherited, so birth is the fingerprint pinned before it.
+        // Ownership is re-pinned: compaction now removes the ids migration
+        // emptied, which renumbers every plate above them.
         assert_eq!(
             ownership_fingerprint(&evolution),
-            14_527_926_896_356_991_964
+            11_231_719_261_217_421_218
         );
         assert_eq!(birth_fingerprint(&evolution), 10_036_958_955_164_647_054);
     }
@@ -382,7 +474,7 @@ mod tests {
     #[test]
     fn every_step_leaves_every_speed_inside_the_configured_bounds() {
         let fixture = evolution_fixture();
-        let config = reference_evolution_config();
+        let config = fixed_plate_set_config();
         // The drifted speed is realized by scaling the rotation vector by a
         // ratio, so it lands a few ulps either side of the clamped value.
         let slack = 1.0e-6;
@@ -408,7 +500,7 @@ mod tests {
     #[test]
     fn a_run_moves_no_axis_further_than_its_steps_could_carry_it() {
         let fixture = evolution_fixture();
-        let config = reference_evolution_config();
+        let config = fixed_plate_set_config();
         let per_step = per_step_angle(config);
 
         for step_count in [1, 3, 9] {
@@ -500,7 +592,7 @@ mod tests {
     #[test]
     fn a_rifting_plate_grows_oceanic_crust_along_its_trailing_edge() {
         let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
-        let config = rift_config(4);
+        let config = opening_config(4);
         let evolution = fixture.evolve(config);
 
         assert!(fixture.birth_prior.cell_birth.iter().all(Option::is_none));
@@ -585,7 +677,7 @@ mod tests {
     fn cell_crust_follows_birth_and_plate_classes_stay_fixed() {
         let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
         let original_classes = fixture.crust.plate_classes.clone();
-        let evolution = fixture.evolve(rift_config(4));
+        let evolution = fixture.evolve(opening_config(4));
 
         assert_eq!(fixture.crust.plate_classes, original_classes);
         assert!(
@@ -612,6 +704,8 @@ mod tests {
             migration: PlateMigrationConfig {
                 minimum_convergence: f32::MAX,
             },
+            // Migration is the subject; a rift would move ownership too.
+            lifecycle: NO_LIFECYCLE,
             ..reference_evolution_config()
         });
 

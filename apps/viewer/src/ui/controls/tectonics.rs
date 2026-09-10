@@ -6,7 +6,7 @@ use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
     DEFAULT_STEP_DURATION, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlatePartitionConfig, PoleDriftConfig,
+    PlateLifecycleConfig, PlatePartitionConfig, PoleDriftConfig,
 };
 
 // The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
@@ -37,6 +37,21 @@ const AXIS_DRIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
 const MAXIMUM_SPEED_DRIFT_PER_STEP: f32 = 0.25;
 const SPEED_DRIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
     0.0..=MAXIMUM_SPEED_DRIFT_PER_STEP / DEFAULT_STEP_DURATION;
+// A rift rate is stated as the chance one default step draws, and divided
+// back out. At the top a large plate breaks up almost every step.
+const MAXIMUM_RIFT_CHANCE_PER_STEP: f32 = 1.0;
+const RIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
+    0.0..=MAXIMUM_RIFT_CHANCE_PER_STEP / DEFAULT_STEP_DURATION;
+// A plate below a cell's worth of the default mesh cannot rift at all, and
+// nothing above a fifth of the sphere is a plate.
+const RIFT_AREA_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.2;
+// A suture takes at least one step and at most the longest run the step range
+// allows.
+const SUTURE_TIME_RANGE: std::ops::RangeInclusive<f32> =
+    DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * *EVOLUTION_STEP_RANGE.end() as f32;
+// Zero merges any pair of touching continents; the top is a collision front
+// spanning a good fraction of a default-mesh plate's perimeter.
+const SUTURE_SHARED_EDGE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
 const CRUST_BIRTH_PRIOR_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 // A boundary reaches its full profile in one default step at the bottom and
@@ -199,6 +214,7 @@ fn evolution_controls(
         0.0..=kinematics.maximum_convergence(WORLD_RADIUS),
     );
     pole_drift_controls(ui, &mut config.pole_drift);
+    lifecycle_controls(ui, &mut config.lifecycle, kinematics);
     drag_value(
         ui,
         "Evolution seed",
@@ -227,6 +243,47 @@ fn pole_drift_controls(ui: &mut egui::Ui, config: &mut PoleDriftConfig) {
         "Speed drift band",
         &mut config.speed_drift_limit,
         0.0..=1.0,
+    );
+}
+
+fn lifecycle_controls(
+    ui: &mut egui::Ui,
+    config: &mut PlateLifecycleConfig,
+    kinematics: PlateKinematicsConfig,
+) {
+    slider(ui, "Rift rate", &mut config.rift_rate, RIFT_RATE_RANGE);
+    slider(
+        ui,
+        "Rift minimum area",
+        &mut config.rift_minimum_area_fraction,
+        RIFT_AREA_FRACTION_RANGE,
+    );
+    slider(
+        ui,
+        "Rift curvature",
+        &mut config.rift_curvature,
+        CURVATURE_RANGE,
+    );
+    // The halves part at this speed on top of the parent's motion, so the
+    // fastest plate the kinematics allows bounds it.
+    slider(
+        ui,
+        "Rift opening speed",
+        &mut config.rift_opening_speed,
+        0.0..=kinematics.maximum_angular_speed,
+    );
+    slider(
+        ui,
+        "Suture time",
+        &mut config.suture_time,
+        SUTURE_TIME_RANGE,
+    );
+    drag_value(
+        ui,
+        "Suture edges",
+        &mut config.suture_minimum_shared_edges,
+        SUTURE_SHARED_EDGE_RANGE,
+        1.0,
     );
 }
 

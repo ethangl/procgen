@@ -87,10 +87,14 @@ Completed foundations:
   two fields each cell carries — the step its crust was created and the
   deformation raised on it — and aggregate evolution diagnostics, without step
   history.
-  Per-plate crust classes remain fixed and describe plates; a cell's crust is
-  read from its birth step, so a rifting continental plate grows an oceanic
-  margin and a cell overridden at a subduction zone takes the overriding
-  material's class. Each step also raises signed per-cell deformation from the
+  The plate set is not fixed by the partition: a large continental plate rifts
+  along a fresh crack arc into two continental halves that part across it, and
+  two continental plates that have collided for long enough suture into one,
+  so plate count, crust classes, and kinematics all change during a run and
+  the run's end compacts away the ids it emptied. Crust classes describe
+  plates; a cell's crust is read from its birth step, so a rifting continental
+  plate grows an oceanic margin and a cell overridden at a subduction zone
+  takes the overriding material's class. Each step also raises signed per-cell deformation from the
   boundaries current in that step, over the crust and ownership current in it,
   with deterministic overlap resolution and bounded within-plate propagation.
   The step's profile is scaled by the model time it spends against a

@@ -2,9 +2,10 @@
 //!
 //! Plate partitioning, flow-field-fitted rigid plate motion, static boundary
 //! classification, static per-plate crust classification, one-step plate
-//! migration, deterministic multi-step evolution of ownership and of what the
-//! cells carry — crust birth and the deformation the boundaries raise on them
-//! step by step — seafloor age in evolution steps, oceanic bathymetric base
+//! migration, deterministic multi-step evolution of ownership, of the plate
+//! set itself as plates rift and suture, and of what the cells carry — crust
+//! birth and the deformation the boundaries raise on them step by step —
+//! seafloor age in evolution steps, oceanic bathymetric base
 //! elevation, and coarse elevation composition live here. Geological effects
 //! remain separate later stages.
 
@@ -16,6 +17,7 @@ mod deformation;
 mod elevation;
 mod evolution;
 mod field;
+mod lifecycle;
 mod migration;
 mod motion;
 mod partition;
@@ -51,6 +53,7 @@ pub use evolution::{
     PlateEvolutionInputs, evolve_plate_ownership,
 };
 pub use field::{DEFAULT_STEP_DURATION, FieldSummary};
+pub use lifecycle::PlateLifecycleConfig;
 pub use migration::{
     CellMigration, PlateMigration, PlateMigrationConfig, PlateMigrationError, migrate_plates_once,
 };
