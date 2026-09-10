@@ -17,8 +17,8 @@ them.
 
 ## Current state
 
-Slices 1 and 2, coherent kinematics and displacement-proportional migration,
-have landed.
+Slices 1, 2, and 3 — coherent kinematics, displacement-proportional migration,
+and accumulated deformation — have landed.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
@@ -44,21 +44,23 @@ have landed.
   public as the raster pilot's interim source until slice 1's own kernel.
 - `classify_boundaries` derives per-edge normal and shear speeds from the two
   owners' rotations and classifies each edge. It is correct and stays.
-- Evolution carries four things across steps: ownership, a birth step per cell,
-  a closing debt per edge, and a travel debt per cell. Debts are distances in
-  model units measured against the mesh's one cell width,
-  `sqrt(total_area / cell_count)`. A convergent edge at or above
+- Evolution carries five things across steps: ownership, a birth step and an
+  accumulated deformation per cell, a closing debt per edge, and a travel debt
+  per cell. Debts are distances in model units measured against the mesh's one
+  cell width, `sqrt(total_area / cell_count)`. A convergent edge at or above
   `minimum_convergence` adds `convergence * step_duration` each step and moves
   one cell across itself once it has closed a whole cell width, carrying the
   remainder forward; every other edge's debt resets to zero. The retreating
-  cell takes the advancing plate's id and the advancing cell's birth, so the
-  overriding plate's material covers it. `minimum_convergence` is now the speed
-  below which nothing accumulates rather than a binary gate.
+  cell takes the advancing plate's id and everything the advancing cell
+  carries, so the overriding plate's material covers it.
+  `minimum_convergence` is now the speed below which nothing accumulates
+  rather than a binary gate.
 - Every cell accumulates `|velocity| * step_duration` and, on reaching a cell
-  width, pulls the birth of the same-plate neighbour behind it. A cell with no
+  width, pulls what the same-plate neighbour behind it carries. A cell with no
   neighbour behind it is at the plate's trailing edge: if the boundary there is
-  a ridge it is reborn as crust made this step, and otherwise it keeps what it
-  has. Both updates read the field as it stood before the substep.
+  a ridge it is reborn as crust made this step, flat because nothing has
+  deformed it yet, and otherwise it keeps what it has. Both updates read the
+  fields as they stood before the substep.
 - Cell crust is derived from birth and never stored: `Some` is oceanic, `None`
   is original continental crust. `CrustClassification::cell_class` is gone, and
   every consumer reads `PlateEvolution::cell_crust`. Plate classes still
@@ -84,11 +86,37 @@ have landed.
   oceanic cells flat on the deep floor, leaving only crust made during the run
   with any gradient at all. At 40 it is 0.5 percent, and mean oceanic base
   elevation rises from 0.084 to 0.169.
-- `derive_boundary_deformation` is still a profile around the final boundary
-  scaled by final strength, and still sees no earlier step. Slice 3 replaces it.
+- Deformation is a second per-cell field carried with crust birth. Each step
+  computes the profile its own boundaries raise, exactly as the removed
+  `derive_boundary_deformation` did over the final ones, scales it by
+  `step_duration / full_deformation_time`, adds it to the carried field, and
+  clamps to `maximum_magnitude`. The increment comes before migration and
+  advection, because uplift happens at the boundary and the material moves
+  afterwards. `full_deformation_time` defaults to nine default steps, so the
+  viewer's nine-step defaults reproduce the previous magnitudes at a boundary
+  that converged the whole run; `maximum_magnitude` defaults to 0.5, the
+  largest offset the default profiles can raise, so the clamp does not bite at
+  the defaults. At the viewer's defaults the field spans -0.181 to 0.368 with
+  a mean of 0.029 over 31,170 affected cells before, and -0.173 to 0.344 with
+  a mean of 0.027 over 37,079 affected cells after: nineteen percent more
+  cells carry a mark, and the extremes shrink slightly because a boundary
+  rarely stays saturated over one cell for a whole run. Land cells move from
+  16,872 to 16,808 and tectonic elevation's maximum from 0.900 to 0.934. No
+  integer fingerprint downstream moved; the geology pins read synthetic
+  elevation fields rather than an evolved one.
+- The deformation config moved into `PlateEvolutionConfig`, beside
+  `PlateMigrationConfig`, because it is now a substage of a step rather than a
+  stage of its own. `PlateEvolution` returns the accumulated
+  `BoundaryDeformation`, whose diagnostics sum source-cell events across steps
+  and summarize the final field.
+- What a step does moved out of `evolution.rs` into `step.rs`, which owns the
+  step state and the two fields it carries. `CarriedFields` holds birth and
+  deformation together and exposes one `move_onto` that migration and
+  advection both call, so the upstream-neighbour search is written once.
 - Carried risk: the viewer's 32-cell cache fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
-  moves which seeds those are. Three changed here, four in slice 1. The fix
+  moves which seeds those are. Two changed here, three in slice 2, four in
+  slice 1. The fix
   belongs in the fixture — a mesh coarse enough to be fast but not so coarse
   that coupling is marginal — rather than in each slice's seed list.
 
@@ -224,7 +252,7 @@ crust. Raster pilot untouched.
 Per-edge accumulated displacement, divergent opening, per-cell birth step,
 seafloor age from birth, base elevation reading true age.
 
-### Accumulated deformation.
+### Accumulated deformation. Landed.
 
 Per-step deformation increments into a persistent field; the final-boundary
 derivation removed.

@@ -1,5 +1,14 @@
 use procgen_sphere_mesh::SphereMesh;
 
+/// Model time per step at the viewer's default mesh: the unit sphere's cell
+/// width `sqrt(4 pi / 65_536)` is 0.0138, and a plate at the default maximum
+/// angular speed of 1.0 covers unit distance per unit time, so one cell width
+/// takes that long. Rounded to a round number, because nothing downstream
+/// resolves the difference. Evolution advances by it and deformation measures
+/// its accumulation against it, so it lives beside the cell width both are
+/// scaled against.
+pub const DEFAULT_STEP_DURATION: f32 = 0.014;
+
 /// The mesh's one representative cell width: the side of a square with the
 /// mean cell area. Evolution measures every accumulated displacement against
 /// it, so a finer mesh moves more cells for the same motion.

@@ -3,11 +3,12 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
 use crate::{
-    BoundaryClass, BoundaryClassification, CrustBirthPrior, CrustBirthPriorConfig, CrustClass,
-    CrustClassification, CrustClassificationConfig, PlateEvolution, PlateEvolutionConfig,
-    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlatePartition,
-    PlatePartitionConfig, classify_boundaries, classify_crust, derive_crust_birth_prior,
-    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
+    BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
+    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
+    PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
+    PlateKinematicsConfig, PlateMigrationConfig, PlatePartition, PlatePartitionConfig,
+    classify_boundaries, classify_crust, derive_crust_birth_prior, evolve_plate_ownership,
+    generate_plate_kinematics, partition_plates,
 };
 
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
@@ -48,9 +49,16 @@ pub fn reference_partition() -> (SphereMesh, PlatePartition) {
 }
 
 pub fn reference_evolution_config() -> PlateEvolutionConfig {
+    let default = PlateEvolutionConfig::default();
     PlateEvolutionConfig {
         step_duration: REFERENCE_STEP_DURATION,
-        ..PlateEvolutionConfig::default()
+        deformation: BoundaryDeformationConfig {
+            // The whole reference run, so a boundary that converged throughout
+            // reaches its full profile offset, as the viewer's defaults do.
+            full_deformation_time: default.step_count as f32 * REFERENCE_STEP_DURATION,
+            ..BoundaryDeformationConfig::default()
+        },
+        ..default
     }
 }
 
@@ -111,6 +119,57 @@ pub fn final_state_fixture() -> (SphereMesh, CrustClassification, PlateEvolution
     let fixture = evolution_fixture();
     let evolution = fixture.evolve(reference_evolution_config());
     (fixture.mesh, fixture.crust, evolution)
+}
+
+/// Rigid rotations that carry the two cells of `edge` along their own
+/// separation direction at unit speed: `outward` of one pulls them apart
+/// and minus one pushes them together. `omega = p x d` is the rotation
+/// whose velocity at `p` is the tangential part of `d`.
+pub fn opposed_kinematics(mesh: &SphereMesh, edge: usize, outward: f32) -> PlateKinematics {
+    let [first, second] = mesh.edges[edge].cells.map(|cell| mesh.cell_centers[cell]);
+    let apart = (second - first).normalized() * outward;
+    PlateKinematics {
+        angular_velocities: vec![first.cross(-apart), second.cross(apart)],
+    }
+}
+
+/// A one-cell plate inside a larger one, moving apart from or into it.
+pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> EvolutionFixture {
+    let (mesh, edge, partition) = two_plate_boundary_partition();
+    let crust = CrustClassification { plate_classes };
+    let kinematics = opposed_kinematics(&mesh, edge, outward);
+    let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
+    let birth_prior = derive_crust_birth_prior(
+        &mesh,
+        &partition,
+        &crust,
+        &boundaries,
+        CrustBirthPriorConfig::default(),
+    )
+    .unwrap();
+    EvolutionFixture {
+        mesh,
+        partition,
+        crust,
+        kinematics,
+        boundaries,
+        birth_prior,
+    }
+}
+
+/// A step long enough to travel one cell width on the 32-cell mesh, with
+/// migration off: the one-cell plate the rifting fixture opens from would
+/// otherwise be swallowed by its own convergent edge before it opened
+/// anything.
+pub fn rift_config(step_count: usize) -> PlateEvolutionConfig {
+    PlateEvolutionConfig {
+        step_count,
+        step_duration: 0.7,
+        migration: PlateMigrationConfig {
+            minimum_convergence: f32::MAX,
+        },
+        ..PlateEvolutionConfig::default()
+    }
 }
 
 pub fn two_plate_boundary_partition() -> (SphereMesh, usize, PlatePartition) {

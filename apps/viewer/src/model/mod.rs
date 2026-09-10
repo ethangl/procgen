@@ -599,7 +599,7 @@ mod tests {
         let previous = Fixture::generate(test_settings(32, 55));
         cache.store(previous.complete()).unwrap();
         let mut app = app_with(cache.clone(), GenerationSettings::default());
-        let requested = test_settings(64, 56);
+        let requested = test_settings(64, 59);
         app.world_mut().insert_resource(requested);
 
         generate(&mut app, GenerateRequest::AllPhases);

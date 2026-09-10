@@ -2,10 +2,11 @@
 //!
 //! Plate partitioning, flow-field-fitted rigid plate motion, static boundary
 //! classification, static per-plate crust classification, one-step plate
-//! migration, deterministic multi-step evolution of ownership and crust birth,
-//! post-evolution boundary deformation, seafloor age in evolution steps,
-//! oceanic bathymetric base elevation, and coarse elevation composition live
-//! here. Geological effects remain separate later stages.
+//! migration, deterministic multi-step evolution of ownership and of what the
+//! cells carry — crust birth and the deformation the boundaries raise on them
+//! step by step — seafloor age in evolution steps, oceanic bathymetric base
+//! elevation, and coarse elevation composition live here. Geological effects
+//! remain separate later stages.
 
 mod base_elevation;
 mod boundaries;
@@ -20,6 +21,7 @@ mod motion;
 mod partition;
 mod seafloor_age;
 mod stage;
+mod step;
 
 #[cfg(test)]
 mod test_support;
@@ -38,17 +40,17 @@ pub use crust::{
 };
 pub use deformation::{
     BoundaryDeformation, BoundaryDeformationConfig, BoundaryDeformationDiagnostics,
-    BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile, derive_boundary_deformation,
+    BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile,
 };
 pub use elevation::{
     CoarseElevation, CoarseElevationConfig, CoarseElevationError, SEA_LEVEL,
     compose_coarse_elevation, is_land, land_elevation_meters,
 };
 pub use evolution::{
-    DEFAULT_STEP_DURATION, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
-    PlateEvolutionError, PlateEvolutionInputs, evolve_plate_ownership,
+    PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,
+    PlateEvolutionInputs, evolve_plate_ownership,
 };
-pub use field::FieldSummary;
+pub use field::{DEFAULT_STEP_DURATION, FieldSummary};
 pub use migration::{
     CellMigration, PlateMigration, PlateMigrationConfig, PlateMigrationError, migrate_plates_once,
 };

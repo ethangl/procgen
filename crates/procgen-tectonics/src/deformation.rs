@@ -1,6 +1,20 @@
+//! Uplift and subsidence raised at the boundaries of one evolution step.
+//!
+//! A step's boundaries, the plates that currently own their cells, and the
+//! crust those cells currently carry give every boundary cell one source
+//! profile. Sources propagate a bounded number of hops inside their own plate
+//! and resolve overlaps by maximum magnitude, exactly as the removed
+//! post-evolution stage did over the final boundaries. The difference is that
+//! the profile is now an increment: it is scaled by how much of
+//! [`BoundaryDeformationConfig::full_deformation_time`] the step spent and
+//! added into the field evolution carries with the crust. Belts therefore
+//! widen where a boundary converged for many steps, a suture survives where a
+//! boundary used to be, and a boundary that changed regime leaves both marks.
+
 use crate::{
     BoundaryClass, BoundaryClassification, CellCrust, CrustClass, FieldSummary, PlatePartition,
-    field::summarize_field, stage::StageInputError,
+    field::{DEFAULT_STEP_DURATION, summarize_field},
+    stage::StageInputError,
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::{collections::VecDeque, fmt};
@@ -47,6 +61,18 @@ pub struct BoundaryDeformationConfig {
     pub trench: BoundaryEffect,
     /// Motion magnitude at which a boundary effect reaches its full offset.
     pub saturation_speed: f32,
+    /// Model time over which a saturated boundary raises its full profile
+    /// offset. Each step adds the profile scaled by the step's duration over
+    /// this time, so the default of nine default steps
+    /// (`9 * DEFAULT_STEP_DURATION`) makes the viewer's nine-step defaults
+    /// reproduce the magnitudes the removed final-boundary stage produced, at
+    /// a boundary that converged for the whole run.
+    pub full_deformation_time: f32,
+    /// Magnitude the accumulated field is clamped to. The default is the
+    /// largest offset the default profiles can raise — the collision centre at
+    /// 0.5, against 0.4 for the convergent, transform, and rift centres and
+    /// 0.2 for the trench — so the clamp does not bite at the defaults.
+    pub maximum_magnitude: f32,
 }
 
 impl Default for BoundaryDeformationConfig {
@@ -74,6 +100,8 @@ impl Default for BoundaryDeformationConfig {
                 depth: 1,
             },
             saturation_speed: 2.0,
+            full_deformation_time: 9.0 * DEFAULT_STEP_DURATION,
+            maximum_magnitude: 0.5,
         }
     }
 }
@@ -81,14 +109,15 @@ impl Default for BoundaryDeformationConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BoundaryDeformationDiagnostics {
     pub summary: FieldSummary,
-    /// Boundary cells that retained a nonzero deformation source.
+    /// Boundary cells that sourced a nonzero profile across all steps. A cell
+    /// can contribute once per step.
     pub source_cell_count: usize,
     pub uplifted_cell_count: usize,
     pub subsided_cell_count: usize,
 }
 
 impl BoundaryDeformationDiagnostics {
-    fn summarize(deformation: &[f32], source_cell_count: usize) -> Self {
+    pub(crate) fn summarize(deformation: &[f32], source_cell_count: usize) -> Self {
         let mut uplifted_cell_count = 0;
         let mut subsided_cell_count = 0;
         let summary = summarize_field(deformation, |value| {
@@ -108,7 +137,8 @@ impl BoundaryDeformationDiagnostics {
     }
 }
 
-/// Signed per-cell deformation derived only from the final tectonic state.
+/// Signed per-cell deformation accumulated over every evolution step, carried
+/// with the crust that it deformed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundaryDeformation {
     pub cell_deformation: Vec<f32>,
@@ -128,69 +158,56 @@ impl BoundaryDeformation {
 pub enum BoundaryDeformationError {
     InvalidConfig,
     InvalidRiftProfile,
-    Input(StageInputError),
 }
 
 impl fmt::Display for BoundaryDeformationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig => formatter.write_str(
-                "deformation offsets must be finite and saturation speed must be finite and positive",
+                "deformation offsets must be finite, and saturation speed, full deformation time, and maximum magnitude must be finite and positive",
             ),
             Self::InvalidRiftProfile => write!(
                 formatter,
                 "rift profile must satisfy center < flank < 0 and decay depth >= {}",
                 ContinentalRiftProfile::MIN_DECAY_DEPTH
             ),
-            Self::Input(error) => error.fmt(formatter),
         }
     }
 }
 
-impl std::error::Error for BoundaryDeformationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidConfig | Self::InvalidRiftProfile => None,
-            Self::Input(error) => Some(error),
-        }
-    }
-}
+impl std::error::Error for BoundaryDeformationError {}
 
-impl From<StageInputError> for BoundaryDeformationError {
-    fn from(error: StageInputError) -> Self {
-        Self::Input(error)
-    }
-}
-
-/// Derives signed boundary deformation from final ownership, final per-cell
-/// crust, and final boundary classes and strengths.
+/// Adds one step's boundary deformation into `accumulated` and returns how
+/// many boundary cells carried a source.
 ///
 /// Each boundary cell retains the strongest local source by absolute
 /// magnitude. Sources then propagate for a bounded number of mesh hops without
-/// crossing the final owning plate. Later overlaps also use maximum absolute
-/// magnitude; stable cell iteration makes equal-magnitude ties deterministic.
-pub fn derive_boundary_deformation(
+/// crossing the plate that currently owns them, and overlaps within the step
+/// also use maximum absolute magnitude; stable cell iteration makes
+/// equal-magnitude ties deterministic. `scale` is the fraction of
+/// [`BoundaryDeformationConfig::full_deformation_time`] the step spent, and
+/// multiplying the propagated field by it is the same as scaling every source,
+/// because the maxima that resolve overlaps are taken on magnitudes a positive
+/// scale preserves.
+///
+/// `config` must have passed [`validate_config`]; evolution runs that once
+/// rather than once per step.
+pub(crate) fn accumulate_boundary_deformation(
     mesh: &SphereMesh,
     partition: &PlatePartition,
     crust: CellCrust<'_>,
     boundaries: &BoundaryClassification,
-    config: BoundaryDeformationConfig,
-) -> Result<BoundaryDeformation, BoundaryDeformationError> {
-    validate_config(config)?;
-    partition.validate(mesh)?;
-    crust.validate(mesh)?;
-    boundaries.validate(mesh)?;
-
-    let sources = collect_boundary_sources(mesh, crust, boundaries, &config);
-    let source_cell_count = sources.iter().flatten().count();
-    let cell_deformation = propagate_boundary_effects(mesh, partition, &sources);
-    let diagnostics =
-        BoundaryDeformationDiagnostics::summarize(&cell_deformation, source_cell_count);
-
-    Ok(BoundaryDeformation {
-        cell_deformation,
-        diagnostics,
-    })
+    config: &BoundaryDeformationConfig,
+    scale: f32,
+    accumulated: &mut [f32],
+) -> usize {
+    let sources = collect_boundary_sources(mesh, crust, boundaries, config);
+    let increment = propagate_boundary_effects(mesh, partition, &sources);
+    let limit = config.maximum_magnitude;
+    for (total, offset) in accumulated.iter_mut().zip(increment) {
+        *total = (*total + offset * scale).clamp(-limit, limit);
+    }
+    sources.iter().flatten().count()
 }
 
 fn collect_boundary_sources(
@@ -242,7 +259,9 @@ fn boundary_source(
     }
 }
 
-fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDeformationError> {
+pub(crate) fn validate_config(
+    config: BoundaryDeformationConfig,
+) -> Result<(), BoundaryDeformationError> {
     if !config.rift.is_valid() {
         return Err(BoundaryDeformationError::InvalidRiftProfile);
     }
@@ -252,9 +271,15 @@ fn validate_config(config: BoundaryDeformationConfig) -> Result<(), BoundaryDefo
         config.collision,
         config.trench,
     ];
+    let positives = [
+        config.saturation_speed,
+        config.full_deformation_time,
+        config.maximum_magnitude,
+    ];
     if effects.iter().any(|effect| !effect.offset.is_finite())
-        || !config.saturation_speed.is_finite()
-        || config.saturation_speed <= 0.0
+        || positives
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
     {
         return Err(BoundaryDeformationError::InvalidConfig);
     }
@@ -376,27 +401,86 @@ mod tests {
         plate_cell_birth(partition, plate_classes)
     }
 
-    #[test]
-    fn deformation_is_deterministic_and_signed() {
-        let (mesh, _, evolution) = final_state_fixture();
-        let partition = &evolution.partition;
-        let crust = evolution.cell_crust();
-        let boundaries = &evolution.boundaries;
-        let config = BoundaryDeformationConfig::default();
-        let first =
-            derive_boundary_deformation(&mesh, partition, crust, boundaries, config).unwrap();
+    /// One step's whole profile, over crust nothing has deformed yet.
+    fn deform_once(
+        mesh: &SphereMesh,
+        partition: &PlatePartition,
+        cell_birth: &[Option<i32>],
+        boundaries: &BoundaryClassification,
+        config: BoundaryDeformationConfig,
+    ) -> Vec<f32> {
+        let mut field = vec![0.0; mesh.cell_count()];
+        accumulate_boundary_deformation(
+            mesh,
+            partition,
+            CellCrust { cell_birth },
+            boundaries,
+            &config,
+            1.0,
+            &mut field,
+        );
+        field
+    }
 
+    #[test]
+    fn an_evolved_field_is_signed_and_summarizes_its_own_cells() {
+        let (mesh, _, evolution) = final_state_fixture();
+        let deformation = &evolution.deformation;
+
+        deformation.validate(&mesh).unwrap();
+        assert!(deformation.diagnostics.summary.minimum < 0.0);
+        assert!(deformation.diagnostics.summary.maximum > 0.0);
         assert_eq!(
-            first,
-            derive_boundary_deformation(&mesh, partition, crust, boundaries, config).unwrap()
+            deformation.diagnostics.affected_cell_count(),
+            deformation.diagnostics.uplifted_cell_count
+                + deformation.diagnostics.subsided_cell_count
         );
-        assert!(first.diagnostics.summary.minimum < 0.0);
-        assert!(first.diagnostics.summary.maximum > 0.0);
         assert_eq!(
-            first.diagnostics.affected_cell_count(),
-            first.diagnostics.uplifted_cell_count + first.diagnostics.subsided_cell_count
+            deformation.diagnostics.affected_cell_count(),
+            deformation
+                .cell_deformation
+                .iter()
+                .filter(|value| **value != 0.0)
+                .count()
         );
-        assert!(first.diagnostics.affected_cell_count() >= first.diagnostics.source_cell_count);
+    }
+
+    #[test]
+    fn a_step_adds_its_scaled_profile_and_clamps_the_running_total() {
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
+        let cell_birth = plate_crust(&partition, &[CrustClass::Continental; 2]);
+        let mut boundaries = empty_boundaries(&mesh);
+        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
+        boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
+        let config = BoundaryDeformationConfig {
+            maximum_magnitude: 0.5,
+            ..Default::default()
+        };
+        let whole = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert_eq!(whole[edge.cells[0]], config.convergent.offset);
+
+        let mut accumulated = vec![0.0; mesh.cell_count()];
+        for expected in [0.1, 0.2, 0.3, 0.4, 0.5, 0.5] {
+            let source_cell_count = accumulate_boundary_deformation(
+                &mesh,
+                &partition,
+                CellCrust {
+                    cell_birth: &cell_birth,
+                },
+                &boundaries,
+                &config,
+                0.25,
+                &mut accumulated,
+            );
+            assert_eq!(source_cell_count, 2);
+            assert!((accumulated[edge.cells[0]] - expected).abs() < 1.0e-6);
+        }
+        assert!(
+            accumulated
+                .iter()
+                .all(|value| value.abs() <= config.maximum_magnitude)
+        );
     }
 
     #[test]
@@ -420,32 +504,14 @@ mod tests {
             ..Default::default()
         };
 
-        let original = derive_boundary_deformation(
-            &mesh,
-            &partition,
-            CellCrust {
-                cell_birth: &cell_birth,
-            },
-            &boundaries,
-            config,
-        )
-        .unwrap();
-        assert!(original.cell_deformation[edge.cells[0]] > 0.0);
-        assert!(original.cell_deformation[edge.cells[1]] < 0.0);
+        let original = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert!(original[edge.cells[0]] > 0.0);
+        assert!(original[edge.cells[1]] < 0.0);
 
         cell_birth.swap(edge.cells[0], edge.cells[1]);
-        let changed = derive_boundary_deformation(
-            &mesh,
-            &partition,
-            CellCrust {
-                cell_birth: &cell_birth,
-            },
-            &boundaries,
-            config,
-        )
-        .unwrap();
-        assert!(changed.cell_deformation[edge.cells[0]] < 0.0);
-        assert!(changed.cell_deformation[edge.cells[1]] > 0.0);
+        let changed = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert!(changed[edge.cells[0]] < 0.0);
+        assert!(changed[edge.cells[1]] > 0.0);
     }
 
     #[test]
@@ -453,9 +519,6 @@ mod tests {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
         let cell_birth = plate_crust(&partition, &[CrustClass::Continental; 2]);
-        let crust = CellCrust {
-            cell_birth: &cell_birth,
-        };
         let config = BoundaryDeformationConfig {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
@@ -473,31 +536,22 @@ mod tests {
         boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
         boundaries.edge_normal_speeds[edge_index] = [-0.5, -0.5];
         boundaries.edge_shear[edge_index] = 3.0;
-        let divergent =
-            derive_boundary_deformation(&mesh, &partition, crust, &boundaries, config).unwrap();
+        let divergent = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         for cell in edge.cells {
-            assert_eq!(
-                divergent.cell_deformation[cell],
-                config.rift.center_offset / 4.0
-            );
+            assert_eq!(divergent[cell], config.rift.center_offset / 4.0);
         }
         let expected_flank = config.rift.flank_offset * 0.5 / config.saturation_speed;
         assert!(
             divergent
-                .cell_deformation
                 .iter()
                 .enumerate()
                 .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == expected_flank)
         );
 
         boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
-        let transform =
-            derive_boundary_deformation(&mesh, &partition, crust, &boundaries, config).unwrap();
+        let transform = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         for cell in edge.cells {
-            assert_eq!(
-                transform.cell_deformation[cell],
-                config.transform.offset * 3.0 / 4.0
-            );
+            assert_eq!(transform[cell], config.transform.offset * 3.0 / 4.0);
         }
     }
 
@@ -522,18 +576,16 @@ mod tests {
         let crust = CellCrust {
             cell_birth: &cell_birth,
         };
-        let deformation =
-            derive_boundary_deformation(&mesh, &partition, crust, &boundaries, config).unwrap();
+        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         for cell in edge.cells {
             let expected = match crust.class(cell) {
                 CrustClass::Continental => -0.4,
                 CrustClass::Oceanic => 0.0,
             };
-            assert_eq!(deformation.cell_deformation[cell], expected);
+            assert_eq!(deformation[cell], expected);
         }
 
         let rift_flanks = deformation
-            .cell_deformation
             .iter()
             .enumerate()
             .filter(|(cell, value)| {
@@ -543,25 +595,15 @@ mod tests {
         assert_eq!(rift_flanks, 4);
         assert!(
             deformation
-                .cell_deformation
                 .iter()
                 .enumerate()
                 .all(|(cell, &value)| partition.cell_plates[cell] == 0 || value == 0.0)
         );
 
         cell_birth.swap(edge.cells[0], edge.cells[1]);
-        let changed = derive_boundary_deformation(
-            &mesh,
-            &partition,
-            CellCrust {
-                cell_birth: &cell_birth,
-            },
-            &boundaries,
-            config,
-        )
-        .unwrap();
-        assert_eq!(changed.cell_deformation[edge.cells[0]], 0.0);
-        assert_eq!(changed.cell_deformation[edge.cells[1]], -0.4);
+        let changed = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert_eq!(changed[edge.cells[0]], 0.0);
+        assert_eq!(changed[edge.cells[1]], -0.4);
     }
 
     #[test]
@@ -609,9 +651,6 @@ mod tests {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
         let cell_birth = plate_crust(&partition, &[CrustClass::Continental; 2]);
-        let crust = CellCrust {
-            cell_birth: &cell_birth,
-        };
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
@@ -623,12 +662,10 @@ mod tests {
             ..Default::default()
         };
 
-        let deformation =
-            derive_boundary_deformation(&mesh, &partition, crust, &boundaries, config).unwrap();
-        assert_eq!(deformation.cell_deformation[edge.cells[1]], 0.4);
+        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert_eq!(deformation[edge.cells[1]], 0.4);
         assert_eq!(
             deformation
-                .cell_deformation
                 .iter()
                 .enumerate()
                 .filter(|(cell, value)| partition.cell_plates[*cell] == 1 && **value != 0.0)
@@ -637,7 +674,6 @@ mod tests {
         );
         assert!(
             deformation
-                .cell_deformation
                 .iter()
                 .enumerate()
                 .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == 0.2)
@@ -701,27 +737,45 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_configuration_and_mismatched_inputs() {
-        let (mesh, _, evolution) = final_state_fixture();
-        let partition = evolution.partition.clone();
-        let cell_birth = evolution.cell_birth.clone();
-        let crust = CellCrust {
-            cell_birth: &cell_birth,
-        };
-        let boundaries = evolution.boundaries.clone();
+    fn rejects_invalid_configuration() {
         assert_eq!(
-            derive_boundary_deformation(
-                &mesh,
-                &partition,
-                crust,
-                &boundaries,
-                BoundaryDeformationConfig {
-                    saturation_speed: 0.0,
-                    ..Default::default()
-                }
-            ),
-            Err(BoundaryDeformationError::InvalidConfig)
+            validate_config(BoundaryDeformationConfig::default()),
+            Ok(())
         );
+        for config in [
+            BoundaryDeformationConfig {
+                saturation_speed: 0.0,
+                ..Default::default()
+            },
+            BoundaryDeformationConfig {
+                full_deformation_time: 0.0,
+                ..Default::default()
+            },
+            BoundaryDeformationConfig {
+                full_deformation_time: f32::NAN,
+                ..Default::default()
+            },
+            BoundaryDeformationConfig {
+                maximum_magnitude: -1.0,
+                ..Default::default()
+            },
+            BoundaryDeformationConfig {
+                maximum_magnitude: f32::INFINITY,
+                ..Default::default()
+            },
+            BoundaryDeformationConfig {
+                convergent: BoundaryEffect {
+                    offset: f32::NAN,
+                    ..BoundaryDeformationConfig::default().convergent
+                },
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                validate_config(config),
+                Err(BoundaryDeformationError::InvalidConfig)
+            );
+        }
         for rift in [
             ContinentalRiftProfile {
                 center_offset: 0.1,
@@ -742,57 +796,12 @@ mod tests {
             },
         ] {
             assert_eq!(
-                derive_boundary_deformation(
-                    &mesh,
-                    &partition,
-                    crust,
-                    &boundaries,
-                    BoundaryDeformationConfig {
-                        rift,
-                        ..Default::default()
-                    }
-                ),
+                validate_config(BoundaryDeformationConfig {
+                    rift,
+                    ..Default::default()
+                }),
                 Err(BoundaryDeformationError::InvalidRiftProfile)
             );
         }
-
-        let mut short_partition = partition.clone();
-        short_partition.cell_plates.pop();
-        assert_eq!(
-            derive_boundary_deformation(
-                &mesh,
-                &short_partition,
-                crust,
-                &boundaries,
-                BoundaryDeformationConfig::default()
-            ),
-            Err(BoundaryDeformationError::Input(StageInputError::Cells))
-        );
-
-        assert_eq!(
-            derive_boundary_deformation(
-                &mesh,
-                &partition,
-                CellCrust {
-                    cell_birth: &cell_birth[1..]
-                },
-                &boundaries,
-                BoundaryDeformationConfig::default()
-            ),
-            Err(BoundaryDeformationError::Input(StageInputError::CrustBirth))
-        );
-
-        let mut short_boundaries = boundaries.clone();
-        short_boundaries.edge_classes.pop();
-        assert_eq!(
-            derive_boundary_deformation(
-                &mesh,
-                &partition,
-                crust,
-                &short_boundaries,
-                BoundaryDeformationConfig::default()
-            ),
-            Err(BoundaryDeformationError::Input(StageInputError::Boundaries))
-        );
     }
 }

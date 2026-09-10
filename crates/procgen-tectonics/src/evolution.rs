@@ -1,42 +1,38 @@
 //! Deterministic multi-step plate evolution.
 //!
-//! A step classifies the boundaries of the current ownership and then moves
-//! two kinds of distance. Convergent edges accumulate what they close, and an
-//! edge that has closed a whole cell width moves one cell across itself: the
-//! retreating cell joins the advancing plate and takes the advancing cell's
-//! crust with it, because the overriding plate's material now covers it. Every
-//! cell separately accumulates the distance it has travelled, and a cell that
-//! has travelled a whole cell width pulls the crust of the same-plate
-//! neighbour behind it. A cell with no neighbour behind it sits on the plate's
-//! trailing edge, and if the boundary there is a ridge the plate has opened
-//! and the cell is reborn as crust made this step.
+//! A run classifies the boundaries of the current ownership, advances one step
+//! over them, reclassifies, and repeats. What a step does lives in `step.rs`;
+//! this module owns the run: its config, its inputs, the totals it keeps, and
+//! the state it hands on.
 //!
-//! Four things therefore survive a step: ownership, each cell's birth step,
-//! and the two debts. Crust class is not one of them. It is read from birth,
-//! so a continental plate that rifts grows an oceanic margin and an overridden
-//! cell takes the overriding material's class without anything storing a
-//! second answer to the question.
+//! Five things survive a step: ownership, the two fields each cell carries —
+//! its birth step and the deformation the boundaries have raised on it — and
+//! the closing and travel debts. Crust class is not one of them. It is read
+//! from birth, so a continental plate that rifts grows an oceanic margin and an
+//! overridden cell takes the overriding material's class without anything
+//! storing a second answer to the question.
+//!
+//! Deformation therefore records where the boundaries have been as well as
+//! where they are: belts widen where a boundary converged for many steps, a
+//! suture stays behind where a boundary used to be, and a boundary that
+//! changed regime leaves both marks.
 
 use crate::{
-    BoundaryClass, BoundaryClassification, BoundaryClassificationError, CellCrust, CrustBirthPrior,
-    CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
+    BoundaryClassification, BoundaryClassificationError, BoundaryDeformation,
+    BoundaryDeformationConfig, BoundaryDeformationDiagnostics, BoundaryDeformationError, CellCrust,
+    CrustBirthPrior, CrustClassification, PlateKinematics, PlateMigration, PlateMigrationConfig,
     PlateMigrationError, PlatePartition, StageInputError, classify_boundaries,
-    field::mean_cell_width, migrate_plates_once, migration::accumulate_closing_distances,
+    deformation::validate_config,
+    field::DEFAULT_STEP_DURATION,
+    step::{CarriedFields, EvolvingWorld},
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
-/// Model time per step at the viewer's default mesh: the unit sphere's cell
-/// width `sqrt(4 pi / 65_536)` is 0.0138, and a plate at the default maximum
-/// angular speed of 1.0 covers unit distance per unit time, so one cell width
-/// takes that long. Rounded to a round number, because nothing downstream
-/// resolves the difference.
-pub const DEFAULT_STEP_DURATION: f32 = 0.014;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlateEvolutionConfig {
-    /// Number of complete boundary-classification, migration, and advection
-    /// transitions.
+    /// Number of complete boundary-classification, deformation, migration,
+    /// and advection transitions.
     pub step_count: usize,
     /// Model time advanced per step. Every displacement is a speed times this
     /// duration measured against the mesh's cell width, so a finer mesh has a
@@ -45,6 +41,11 @@ pub struct PlateEvolutionConfig {
     /// world. See [`DEFAULT_STEP_DURATION`] for where the default sits.
     pub step_duration: f32,
     pub migration: PlateMigrationConfig,
+    /// Profiles the boundaries current in each step raise into the carried
+    /// deformation field. It sits here rather than beside evolution because
+    /// deformation is a substage of a step exactly as migration is: a config
+    /// evolution reads, not a result it is handed.
+    pub deformation: BoundaryDeformationConfig,
 }
 
 impl Default for PlateEvolutionConfig {
@@ -53,6 +54,7 @@ impl Default for PlateEvolutionConfig {
             step_count: 5,
             step_duration: DEFAULT_STEP_DURATION,
             migration: PlateMigrationConfig::default(),
+            deformation: BoundaryDeformationConfig::default(),
         }
     }
 }
@@ -100,8 +102,7 @@ pub struct PlateEvolutionInputs<'a> {
     pub birth_prior: &'a CrustBirthPrior,
 }
 
-/// Final ownership, boundary state, and crust birth after deterministic
-/// evolution.
+/// Final ownership, boundary state, and the fields the run's cells carry.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlateEvolution {
     pub partition: PlatePartition,
@@ -110,6 +111,9 @@ pub struct PlateEvolution {
     /// the prior for crust that predates step zero; `None` is original
     /// continental crust that evolution never re-made.
     pub cell_birth: Vec<Option<i32>>,
+    /// Deformation summed over every step's boundaries and carried with the
+    /// crust, so it records where boundaries were as well as where they are.
+    pub deformation: BoundaryDeformation,
     pub diagnostics: PlateEvolutionDiagnostics,
 }
 
@@ -117,6 +121,7 @@ impl PlateEvolution {
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
         self.partition.validate(mesh)?;
         self.boundaries.validate(mesh)?;
+        self.deformation.validate(mesh)?;
         self.cell_crust().validate(mesh)
     }
 
@@ -132,6 +137,7 @@ impl PlateEvolution {
 pub enum PlateEvolutionError {
     InvalidStepDuration,
     InvalidMinimumConvergence,
+    Deformation(BoundaryDeformationError),
     Input(StageInputError),
     Boundary(BoundaryClassificationError),
     Migration(PlateMigrationError),
@@ -146,6 +152,7 @@ impl fmt::Display for PlateEvolutionError {
             Self::InvalidMinimumConvergence => {
                 formatter.write_str("minimum convergence must be finite and non-negative")
             }
+            Self::Deformation(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
             Self::Boundary(error) => error.fmt(formatter),
             Self::Migration(error) => error.fmt(formatter),
@@ -154,6 +161,12 @@ impl fmt::Display for PlateEvolutionError {
 }
 
 impl std::error::Error for PlateEvolutionError {}
+
+impl From<BoundaryDeformationError> for PlateEvolutionError {
+    fn from(error: BoundaryDeformationError) -> Self {
+        Self::Deformation(error)
+    }
+}
 
 impl From<StageInputError> for PlateEvolutionError {
     fn from(error: StageInputError) -> Self {
@@ -173,8 +186,9 @@ impl From<PlateMigrationError> for PlateEvolutionError {
     }
 }
 
-/// Repeatedly classifies current boundaries, applies one simultaneous
-/// migration transition, and advects crust one cell width at a time.
+/// Repeatedly classifies current boundaries, raises deformation along them,
+/// applies one simultaneous migration transition, and advects what the cells
+/// carry one cell width at a time.
 ///
 /// Plate crust classes are read-only and describe plates; the returned
 /// [`PlateEvolution::cell_crust`] is what a cell carries.
@@ -191,27 +205,20 @@ pub fn evolve_plate_ownership(
     {
         return Err(PlateEvolutionError::InvalidMinimumConvergence);
     }
+    validate_config(config.deformation)?;
     inputs.partition.validate(mesh)?;
     inputs.crust.validate(inputs.partition)?;
     inputs.kinematics.validate(inputs.partition)?;
     inputs.boundaries.validate(mesh)?;
     inputs.birth_prior.validate(mesh)?;
 
-    let mut world = EvolvingWorld {
-        mesh,
-        crust: inputs.crust,
-        kinematics: inputs.kinematics,
-        config,
-        cell_width: mean_cell_width(mesh),
-        partition: inputs.partition.clone(),
-        cell_birth: inputs.birth_prior.cell_birth.clone(),
-        edge_closing: vec![0.0; mesh.edge_count()],
-        cell_travel: vec![0.0; mesh.cell_count()],
-    };
+    let mut world = EvolvingWorld::new(mesh, inputs, config);
     let mut boundaries = inputs.boundaries.clone();
     let mut diagnostics = PlateEvolutionDiagnostics::default();
+    let mut source_cell_count = 0;
 
     for step in 0..config.step_count {
+        source_cell_count += world.deform(&boundaries);
         let migrated_cell_count = diagnostics.record_migration(&world.migrate(&boundaries)?);
         let born_cell_count = world.advect(&boundaries, step as i32);
         diagnostics.born_cell_count += born_cell_count;
@@ -220,136 +227,34 @@ pub fn evolve_plate_ownership(
         boundaries = classify_boundaries(mesh, &world.partition, inputs.kinematics)?;
     }
 
+    let CarriedFields {
+        birth: cell_birth,
+        deformation: cell_deformation,
+    } = world.carried;
     Ok(PlateEvolution {
         partition: world.partition,
         boundaries,
-        cell_birth: world.cell_birth,
+        cell_birth,
+        deformation: BoundaryDeformation {
+            diagnostics: BoundaryDeformationDiagnostics::summarize(
+                &cell_deformation,
+                source_cell_count,
+            ),
+            cell_deformation,
+        },
         diagnostics,
     })
-}
-
-/// The state one step advances, together with the inputs every step reads.
-///
-/// Ownership, birth, and the two debts move together once per step and nothing
-/// outside evolution owns a step, so holding them in one place keeps the
-/// per-step solves in `migration.rs` pure functions of the current state
-/// rather than functions that also return four vectors.
-struct EvolvingWorld<'a> {
-    mesh: &'a SphereMesh,
-    crust: &'a CrustClassification,
-    kinematics: &'a PlateKinematics,
-    config: PlateEvolutionConfig,
-    /// The one distance every accumulated displacement is measured against.
-    cell_width: f32,
-    partition: PlatePartition,
-    cell_birth: Vec<Option<i32>>,
-    /// Closing distance accumulated per boundary edge, in model units.
-    edge_closing: Vec<f32>,
-    /// Distance travelled per cell since its last pull, in model units.
-    cell_travel: Vec<f32>,
-}
-
-impl EvolvingWorld<'_> {
-    /// Advances every edge's closing debt and applies the migrations the debts
-    /// have paid for. A migrating cell takes the advancing cell's crust across
-    /// the edge, and the winning edge's debt drops by one cell width.
-    fn migrate(
-        &mut self,
-        boundaries: &BoundaryClassification,
-    ) -> Result<PlateMigration, PlateMigrationError> {
-        accumulate_closing_distances(
-            boundaries,
-            &mut self.edge_closing,
-            self.config.migration,
-            self.config.step_duration,
-        );
-        let migration = migrate_plates_once(
-            self.mesh,
-            &self.partition,
-            self.crust,
-            boundaries,
-            &self.edge_closing,
-            self.cell_width,
-        )?;
-
-        let previous_birth = self.cell_birth.clone();
-        for (cell, change) in migration.cell_changes.iter().enumerate() {
-            let Some(change) = change else { continue };
-            let cells = self.mesh.edges[change.boundary_edge].cells;
-            let advancing = if cells[0] == cell { cells[1] } else { cells[0] };
-            self.cell_birth[cell] = previous_birth[advancing];
-            self.edge_closing[change.boundary_edge] -= self.cell_width;
-        }
-        self.partition.clone_from(&migration.partition);
-        Ok(migration)
-    }
-
-    /// Advances every cell's travel debt and pulls crust upstream by one cell
-    /// for the cells that have paid for it.
-    ///
-    /// A cell's upstream neighbour is the same-plate neighbour lying most
-    /// nearly opposite its velocity. A cell with none is at the plate's
-    /// trailing edge: if the boundary behind it is a ridge it is new crust
-    /// born this step, and otherwise it keeps the crust it has. Every pull
-    /// reads the field as it stood before this substep, so the update is
-    /// simultaneous.
-    fn advect(&mut self, boundaries: &BoundaryClassification, step: i32) -> usize {
-        let mesh = self.mesh;
-        let previous_birth = self.cell_birth.clone();
-        let mut born_cell_count = 0;
-
-        for cell in 0..mesh.cell_count() {
-            let plate = self.partition.cell_plates[cell];
-            let center = mesh.cell_centers[cell];
-            let velocity = self.kinematics.velocity_at(plate, center);
-            self.cell_travel[cell] += velocity.length() * self.config.step_duration;
-            if self.cell_travel[cell] < self.cell_width {
-                continue;
-            }
-            self.cell_travel[cell] -= self.cell_width;
-
-            let mut upstream: Option<(f32, usize)> = None;
-            let mut behind: Option<(f32, usize)> = None;
-            for corner in mesh.cell_corners(cell) {
-                let opposition = (mesh.cell_centers[corner.neighbor] - center).dot(-velocity);
-                if opposition <= 0.0 {
-                    continue;
-                }
-                if behind.is_none_or(|(best, _)| opposition > best) {
-                    behind = Some((opposition, corner.edge));
-                }
-                if self.partition.cell_plates[corner.neighbor] == plate
-                    && upstream.is_none_or(|(best, _)| opposition > best)
-                {
-                    upstream = Some((opposition, corner.neighbor));
-                }
-            }
-
-            match upstream {
-                Some((_, neighbor)) => self.cell_birth[cell] = previous_birth[neighbor],
-                None => {
-                    let opening = behind.is_some_and(|(_, edge)| {
-                        boundaries.edge_classes[edge] == BoundaryClass::Divergent
-                    });
-                    if opening {
-                        self.cell_birth[cell] = Some(step);
-                        born_cell_count += 1;
-                    }
-                }
-            }
-        }
-        born_cell_count
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deformation::accumulate_boundary_deformation;
     use crate::test_support::{
-        EvolutionFixture, empty_boundaries, evolution_fixture, fingerprint,
-        reference_evolution_config, two_plate_boundary_partition,
+        EvolutionFixture, empty_boundaries, evolution_fixture, fingerprint, opposed_kinematics,
+        reference_evolution_config, rift_config, two_plate_boundary_partition, two_plate_fixture,
     };
-    use crate::{CrustBirthPriorConfig, CrustClass, derive_crust_birth_prior};
+    use crate::{BoundaryClass, BoundaryEffect, ContinentalRiftProfile, CrustClass};
     use procgen_core::Vec3;
 
     fn ownership_fingerprint(evolution: &PlateEvolution) -> u64 {
@@ -371,42 +276,6 @@ mod tests {
         )
     }
 
-    /// Rigid rotations that carry the two cells of `edge` along their own
-    /// separation direction at unit speed: `outward` of one pulls them apart
-    /// and minus one pushes them together. `omega = p x d` is the rotation
-    /// whose velocity at `p` is the tangential part of `d`.
-    fn opposed_kinematics(mesh: &SphereMesh, edge: usize, outward: f32) -> PlateKinematics {
-        let [first, second] = mesh.edges[edge].cells.map(|cell| mesh.cell_centers[cell]);
-        let apart = (second - first).normalized() * outward;
-        PlateKinematics {
-            angular_velocities: vec![first.cross(-apart), second.cross(apart)],
-        }
-    }
-
-    /// A one-cell plate inside a larger one, moving apart from or into it.
-    fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> EvolutionFixture {
-        let (mesh, edge, partition) = two_plate_boundary_partition();
-        let crust = CrustClassification { plate_classes };
-        let kinematics = opposed_kinematics(&mesh, edge, outward);
-        let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
-        let birth_prior = derive_crust_birth_prior(
-            &mesh,
-            &partition,
-            &crust,
-            &boundaries,
-            CrustBirthPriorConfig::default(),
-        )
-        .unwrap();
-        EvolutionFixture {
-            mesh,
-            partition,
-            crust,
-            kinematics,
-            boundaries,
-            birth_prior,
-        }
-    }
-
     #[test]
     fn multi_step_evolution_is_deterministic_and_has_stable_aggregates() {
         let fixture = evolution_fixture();
@@ -425,6 +294,18 @@ mod tests {
         assert!((first.diagnostics.maximum_convergence - 1.579_952_7).abs() < 1.0e-3);
         assert_eq!(ownership_fingerprint(&first), 3_267_391_620_510_768_872);
         assert_eq!(birth_fingerprint(&first), 8_599_187_947_100_659_055);
+
+        // Float, so it is never pinned; equality above already covers the whole
+        // result including this field.
+        let deformation = &first.deformation;
+        assert!(deformation.diagnostics.affected_cell_count() > 0);
+        assert!(deformation.diagnostics.source_cell_count > 0);
+        assert!(
+            deformation
+                .cell_deformation
+                .iter()
+                .all(|value| value.abs() <= config.deformation.maximum_magnitude)
+        );
     }
 
     #[test]
@@ -452,20 +333,14 @@ mod tests {
         assert_eq!(evolution.partition, fixture.partition);
         assert_eq!(evolution.cell_birth, fixture.birth_prior.cell_birth);
         assert_eq!(evolution.diagnostics, PlateEvolutionDiagnostics::default());
-    }
-
-    /// A step long enough to travel one cell width on the 32-cell mesh, with
-    /// migration off: the one-cell plate this fixture rifts from would
-    /// otherwise be swallowed by its own convergent edge before it opened
-    /// anything.
-    fn rift_config(step_count: usize) -> PlateEvolutionConfig {
-        PlateEvolutionConfig {
-            step_count,
-            step_duration: 0.7,
-            migration: PlateMigrationConfig {
-                minimum_convergence: f32::MAX,
-            },
-        }
+        assert!(
+            evolution
+                .deformation
+                .cell_deformation
+                .iter()
+                .all(|&value| value == 0.0),
+            "a step that advances no time raises no deformation"
+        );
     }
 
     #[test]
@@ -522,6 +397,7 @@ mod tests {
             migration: PlateMigrationConfig {
                 minimum_convergence: convergence * 0.999,
             },
+            ..PlateEvolutionConfig::default()
         };
         let qualifying = (0..fixture.mesh.edge_count())
             .filter(|&edge| fixture.boundaries.convergence(edge) >= convergence * 0.999)
@@ -659,6 +535,22 @@ mod tests {
             ),
             Err(PlateEvolutionError::InvalidMinimumConvergence)
         );
+        assert_eq!(
+            evolve_plate_ownership(
+                &fixture.mesh,
+                fixture.inputs(),
+                PlateEvolutionConfig {
+                    deformation: BoundaryDeformationConfig {
+                        full_deformation_time: 0.0,
+                        ..BoundaryDeformationConfig::default()
+                    },
+                    ..reference_evolution_config()
+                }
+            ),
+            Err(PlateEvolutionError::Deformation(
+                BoundaryDeformationError::InvalidConfig
+            ))
+        );
 
         let short_prior = CrustBirthPrior {
             cell_birth: fixture.birth_prior.cell_birth[1..].to_vec(),
@@ -689,6 +581,163 @@ mod tests {
                 reference_evolution_config()
             ),
             Err(PlateEvolutionError::Input(StageInputError::Boundaries))
+        );
+    }
+
+    /// A convergent two-plate run whose boundary never moves: migration is off
+    /// and the step is far too short for any cell to travel a cell width, so
+    /// every step classifies the same boundaries and raises the same profile.
+    fn static_boundary_fixture(
+        step_count: usize,
+        maximum_magnitude: f32,
+    ) -> (EvolutionFixture, PlateEvolutionConfig) {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        let config = PlateEvolutionConfig {
+            step_count,
+            step_duration: 0.1,
+            migration: PlateMigrationConfig {
+                minimum_convergence: f32::MAX,
+            },
+            deformation: BoundaryDeformationConfig {
+                // A tenth of the profile per step, and every boundary here
+                // closes far faster than this, so every source saturates.
+                full_deformation_time: 1.0,
+                saturation_speed: 0.1,
+                maximum_magnitude,
+                ..BoundaryDeformationConfig::default()
+            },
+        };
+        (fixture, config)
+    }
+
+    #[test]
+    fn a_boundary_that_stays_put_adds_the_same_increment_every_step_until_the_clamp() {
+        let limit = 0.12;
+        let (fixture, config) = static_boundary_fixture(1, limit);
+        let single = fixture.evolve(config).deformation.cell_deformation;
+        assert_eq!(single[fixture.mesh.edges[0].cells[0]], 0.05);
+
+        for step_count in 1..=6 {
+            let run = fixture.evolve(PlateEvolutionConfig {
+                step_count,
+                ..config
+            });
+            assert_eq!(
+                run.partition, fixture.partition,
+                "nothing may move, or the increments would differ between steps"
+            );
+            assert_eq!(run.cell_birth, fixture.birth_prior.cell_birth);
+            for (cell, &value) in run.deformation.cell_deformation.iter().enumerate() {
+                let expected = (step_count as f32 * single[cell]).clamp(-limit, limit);
+                // Summing an increment n times and multiplying it by n round
+                // differently in the last bits.
+                assert!(
+                    (value - expected).abs() < 1.0e-6,
+                    "cell {cell} after {step_count} steps: {value} against {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deformation_reaches_no_further_than_the_profiles_propagate() {
+        let depth = 2;
+        let (fixture, config) = static_boundary_fixture(4, 1.0);
+        let effect = BoundaryEffect { offset: 0.5, depth };
+        // Every profile reaches exactly `depth` hops: a linear effect decays to
+        // zero one hop past its own, and a rift one hop past its decay depth.
+        let run = fixture.evolve(PlateEvolutionConfig {
+            deformation: BoundaryDeformationConfig {
+                convergent: effect,
+                transform: effect,
+                collision: effect,
+                trench: BoundaryEffect {
+                    offset: -0.2,
+                    depth,
+                },
+                rift: ContinentalRiftProfile {
+                    decay_depth: depth + 1,
+                    ..config.deformation.rift
+                },
+                ..config.deformation
+            },
+            ..config
+        });
+
+        let mut reached: Vec<_> = (0..fixture.mesh.cell_count())
+            .map(|cell| {
+                fixture.mesh.cell_corners(cell).iter().any(|corner| {
+                    fixture.partition.cell_plates[corner.neighbor]
+                        != fixture.partition.cell_plates[cell]
+                })
+            })
+            .collect();
+        for _ in 0..depth {
+            reached = (0..fixture.mesh.cell_count())
+                .map(|cell| {
+                    reached[cell]
+                        || fixture
+                            .mesh
+                            .cell_corners(cell)
+                            .iter()
+                            .any(|corner| reached[corner.neighbor])
+                })
+                .collect();
+        }
+
+        assert!(
+            reached.iter().any(|within| !within),
+            "the test needs cells the profiles cannot reach"
+        );
+        for (cell, &value) in run.deformation.cell_deformation.iter().enumerate() {
+            if !reached[cell] {
+                assert_eq!(
+                    value, 0.0,
+                    "cell {cell} is further than {depth} hops from the boundary"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_boundary_that_has_moved_on_leaves_its_deformation_behind() {
+        let (fixture, config, steps) = single_edge_convergent_fixture();
+        let config = PlateEvolutionConfig {
+            step_count: steps,
+            deformation: BoundaryDeformationConfig {
+                full_deformation_time: 1.0,
+                ..BoundaryDeformationConfig::default()
+            },
+            ..config
+        };
+        let run = fixture.evolve(config);
+
+        // The overridden cell was the whole of its plate, so the boundary that
+        // deformed these cells no longer exists anywhere.
+        assert_eq!(run.diagnostics.migrated_cell_count, 1);
+        assert!(
+            run.boundaries
+                .edge_classes
+                .iter()
+                .all(|class| *class == BoundaryClass::Interior)
+        );
+        let mut current = vec![0.0; fixture.mesh.cell_count()];
+        accumulate_boundary_deformation(
+            &fixture.mesh,
+            &run.partition,
+            run.cell_crust(),
+            &run.boundaries,
+            &config.deformation,
+            1.0,
+            &mut current,
+        );
+        assert!(current.iter().all(|&value| value == 0.0));
+        assert!(
+            run.deformation
+                .cell_deformation
+                .iter()
+                .any(|&value| value != 0.0),
+            "the suture the vanished boundary left must survive it"
         );
     }
 

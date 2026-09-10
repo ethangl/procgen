@@ -29,6 +29,13 @@ const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const STEP_DURATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=DEFAULT_STEP_DURATION * 10.0;
 const CRUST_BIRTH_PRIOR_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+// A boundary reaches its full profile in one default step at the bottom and
+// over the longest run the step range allows at the top.
+const FULL_DEFORMATION_TIME_RANGE: std::ops::RangeInclusive<f32> =
+    DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * *EVOLUTION_STEP_RANGE.end() as f32;
+// A single profile offset is bounded to one, and tectonic elevation clamps to
+// the unit range, so a clamp above one could never bite.
+const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
 
 pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
@@ -50,11 +57,11 @@ pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     section(ui, "Plate evolution", |ui| {
         evolution_controls(ui, &mut settings.evolution, settings.kinematics)
     });
+    section(ui, "Boundary deformation", |ui| {
+        deformation_controls(ui, &mut settings.evolution.deformation, settings.kinematics)
+    });
     section(ui, "Base elevation", |ui| {
         base_elevation_controls(ui, &mut settings.base_elevation)
-    });
-    section(ui, "Boundary deformation", |ui| {
-        deformation_controls(ui, &mut settings.deformation, settings.kinematics)
     });
     section(ui, "Tectonic elevation", |ui| {
         elevation_controls(ui, &mut settings.elevation)
@@ -231,6 +238,18 @@ fn deformation_controls(
         "Saturation speed",
         &mut config.saturation_speed,
         0.01..=maximum_strength,
+    );
+    slider(
+        ui,
+        "Full deformation time",
+        &mut config.full_deformation_time,
+        FULL_DEFORMATION_TIME_RANGE,
+    );
+    slider(
+        ui,
+        "Maximum magnitude",
+        &mut config.maximum_magnitude,
+        DEFORMATION_MAGNITUDE_RANGE,
     );
 }
 

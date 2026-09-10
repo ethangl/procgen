@@ -157,8 +157,7 @@ mod tests {
         final_state_fixture, reference_evolution_config, two_plate_boundary_partition,
     };
     use crate::{
-        BaseElevationConfig, BaseElevationDiagnostics, BoundaryDeformationConfig,
-        derive_base_elevation, derive_boundary_deformation, derive_seafloor_age,
+        BaseElevationConfig, BaseElevationDiagnostics, derive_base_elevation, derive_seafloor_age,
     };
 
     fn final_fixture() -> (SphereMesh, BaseElevation, BoundaryDeformation) {
@@ -166,15 +165,7 @@ mod tests {
         let age = derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count)
             .unwrap();
         let base = derive_base_elevation(&age, BaseElevationConfig::default()).unwrap();
-        let deformation = derive_boundary_deformation(
-            &mesh,
-            &evolution.partition,
-            evolution.cell_crust(),
-            &evolution.boundaries,
-            BoundaryDeformationConfig::default(),
-        )
-        .unwrap();
-        (mesh, base, deformation)
+        (mesh, base, evolution.deformation)
     }
 
     #[test]

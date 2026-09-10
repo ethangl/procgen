@@ -2,15 +2,13 @@ use super::{GenerationTimings, WORLD_RADIUS};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
-    BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation,
-    BoundaryDeformationConfig, CellCrust, CoarseElevation, CoarseElevationConfig, CrustBirthPrior,
-    CrustBirthPriorConfig, CrustBirthPriorDiagnostics, CrustClassification,
-    CrustClassificationConfig, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
-    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlatePartition,
-    PlatePartitionConfig, SeafloorAge, classify_boundaries, classify_crust,
-    compose_coarse_elevation, derive_base_elevation, derive_boundary_deformation,
-    derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
-    generate_plate_kinematics, partition_plates,
+    BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation, CellCrust,
+    CoarseElevation, CoarseElevationConfig, CrustBirthPrior, CrustBirthPriorConfig,
+    CrustBirthPriorDiagnostics, CrustClassification, CrustClassificationConfig, PlateEvolution,
+    PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionInputs, PlateKinematics,
+    PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, SeafloorAge, classify_boundaries,
+    classify_crust, compose_coarse_elevation, derive_base_elevation, derive_crust_birth_prior,
+    derive_seafloor_age, evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 use std::error::Error;
 
@@ -23,9 +21,9 @@ pub struct TectonicsSettings {
     pub crust: CrustClassificationConfig,
     pub kinematics: PlateKinematicsConfig,
     pub birth_prior: CrustBirthPriorConfig,
+    /// Evolution's own config, which carries the per-step deformation profiles.
     pub evolution: PlateEvolutionConfig,
     pub base_elevation: BaseElevationConfig,
-    pub deformation: BoundaryDeformationConfig,
     pub elevation: CoarseElevationConfig,
 }
 
@@ -52,7 +50,6 @@ impl Default for TectonicsSettings {
                 ..Default::default()
             },
             base_elevation: BaseElevationConfig::default(),
-            deformation: BoundaryDeformationConfig::default(),
             elevation: CoarseElevationConfig::default(),
         }
     }
@@ -72,6 +69,8 @@ pub struct TectonicsWorld {
     pub evolution: PlateEvolutionDiagnostics,
     pub seafloor_age: SeafloorAge,
     pub base_elevation: BaseElevation,
+    /// Deformation accumulated over evolution's steps, not derived from the
+    /// boundaries it ended on.
     pub deformation: BoundaryDeformation,
     pub elevation: CoarseElevation,
     pub timings: GenerationTimings,
@@ -140,6 +139,7 @@ impl TectonicsWorld {
             partition: plates,
             boundaries,
             cell_birth,
+            deformation,
             diagnostics: evolution,
         } = evolution_result;
         let CrustBirthPrior {
@@ -148,17 +148,6 @@ impl TectonicsWorld {
         } = birth_prior;
         let base_elevation = timings.record("Base elevation", || {
             derive_base_elevation(&seafloor_age, config.base_elevation)
-        })?;
-        let deformation = timings.record("Boundary deformation", || {
-            derive_boundary_deformation(
-                &voronoi,
-                &plates,
-                CellCrust {
-                    cell_birth: &cell_birth,
-                },
-                &boundaries,
-                config.deformation,
-            )
         })?;
         let elevation = timings.record("Tectonic elevation", || {
             compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)

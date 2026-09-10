@@ -78,28 +78,31 @@ Completed foundations:
   simultaneous ownership migration and crust advection for a configured step
   count, each proportional to speed times step duration and each spending a
   whole cell width of accumulated displacement per cell moved. The result
-  retains final ownership and boundaries, the step at which each cell's crust
-  was created, and aggregate evolution diagnostics, without step history.
+  retains final ownership and boundaries, the two fields each cell carries —
+  the step its crust was created and the deformation raised on it — and
+  aggregate evolution diagnostics, without step history.
   Per-plate crust classes remain fixed and describe plates; a cell's crust is
   read from its birth step, so a rifting continental plate grows an oceanic
   margin and a cell overridden at a subduction zone takes the overriding
-  material's class. A separate
-  post-evolution stage derives signed per-cell deformation from current-owner
-  crust and final boundary classes and strengths, with deterministic overlap
-  resolution and bounded within-plate propagation. Continental divergent
-  boundaries use a configurable graben profile: strength-scaled central
-  subsidence, a steep transition to weaker negative flanks, then bounded decay
-  to zero. Oceanic ridges remain solely owned by bathymetry. A crust-birth
-  prior derives oceanic-cell hop distance from the initial divergent
-  boundaries, negated into birth steps that predate step zero; propagation
+  material's class. Each step also raises signed per-cell deformation from the
+  boundaries current in that step, over the crust and ownership current in it,
+  with deterministic overlap resolution and bounded within-plate propagation.
+  The step's profile is scaled by the model time it spends against a
+  configured full deformation time, added to a per-cell field that moves with
+  the crust exactly as birth does, and clamped to a configured maximum
+  magnitude, so belts widen where a boundary converged for many steps and a
+  suture stays where a boundary used to be. Continental divergent boundaries
+  use a configurable graben profile: strength-scaled central subsidence, a
+  steep transition to weaker negative flanks, then bounded decay to zero.
+  Oceanic ridges remain solely owned by bathymetry. A crust-birth prior
+  derives oceanic-cell hop distance from the initial divergent boundaries,
+  negated into birth steps that predate step zero; propagation
   stays within initial plate ownership and ridge-less oceanic plates receive a
   deterministic configured fallback age. Seafloor age is then the steps elapsed
   since each cell's birth. Base elevation keeps continental cells at their
   configured base and maps oceanic age through a configurable square-root
   ridge-to-deep cooling curve. Tectonic elevation composes that base with
   boundary deformation once before simultaneous smoothing and clamping.
-  Evolution accumulates displacement and crust birth across its steps;
-  deformation still reads only the final boundaries.
 - `procgen-geology`: deterministic present-day geological fields derived from
   completed tectonic state without feeding changes back into tectonics. Seeded
   mantle hotspots have bounded decaying trails opposite final-owner plate
