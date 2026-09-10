@@ -1,5 +1,5 @@
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::is_land;
+use procgen_tectonics::ElevationField;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,10 +33,9 @@ pub enum Surface {
 }
 
 impl Surface {
-    /// Classifies one normalized elevation against the sea-level datum the
-    /// elevation field was composed against.
-    pub fn from_elevation(elevation: f32, sea_level: f32) -> Self {
-        if is_land(elevation, sea_level) {
+    /// Classifies one cell against the datum its elevation field carries.
+    pub fn at(elevation: ElevationField<'_>, cell: usize) -> Self {
+        if elevation.is_land(cell) {
             Self::Land
         } else {
             Self::Ocean
@@ -93,14 +92,13 @@ mod tests {
     #[test]
     fn surface_uses_the_authoritative_elevation_boundary() {
         for sea_level in [CoarseElevationConfig::default().sea_level, 0.3, 0.7] {
-            assert_eq!(
-                Surface::from_elevation(sea_level, sea_level),
-                Surface::Ocean
-            );
-            assert_eq!(
-                Surface::from_elevation(f32::from_bits(sea_level.to_bits() + 1), sea_level),
-                Surface::Land
-            );
+            let cell_elevations = [sea_level, f32::from_bits(sea_level.to_bits() + 1)];
+            let elevation = ElevationField {
+                cell_elevations: &cell_elevations,
+                sea_level,
+            };
+            assert_eq!(Surface::at(elevation, 0), Surface::Ocean);
+            assert_eq!(Surface::at(elevation, 1), Surface::Land);
         }
     }
 

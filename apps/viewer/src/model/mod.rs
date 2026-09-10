@@ -8,6 +8,7 @@ pub use tectonics::{TectonicsSettings, TectonicsWorld, build_mesh};
 
 use crate::cache::WorldCache;
 use bevy::prelude::*;
+use procgen_tectonics::ElevationField;
 use std::{
     error::Error,
     time::{Duration, Instant},
@@ -103,22 +104,14 @@ impl GeneratedWorld {
         })
     }
 
-    /// The sea-level datum the generated elevation field was composed against,
-    /// absent until tectonics has run. Every phase downstream reads the same
-    /// datum, because it travels with the field they all descend from.
-    pub fn sea_level(&self) -> Option<f32> {
-        Some(self.tectonics.as_ref()?.elevation.sea_level)
-    }
-
-    /// The most refined elevation the generated phases offer, with the phase it
-    /// comes from: the isostatically adjusted elevation once geology has run,
-    /// and tectonic elevation before that.
-    pub fn surface_elevations(&self) -> Option<(Phase, &[f32])> {
+    /// The most refined elevation field the generated phases offer, with the
+    /// phase it comes from: the isostatically adjusted field once geology has
+    /// run, and the tectonic field before that. The datum travels with it, so
+    /// a reader never pairs these values with a sea level from elsewhere.
+    pub fn surface_elevations(&self) -> Option<(Phase, ElevationField<'_>)> {
         match (&self.geology, &self.tectonics) {
-            (Some(geology), _) => Some((Phase::Geology, &geology.isostasy.cell_elevations)),
-            (None, Some(tectonics)) => {
-                Some((Phase::Tectonics, &tectonics.elevation.cell_elevations))
-            }
+            (Some(geology), _) => Some((Phase::Geology, geology.isostasy.field())),
+            (None, Some(tectonics)) => Some((Phase::Tectonics, tectonics.elevation.field())),
             (None, None) => None,
         }
     }
@@ -570,12 +563,11 @@ mod tests {
         assert!(world.holds(Phase::Tectonics));
         assert!(!world.holds(Phase::Geology));
         assert!(!world.holds(Phase::Climate));
+        let (phase, elevation) = world.surface_elevations().unwrap();
+        assert_eq!(phase, Phase::Tectonics);
         assert_eq!(
-            world.surface_elevations().unwrap(),
-            (
-                Phase::Tectonics,
-                &world.tectonics().unwrap().elevation.cell_elevations[..]
-            )
+            elevation.cell_elevations,
+            world.tectonics().unwrap().elevation.cell_elevations
         );
 
         fs::remove_dir_all(cache_dir).unwrap();

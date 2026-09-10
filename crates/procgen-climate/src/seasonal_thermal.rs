@@ -7,6 +7,7 @@ use crate::{
 };
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
+use procgen_tectonics::ElevationField;
 use std::{fmt, ops::RangeInclusive};
 
 pub const THERMAL_CAPACITY_RANGE: RangeInclusive<f64> = 0.0..=1.0e12;
@@ -51,9 +52,7 @@ pub struct SeasonalThermalInputs<'a> {
     pub planet: Planet,
     pub solar_forcing: SolarForcingConfig,
     pub emissivity: f64,
-    pub final_elevation: &'a [f32],
-    /// Sea-level datum the elevation field was composed against.
-    pub sea_level: f32,
+    pub final_elevation: ElevationField<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -355,7 +354,6 @@ pub fn derive_seasonal_thermal_response(
         solar_forcing,
         emissivity,
         final_elevation,
-        sea_level,
     } = inputs;
     planet.validate()?;
     solar_forcing.validate()?;
@@ -373,13 +371,14 @@ pub fn derive_seasonal_thermal_response(
     let mut endpoints = Vec::with_capacity(sample_count + 1);
     let mut samples = Vec::with_capacity(sample_count);
 
-    for (((&elevation, &center), &area), &albedo) in final_elevation
+    for (cell, ((&center, &area), &albedo)) in mesh
+        .cell_centers
         .iter()
-        .zip(&mesh.cell_centers)
         .zip(&mesh.cell_areas)
         .zip(cell_albedo)
+        .enumerate()
     {
-        let surface = Surface::from_elevation(elevation, sea_level);
+        let surface = Surface::at(final_elevation, cell);
         let heat_capacity = config.heat_capacity(surface);
         let latitude_sine = f64::from(center.y / mesh.radius);
         let target = |state| {
@@ -423,13 +422,17 @@ pub fn derive_seasonal_thermal_response(
 
 fn validate_inputs(
     mesh: &SphereMesh,
-    elevations: &[f32],
+    elevation: ElevationField<'_>,
     config: SeasonalThermalConfig,
 ) -> Result<(), SeasonalThermalError> {
-    if elevations.len() != mesh.cell_count() {
+    if elevation.cell_elevations.len() != mesh.cell_count() {
         return Err(SeasonalThermalError::ElevationCells);
     }
-    if elevations.iter().any(|value| !value.is_finite()) {
+    if elevation
+        .cell_elevations
+        .iter()
+        .any(|value| !value.is_finite())
+    {
         return Err(SeasonalThermalError::Elevation);
     }
     if !valid_heat_capacity(config.land_heat_capacity) {
@@ -550,10 +553,13 @@ mod tests {
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::SphericalDelaunay;
 
-    /// The datum the tectonic pipeline defaults to, which these synthetic
-    /// elevation fields are written against.
-    fn default_sea_level() -> f32 {
-        procgen_tectonics::CoarseElevationConfig::default().sea_level
+    /// Lends a synthetic field against the datum the tectonic pipeline
+    /// defaults to, which these elevations are written against.
+    fn elevation_field(cell_elevations: &[f32]) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations,
+            sea_level: procgen_tectonics::CoarseElevationConfig::default().sea_level,
+        }
     }
 
     fn mesh(count: usize) -> SphereMesh {
@@ -588,8 +594,7 @@ mod tests {
                     annual_sample_count: sample_count,
                 },
                 emissivity: 1.0,
-                final_elevation: elevations,
-                sea_level: default_sea_level(),
+                final_elevation: elevation_field(elevations),
             },
             config,
             &albedo,
@@ -810,8 +815,7 @@ mod tests {
                     planet: Planet::EARTH,
                     solar_forcing: SolarForcingConfig::default(),
                     emissivity: 1.0,
-                    final_elevation: &elevations,
-                    sea_level: default_sea_level(),
+                    final_elevation: elevation_field(&elevations),
                 },
                 config,
                 &vec![0.3; mesh.cell_count()],
@@ -855,8 +859,7 @@ mod tests {
                         annual_sample_count: 3,
                     },
                     emissivity: 1.0,
-                    final_elevation: &elevations,
-                    sea_level: default_sea_level(),
+                    final_elevation: elevation_field(&elevations),
                 },
                 SeasonalThermalConfig::EARTHLIKE,
                 &vec![0.3; mesh.cell_count()],

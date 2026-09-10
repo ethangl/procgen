@@ -1,7 +1,7 @@
 use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
 use procgen_tectonics::{
-    CellCrust, CoarseElevation, CrustClass, FieldSummary, PlatePartition, StageInputError,
+    CellCrust, CrustClass, ElevationField, FieldSummary, PlatePartition, StageInputError,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +57,7 @@ pub fn derive_craton_field(
     mesh: &SphereMesh,
     plates: &PlatePartition,
     crust: CellCrust<'_>,
-    elevation: &CoarseElevation,
+    elevation: ElevationField<'_>,
     config: CratonFieldConfig,
 ) -> Result<CratonField, StageInputError> {
     plates.validate(mesh)?;
@@ -138,12 +138,7 @@ mod tests {
     fn fixture(
         cell_count: usize,
         arc_count: usize,
-    ) -> (
-        SphereMesh,
-        PlatePartition,
-        Vec<Option<i32>>,
-        CoarseElevation,
-    ) {
+    ) -> (SphereMesh, PlatePartition, Vec<Option<i32>>, Vec<f32>) {
         let mesh = build_sphere_mesh(
             fibonacci_sphere(FibonacciConfig {
                 count: cell_count,
@@ -178,9 +173,9 @@ mod tests {
             },
         )
         .unwrap();
-        let elevation = flat_elevation(mesh.cell_count());
+        let elevations = flat_elevation(mesh.cell_count());
         let cell_birth = plate_cell_birth(&plates, &crust.plate_classes);
-        (mesh, plates, cell_birth, elevation)
+        (mesh, plates, cell_birth, elevations)
     }
 
     fn crust(cell_birth: &[Option<i32>]) -> CellCrust<'_> {
@@ -189,27 +184,43 @@ mod tests {
 
     /// Continental elevation everywhere, so craton eligibility turns on crust
     /// class and boundary distance alone.
-    fn flat_elevation(cell_count: usize) -> CoarseElevation {
-        CoarseElevation {
-            cell_elevations: vec![0.65; cell_count],
+    fn flat_elevation(cell_count: usize) -> Vec<f32> {
+        vec![0.65; cell_count]
+    }
+
+    fn elevation(values: &[f32]) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations: values,
             sea_level: CoarseElevationConfig::default().sea_level,
-            diagnostics: Default::default(),
         }
     }
 
     #[test]
     fn field_is_deterministic_bounded_and_preserves_elevation() {
-        let (mesh, plates, cell_birth, elevation) = fixture(1_024, 6);
-        let original_elevation = elevation.clone();
+        let (mesh, plates, cell_birth, elevations) = fixture(1_024, 6);
+        let original_elevations = elevations.clone();
         let config = CratonFieldConfig::default();
-        let first =
-            derive_craton_field(&mesh, &plates, crust(&cell_birth), &elevation, config).unwrap();
+        let first = derive_craton_field(
+            &mesh,
+            &plates,
+            crust(&cell_birth),
+            elevation(&elevations),
+            config,
+        )
+        .unwrap();
 
         assert_eq!(
             first,
-            derive_craton_field(&mesh, &plates, crust(&cell_birth), &elevation, config).unwrap()
+            derive_craton_field(
+                &mesh,
+                &plates,
+                crust(&cell_birth),
+                elevation(&elevations),
+                config
+            )
+            .unwrap()
         );
-        assert_eq!(elevation, original_elevation);
+        assert_eq!(elevations, original_elevations);
         assert_eq!(first.cell_strengths.len(), mesh.cell_count());
         assert!(
             first
@@ -256,12 +267,12 @@ mod tests {
 
     #[test]
     fn reference_field_has_stable_fingerprint() {
-        let (mesh, plates, cell_birth, elevation) = fixture(1_024, 6);
+        let (mesh, plates, cell_birth, elevations) = fixture(1_024, 6);
         let field = derive_craton_field(
             &mesh,
             &plates,
             crust(&cell_birth),
-            &elevation,
+            elevation(&elevations),
             CratonFieldConfig::default(),
         )
         .unwrap();
@@ -275,13 +286,13 @@ mod tests {
 
     #[test]
     fn eligibility_and_ramp_follow_present_day_inputs() {
-        let (mesh, plates, mut cell_birth, mut elevation) = fixture(512, 4);
+        let (mesh, plates, mut cell_birth, mut elevations) = fixture(512, 4);
         cell_birth.fill(None);
         let hard_cutoff = derive_craton_field(
             &mesh,
             &plates,
             crust(&cell_birth),
-            &elevation,
+            elevation(&elevations),
             CratonFieldConfig {
                 minimum_boundary_distance: 0,
                 ramp_width: 0,
@@ -306,14 +317,14 @@ mod tests {
             .max_by_key(|(_, distance)| *distance)
             .map(|(cell, _)| cell)
             .unwrap();
-        elevation.cell_elevations[boundary_cell] = elevation.sea_level;
+        elevations[boundary_cell] = CoarseElevationConfig::default().sea_level;
         cell_birth[interior_cell] = Some(0);
 
         let ramped = derive_craton_field(
             &mesh,
             &plates,
             crust(&cell_birth),
-            &elevation,
+            elevation(&elevations),
             CratonFieldConfig {
                 minimum_boundary_distance: 0,
                 ramp_width: 2,
@@ -337,12 +348,12 @@ mod tests {
             plate_count: 1,
         };
         let cell_birth = vec![None; mesh.cell_count()];
-        let elevation = flat_elevation(mesh.cell_count());
+        let elevations = flat_elevation(mesh.cell_count());
         let field = derive_craton_field(
             &mesh,
             &plates,
             crust(&cell_birth),
-            &elevation,
+            elevation(&elevations),
             CratonFieldConfig {
                 minimum_boundary_distance: 0,
                 ramp_width: 0,
@@ -363,7 +374,7 @@ mod tests {
 
     #[test]
     fn rejects_mismatched_inputs() {
-        let (mesh, plates, cell_birth, elevation) = fixture(128, 2);
+        let (mesh, plates, cell_birth, elevations) = fixture(128, 2);
 
         let mut invalid_plates = plates.clone();
         invalid_plates.cell_plates.pop();
@@ -372,7 +383,7 @@ mod tests {
                 &mesh,
                 &invalid_plates,
                 crust(&cell_birth),
-                &elevation,
+                elevation(&elevations),
                 CratonFieldConfig::default(),
             ),
             Err(StageInputError::Cells)
@@ -383,20 +394,18 @@ mod tests {
                 &mesh,
                 &plates,
                 crust(&cell_birth[1..]),
-                &elevation,
+                elevation(&elevations),
                 CratonFieldConfig::default(),
             ),
             Err(StageInputError::CrustBirth)
         );
 
-        let mut invalid_elevation = elevation.clone();
-        invalid_elevation.cell_elevations.pop();
         assert_eq!(
             derive_craton_field(
                 &mesh,
                 &plates,
                 crust(&cell_birth),
-                &invalid_elevation,
+                elevation(&elevations[1..]),
                 CratonFieldConfig::default(),
             ),
             Err(StageInputError::Elevation)

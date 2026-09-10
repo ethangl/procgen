@@ -14,7 +14,7 @@ use bevy::{
     prelude::{Color, ColorToComponents, Mesh, Vec3},
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::CrustClass;
+use procgen_tectonics::{CrustClass, ElevationField};
 use procgen_viewer_support::id_color;
 
 pub(super) fn empty_surface_mesh() -> Mesh {
@@ -96,15 +96,18 @@ pub(super) fn basin_colors(_: &TectonicsWorld, geology: &GeologyWorld) -> Vec<Co
 
 /// Builds the displaced fan mesh for one coloured elevation field.
 ///
-/// `sea_level` is the datum the field was composed against; relief is measured
-/// from it, so the ocean surface stays at the nominal radius as the datum moves.
+/// Relief is measured from the field's own datum, so the ocean surface stays
+/// at the nominal radius as the datum moves.
 pub(super) fn cell_surface_mesh(
     sphere: &SphereMesh,
     colors: &[Color],
-    cell_elevations: &[f32],
-    sea_level: f32,
+    elevation: ElevationField<'_>,
     relief_exaggeration: f32,
 ) -> Mesh {
+    let ElevationField {
+        cell_elevations,
+        sea_level,
+    } = elevation;
     assert_eq!(colors.len(), sphere.cell_count());
     assert_eq!(cell_elevations.len(), sphere.cell_count());
     assert!(relief_exaggeration.is_finite() && relief_exaggeration >= 0.0);
@@ -198,12 +201,15 @@ fn surface_radius(elevation: f32, sea_level: f32, relief_exaggeration: f32) -> f
 }
 
 pub(super) fn maximum_surface_radius(
-    cell_elevations: &[f32],
-    sea_level: f32,
+    elevation: ElevationField<'_>,
     relief_exaggeration: f32,
 ) -> f32 {
-    let maximum_elevation = cell_elevations.iter().copied().fold(sea_level, f32::max);
-    surface_radius(maximum_elevation, sea_level, relief_exaggeration)
+    let maximum_elevation = elevation
+        .cell_elevations
+        .iter()
+        .copied()
+        .fold(elevation.sea_level, f32::max);
+    surface_radius(maximum_elevation, elevation.sea_level, relief_exaggeration)
 }
 
 #[cfg(test)]
@@ -216,6 +222,15 @@ mod tests {
     /// These meshes assert geometric invariants only, so the datum is
     /// deliberately not the pipeline default: nothing here may depend on it.
     const TEST_SEA_LEVEL: f32 = 0.4;
+
+    const TEST_ELEVATIONS: [f32; 4] = [0.0, 0.3, 0.7, 1.0];
+
+    fn test_field() -> ElevationField<'static> {
+        ElevationField {
+            cell_elevations: &TEST_ELEVATIONS,
+            sea_level: TEST_SEA_LEVEL,
+        }
+    }
 
     fn tetrahedron_mesh() -> SphereMesh {
         build_sphere_mesh(
@@ -266,13 +281,7 @@ mod tests {
     #[test]
     fn zero_exaggeration_leaves_every_vertex_at_surface_radius() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(
-            &sphere,
-            &[Color::WHITE; 4],
-            &[0.0, 0.3, 0.7, 1.0],
-            TEST_SEA_LEVEL,
-            0.0,
-        );
+        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], test_field(), 0.0);
 
         let positions = float3_attribute(&mesh, Mesh::ATTRIBUTE_POSITION);
         assert!(positions.iter().all(|position| {
@@ -283,13 +292,7 @@ mod tests {
     #[test]
     fn incident_fans_share_identical_displaced_corner_positions() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(
-            &sphere,
-            &[Color::WHITE; 4],
-            &[0.0, 0.3, 0.7, 1.0],
-            TEST_SEA_LEVEL,
-            0.3,
-        );
+        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], test_field(), 0.3);
         let positions = float3_attribute(&mesh, Mesh::ATTRIBUTE_POSITION);
         assert_shared_corner_values(corner_copies(&sphere, positions));
     }
@@ -297,13 +300,7 @@ mod tests {
     #[test]
     fn displaced_triangle_fans_remain_finite_and_outward() {
         let sphere = tetrahedron_mesh();
-        let mesh = cell_surface_mesh(
-            &sphere,
-            &[Color::WHITE; 4],
-            &[0.0, 0.3, 0.7, 1.0],
-            TEST_SEA_LEVEL,
-            0.4,
-        );
+        let mesh = cell_surface_mesh(&sphere, &[Color::WHITE; 4], test_field(), 0.4);
 
         assert_eq!(
             mesh.count_vertices(),
@@ -332,21 +329,8 @@ mod tests {
     #[test]
     fn normals_are_recomputed_from_displaced_geometry() {
         let sphere = tetrahedron_mesh();
-        let elevations = [0.0, 0.3, 0.7, 1.0];
-        let flat = cell_surface_mesh(
-            &sphere,
-            &[Color::WHITE; 4],
-            &elevations,
-            TEST_SEA_LEVEL,
-            0.0,
-        );
-        let relief = cell_surface_mesh(
-            &sphere,
-            &[Color::WHITE; 4],
-            &elevations,
-            TEST_SEA_LEVEL,
-            0.4,
-        );
+        let flat = cell_surface_mesh(&sphere, &[Color::WHITE; 4], test_field(), 0.0);
+        let relief = cell_surface_mesh(&sphere, &[Color::WHITE; 4], test_field(), 0.4);
         let flat_normals = float3_attribute(&flat, Mesh::ATTRIBUTE_NORMAL);
         let relief_positions = float3_attribute(&relief, Mesh::ATTRIBUTE_POSITION);
         let relief_normals = float3_attribute(&relief, Mesh::ATTRIBUTE_NORMAL);

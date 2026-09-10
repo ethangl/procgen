@@ -283,12 +283,11 @@ fn sync_layer_render_state(
     mut camera_layers: Single<&mut RenderLayers, With<OrbitCamera>>,
     mut layer_transforms: Query<(&DiagnosticLayer, &mut Transform)>,
 ) {
-    let outer_radius = world.surface_elevations().zip(world.sea_level()).map_or(
-        SURFACE_RADIUS,
-        |((_, elevations), sea_level)| {
-            maximum_surface_radius(elevations, sea_level, relief.exaggeration)
-        },
-    );
+    let outer_radius = world
+        .surface_elevations()
+        .map_or(SURFACE_RADIUS, |(_, elevation)| {
+            maximum_surface_radius(elevation, relief.exaggeration)
+        });
     for (layer, mut transform) in &mut layer_transforms {
         transform.scale = Vec3::splat(outer_radius * overlays.depth_scale(*layer) / SURFACE_RADIUS);
     }

@@ -42,21 +42,22 @@ impl Default for CoarseElevationConfig {
     }
 }
 
-/// Normalized coarse elevation together with the datum it was composed
-/// against.
+/// A borrowed normalized elevation field together with the datum it was
+/// composed against.
 ///
 /// The datum is part of the field rather than an echo of a knob: an elevation
 /// field is not interpretable without knowing where its ocean ends, the same
-/// way a [`SphereMesh`] is not interpretable without its radius. Every reader
-/// either holds this field and asks it, or is handed `sea_level` explicitly.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CoarseElevation {
-    pub cell_elevations: Vec<f32>,
+/// way a [`SphereMesh`] is not interpretable without its radius. Every stage
+/// that produces normalized elevation lends one of these, so a reader is
+/// handed the datum with the values instead of a slice and a loose `f32`
+/// beside it.
+#[derive(Clone, Copy, Debug)]
+pub struct ElevationField<'a> {
+    pub cell_elevations: &'a [f32],
     pub sea_level: f32,
-    pub diagnostics: FieldSummary,
 }
 
-impl CoarseElevation {
+impl ElevationField<'_> {
     pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
         if self.cell_elevations.len() != mesh.cell_count() {
             return Err(StageInputError::Elevation);
@@ -73,6 +74,27 @@ impl CoarseElevation {
         (0..self.cell_elevations.len())
             .filter(|&cell| self.is_land(cell))
             .count()
+    }
+}
+
+/// Normalized coarse elevation, its datum, and the summary of its values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CoarseElevation {
+    pub cell_elevations: Vec<f32>,
+    pub sea_level: f32,
+    pub diagnostics: FieldSummary,
+}
+
+impl CoarseElevation {
+    pub fn field(&self) -> ElevationField<'_> {
+        ElevationField {
+            cell_elevations: &self.cell_elevations,
+            sea_level: self.sea_level,
+        }
+    }
+
+    pub fn validate(&self, mesh: &SphereMesh) -> Result<(), StageInputError> {
+        self.field().validate(mesh)
     }
 }
 
@@ -216,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn coarse_elevation_classifies_land_against_its_own_datum() {
+    fn an_elevation_field_classifies_land_against_its_own_datum() {
         let (mesh, _, _) = two_plate_boundary_partition();
         for sea_level in [0.3, default_sea_level(), 0.7] {
             let mut elevation = CoarseElevation {
@@ -225,12 +247,12 @@ mod tests {
                 diagnostics: Default::default(),
             };
             assert_eq!(elevation.validate(&mesh), Ok(()));
-            assert!(!elevation.is_land(0));
-            assert_eq!(elevation.land_cell_count(), 0);
+            assert!(!elevation.field().is_land(0));
+            assert_eq!(elevation.field().land_cell_count(), 0);
 
             elevation.cell_elevations[0] = sea_level + 0.01;
-            assert!(elevation.is_land(0));
-            assert_eq!(elevation.land_cell_count(), 1);
+            assert!(elevation.field().is_land(0));
+            assert_eq!(elevation.field().land_cell_count(), 1);
             elevation.cell_elevations.pop();
             assert_eq!(elevation.validate(&mesh), Err(StageInputError::Elevation));
         }
@@ -267,6 +289,7 @@ mod tests {
                     },
                 )
                 .unwrap()
+                .field()
                 .land_cell_count()
             })
             .collect();

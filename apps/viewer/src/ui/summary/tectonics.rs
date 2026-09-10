@@ -178,6 +178,6 @@ fn elevation_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
     stat_grid(ui, "Tectonic elevation", "elevation", |ui| {
         field_summary_stats(ui, &world.elevation.diagnostics);
         stat(ui, "Sea level", format!("{:.3}", world.elevation.sea_level));
-        stat(ui, "Land cells", world.elevation.land_cell_count());
+        stat(ui, "Land cells", world.elevation.field().land_cell_count());
     });
 }

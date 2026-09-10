@@ -451,9 +451,9 @@ struct_codec! {
     ElevationEffectDiagnostics { affected_cell_count, total_delta, maximum_absolute_delta }
     SignedEffectDiagnostics { rise, sink }
     GeologicalElevationDiagnostics { elevation, hotspots, volcanic_arcs, cratons, basins }
-    GeologicalElevation { cell_elevations, diagnostics }
+    GeologicalElevation { cell_elevations, sea_level, diagnostics }
     IsostaticAdjustmentDiagnostics { support, elevation, oceanic_cell_count, preserved_basin_cell_count, adjustment }
-    IsostaticAdjustment { cell_support, cell_elevations, diagnostics }
+    IsostaticAdjustment { cell_support, cell_elevations, sea_level, diagnostics }
     AreaWeightedSummary { minimum, maximum, area_weighted_mean }
     SolarForcingDiagnostics { orbital_phase, orbital_distance_meters, stellar_flux_watts_per_square_meter, solar_declination_radians, polar_night_cell_count, polar_day_cell_count, daily_mean, annual_mean }
     SolarForcing { daily_mean_insolation, annual_mean_insolation, diagnostics }

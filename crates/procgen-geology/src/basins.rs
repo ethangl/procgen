@@ -1,6 +1,6 @@
 use crate::field::GeologyInputError;
 use procgen_sphere_mesh::{SphereMesh, connected_components};
-use procgen_tectonics::{CellCrust, CoarseElevation, CrustClass, StageInputError};
+use procgen_tectonics::{CellCrust, CrustClass, ElevationField, StageInputError};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,7 +112,7 @@ impl From<StageInputError> for SedimentaryBasinFieldError {
 pub fn derive_sedimentary_basin_field(
     mesh: &SphereMesh,
     crust: CellCrust<'_>,
-    elevation: &CoarseElevation,
+    elevation: ElevationField<'_>,
     config: SedimentaryBasinFieldConfig,
 ) -> Result<SedimentaryBasinField, SedimentaryBasinFieldError> {
     validate_inputs(mesh, crust, elevation, config)?;
@@ -187,7 +187,7 @@ fn reject_reason(
 fn summarize_component(
     mesh: &SphereMesh,
     candidates: &[bool],
-    elevation: &CoarseElevation,
+    elevation: ElevationField<'_>,
     cells: &[usize],
 ) -> SedimentaryBasin {
     let mut perimeter_count = 0;
@@ -220,7 +220,7 @@ fn summarize_component(
 fn validate_inputs(
     mesh: &SphereMesh,
     crust: CellCrust<'_>,
-    elevation: &CoarseElevation,
+    elevation: ElevationField<'_>,
     config: SedimentaryBasinFieldConfig,
 ) -> Result<(), SedimentaryBasinFieldError> {
     if !config.maximum_elevation.is_finite()
@@ -265,15 +265,14 @@ mod tests {
         (mesh, vec![None; cell_count])
     }
 
-    fn elevation(values: Vec<f32>) -> CoarseElevation {
+    fn elevation(values: &[f32]) -> ElevationField<'_> {
         elevation_at(values, default_sea_level())
     }
 
-    fn elevation_at(values: Vec<f32>, sea_level: f32) -> CoarseElevation {
-        CoarseElevation {
+    fn elevation_at(values: &[f32], sea_level: f32) -> ElevationField<'_> {
+        ElevationField {
             cell_elevations: values,
             sea_level,
-            diagnostics: Default::default(),
         }
     }
 
@@ -301,16 +300,16 @@ mod tests {
         for (index, cell) in connected_cells(&mesh, 12).into_iter().enumerate() {
             values[cell] = 0.52 + index as f32 * 0.001;
         }
-        let elevation = elevation(values);
-        let original_elevation = elevation.clone();
+        let original_values = values.clone();
+        let elevation = elevation(&values);
         let config = SedimentaryBasinFieldConfig::default();
-        let first = derive_sedimentary_basin_field(&mesh, crust, &elevation, config).unwrap();
+        let first = derive_sedimentary_basin_field(&mesh, crust, elevation, config).unwrap();
 
         assert_eq!(
             first,
-            derive_sedimentary_basin_field(&mesh, crust, &elevation, config).unwrap()
+            derive_sedimentary_basin_field(&mesh, crust, elevation, config).unwrap()
         );
-        assert_eq!(elevation, original_elevation);
+        assert_eq!(elevation.cell_elevations, original_values);
         assert_eq!(first.basins.len(), 1);
         assert_eq!(first.basins[0].root_cell, 0);
         assert_eq!(first.diagnostics.basin_cell_count, 12);
@@ -345,7 +344,7 @@ mod tests {
             ..Default::default()
         };
         let small =
-            derive_sedimentary_basin_field(&mesh, crust, &elevation(enclosed), config).unwrap();
+            derive_sedimentary_basin_field(&mesh, crust, elevation(&enclosed), config).unwrap();
         assert!(small.basins.is_empty());
         assert_eq!(small.diagnostics.rejected_small_component_count, 1);
         assert_eq!(small.diagnostics.rejected_ocean_exposed_component_count, 0);
@@ -357,7 +356,7 @@ mod tests {
         let exposed = derive_sedimentary_basin_field(
             &mesh,
             crust,
-            &elevation(exposed),
+            elevation(&exposed),
             SedimentaryBasinFieldConfig {
                 minimum_cell_count: 1,
                 maximum_ocean_perimeter_fraction: 0.5,
@@ -395,7 +394,7 @@ mod tests {
         let field = derive_sedimentary_basin_field(
             &mesh,
             crust,
-            &elevation(values),
+            elevation(&values),
             SedimentaryBasinFieldConfig {
                 minimum_cell_count: 1,
                 ..Default::default()
@@ -433,7 +432,7 @@ mod tests {
                 CellCrust {
                     cell_birth: &cell_birth,
                 },
-                &elevation(values),
+                elevation(&values),
                 config,
             )
             .unwrap();
@@ -448,7 +447,7 @@ mod tests {
             CellCrust {
                 cell_birth: &cell_birth,
             },
-            &elevation(values),
+            elevation(&values),
             config,
         )
         .unwrap();
@@ -462,11 +461,12 @@ mod tests {
         let crust = CellCrust {
             cell_birth: &cell_birth,
         };
-        let elevation = elevation(vec![0.7; mesh.cell_count()]);
+        let values = vec![0.7; mesh.cell_count()];
+        let elevation = elevation(&values);
         let empty = derive_sedimentary_basin_field(
             &mesh,
             crust,
-            &elevation,
+            elevation,
             SedimentaryBasinFieldConfig::default(),
         )
         .unwrap();
@@ -499,7 +499,7 @@ mod tests {
         ];
         for (config, expected) in invalid_cases {
             assert_eq!(
-                derive_sedimentary_basin_field(&mesh, crust, &elevation, config),
+                derive_sedimentary_basin_field(&mesh, crust, elevation, config),
                 Err(expected)
             );
         }
@@ -512,26 +512,16 @@ mod tests {
             cell_birth: &cell_birth,
         };
         let config = SedimentaryBasinFieldConfig::default();
+        let values = vec![0.7; mesh.cell_count()];
         // The default maximum sits above the default datum and below a raised
         // one, so the same config is accepted by one field and rejected by the
         // other.
-        assert!(
-            derive_sedimentary_basin_field(
-                &mesh,
-                crust,
-                &elevation(vec![0.7; mesh.cell_count()]),
-                config,
-            )
-            .is_ok()
-        );
+        assert!(derive_sedimentary_basin_field(&mesh, crust, elevation(&values), config).is_ok());
         assert_eq!(
             derive_sedimentary_basin_field(
                 &mesh,
                 crust,
-                &elevation_at(
-                    vec![0.7; mesh.cell_count()],
-                    config.maximum_elevation + 0.01
-                ),
+                elevation_at(&values, config.maximum_elevation + 0.01),
                 config,
             ),
             Err(SedimentaryBasinFieldError::InvalidMaximumElevation)
