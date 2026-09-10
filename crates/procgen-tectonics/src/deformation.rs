@@ -64,14 +64,18 @@ pub struct BoundaryDeformationConfig {
     /// Model time over which a saturated boundary raises its full profile
     /// offset. Each step adds the profile scaled by the step's duration over
     /// this time, so the default of nine default steps
-    /// (`9 * DEFAULT_STEP_DURATION`) makes the viewer's nine-step defaults
-    /// reproduce the magnitudes the removed final-boundary stage produced, at
-    /// a boundary that converged for the whole run.
+    /// (`9 * DEFAULT_STEP_DURATION`) is the time a boundary needs to hold one
+    /// regime to reach the magnitudes the removed final-boundary stage
+    /// produced. The viewer's run is longer than that, so a boundary that
+    /// converges throughout raises more and [`Self::maximum_magnitude`]
+    /// catches the few cells that saturate.
     pub full_deformation_time: f32,
     /// Magnitude the accumulated field is clamped to. The default is the
     /// largest offset the default profiles can raise — the collision centre at
     /// 0.5, against 0.4 for the convergent, transform, and rift centres and
-    /// 0.2 for the trench — so the clamp does not bite at the defaults.
+    /// 0.2 for the trench — so it bites only where a boundary held one regime
+    /// for longer than [`Self::full_deformation_time`]: 284 of the 65,536
+    /// cells at the viewer's defaults.
     pub maximum_magnitude: f32,
 }
 
@@ -80,7 +84,7 @@ impl Default for BoundaryDeformationConfig {
         Self {
             convergent: BoundaryEffect {
                 offset: 0.4,
-                depth: 3,
+                depth: 6,
             },
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
@@ -392,9 +396,11 @@ fn propagate_boundary_effects(
 mod tests {
     use super::*;
     use crate::test_support::{
-        empty_boundaries, final_state_fixture, mesh as test_mesh, plate_cell_birth,
-        two_plate_boundary_partition,
+        EvolutionFixture, NO_POLE_DRIFT, empty_boundaries, final_state_fixture, mesh as test_mesh,
+        plate_cell_birth, single_edge_convergent_fixture, two_plate_boundary_partition,
+        two_plate_fixture,
     };
+    use crate::{BoundaryClass, PlateEvolutionConfig, PlateMigrationConfig};
 
     /// Cell crust laid out by plate, for the hand-built two-plate fixtures.
     fn plate_crust(partition: &PlatePartition, plate_classes: &[CrustClass]) -> Vec<Option<i32>> {
@@ -803,5 +809,165 @@ mod tests {
                 Err(BoundaryDeformationError::InvalidRiftProfile)
             );
         }
+    }
+    /// A convergent two-plate run whose boundary never moves: migration is off
+    /// and the step is far too short for any cell to travel a cell width, so
+    /// every step classifies the same boundaries and raises the same profile.
+    fn static_boundary_fixture(
+        step_count: usize,
+        maximum_magnitude: f32,
+    ) -> (EvolutionFixture, PlateEvolutionConfig) {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        let config = PlateEvolutionConfig {
+            step_count,
+            step_duration: 0.1,
+            migration: PlateMigrationConfig {
+                minimum_convergence: f32::MAX,
+            },
+            deformation: BoundaryDeformationConfig {
+                // A tenth of the profile per step, and every boundary here
+                // closes far faster than this, so every source saturates.
+                full_deformation_time: 1.0,
+                saturation_speed: 0.1,
+                maximum_magnitude,
+                ..BoundaryDeformationConfig::default()
+            },
+            // Every step must classify the same boundaries, which drifting
+            // motion is precisely what stops happening.
+            pole_drift: NO_POLE_DRIFT,
+            ..PlateEvolutionConfig::default()
+        };
+        (fixture, config)
+    }
+
+    #[test]
+    fn a_boundary_that_stays_put_adds_the_same_increment_every_step_until_the_clamp() {
+        let limit = 0.12;
+        let (fixture, config) = static_boundary_fixture(1, limit);
+        let single = fixture.evolve(config).deformation.cell_deformation;
+        assert_eq!(single[fixture.mesh.edges[0].cells[0]], 0.05);
+
+        for step_count in 1..=6 {
+            let run = fixture.evolve(PlateEvolutionConfig {
+                step_count,
+                ..config
+            });
+            assert_eq!(
+                run.partition, fixture.partition,
+                "nothing may move, or the increments would differ between steps"
+            );
+            assert_eq!(run.cell_birth, fixture.birth_prior.cell_birth);
+            for (cell, &value) in run.deformation.cell_deformation.iter().enumerate() {
+                let expected = (step_count as f32 * single[cell]).clamp(-limit, limit);
+                // Summing an increment n times and multiplying it by n round
+                // differently in the last bits.
+                assert!(
+                    (value - expected).abs() < 1.0e-6,
+                    "cell {cell} after {step_count} steps: {value} against {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deformation_reaches_no_further_than_the_profiles_propagate() {
+        let depth = 2;
+        let (fixture, config) = static_boundary_fixture(4, 1.0);
+        let effect = BoundaryEffect { offset: 0.5, depth };
+        // Every profile reaches exactly `depth` hops: a linear effect decays to
+        // zero one hop past its own, and a rift one hop past its decay depth.
+        let run = fixture.evolve(PlateEvolutionConfig {
+            deformation: BoundaryDeformationConfig {
+                convergent: effect,
+                transform: effect,
+                collision: effect,
+                trench: BoundaryEffect {
+                    offset: -0.2,
+                    depth,
+                },
+                rift: ContinentalRiftProfile {
+                    decay_depth: depth + 1,
+                    ..config.deformation.rift
+                },
+                ..config.deformation
+            },
+            ..config
+        });
+
+        let mut reached: Vec<_> = (0..fixture.mesh.cell_count())
+            .map(|cell| {
+                fixture.mesh.cell_corners(cell).iter().any(|corner| {
+                    fixture.partition.cell_plates[corner.neighbor]
+                        != fixture.partition.cell_plates[cell]
+                })
+            })
+            .collect();
+        for _ in 0..depth {
+            reached = (0..fixture.mesh.cell_count())
+                .map(|cell| {
+                    reached[cell]
+                        || fixture
+                            .mesh
+                            .cell_corners(cell)
+                            .iter()
+                            .any(|corner| reached[corner.neighbor])
+                })
+                .collect();
+        }
+
+        assert!(
+            reached.iter().any(|within| !within),
+            "the test needs cells the profiles cannot reach"
+        );
+        for (cell, &value) in run.deformation.cell_deformation.iter().enumerate() {
+            if !reached[cell] {
+                assert_eq!(
+                    value, 0.0,
+                    "cell {cell} is further than {depth} hops from the boundary"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_boundary_that_has_moved_on_leaves_its_deformation_behind() {
+        let (fixture, config, steps) = single_edge_convergent_fixture();
+        let config = PlateEvolutionConfig {
+            step_count: steps,
+            deformation: BoundaryDeformationConfig {
+                full_deformation_time: 1.0,
+                ..BoundaryDeformationConfig::default()
+            },
+            ..config
+        };
+        let run = fixture.evolve(config);
+
+        // The overridden cell was the whole of its plate, so the boundary that
+        // deformed these cells no longer exists anywhere.
+        assert_eq!(run.diagnostics.migrated_cell_count, 1);
+        assert!(
+            run.boundaries
+                .edge_classes
+                .iter()
+                .all(|class| *class == BoundaryClass::Interior)
+        );
+        let mut current = vec![0.0; fixture.mesh.cell_count()];
+        accumulate_boundary_deformation(
+            &fixture.mesh,
+            &run.partition,
+            run.cell_crust(),
+            &run.boundaries,
+            &config.deformation,
+            1.0,
+            &mut current,
+        );
+        assert!(current.iter().all(|&value| value == 0.0));
+        assert!(
+            run.deformation
+                .cell_deformation
+                .iter()
+                .any(|&value| value != 0.0),
+            "the suture the vanished boundary left must survive it"
+        );
     }
 }

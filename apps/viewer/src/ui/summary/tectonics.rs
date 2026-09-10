@@ -80,7 +80,9 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
 }
 
 fn boundary_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
-    stat_grid(ui, "Static boundaries", "boundaries", |ui| {
+    // Not static any more: the poles drift, so these are the classes the run
+    // ended on rather than the ones it started from.
+    stat_grid(ui, "Final boundaries", "boundaries", |ui| {
         stat(
             ui,
             "Convergent",

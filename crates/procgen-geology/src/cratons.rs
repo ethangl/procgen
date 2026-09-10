@@ -160,6 +160,10 @@ mod tests {
                 arc_count,
                 piece_fraction: 32.0 / cell_count as f32,
                 growth_roughness: 0,
+                // Whole crack faces: a craton is an interior at least
+                // `minimum_boundary_distance` hops from any boundary, which
+                // the default's split minor plates are too small to hold.
+                subdivided_fraction: 0.0,
                 seed: 11,
                 ..PlatePartitionConfig::default()
             },
@@ -265,7 +269,7 @@ mod tests {
             .iter()
             .map(|strength| u64::from(strength.to_bits()));
 
-        assert_eq!(fingerprint(values), 3_953_090_922_574_247_052);
+        assert_eq!(fingerprint(values), 16_725_339_665_522_894_855);
     }
 
     #[test]

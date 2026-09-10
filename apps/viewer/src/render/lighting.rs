@@ -11,10 +11,10 @@ pub struct LightingSettings {
 impl Default for LightingSettings {
     fn default() -> Self {
         Self {
-            azimuth_degrees: -30.0,
-            elevation_degrees: 30.0,
-            illuminance: 5_000.0,
-            ambient_brightness: 33.0,
+            azimuth_degrees: 20.0,
+            elevation_degrees: 20.0,
+            illuminance: 4_000.0,
+            ambient_brightness: 1_000.0,
         }
     }
 }

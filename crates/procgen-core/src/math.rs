@@ -55,6 +55,23 @@ impl Vec3 {
     pub fn distance_squared(self, other: Self) -> f32 {
         (self - other).length_squared()
     }
+
+    /// Rotates toward `perpendicular` by the angle whose half-angle tangent
+    /// is `half_tangent`, in the plane the two vectors span. `perpendicular`
+    /// must be perpendicular to `self` and of the same length; the result
+    /// then has that length too, because the two coefficients are the
+    /// cosine and sine of the angle written as rational functions of the
+    /// half-angle tangent.
+    ///
+    /// The half-angle form exists so that a rotation costs only add,
+    /// multiply, and divide. A sine and a cosine would put libm on the path,
+    /// and libm differs between machines, so any integer a rotated vector
+    /// goes on to decide would differ with it.
+    pub fn rotated_toward(self, perpendicular: Self, half_tangent: f32) -> Self {
+        let square = half_tangent * half_tangent;
+        let scale = (1.0 + square).recip();
+        self * ((1.0 - square) * scale) + perpendicular * (2.0 * half_tangent * scale)
+    }
 }
 
 impl Add for Vec3 {
@@ -104,5 +121,22 @@ mod tests {
         assert!(!Vec3::new(f32::NAN, 0.0, 0.0).is_finite());
         assert!(((x + y).normalized().length() - 1.0).abs() < 1.0e-6);
         assert_eq!(Vec3::ZERO.normalized(), Vec3::ZERO);
+    }
+
+    #[test]
+    fn rotation_toward_a_perpendicular_keeps_length_and_spans_a_half_turn() {
+        let x = Vec3::X * 3.0;
+        let y = Vec3::Y * 3.0;
+
+        assert_eq!(x.rotated_toward(y, 0.0), x);
+        // The half-angle tangent of a quarter turn is one, and of a half turn
+        // is unbounded, so the whole finite range is one half turn either way.
+        assert!((x.rotated_toward(y, 1.0) - y).length() < 1.0e-6);
+        assert!((x.rotated_toward(y, -1.0) + y).length() < 1.0e-6);
+        for half_tangent in [-4.0, -0.3, 0.7, 12.0] {
+            let rotated = x.rotated_toward(y, half_tangent);
+            assert!((rotated.length() - x.length()).abs() < 1.0e-6);
+            assert!(rotated.dot(x.cross(y)).abs() < 1.0e-6);
+        }
     }
 }

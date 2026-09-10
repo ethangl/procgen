@@ -234,19 +234,19 @@ mod tests {
             CrustBirthPriorDiagnostics {
                 hops: FieldSummary {
                     minimum: 0.0,
-                    maximum: 5.0,
-                    mean: 1.452_380_9,
+                    maximum: 7.0,
+                    mean: 0.932_960_87,
                 },
-                oceanic_cell_count: 378,
-                ridge_cell_count: 114,
-                ridge_plate_count: 12,
+                oceanic_cell_count: 358,
+                ridge_cell_count: 153,
+                ridge_plate_count: 28,
                 ridge_less_plate_count: 0,
                 fallback_cell_count: 0,
             }
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            9_308_829_775_786_426_828
+            6_906_356_226_867_374_971
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0),
@@ -442,7 +442,7 @@ mod tests {
                     .iter()
                     .map(|age| age.map_or(u64::MAX, |age| age as u64))
             ),
-            4_314_310_674_976_984_011
+            14_136_974_782_629_923_907
         );
     }
 

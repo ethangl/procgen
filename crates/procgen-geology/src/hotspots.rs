@@ -359,7 +359,7 @@ mod tests {
             )
         });
 
-        assert_eq!(fingerprint(values), 10_292_652_998_035_741_680);
+        assert_eq!(fingerprint(values), 12_761_953_125_410_028_623);
     }
 
     #[test]

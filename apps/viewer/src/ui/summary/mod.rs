@@ -56,6 +56,7 @@ fn mesh_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         stat(ui, "Plate seed", world.config.plates.seed);
         stat(ui, "Crust seed", world.config.crust.seed);
         stat(ui, "Motion seed", world.config.kinematics.seed);
+        stat(ui, "Evolution seed", world.config.evolution.seed);
     });
 }
 

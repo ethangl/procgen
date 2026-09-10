@@ -1,10 +1,17 @@
-//! One evolution step: the state it advances and the three moves it makes.
+//! One evolution step: the state it advances and the four moves it makes.
 //!
 //! A step raises deformation along the boundaries it starts from, moves
-//! ownership across the edges whose closing debt has paid for a cell, and
-//! pulls what the cells carry one cell upstream. The first happens before the
-//! other two because uplift happens at the boundary and the material moves
-//! afterwards.
+//! ownership across the edges whose closing debt has paid for a cell, pulls
+//! what the cells carry one cell upstream, and finally drifts every plate's
+//! rotation vector. The first happens before the next two because uplift
+//! happens at the boundary and the material moves afterwards; the drift
+//! happens last, so a step's three moves all read the motion the step began
+//! with and the next classification reads the drifted motion.
+//!
+//! Kinematics is therefore per-step state like ownership and the carried
+//! fields, not a fixed input. Without the drift every step would classify the
+//! same relative motion at a boundary that has not moved, and the accumulated
+//! fields would record a scaled copy of the final state.
 //!
 //! Two per-cell fields travel with the crust rather than being recomputed from
 //! the current state: the step a cell's crust was created, and the deformation
@@ -20,7 +27,70 @@ use crate::{
     deformation::accumulate_boundary_deformation, field::mean_cell_width, migrate_plates_once,
     migration::accumulate_closing_distances,
 };
+use procgen_core::{RandomStream, Vec3, random_streams::PLATE_POLE_DRIFT};
 use procgen_sphere_mesh::SphereMesh;
+
+/// Draws one plate takes from the drift stream in one step: three for the
+/// hashed direction the axis turns toward and one for the change of speed.
+/// The item coordinate names the plate, so the step takes its own block of
+/// four samples.
+const DRIFT_DRAWS_PER_STEP: u64 = 4;
+
+/// How far a plate's rotation vector moves per unit of model time, and how
+/// far from the motion it started with it may end up.
+///
+/// Both rates are per unit time rather than per step, so changing the step
+/// duration changes how many steps a given amount of wander takes rather than
+/// how much wander a run produces. Zero means no drift.
+///
+/// The defaults are modest on purpose. Drift is what makes a boundary change
+/// regime during a run, which is the whole point of carrying accumulated
+/// fields, but drift that is too large makes boundaries flicker between
+/// regimes from step to step and blurs the fields into an average instead of
+/// a record.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PoleDriftConfig {
+    /// Angle in model radians per unit time by which the rotation axis turns,
+    /// toward a fresh hashed direction perpendicular to it each step. The
+    /// angle per step is fixed and only the direction is hashed, so an axis
+    /// takes a random walk on the sphere of directions: over `n` steps of
+    /// angle `theta` the expected total wander is roughly `theta * sqrt(n)`.
+    pub axis_drift_rate: f32,
+    /// Fractional change of angular speed per unit time. One step multiplies
+    /// the speed by `1 + s * rate * step_duration` for a hashed `s` in
+    /// `[-1, 1)`.
+    pub speed_drift_rate: f32,
+    /// Fraction either side of the speed a plate began the run with that its
+    /// drifted speed may reach. The band is relative to the fitted motion
+    /// rather than to the global angular-speed range, because a random walk
+    /// against fixed global limits eventually piles every plate against one
+    /// of them, where a band around the fitted speed keeps drift the
+    /// perturbation of the flow field's answer that it is meant to be. At one
+    /// the band reaches zero; a plate can slow to a stop but never reverse.
+    pub speed_drift_limit: f32,
+}
+
+impl Default for PoleDriftConfig {
+    fn default() -> Self {
+        Self {
+            // A default fifteen-step run at `DEFAULT_STEP_DURATION` turns an
+            // axis by `15 * 0.014 = 0.21` radians per step, and
+            // `0.21 * sqrt(15)` is 0.81 radians: about forty-seven degrees of
+            // expected total wander, enough for boundaries to change regime
+            // several times and little enough that they do not flicker.
+            axis_drift_rate: 15.0,
+            // `7.5 * 0.014` is 0.105, so a step changes a plate's speed by at
+            // most about a tenth.
+            speed_drift_rate: 7.5,
+            // A step's expected change is `0.105 / sqrt(3)`, so a default
+            // fifteen-step walk is expected to stray about a quarter. At a
+            // half the band bounds the tail of that walk without shaping the
+            // bulk of it: five of the 111 plates at the viewer's defaults
+            // reach the edge over fifteen steps, and a long run stays inside.
+            speed_drift_limit: 0.5,
+        }
+    }
+}
 
 /// Everything a cell carries across a step, held column by column so that
 /// consumers can borrow the birth field on its own.
@@ -67,10 +137,16 @@ impl CarriedFields {
 pub(crate) struct EvolvingWorld<'a> {
     mesh: &'a SphereMesh,
     crust: &'a CrustClassification,
-    kinematics: &'a PlateKinematics,
     config: PlateEvolutionConfig,
+    /// The motion the run started from, kept beside the copy that drifts:
+    /// each plate's drifted speed is bounded relative to the speed it began
+    /// with.
+    initial_kinematics: &'a PlateKinematics,
     /// The one distance every accumulated displacement is measured against.
     cell_width: f32,
+    /// Read between steps to reclassify, and taken when the run ends. The
+    /// initial motion belongs to the caller; a run drifts its own copy.
+    pub(crate) kinematics: PlateKinematics,
     /// Read between steps to reclassify, and taken when the run ends.
     pub(crate) partition: PlatePartition,
     /// Taken when the run ends; the two fields it holds are the run's output.
@@ -93,8 +169,9 @@ impl<'a> EvolvingWorld<'a> {
         Self {
             mesh,
             crust: inputs.crust,
-            kinematics: inputs.kinematics,
             config,
+            initial_kinematics: inputs.kinematics,
+            kinematics: inputs.kinematics.clone(),
             cell_width: mean_cell_width(mesh),
             partition: inputs.partition.clone(),
             carried: CarriedFields::new(inputs.birth_prior.cell_birth.clone()),
@@ -215,13 +292,64 @@ impl<'a> EvolvingWorld<'a> {
         }
         born_cell_count
     }
+
+    /// Steps every plate's rotation vector once: a turn of the axis through a
+    /// fixed angle toward a fresh hashed perpendicular direction, and a
+    /// hashed change of speed bounded to a band around the speed the plate
+    /// started the run with.
+    ///
+    /// The turn is the half-angle tangent form, so it costs only add,
+    /// multiply, and divide. Half the intended angle stands in for its
+    /// tangent, which is the same number to third order: at the default rate
+    /// the realized turn is four parts in a thousand short of the configured
+    /// one, and nothing downstream resolves that. Taking the tangent for real
+    /// would put libm back on the path the boundary classes come off.
+    pub(crate) fn drift(&mut self, step: i32) {
+        let config = self.config.pole_drift;
+        // Returning rather than multiplying by one leaves a run with no drift
+        // bit-identical to one from before this substep existed.
+        if config.axis_drift_rate == 0.0 && config.speed_drift_rate == 0.0 {
+            return;
+        }
+        let half_tangent = 0.5 * config.axis_drift_rate * self.config.step_duration;
+        let speed_span = config.speed_drift_rate * self.config.step_duration;
+        let stream = RandomStream::new(self.config.seed, PLATE_POLE_DRIFT);
+        let initial = &self.initial_kinematics.angular_velocities;
+
+        for (plate, rotation) in self.kinematics.angular_velocities.iter_mut().enumerate() {
+            let speed = rotation.length();
+            if speed == 0.0 {
+                // A plate that started the run at rest, or that the band let
+                // slow to one, has no axis to turn and no speed to scale.
+                continue;
+            }
+            let item = plate as u64;
+            let sample = step as u64 * DRIFT_DRAWS_PER_STEP;
+            let axis = *rotation * speed.recip();
+            let hashed = Vec3::new(
+                stream.signed_f32(item, sample),
+                stream.signed_f32(item, sample + 1),
+                stream.signed_f32(item, sample + 2),
+            );
+            // Perpendicular to the axis and of the rotation vector's own
+            // length, which is what makes the turn preserve that length.
+            let perpendicular = (hashed - axis * hashed.dot(axis)).normalized() * speed;
+            let turned = rotation.rotated_toward(perpendicular, half_tangent);
+            let started = initial[plate].length();
+            let drifted = (speed * (1.0 + stream.signed_f32(item, sample + 3) * speed_span)).clamp(
+                started * (1.0 - config.speed_drift_limit),
+                started * (1.0 + config.speed_drift_limit),
+            );
+            *rotation = turned * (drifted / speed);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CrustClass;
-    use crate::test_support::{rift_config, two_plate_fixture};
+    use crate::test_support::{drift_config, rift_config, two_plate_fixture};
 
     /// Birth out of every cell's reach, so a cell carrying it was reborn rather
     /// than handed it by a neighbour.
@@ -259,5 +387,76 @@ mod tests {
             }
         }
         assert!(pulled_cell_count > 0, "the fixture must advect somewhere");
+    }
+
+    /// The angle a drift turns an axis through, recovered from the half-angle
+    /// tangent the substep is written in. Scaffolding: the substep itself
+    /// never calls libm.
+    fn per_step_angle(config: PlateEvolutionConfig) -> f32 {
+        2.0 * (0.5 * config.pole_drift.axis_drift_rate * config.step_duration).atan()
+    }
+
+    #[test]
+    fn one_drift_turns_every_axis_through_the_configured_angle_and_keeps_its_speed() {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        // Speed held still, so the turn is the only thing that can change a
+        // rotation vector and its length is the invariant to check.
+        let config = PlateEvolutionConfig {
+            pole_drift: PoleDriftConfig {
+                speed_drift_rate: 0.0,
+                ..PoleDriftConfig::default()
+            },
+            ..drift_config(1)
+        };
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        let before = world.kinematics.clone();
+
+        world.drift(0);
+
+        let expected = per_step_angle(config);
+        assert!(expected > 0.0);
+        for (plate, &rotation) in world.kinematics.angular_velocities.iter().enumerate() {
+            let was = before.angular_velocities[plate];
+            assert!(
+                (rotation.length() - was.length()).abs() < 1.0e-6,
+                "plate {plate} changed speed"
+            );
+            let turned = rotation
+                .normalized()
+                .dot(was.normalized())
+                .clamp(-1.0, 1.0)
+                .acos();
+            assert!(
+                (turned - expected).abs() < 1.0e-6,
+                "plate {plate} turned {turned} rather than {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_direction_each_step_keeps_the_axis_off_a_straight_line() {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        let config = drift_config(1);
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        let start = world.kinematics.clone();
+
+        world.drift(0);
+        let after_one = world.kinematics.clone();
+        world.drift(1);
+
+        for (plate, &rotation) in world.kinematics.angular_velocities.iter().enumerate() {
+            let axis = rotation.normalized();
+            let first = start.angular_velocities[plate].normalized();
+            let second = after_one.angular_velocities[plate].normalized();
+            assert_ne!(
+                axis, second,
+                "plate {plate} did not move on its second step"
+            );
+            let total = axis.dot(first).clamp(-1.0, 1.0).acos();
+            assert!(
+                total < 2.0 * per_step_angle(config),
+                "plate {plate} walked a straight line: {total}"
+            );
+        }
     }
 }

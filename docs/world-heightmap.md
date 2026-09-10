@@ -73,14 +73,20 @@ Completed foundations:
   angular velocities, fitted per plate to a smooth global flow field and scaled
   by crust class and plate size, local spherical tangent motion, static
   convergent, divergent, and transform boundary classification, and static
-  per-plate crust classification with area-weighted ocean coverage. It
+  per-plate crust classification with area-weighted ocean coverage. Those
+  velocities are only where a run starts: every evolution step ends by
+  drifting each plate's rotation vector, turning its axis through a fixed
+  angle toward a fresh hashed direction and scaling its speed by a hashed
+  fraction, bounded to a band around the speed the plate started with, so
+  boundaries change regime during a run. It
   repeatedly reclassifies current boundaries and applies deterministic,
   simultaneous ownership migration and crust advection for a configured step
   count, each proportional to speed times step duration and each spending a
   whole cell width of accumulated displacement per cell moved. The result
-  retains final ownership and boundaries, the two fields each cell carries —
-  the step its crust was created and the deformation raised on it — and
-  aggregate evolution diagnostics, without step history.
+  retains final ownership, the motion the run ended on, final boundaries, the
+  two fields each cell carries — the step its crust was created and the
+  deformation raised on it — and aggregate evolution diagnostics, without step
+  history.
   Per-plate crust classes remain fixed and describe plates; a cell's crust is
   read from its birth step, so a rifting continental plate grows an oceanic
   margin and a cell overridden at a subduction zone takes the overriding

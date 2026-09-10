@@ -2,19 +2,29 @@ pub use procgen_core::fingerprint;
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
+use crate::field::{DEFAULT_STEP_DURATION, mean_cell_width};
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
     CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
     PlateKinematicsConfig, PlateMigrationConfig, PlatePartition, PlatePartitionConfig,
-    classify_boundaries, classify_crust, derive_crust_birth_prior, evolve_plate_ownership,
-    generate_plate_kinematics, partition_plates,
+    PoleDriftConfig, classify_boundaries, classify_crust, derive_crust_birth_prior,
+    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
 
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
 /// is 0.157 against the default mesh's 0.0138, so a step here has to be about
 /// eleven times longer to move a plate the same one cell.
 pub const REFERENCE_STEP_DURATION: f32 = 0.15;
+
+/// No pole drift, for the fixtures whose assertions are about what one fixed
+/// motion does over several steps. Their steps are long enough that the
+/// default rates would turn an axis a large fraction of a right angle each.
+pub const NO_POLE_DRIFT: PoleDriftConfig = PoleDriftConfig {
+    axis_drift_rate: 0.0,
+    speed_drift_rate: 0.0,
+    speed_drift_limit: 0.0,
+};
 
 pub fn mesh(cell_count: usize) -> SphereMesh {
     build_sphere_mesh(
@@ -50,8 +60,17 @@ pub fn reference_partition() -> (SphereMesh, PlatePartition) {
 
 pub fn reference_evolution_config() -> PlateEvolutionConfig {
     let default = PlateEvolutionConfig::default();
+    let time_scale = DEFAULT_STEP_DURATION / REFERENCE_STEP_DURATION;
     PlateEvolutionConfig {
         step_duration: REFERENCE_STEP_DURATION,
+        pole_drift: PoleDriftConfig {
+            // Drift rates are per unit time and this step is eleven times the
+            // default one, so scaling them by the same ratio gives the
+            // reference run the per-step wander the viewer's defaults produce.
+            axis_drift_rate: default.pole_drift.axis_drift_rate * time_scale,
+            speed_drift_rate: default.pole_drift.speed_drift_rate * time_scale,
+            ..default.pole_drift
+        },
         deformation: BoundaryDeformationConfig {
             // The whole reference run, so a boundary that converged throughout
             // reaches its full profile offset, as the viewer's defaults do.
@@ -168,8 +187,70 @@ pub fn rift_config(step_count: usize) -> PlateEvolutionConfig {
         migration: PlateMigrationConfig {
             minimum_convergence: f32::MAX,
         },
+        pole_drift: NO_POLE_DRIFT,
         ..PlateEvolutionConfig::default()
     }
+}
+
+/// A run on the two-plate fixture that isolates pole drift: migration is off
+/// and the step is far too short for a cell to travel a cell width, so
+/// nothing but the drifting motion can change what the boundaries are. The
+/// default rates over a step this long turn an axis about seventeen degrees.
+pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
+    PlateEvolutionConfig {
+        step_count,
+        step_duration: 0.02,
+        migration: PlateMigrationConfig {
+            minimum_convergence: f32::MAX,
+        },
+        ..PlateEvolutionConfig::default()
+    }
+}
+
+/// The first step at which a convergent edge closing at `convergence` has
+/// paid for a whole cell width.
+fn paying_step(cell_width: f32, convergence: f32, step_duration: f32) -> usize {
+    (1..)
+        .find(|steps| *steps as f32 * convergence * step_duration >= cell_width)
+        .unwrap()
+}
+
+fn strongest_convergence(fixture: &EvolutionFixture) -> f32 {
+    (0..fixture.mesh.edge_count())
+        .map(|edge| fixture.boundaries.convergence(edge))
+        .fold(f32::MIN, f32::max)
+}
+
+/// A two-plate world in which exactly one edge clears the migration minimum,
+/// so one cell can ever migrate and the whole schedule is that edge's debt.
+/// Returns the fixture, its config, and the step at which the debt pays.
+pub fn single_edge_convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
+    let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+    let convergence = strongest_convergence(&fixture);
+    // Only the strongest edge clears the minimum, so exactly one cell can
+    // ever migrate and its debt is the whole schedule.
+    let config = PlateEvolutionConfig {
+        step_count: 0,
+        step_duration: 0.1,
+        migration: PlateMigrationConfig {
+            minimum_convergence: convergence * 0.999,
+        },
+        // The debt schedule below is the whole point of the fixture, and
+        // drift would change the closing speed it is computed from.
+        pole_drift: NO_POLE_DRIFT,
+        ..PlateEvolutionConfig::default()
+    };
+    let qualifying = (0..fixture.mesh.edge_count())
+        .filter(|&edge| fixture.boundaries.convergence(edge) >= convergence * 0.999)
+        .count();
+    assert_eq!(qualifying, 1);
+    let steps = paying_step(
+        mean_cell_width(&fixture.mesh),
+        convergence,
+        config.step_duration,
+    );
+    assert!(steps > 1, "the debt must take more than one step to pay");
+    (fixture, config, steps)
 }
 
 pub fn two_plate_boundary_partition() -> (SphereMesh, usize, PlatePartition) {

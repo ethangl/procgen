@@ -46,9 +46,9 @@ pub struct PlatePartitionConfig {
 impl Default for PlatePartitionConfig {
     fn default() -> Self {
         Self {
-            arc_count: 40,
-            curvature: 2.0,
-            subdivided_fraction: 0.4,
+            arc_count: 16,
+            curvature: 8.0,
+            subdivided_fraction: 0.8,
             piece_fraction: 1.0 / 120.0,
             growth_roughness: MAX_GROWTH_ROUGHNESS,
             seed: 0,
@@ -457,6 +457,6 @@ mod tests {
 
         // The crack walk is libm-free, so this value is expected to match on
         // both the macOS and the Windows development machine.
-        assert_eq!(fingerprint, 10_203_068_204_820_146_677);
+        assert_eq!(fingerprint, 1_312_040_099_017_365_644);
     }
 }
