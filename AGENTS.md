@@ -228,8 +228,12 @@ and climate (solar forcing, radiative equilibrium, seasonal thermal response,
 circulation, moisture transport, cryosphere, and bounded coupling). Sea level
 is a configured datum every elevation field carries, tectonic and geological
 alike, so land is elevation above the field's own datum rather than above a
-constant and no reader pairs a bare vector with a sea level from elsewhere;
-per-cell continental crust is the next step in that story.
+constant and no reader pairs a bare vector with a sea level from elsewhere,
+and crust belongs to cells rather than plates: continental nuclei grow to a
+target area across plate boundaries, plates have no crust class, and about
+nineteen coast edges in twenty lie inside a plate as a passive margin.
+Continental margins, the shelf that floods and drains with sea level, are the
+next step in that story.
 The viewer consumes every stage, caches complete generated worlds keyed on the
 generator build identity, and draws a displaced fan mesh with relief and
 lighting controls. It runs tectonics, geology, and climate as separately

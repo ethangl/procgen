@@ -34,6 +34,8 @@ pub struct CrustBirthPriorDiagnostics {
     pub oceanic_cell_count: usize,
     pub ridge_cell_count: usize,
     pub ridge_plate_count: usize,
+    /// Plates that own oceanic crust but no ridge of their own, whose cells
+    /// all take the fallback age.
     pub ridge_less_plate_count: usize,
     pub fallback_cell_count: usize,
 }
@@ -58,11 +60,16 @@ impl CrustBirthPrior {
 /// and ownership.
 ///
 /// Oceanic cells touching a divergent edge are born at step zero. A
-/// multi-source BFS propagates one step of age per hop, only through cells
-/// with the same initial plate owner, so a cell `h` hops from its nearest
-/// ridge was born `h` steps before the run. Oceanic plates with no ridge
-/// receive the configured fallback age uniformly. Cell crust is plate crust
-/// here, which is the last point at which that is true: nothing has moved yet.
+/// multi-source BFS propagates one step of age per hop, only through oceanic
+/// cells with the same initial plate owner, so a cell `h` hops from its
+/// nearest ridge was born `h` steps before the run. Oceanic cells whose plate
+/// has no ridge of its own receive the configured fallback age uniformly.
+///
+/// This is the one stage that reads the initial per-cell classification: it
+/// turns that mask into the birth field, and from step zero onward
+/// [`crate::CellCrust`] over birth is the answer. Continental cells have no
+/// birth, so the walk never crosses one and a plate that carries both crusts
+/// dates only its ocean.
 pub fn derive_crust_birth_prior(
     mesh: &SphereMesh,
     partition: &PlatePartition,
@@ -71,11 +78,10 @@ pub fn derive_crust_birth_prior(
     config: CrustBirthPriorConfig,
 ) -> Result<CrustBirthPrior, StageInputError> {
     partition.validate(mesh)?;
-    crust.validate(partition)?;
+    crust.validate(mesh)?;
     boundaries.validate(mesh)?;
 
-    let oceanic =
-        |cell: usize| crust.plate_classes[partition.cell_plates[cell]] == CrustClass::Oceanic;
+    let oceanic = |cell: usize| crust.class(cell) == CrustClass::Oceanic;
     let mut ridge_plates = vec![false; partition.plate_count];
     let mut ridge_cells = Vec::new();
 
@@ -92,13 +98,18 @@ pub fn derive_crust_birth_prior(
         }
     }
     let mut cell_hops = multi_source_distances(mesh, &ridge_cells, |cell, neighbor| {
-        partition.cell_plates[cell] == partition.cell_plates[neighbor]
+        partition.cell_plates[cell] == partition.cell_plates[neighbor] && oceanic(neighbor)
     });
     let ridge_cell_count = cell_hops.iter().filter(|&&hops| hops == Some(0)).count();
 
+    let mut oceanic_plates = vec![false; partition.plate_count];
     let mut fallback_cell_count = 0;
     for (cell, hops) in cell_hops.iter_mut().enumerate() {
-        if oceanic(cell) && hops.is_none() {
+        if !oceanic(cell) {
+            continue;
+        }
+        oceanic_plates[partition.cell_plates[cell]] = true;
+        if hops.is_none() {
             *hops = Some(config.ridge_less_age);
             fallback_cell_count += 1;
         }
@@ -114,7 +125,8 @@ pub fn derive_crust_birth_prior(
         oceanic_cell_count: oceanic_hops.len(),
         ridge_cell_count,
         ridge_plate_count,
-        ridge_less_plate_count: crust.plate_count(CrustClass::Oceanic) - ridge_plate_count,
+        ridge_less_plate_count: oceanic_plates.iter().filter(|&&oceanic| oceanic).count()
+            - ridge_plate_count,
         fallback_cell_count,
     };
 
@@ -191,7 +203,7 @@ pub fn derive_seafloor_age(
 mod tests {
     use super::*;
     use crate::test_support::{
-        empty_boundaries, evolution_fixture, final_state_fixture, fingerprint,
+        empty_boundaries, evolution_fixture, final_state_fixture, fingerprint, plate_crust,
         reference_evolution_config, reference_partition,
     };
 
@@ -234,19 +246,21 @@ mod tests {
             CrustBirthPriorDiagnostics {
                 hops: FieldSummary {
                     minimum: 0.0,
-                    maximum: 7.0,
-                    mean: 0.932_960_87,
+                    maximum: 9.0,
+                    mean: 1.666_666_6,
                 },
-                oceanic_cell_count: 358,
-                ridge_cell_count: 153,
-                ridge_plate_count: 28,
-                ridge_less_plate_count: 0,
-                fallback_cell_count: 0,
+                oceanic_cell_count: 363,
+                ridge_cell_count: 114,
+                ridge_plate_count: 30,
+                // One plate of the reference world owns oceanic crust with no
+                // ridge of its own, so its cells take the fallback age.
+                ridge_less_plate_count: 1,
+                fallback_cell_count: 4,
             }
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            6_906_356_226_867_374_971
+            17_712_315_253_162_049_905
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0),
@@ -257,17 +271,13 @@ mod tests {
     #[test]
     fn ridge_less_oceanic_plates_use_the_configured_age_and_continents_stay_empty() {
         let (mesh, partition) = reference_partition();
-        let crust = CrustClassification {
-            plate_classes: (0..partition.plate_count)
-                .map(|plate| {
-                    if plate == 0 {
-                        CrustClass::Continental
-                    } else {
-                        CrustClass::Oceanic
-                    }
-                })
-                .collect(),
-        };
+        let plate_classes: Vec<_> = (0..partition.plate_count)
+            .map(|plate| match plate {
+                0 => CrustClass::Continental,
+                _ => CrustClass::Oceanic,
+            })
+            .collect();
+        let crust = plate_crust(&partition, &plate_classes);
         let prior = derive_crust_birth_prior(
             &mesh,
             &partition,
@@ -298,9 +308,10 @@ mod tests {
     #[test]
     fn all_continental_world_has_no_prior_or_aggregates() {
         let (mesh, partition) = reference_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Continental; partition.plate_count],
-        };
+        let crust = plate_crust(
+            &partition,
+            &vec![CrustClass::Continental; partition.plate_count],
+        );
 
         let prior = derive_crust_birth_prior(
             &mesh,
@@ -329,9 +340,10 @@ mod tests {
         boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
         let ridge_edge = mesh.edges[edge_index];
         let ridge_plates = ridge_edge.cells.map(|cell| partition.cell_plates[cell]);
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic; partition.plate_count],
-        };
+        let crust = plate_crust(
+            &partition,
+            &vec![CrustClass::Oceanic; partition.plate_count],
+        );
         let prior = derive_crust_birth_prior(
             &mesh,
             &partition,
@@ -365,9 +377,10 @@ mod tests {
     #[test]
     fn the_prior_rejects_mismatched_inputs() {
         let (mesh, partition) = reference_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic; partition.plate_count],
-        };
+        let crust = plate_crust(
+            &partition,
+            &vec![CrustClass::Oceanic; partition.plate_count],
+        );
         let boundaries = empty_boundaries(&mesh);
 
         let mut wrong_partition = partition.clone();
@@ -384,7 +397,8 @@ mod tests {
         );
 
         let wrong_crust = CrustClassification {
-            plate_classes: Vec::new(),
+            cell_classes: Vec::new(),
+            ..crust.clone()
         };
         assert_eq!(
             derive_crust_birth_prior(
@@ -394,7 +408,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(StageInputError::Plates)
+            Err(StageInputError::CrustClasses)
         );
 
         let mut wrong_boundaries = boundaries;
@@ -442,7 +456,7 @@ mod tests {
                     .iter()
                     .map(|age| age.map_or(u64::MAX, |age| age as u64))
             ),
-            12_278_890_782_638_204_595
+            18_353_142_277_564_956_787
         );
     }
 

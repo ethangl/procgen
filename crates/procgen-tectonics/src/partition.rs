@@ -152,7 +152,14 @@ pub fn partition_plates(
 
     let faces = crack_faces(mesh, config.seed, config.arc_count, config.curvature);
     let seeds = plate_seeds(mesh, &faces, config);
-    let mut growth = PlateGrowth::new(mesh, &faces.cell_faces, config);
+    let mut growth = PlateGrowth::new(
+        mesh,
+        GrowthBounds::WithinFaces(&faces.cell_faces),
+        GrowthCosts {
+            roughness: config.growth_roughness,
+            stream: RandomStream::new(config.seed, PLATE_GROWTH_COST),
+        },
+    );
     for (plate, &cell) in seeds.iter().enumerate() {
         growth.seed(cell, plate);
     }
@@ -195,9 +202,18 @@ fn plate_seeds(mesh: &SphereMesh, faces: &CrackFaces, config: PlatePartitionConf
     seeds
 }
 
-/// Returns `count` seeds within one face: `first`, then repeatedly the cell
+/// Returns `count` seeds among `cells`: `first`, then repeatedly the cell
 /// farthest from every seed already chosen. Ties go to the lower cell index.
-fn farthest_first(mesh: &SphereMesh, cells: &[usize], first: usize, count: usize) -> Vec<usize> {
+///
+/// The partition passes one face's cells, so a face's minor plates are spread
+/// across it; [`crate::crust`] passes every cell, so continental nuclei are
+/// spread across the sphere.
+pub(crate) fn farthest_first(
+    mesh: &SphereMesh,
+    cells: &[usize],
+    first: usize,
+    count: usize,
+) -> Vec<usize> {
     let mut seeds = vec![first];
     let mut chosen = first;
     // A chosen cell's own distance falls to zero, so it never wins again.
@@ -214,7 +230,7 @@ fn farthest_first(mesh: &SphereMesh, cells: &[usize], first: usize, count: usize
                 left.total_cmp(right)
                     .then_with(|| right_index.cmp(left_index))
             })
-            .expect("a face holds at least one cell");
+            .expect("at least one cell to choose from");
         chosen = cells[index];
         seeds.push(chosen);
     }
@@ -229,57 +245,127 @@ struct Arrival {
     plate: usize,
 }
 
-/// Multi-source shortest-arrival search over per-edge integer costs. A step
-/// is passable only within one face, so a plate never leaves the face its
-/// seed sits in.
-struct PlateGrowth<'mesh> {
+/// Which steps growth may take. The partition confines every plate to the
+/// crack face its seed sits in, so a plate never leaves it; continental
+/// nuclei grow over the whole sphere, because a continent's edge has nothing
+/// to do with a plate boundary.
+pub(crate) enum GrowthBounds<'a> {
+    WithinFaces(&'a [usize]),
+    WholeSphere,
+}
+
+impl GrowthBounds<'_> {
+    fn passable(&self, cell: usize, neighbor: usize) -> bool {
+        match self {
+            Self::WithinFaces(cell_faces) => cell_faces[cell] == cell_faces[neighbor],
+            Self::WholeSphere => true,
+        }
+    }
+}
+
+/// The per-edge cost field growth crosses: how far a cost may vary from the
+/// baseline, and the stream that variation is hashed from.
+///
+/// The stream is the caller's rather than derived from a seed here, so two
+/// growths over the same mesh cross independent cost fields even when their
+/// seeds coincide.
+pub(crate) struct GrowthCosts {
+    pub(crate) roughness: u32,
+    pub(crate) stream: RandomStream,
+}
+
+/// Multi-source shortest-arrival search over per-edge integer costs, bounded
+/// by [`GrowthBounds`].
+///
+/// The numbered regions it grows are the partition's plates; [`crate::crust`]
+/// grows continental nuclei with the same engine and reads only which cells
+/// it reached.
+pub(crate) struct PlateGrowth<'mesh> {
     mesh: &'mesh SphereMesh,
-    cell_faces: &'mesh [usize],
-    cell_plates: Vec<usize>,
+    bounds: GrowthBounds<'mesh>,
+    pub(crate) cell_plates: Vec<usize>,
     best_arrivals: Vec<u64>,
     arrivals: BinaryHeap<Reverse<Arrival>>,
     next_sequence: u64,
-    growth_roughness: u64,
-    growth_costs: RandomStream,
+    costs: GrowthCosts,
 }
 
 impl<'mesh> PlateGrowth<'mesh> {
-    fn new(
+    pub(crate) fn new(
         mesh: &'mesh SphereMesh,
-        cell_faces: &'mesh [usize],
-        config: PlatePartitionConfig,
+        bounds: GrowthBounds<'mesh>,
+        costs: GrowthCosts,
     ) -> Self {
         Self {
             mesh,
-            cell_faces,
+            bounds,
             cell_plates: vec![UNASSIGNED_PLATE; mesh.cell_count()],
             best_arrivals: vec![u64::MAX; mesh.cell_count()],
             arrivals: BinaryHeap::new(),
             next_sequence: 0,
-            growth_roughness: u64::from(config.growth_roughness),
-            growth_costs: RandomStream::new(config.seed, PLATE_GROWTH_COST),
+            costs,
         }
     }
 
-    /// Plants a plate's first cell, which arrives at zero cost.
-    fn seed(&mut self, cell: usize, plate: usize) {
-        self.settle(cell, plate, 0);
+    /// Plants a region's first cell, which arrives at zero cost.
+    pub(crate) fn seed(&mut self, cell: usize, region: usize) {
+        self.settle(cell, region, 0);
     }
 
-    fn grow(&mut self) {
+    /// Settles every cell the seeds can reach.
+    pub(crate) fn grow(&mut self) {
+        while self.settle_next().is_some() {}
+    }
+
+    /// Settles cells until their total area reaches `target_area`, and returns
+    /// the area settled.
+    ///
+    /// The budget is checked before each settle, so growth ends at the first
+    /// settled cell that carries the total past the target and the achieved
+    /// area exceeds it by at most one cell's. A target the seeds already meet
+    /// grows nothing, and one beyond the reachable area settles everything.
+    pub(crate) fn grow_to_area(&mut self, target_area: f64) -> f64 {
+        let mut area = self.settled_area();
+        while area < target_area {
+            let Some(cell) = self.settle_next() else {
+                break;
+            };
+            area += f64::from(self.mesh.cell_areas[cell]);
+        }
+        area
+    }
+
+    /// Whether growth has reached `cell`.
+    pub(crate) fn reached(&self, cell: usize) -> bool {
+        self.cell_plates[cell] != UNASSIGNED_PLATE
+    }
+
+    fn settled_area(&self) -> f64 {
+        self.cell_plates
+            .iter()
+            .zip(&self.mesh.cell_areas)
+            .filter(|&(&plate, _)| plate != UNASSIGNED_PLATE)
+            .map(|(_, &area)| f64::from(area))
+            .sum()
+    }
+
+    /// Settles the cheapest arrival still outstanding and returns its cell, or
+    /// `None` once the frontier holds nothing new.
+    fn settle_next(&mut self) -> Option<usize> {
         while let Some(Reverse(arrival)) = self.arrivals.pop() {
             if self.cell_plates[arrival.cell] != UNASSIGNED_PLATE {
                 continue;
             }
             self.settle(arrival.cell, arrival.plate, arrival.cost);
+            return Some(arrival.cell);
         }
+        None
     }
 
     fn settle(&mut self, cell: usize, plate: usize, cost: u64) {
         self.cell_plates[cell] = plate;
-        let face = self.cell_faces[cell];
         for corner in self.mesh.cell_corners(cell) {
-            if self.cell_faces[corner.neighbor] != face
+            if !self.bounds.passable(cell, corner.neighbor)
                 || self.cell_plates[corner.neighbor] != UNASSIGNED_PLATE
             {
                 continue;
@@ -299,8 +385,9 @@ impl<'mesh> PlateGrowth<'mesh> {
     }
 
     fn edge_cost(&self, edge: usize) -> u64 {
-        let offset = self.growth_costs.sample_u64(edge as u64, 0) % (self.growth_roughness * 2 + 1);
-        BASE_GROWTH_COST - self.growth_roughness + offset
+        let roughness = u64::from(self.costs.roughness);
+        let offset = self.costs.stream.sample_u64(edge as u64, 0) % (roughness * 2 + 1);
+        BASE_GROWTH_COST - roughness + offset
     }
 }
 

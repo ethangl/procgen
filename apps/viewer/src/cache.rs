@@ -383,7 +383,7 @@ struct_codec! {
     Orbit { semi_major_axis_meters, eccentricity, obliquity_radians, stellar_longitude_at_periapsis_radians }
     Planet { star, orbit, radius_meters, sidereal_rotation_period_seconds, atmospheric_specific_gas_constant_joules_per_kilogram_kelvin, maximum_land_elevation_meters }
     PlatePartitionConfig { arc_count, curvature, subdivided_fraction, piece_fraction, growth_roughness, seed }
-    CrustClassificationConfig { target_ocean_fraction, seed }
+    CrustClassificationConfig { continental_fraction, nucleus_count, growth_roughness, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     PlateMigrationConfig { minimum_convergence }
     PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
@@ -419,7 +419,7 @@ struct_codec! {
     CellCorner { vertex, neighbor, edge }
     SphereMesh { radius, cell_centers, cell_offsets, corners, cell_areas, vertices, vertex_cells, vertex_neighbors, edges }
     PlatePartition { cell_plates, plate_count }
-    CrustClassification { plate_classes }
+    CrustClassificationDiagnostics { continental_fraction, nucleus_count, component_count }
     PlateKinematics { angular_velocities }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
     PlateEvolutionDiagnostics { active_step_count, proposal_count, contested_cell_count, migrated_cell_count, born_cell_count, maximum_convergence, rift_count, failed_rift_count, suture_count }
@@ -491,7 +491,6 @@ macro_rules! enum_codec {
     };
 }
 
-enum_codec!(CrustClass { CrustClass::Oceanic = 0, CrustClass::Continental = 1 });
 enum_codec!(BoundaryClass {
     BoundaryClass::Interior = 0,
     BoundaryClass::Convergent = 1,
@@ -669,7 +668,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_dimensions_are_rejected() {
-        let fixture = Fixture::new(32, 28);
+        let fixture = Fixture::new(32, 30);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes);
         bytes[offset..offset + size_of::<u32>()].copy_from_slice(&3_u32.to_le_bytes());
@@ -679,7 +678,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_data_is_rejected() {
-        let fixture = Fixture::new(32, 16);
+        let fixture = Fixture::new(32, 30);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         bytes[offset..offset + size_of::<f32>()].copy_from_slice(&f32::NAN.to_le_bytes());
@@ -690,7 +689,7 @@ mod tests {
     #[test]
     fn loaded_snapshot_reuses_cached_bake_data() {
         let (cache_dir, cache) = test_cache("reuse-bake");
-        let fixture = Fixture::new(32, 24);
+        let fixture = Fixture::new(32, 30);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         let cached_value = 123.25_f32;
@@ -718,7 +717,7 @@ mod tests {
 
     #[test]
     fn truncated_snapshot_is_nonfatal_corruption() {
-        let fixture = Fixture::new(32, 19);
+        let fixture = Fixture::new(32, 30);
         let mut bytes = encode_snapshot(fixture.complete());
         bytes.truncate(bytes.len() / 2);
 

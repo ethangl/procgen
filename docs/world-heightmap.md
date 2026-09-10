@@ -71,9 +71,11 @@ Completed foundations:
   primary faces, and a configured fraction of them split into minor plates by
   integer-cost growth confined to their own face. It also derives rigid plate
   angular velocities, fitted per plate to a smooth global flow field and scaled
-  by crust class and plate size, local spherical tangent motion, static
-  convergent, divergent, and transform boundary classification, and static
-  per-plate crust classification with area-weighted ocean coverage. Those
+  by each plate's continental area fraction and its size, local spherical
+  tangent motion, static convergent, divergent, and transform boundary
+  classification, and per-cell continental crust grown from farthest-first
+  nuclei by integer-cost growth to a target continental area, ignoring plate
+  boundaries so that most of the coastline is a passive margin. Those
   velocities are only where a run starts: every evolution step ends by
   drifting each plate's rotation vector, turning its axis through a fixed
   angle toward a fresh hashed direction and scaling its speed by a hashed

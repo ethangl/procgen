@@ -7,7 +7,7 @@
 //! drift and before the next boundary classification, so the next step's
 //! boundaries are the ones the new plate set implies.
 //!
-//! **Rifting.** Each step every continental plate above
+//! **Rifting.** Each step every plate whose continental area exceeds
 //! `rift_minimum_area_fraction` of the sphere rolls a hashed draw against
 //! `rift_rate * step_duration`. A plate that rifts walks one arc of
 //! [`crate::cracks`] from a hashed cell of its own, in both directions, and
@@ -33,9 +33,8 @@
 //! An arc that closed on itself is the one case with no such axis: its wall's
 //! mean center is the sphere's own. That rift fails too.
 //!
-//! **Suturing.** Each step counts, for every adjacent pair of continental
-//! plates, the shared edges that are convergent with continental crust on both
-//! sides. A pair at or above `suture_minimum_shared_edges` grows its collision
+//! **Suturing.** Each step counts, for every adjacent pair of plates, the
+//! shared edges that are convergent with continental crust on both sides. A pair at or above `suture_minimum_shared_edges` grows its collision
 //! time by the step; a pair below it starts over, the same convention the
 //! closing debt uses for an edge that stopped converging. At `suture_time` the
 //! plate with more area absorbs the other, taking the area-weighted mean of
@@ -43,9 +42,9 @@
 //!
 //! **Compaction.** The run ends by removing every plate id that owns no cell
 //! — the ones suturing emptied and the ones migration did — and remapping
-//! ownership, kinematics, and plate classes to `0..live_count` in id order, so
-//! every plate identity a consumer sees owns crust and no id means the same
-//! plate either side of a run.
+//! ownership and kinematics to `0..live_count` in id order, so every plate
+//! identity a consumer sees owns cells and no id means the same plate either
+//! side of a run.
 //!
 //! Determinism: the arc walk, connected components, integer hashes, edge
 //! tallies, and area sums are all exact, and the only floats that decide an
@@ -55,7 +54,7 @@
 //! bit-identical across machines.
 
 use crate::{
-    BoundaryClass, BoundaryClassification, CellCrust, CrustClass, PlateEvolutionError,
+    BoundaryClass, BoundaryClassification, CrustClass, PlateEvolutionError,
     cracks::{Cracks, adopt_unassigned_cells},
     step::EvolvingWorld,
 };
@@ -198,14 +197,20 @@ impl EvolvingWorld<'_> {
         }
 
         let minimum_area = f64::from(config.rift_minimum_area_fraction) * self.mesh.total_area();
-        let areas = self.partition.plate_areas(self.mesh);
+        // A plate can carry both crusts, so what has to clear the minimum is
+        // the continental area a rift arc could separate, not the plate's
+        // whole extent. The arc itself still walks the whole plate.
+        let mut continental_areas = vec![0.0; self.partition.plate_count];
+        let cell_crust = self.cell_crust();
+        for (cell, &plate) in self.partition.cell_plates.iter().enumerate() {
+            if cell_crust.class(cell) == CrustClass::Continental {
+                continental_areas[plate] += f64::from(self.mesh.cell_areas[cell]);
+            }
+        }
         // Taken before any split, so a half a rift just made cannot rift
         // again in the same step.
         let eligible: Vec<usize> = (0..self.partition.plate_count)
-            .filter(|&plate| {
-                self.crust.plate_classes[plate] == CrustClass::Continental
-                    && areas[plate] > minimum_area
-            })
+            .filter(|&plate| continental_areas[plate] > minimum_area)
             .collect();
 
         let stream = RandomStream::new(self.config.seed, PLATE_RIFT);
@@ -317,10 +322,6 @@ impl EvolvingWorld<'_> {
             self.partition.cell_plates[cell] = new_plate;
         }
         self.partition.plate_count += 1;
-        // A rift splits continental crust into two continental plates. The
-        // ocean between them is made later, cell by cell, by the rebirth rule
-        // at the divergent boundary the opening motion creates.
-        self.crust.plate_classes.push(CrustClass::Continental);
 
         let parent = self.kinematics.angular_velocities[plate];
         let rotations = [parent + opening, parent - opening];
@@ -346,9 +347,7 @@ impl EvolvingWorld<'_> {
             return 0;
         }
 
-        let cell_crust = CellCrust {
-            cell_birth: &self.carried.birth,
-        };
+        let cell_crust = self.cell_crust();
         let mut shared: BTreeMap<(usize, usize), usize> = BTreeMap::new();
         for (edge_index, edge) in self.mesh.edges.iter().enumerate() {
             if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent {
@@ -358,17 +357,13 @@ impl EvolvingWorld<'_> {
             if plates[0] == plates[1] {
                 continue;
             }
-            // A continental plate can carry an oceanic margin, so the pair's
-            // classes are not the whole test: a suture is continent meeting
-            // continent, which is what the cells' own crust says.
-            let continental = plates
+            // A suture is continent meeting continent, which is what the two
+            // cells' own crust says.
+            if edge
+                .cells
                 .iter()
-                .all(|&plate| self.crust.plate_classes[plate] == CrustClass::Continental)
-                && edge
-                    .cells
-                    .iter()
-                    .all(|&cell| cell_crust.class(cell) == CrustClass::Continental);
-            if !continental {
+                .any(|&cell| cell_crust.class(cell) != CrustClass::Continental)
+            {
                 continue;
             }
             let pair = (plates[0].min(plates[1]), plates[0].max(plates[1]));
@@ -472,10 +467,6 @@ impl EvolvingWorld<'_> {
             .iter()
             .map(|&plate| self.starting_speeds[plate])
             .collect();
-        self.crust.plate_classes = live
-            .iter()
-            .map(|&plate| self.crust.plate_classes[plate])
-            .collect();
         self.partition.plate_count = live.len();
     }
 }
@@ -559,7 +550,7 @@ mod tests {
     use crate::test_support::EvolutionFixture;
     use crate::test_support::{
         NO_LIFECYCLE, closed_arc_rift_fixture, empty_boundaries, evolution_fixture,
-        failed_rift_fixture, forced_rift_fixture, forced_suture_fixture,
+        failed_rift_fixture, forced_rift_fixture, forced_suture_fixture, half_oceanic_rift_fixture,
         reference_evolution_config, two_plate_fixture,
     };
     use crate::{PlateEvolution, PlateEvolutionConfig, evolve_plate_ownership};
@@ -597,8 +588,8 @@ mod tests {
         );
         evolution.validate(&fixture.mesh).unwrap();
 
-        // Each half is one connected piece, both are continental, and together
-        // they are exactly the cells the parent owned.
+        // Each half is one connected piece and together they are exactly the
+        // cells the parent owned.
         let mut covered = Vec::new();
         for half in HALVES {
             let pieces = connected_components(
@@ -607,7 +598,6 @@ mod tests {
                 |_, _| true,
             );
             assert_eq!(pieces.len(), 1, "half {half} is empty or disconnected");
-            assert_eq!(evolution.crust.plate_classes[half], CrustClass::Continental);
             covered.extend(pieces.into_iter().flatten());
         }
         covered.sort_unstable();
@@ -671,6 +661,49 @@ mod tests {
         );
     }
 
+    /// Rift eligibility is a plate's continental area, not its extent: half
+    /// the cap's crust is ocean, so the plate still holds three fifths of the
+    /// sphere and no longer holds the minimum in continent.
+    #[test]
+    fn a_plate_whose_continent_is_too_small_is_never_drawn_for() {
+        let (fixture, config) = half_oceanic_rift_fixture();
+        let minimum_area =
+            f64::from(config.lifecycle.rift_minimum_area_fraction) * fixture.mesh.total_area();
+        let areas = fixture.partition.plate_areas(&fixture.mesh);
+        assert!(
+            areas.iter().any(|&area| area > minimum_area),
+            "a plate must still clear the minimum on total area"
+        );
+        assert!(
+            fixture
+                .crust
+                .plate_continental_fraction(&fixture.mesh, &fixture.partition)
+                .iter()
+                .zip(&areas)
+                .all(|(share, &area)| share * area <= minimum_area),
+            "no plate may clear it on continental area"
+        );
+
+        let evolution = fixture.evolve(config);
+
+        assert_eq!(evolution.diagnostics.rift_count, 0);
+        assert_eq!(evolution.diagnostics.failed_rift_count, 0);
+        assert_eq!(
+            evolution.partition.plate_count,
+            fixture.partition.plate_count
+        );
+        // The forced-rift fixture is this world with the whole cap
+        // continental, and it splits on its first step.
+        let (continental, continental_config) = forced_rift_fixture();
+        assert_eq!(
+            continental
+                .evolve(continental_config)
+                .diagnostics
+                .rift_count,
+            1
+        );
+    }
+
     #[test]
     fn a_rift_that_separates_nothing_leaves_the_plate_alone() {
         let (fixture, config) = failed_rift_fixture();
@@ -679,7 +712,6 @@ mod tests {
         assert_eq!(evolution.diagnostics.rift_count, 0);
         assert_eq!(evolution.diagnostics.failed_rift_count, 1);
         assert_eq!(evolution.partition, fixture.partition);
-        assert_eq!(evolution.crust, fixture.crust);
         assert_eq!(evolution.kinematics, fixture.kinematics);
     }
 
@@ -720,12 +752,11 @@ mod tests {
             ..config
         });
         assert_eq!(merged.diagnostics.suture_count, 1);
-        // Compaction leaves one plate owning every cell, with one motion and
-        // one class to its name.
+        // Compaction leaves one plate owning every cell, with one motion to
+        // its name.
         assert_eq!(merged.partition.plate_count, 1);
         assert!(merged.partition.cell_plates.iter().all(|&plate| plate == 0));
         assert_eq!(merged.kinematics.angular_velocities.len(), 1);
-        assert_eq!(merged.crust.plate_classes.len(), 1);
         merged.validate(&fixture.mesh).unwrap();
 
         // The larger plate absorbed the smaller, and its motion is the
@@ -776,7 +807,7 @@ mod tests {
         });
 
         assert_eq!(
-            evolution.crust.plate_classes.len(),
+            evolution.kinematics.angular_velocities.len(),
             evolution.partition.plate_count
         );
         assert_eq!(evolution.diagnostics.rift_count, 0);
@@ -803,19 +834,15 @@ mod tests {
                 *plate = 0;
             }
         }
-        let classes = world.crust.plate_classes.clone();
+        let plate_count = world.partition.plate_count;
         let motions = world.kinematics.angular_velocities.clone();
         let speeds = world.starting_speeds.clone();
 
         world.compact();
 
-        assert_eq!(world.partition.plate_count, classes.len() - 1);
+        assert_eq!(world.partition.plate_count, plate_count - 1);
         world.partition.validate(&fixture.mesh).unwrap();
-        let survivors: Vec<usize> = (0..classes.len()).filter(|&p| p != ABSORBED).collect();
-        let kept = |values: &[CrustClass]| -> Vec<CrustClass> {
-            survivors.iter().map(|&plate| values[plate]).collect()
-        };
-        assert_eq!(world.crust.plate_classes, kept(&classes));
+        let survivors: Vec<usize> = (0..plate_count).filter(|&p| p != ABSORBED).collect();
         assert_eq!(
             world.kinematics.angular_velocities,
             survivors

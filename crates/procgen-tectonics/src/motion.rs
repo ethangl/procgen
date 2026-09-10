@@ -29,7 +29,7 @@
 //! drifts its own copy of it step by step and returns the motion it ended on,
 //! which is what every consumer downstream of a run reads.
 
-use crate::{CrustClass, CrustClassification, PlatePartition, StageInputError};
+use crate::{CrustClassification, PlatePartition, StageInputError};
 use procgen_core::{
     RandomStream, Vec3,
     random_streams::{PLATE_ANGULAR_SPEED, PLATE_FLOW_FIELD, PLATE_ROTATION_AXIS},
@@ -58,9 +58,11 @@ pub struct PlateKinematicsConfig {
     /// Fraction of the way from the hashed random axis to the fitted axis.
     /// Zero reproduces independent random motion; one is fully field-driven.
     pub coherence: f32,
-    /// Speed multiplier for plates classified oceanic.
+    /// Speed multiplier for a plate that carries no continental crust.
     pub oceanic_speed_factor: f32,
-    /// Speed multiplier for plates classified continental.
+    /// Speed multiplier for a plate that is continental throughout. A plate
+    /// that carries both crusts interpolates between the two factors by its
+    /// continental area fraction.
     pub continental_speed_factor: f32,
 }
 
@@ -206,8 +208,9 @@ pub fn generate_plate_kinematics(
 ) -> Result<PlateKinematics, PlateKinematicsError> {
     validate_config(config)?;
     partition.validate(mesh)?;
-    crust.validate(partition)?;
+    crust.validate(mesh)?;
 
+    let continental = crust.plate_continental_fraction(mesh, partition);
     let areas = partition.plate_areas(mesh);
     let reference_area = mesh.total_area() / partition.plate_count as f64;
     let flow = FlowField::new(&config);
@@ -217,10 +220,10 @@ pub fn generate_plate_kinematics(
 
     let angular_velocities = fitted
         .iter()
-        .zip(&crust.plate_classes)
+        .zip(&continental)
         .zip(&areas)
         .enumerate()
-        .map(|(plate, ((fitted, &class), &area))| {
+        .map(|(plate, ((fitted, &continental), &area))| {
             let random = random_axis(plate, config);
             let axis = match fitted {
                 Some(rotation) => blend_axis(random, rotation.normalized(), config.coherence),
@@ -233,7 +236,7 @@ pub fn generate_plate_kinematics(
                 // every plate.
                 None => random,
             };
-            axis * plate_speed(plate, area, reference_area, class, config)
+            axis * plate_speed(plate, area, reference_area, continental, config)
         })
         .collect();
 
@@ -306,17 +309,24 @@ fn blend_axis(random: Vec3, fitted: Vec3, coherence: f32) -> Vec3 {
     (random + (fitted - random) * coherence).normalized()
 }
 
+/// The speed multiplier a plate's crust earns it: the oceanic factor at no
+/// continental area, the continental factor at nothing but, and a linear
+/// interpolation in between, because a plate that is half continent is half
+/// as slowed by it.
+fn crust_speed_factor(continental_fraction: f64, config: PlateKinematicsConfig) -> f32 {
+    let oceanic = f64::from(config.oceanic_speed_factor);
+    let continental = f64::from(config.continental_speed_factor);
+    (oceanic + (continental - oceanic) * continental_fraction) as f32
+}
+
 fn plate_speed(
     plate: usize,
     plate_area: f64,
     reference_area: f64,
-    class: CrustClass,
+    continental_fraction: f64,
     config: PlateKinematicsConfig,
 ) -> f32 {
-    let crust_factor = match class {
-        CrustClass::Oceanic => config.oceanic_speed_factor,
-        CrustClass::Continental => config.continental_speed_factor,
-    };
+    let crust_factor = crust_speed_factor(continental_fraction, config);
     // Larger plates move more slowly, by the fourth root of the mean plate area
     // over their own. Two square roots rather than a configurable exponent
     // because `powf` would put libm on the path that decides boundary classes,
@@ -418,7 +428,8 @@ fn determinant_3x3(m: [[f64; 3]; 3]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CrustClassificationConfig, classify_crust, test_support};
+    use crate::test_support::plate_crust;
+    use crate::{CrustClass, classify_crust, test_support};
 
     /// Normalizing the blended axis leaves the rotation vector's magnitude a
     /// few last bits off the clamped speed it was scaled by.
@@ -426,7 +437,7 @@ mod tests {
 
     fn reference_inputs() -> (SphereMesh, PlatePartition, CrustClassification) {
         let (mesh, partition) = test_support::reference_partition();
-        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
+        let crust = classify_crust(&mesh, test_support::reference_crust_config()).unwrap();
         (mesh, partition, crust)
     }
 
@@ -528,9 +539,10 @@ mod tests {
 
         // At full coherence the blend is the fitted axis itself, so the flow
         // field is the only thing setting direction.
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic; partition.plate_count],
-        };
+        let crust = plate_crust(
+            &partition,
+            &vec![CrustClass::Oceanic; partition.plate_count],
+        );
         let config = PlateKinematicsConfig {
             coherence: 1.0,
             ..PlateKinematicsConfig::new(7)
@@ -550,6 +562,22 @@ mod tests {
     }
 
     #[test]
+    fn the_crust_factor_interpolates_by_continental_area() {
+        let config = PlateKinematicsConfig::new(7);
+        // The defaults are 1.5 and 1.0, whose mean is exact in binary, so the
+        // midpoint is an equality rather than a tolerance.
+        assert_eq!(crust_speed_factor(0.0, config), config.oceanic_speed_factor);
+        assert_eq!(
+            crust_speed_factor(1.0, config),
+            config.continental_speed_factor
+        );
+        assert_eq!(
+            crust_speed_factor(0.5, config),
+            (config.oceanic_speed_factor + config.continental_speed_factor) / 2.0
+        );
+    }
+
+    #[test]
     fn oceanic_plates_outrun_continental_plates_of_similar_size() {
         let (mesh, partition) = two_equal_plates();
         let areas = partition.plate_areas(&mesh);
@@ -558,9 +586,7 @@ mod tests {
             "the halves must be similar in size: {areas:?}"
         );
 
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic, CrustClass::Continental],
-        };
+        let crust = plate_crust(&partition, &[CrustClass::Oceanic, CrustClass::Continental]);
         let kinematics =
             generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
                 .unwrap();
@@ -583,9 +609,7 @@ mod tests {
             cell_plates,
             plate_count: 2,
         };
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic; 2],
-        };
+        let crust = plate_crust(&partition, &[CrustClass::Oceanic; 2]);
         let config = PlateKinematicsConfig {
             minimum_angular_speed: 0.0,
             maximum_angular_speed: 100.0,
@@ -616,9 +640,7 @@ mod tests {
     #[test]
     fn single_cell_plates_fall_back_to_the_hashed_axis() {
         let (mesh, _, partition) = test_support::two_plate_boundary_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Oceanic; 2],
-        };
+        let crust = plate_crust(&partition, &[CrustClass::Oceanic; 2]);
         let config = PlateKinematicsConfig::new(7);
         let areas = partition.plate_areas(&mesh);
 
@@ -636,7 +658,7 @@ mod tests {
                 < 1.0e-6
         );
         let reference_area = mesh.total_area() / 2.0;
-        let expected = plate_speed(1, areas[1], reference_area, CrustClass::Oceanic, config);
+        let expected = plate_speed(1, areas[1], reference_area, 0.0, config);
         assert!(
             (kinematics.angular_velocities[1].length() - expected).abs()
                 < SPEED_TOLERANCE * expected
@@ -788,11 +810,12 @@ mod tests {
                 &mesh,
                 &partition,
                 &CrustClassification {
-                    plate_classes: crust.plate_classes[1..].to_vec(),
+                    cell_classes: crust.cell_classes[1..].to_vec(),
+                    ..crust.clone()
                 },
                 config,
             ),
-            Err(PlateKinematicsError::Input(StageInputError::Plates))
+            Err(PlateKinematicsError::Input(StageInputError::CrustClasses))
         );
     }
 }

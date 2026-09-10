@@ -395,7 +395,7 @@ fn trace_trail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::plate_cell_birth;
+    use crate::test_support::classified_cell_birth;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::{build_sphere_mesh, connected_components};
@@ -436,12 +436,12 @@ mod tests {
                 },
             )
             .unwrap();
-            let crust = classify_crust(&mesh, &plates, CrustClassificationConfig::new(17)).unwrap();
+            let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
             let kinematics =
                 generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
                     .unwrap();
             Self {
-                cell_birth: plate_cell_birth(&plates, &crust.plate_classes),
+                cell_birth: classified_cell_birth(&crust),
                 mesh,
                 plates,
                 kinematics,
@@ -752,9 +752,9 @@ mod tests {
             })
             .chain(covered);
 
-        assert_eq!(fingerprint(values), 13_290_903_591_695_477_537);
-        assert_eq!(field.diagnostics.province_count, 6);
-        assert_eq!(field.diagnostics.province_cell_count, 114);
+        assert_eq!(fingerprint(values), 4_852_758_932_337_177_982);
+        assert_eq!(field.diagnostics.province_count, 2);
+        assert_eq!(field.diagnostics.province_cell_count, 13);
     }
 
     #[test]

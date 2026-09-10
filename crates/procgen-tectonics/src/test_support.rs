@@ -6,11 +6,12 @@ use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 use crate::field::{DEFAULT_STEP_DURATION, mean_cell_width};
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CrustBirthPrior,
-    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig, FlowField,
-    PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
-    PlateKinematicsConfig, PlateLifecycleConfig, PlateMigrationConfig, PlatePartition,
-    PlatePartitionConfig, PoleDriftConfig, classify_boundaries, classify_crust,
-    derive_crust_birth_prior, evolve_plate_ownership, generate_plate_kinematics, partition_plates,
+    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
+    CrustClassificationDiagnostics, FlowField, PlateEvolution, PlateEvolutionConfig,
+    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlateLifecycleConfig,
+    PlateMigrationConfig, PlatePartition, PlatePartitionConfig, PoleDriftConfig,
+    classify_boundaries, classify_crust, derive_crust_birth_prior, evolve_plate_ownership,
+    generate_plate_kinematics, partition_plates,
 };
 
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
@@ -133,7 +134,6 @@ impl EvolutionFixture {
     pub fn inputs(&self) -> PlateEvolutionInputs<'_> {
         PlateEvolutionInputs {
             partition: &self.partition,
-            crust: &self.crust,
             kinematics: &self.kinematics,
             boundaries: &self.boundaries,
             birth_prior: &self.birth_prior,
@@ -147,7 +147,7 @@ impl EvolutionFixture {
 
 pub fn evolution_fixture() -> EvolutionFixture {
     let (mesh, partition) = reference_partition();
-    let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
+    let crust = classify_crust(&mesh, reference_crust_config()).unwrap();
     let kinematics = generate_plate_kinematics(
         &mesh,
         &partition,
@@ -197,7 +197,7 @@ pub fn opposed_kinematics(mesh: &SphereMesh, edge: usize, outward: f32) -> Plate
 /// A one-cell plate inside a larger one, moving apart from or into it.
 pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> EvolutionFixture {
     let (mesh, edge, partition) = two_plate_boundary_partition();
-    let crust = CrustClassification { plate_classes };
+    let crust = plate_crust(&partition, &plate_classes);
     let kinematics = opposed_kinematics(&mesh, edge, outward);
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
@@ -333,6 +333,44 @@ pub fn plate_cell_birth(
         .collect()
 }
 
+/// The birth field an initial per-cell classification implies, for the stages
+/// tested without running the birth prior: oceanic crust born at step zero,
+/// continental crust that nothing has re-made.
+pub fn classified_cell_birth(crust: &CrustClassification) -> Vec<Option<i32>> {
+    crust
+        .cell_classes
+        .iter()
+        .map(|&class| (class == CrustClass::Oceanic).then_some(0))
+        .collect()
+}
+
+/// A classification whose cells take their plate's class, for the fixtures
+/// whose crust is chosen rather than grown. Its diagnostics are the default:
+/// nothing in the pipeline reads them, only the viewer's summary.
+pub fn plate_crust(
+    partition: &PlatePartition,
+    plate_classes: &[CrustClass],
+) -> CrustClassification {
+    CrustClassification {
+        cell_classes: partition
+            .cell_plates
+            .iter()
+            .map(|&plate| plate_classes[plate])
+            .collect(),
+        diagnostics: CrustClassificationDiagnostics::default(),
+    }
+}
+
+/// Nucleus count scaled to the 512-cell reference mesh. The default eight
+/// nuclei over the default mesh's 111 plates put a continent across about four
+/// of them; this mesh has thirty-three plates, so three nuclei keep that ratio.
+pub fn reference_crust_config() -> CrustClassificationConfig {
+    CrustClassificationConfig {
+        nucleus_count: 3,
+        ..CrustClassificationConfig::new(17)
+    }
+}
+
 /// A world whose continental plate is a large cap, and a run that rifts it on
 /// its first step.
 ///
@@ -345,6 +383,35 @@ pub fn plate_cell_birth(
 /// cell width of this mesh in a few steps, so the ridge the rift opened has
 /// time to make crust.
 pub fn forced_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
+    let (mesh, partition, config) = rift_cap_world();
+    let crust = plate_crust(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
+    (fixture_over(mesh, partition, crust, at_rest(2)), config)
+}
+
+/// The same cap with an ocean over the half of it below the equator: the
+/// plate's total area still clears `rift_minimum_area_fraction` and its
+/// continental area no longer does, so the rift is never drawn for.
+pub fn half_oceanic_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
+    let (mesh, partition, config) = rift_cap_world();
+    let cell_classes = mesh
+        .cell_centers
+        .iter()
+        .map(|center| match center.z > 0.0 {
+            true => CrustClass::Continental,
+            false => CrustClass::Oceanic,
+        })
+        .collect();
+    let crust = CrustClassification {
+        cell_classes,
+        diagnostics: CrustClassificationDiagnostics::default(),
+    };
+    (fixture_over(mesh, partition, crust, at_rest(2)), config)
+}
+
+/// The cap world the two rift fixtures share: a plate of about three fifths
+/// of the sphere beside one holding the rest, and a run that draws for a rift
+/// every step.
+fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
     let mesh = mesh(256);
     let partition = PlatePartition {
         cell_plates: mesh
@@ -353,11 +420,6 @@ pub fn forced_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
             .map(|center| usize::from(center.z < CONTINENT_EDGE))
             .collect(),
         plate_count: 2,
-    };
-    // Both plates at rest, so the opening term is the whole of the halves'
-    // motion and the rift is the only boundary the run can open.
-    let kinematics = PlateKinematics {
-        angular_velocities: vec![Vec3::ZERO; 2],
     };
     let config = PlateEvolutionConfig {
         step_count: 6,
@@ -376,15 +438,15 @@ pub fn forced_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
         },
         ..PlateEvolutionConfig::default()
     };
-    (
-        fixture_over(
-            mesh,
-            partition,
-            vec![CrustClass::Continental, CrustClass::Oceanic],
-            kinematics,
-        ),
-        config,
-    )
+    (mesh, partition, config)
+}
+
+/// Plates at rest, so a rift's opening term is the whole of the halves'
+/// motion and the boundary it makes is the only one a run can open.
+fn at_rest(plate_count: usize) -> PlateKinematics {
+    PlateKinematics {
+        angular_velocities: vec![Vec3::ZERO; plate_count],
+    }
 }
 
 /// Height above which the forced-rift fixture's cap is continental: about
@@ -396,9 +458,6 @@ const CONTINENT_EDGE: f32 = -0.2;
 /// wall is the whole plate and there is nothing for it to separate.
 pub fn failed_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
     let (mesh, _, partition) = two_plate_boundary_partition();
-    let kinematics = PlateKinematics {
-        angular_velocities: vec![Vec3::ZERO; 2],
-    };
     let config = PlateEvolutionConfig {
         step_count: 1,
         step_duration: 0.1,
@@ -412,15 +471,8 @@ pub fn failed_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
         },
         ..PlateEvolutionConfig::default()
     };
-    (
-        fixture_over(
-            mesh,
-            partition,
-            vec![CrustClass::Oceanic, CrustClass::Continental],
-            kinematics,
-        ),
-        config,
-    )
+    let crust = plate_crust(&partition, &[CrustClass::Oceanic, CrustClass::Continental]);
+    (fixture_over(mesh, partition, crust, at_rest(2)), config)
 }
 
 /// A world of one continental plate covering the sphere, and a run that tries
@@ -432,9 +484,6 @@ pub fn closed_arc_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
     let partition = PlatePartition {
         cell_plates: vec![0; mesh.cell_count()],
         plate_count: 1,
-    };
-    let kinematics = PlateKinematics {
-        angular_velocities: vec![Vec3::ZERO],
     };
     let config = PlateEvolutionConfig {
         step_count: 1,
@@ -449,10 +498,8 @@ pub fn closed_arc_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
         },
         ..PlateEvolutionConfig::default()
     };
-    (
-        fixture_over(mesh, partition, vec![CrustClass::Continental], kinematics),
-        config,
-    )
+    let crust = plate_crust(&partition, &[CrustClass::Continental]);
+    (fixture_over(mesh, partition, crust, at_rest(1)), config)
 }
 
 /// Two continental plates in sustained head-on convergence, and the run that
@@ -487,15 +534,15 @@ pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize
     (fixture, config, steps)
 }
 
-/// The boundaries, crust, and kinematics a hand-built ownership implies, for
-/// the fixtures whose plate classes and motion are chosen rather than fitted.
+/// The boundaries and birth prior a hand-built ownership, crust, and motion
+/// imply, for the fixtures whose crust and motion are chosen rather than
+/// grown and fitted.
 fn fixture_over(
     mesh: SphereMesh,
     partition: PlatePartition,
-    plate_classes: Vec<CrustClass>,
+    crust: CrustClassification,
     kinematics: PlateKinematics,
 ) -> EvolutionFixture {
-    let crust = CrustClassification { plate_classes };
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,

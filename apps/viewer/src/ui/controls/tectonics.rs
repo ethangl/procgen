@@ -20,6 +20,9 @@ const ANGULAR_SPEED_STEP: f64 = 0.01;
 // A flow cell spans the sphere at low frequency and a single plate near the top
 // of this range, past which the fit averages the field away.
 const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
+// One nucleus is a single continent; the top of the range is about the number
+// of plates the default partition makes, past which a nucleus is a plate.
+const NUCLEUS_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=128;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
@@ -153,9 +156,23 @@ fn plate_controls(ui: &mut egui::Ui, config: &mut PlatePartitionConfig) {
 fn crust_controls(ui: &mut egui::Ui, config: &mut CrustClassificationConfig) {
     slider(
         ui,
-        "Target ocean",
-        &mut config.target_ocean_fraction,
+        "Target continent",
+        &mut config.continental_fraction,
         0.0..=1.0,
+    );
+    drag_value(
+        ui,
+        "Nuclei",
+        &mut config.nucleus_count,
+        NUCLEUS_COUNT_RANGE,
+        1.0,
+    );
+    drag_value(
+        ui,
+        "Growth roughness %",
+        &mut config.growth_roughness,
+        0..=MAX_GROWTH_ROUGHNESS,
+        1.0,
     );
     drag_value(ui, "Crust seed", &mut config.seed, u64::MIN..=u64::MAX, 1.0);
 }

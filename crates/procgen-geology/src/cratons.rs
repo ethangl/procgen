@@ -126,7 +126,7 @@ fn strength_at_distance(distance: usize, config: CratonFieldConfig) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::plate_cell_birth;
+    use crate::test_support::classified_cell_birth;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
@@ -164,17 +164,9 @@ mod tests {
             },
         )
         .unwrap();
-        let crust = classify_crust(
-            &mesh,
-            &plates,
-            CrustClassificationConfig {
-                target_ocean_fraction: 0.7,
-                seed: 17,
-            },
-        )
-        .unwrap();
+        let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
         let elevations = flat_elevation(mesh.cell_count());
-        let cell_birth = plate_cell_birth(&plates, &crust.plate_classes);
+        let cell_birth = classified_cell_birth(&crust);
         (mesh, plates, cell_birth, elevations)
     }
 
@@ -281,7 +273,7 @@ mod tests {
             .iter()
             .map(|strength| u64::from(strength.to_bits()));
 
-        assert_eq!(fingerprint(values), 16_725_339_665_522_894_855);
+        assert_eq!(fingerprint(values), 8_813_300_208_932_561_958);
     }
 
     #[test]

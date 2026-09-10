@@ -1,7 +1,7 @@
 use super::{field_summary_stats, format_field_range, stat, stat_grid};
 use crate::model::TectonicsWorld;
 use bevy_egui::egui;
-use procgen_tectonics::{BoundaryClass, CrustClass};
+use procgen_tectonics::BoundaryClass;
 
 pub(super) fn summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
     crust_summary(ui, world);
@@ -15,32 +15,21 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
 }
 
 fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
-    // Not static any more: plates rift and suture, so these describe the
-    // plate set the run ended with rather than the one it classified.
-    stat_grid(ui, "Plate crust", "crust", |ui| {
+    stat_grid(ui, "Crust", "crust", |ui| {
+        // The classification's own numbers describe the world before step
+        // zero; the cell counts are what evolution left behind.
         stat(
             ui,
-            "Target ocean area",
-            format!("{:.2}%", world.config.crust.target_ocean_fraction * 100.0),
+            "Target continent area",
+            format!("{:.2}%", world.config.crust.continental_fraction * 100.0),
         );
         stat(
             ui,
-            "Final ocean area",
-            format!(
-                "{:.2}%",
-                world.crust.ocean_fraction(&world.voronoi, &world.plates) * 100.0
-            ),
+            "Grown continent area",
+            format!("{:.2}%", world.crust.continental_fraction * 100.0),
         );
-        stat(
-            ui,
-            "Oceanic plates",
-            world.crust.plate_count(CrustClass::Oceanic),
-        );
-        stat(
-            ui,
-            "Continental plates",
-            world.crust.plate_count(CrustClass::Continental),
-        );
+        stat(ui, "Nuclei", world.crust.nucleus_count);
+        stat(ui, "Continents", world.crust.component_count);
         let [oceanic_cells, continental_cells] = world.cell_crust().cell_counts();
         stat(ui, "Oceanic cells", oceanic_cells);
         stat(ui, "Continental cells", continental_cells);

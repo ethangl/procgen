@@ -7,6 +7,7 @@ pub enum StageInputError {
     PlateOwnership,
     EmptyPlate,
     Boundaries,
+    CrustClasses,
     CrustBirth,
     CrustBirthAfterRun,
     Elevation,
@@ -24,6 +25,9 @@ impl fmt::Display for StageInputError {
             Self::EmptyPlate => formatter.write_str("every plate must own at least one cell"),
             Self::Boundaries => {
                 formatter.write_str("boundary arrays must match the mesh edge count")
+            }
+            Self::CrustClasses => {
+                formatter.write_str("crust classes must match the mesh cell count")
             }
             Self::CrustBirth => {
                 formatter.write_str("crust birth steps must match the mesh cell count")

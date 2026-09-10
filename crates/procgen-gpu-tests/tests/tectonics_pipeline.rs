@@ -12,16 +12,13 @@ use procgen_gpu_tests::{
     readback, request_device_with_limits, run_compute, storage_output_buffer, validate_wgsl,
 };
 use procgen_raster_tectonics::{
-    BASE_GROWTH_COST, FMA_CONTRACTION_TEST_VECTORS, PipelineTuning, RasterEvolutionConfig,
-    RasterPlate, RasterPlatePartitionConfig, RasterTectonicsConfig, TectonicsPipeline,
-    UNCLAIMED_LABEL, boundary_class, crust_class_code, current_plate, first_seed_cell,
-    fold_growth_key, growth_label, growth_label_cost, growth_label_plate, pending_plate,
-    tectonics_kernel_source,
+    BASE_GROWTH_COST, FMA_CONTRACTION_TEST_VECTORS, PipelineTuning,
+    RasterCrustClassificationConfig, RasterEvolutionConfig, RasterPlate,
+    RasterPlatePartitionConfig, RasterTectonicsConfig, TectonicsPipeline, UNCLAIMED_LABEL,
+    boundary_class, crust_class_code, current_plate, first_seed_cell, fold_growth_key,
+    growth_label, growth_label_cost, growth_label_plate, pending_plate, tectonics_kernel_source,
 };
-use procgen_tectonics::{
-    BoundaryClass, CrustClass, CrustClassificationConfig, PlateKinematicsConfig,
-    PlateMigrationConfig,
-};
+use procgen_tectonics::{BoundaryClass, CrustClass, PlateKinematicsConfig, PlateMigrationConfig};
 use std::{cmp::Reverse, collections::BinaryHeap};
 use wgpu::util::DeviceExt;
 
@@ -61,7 +58,7 @@ fn evolving_config() -> RasterTectonicsConfig {
             ..RasterPlatePartitionConfig::default()
         },
         evolution: RasterEvolutionConfig {
-            crust: CrustClassificationConfig::new(7),
+            crust: RasterCrustClassificationConfig::new(7),
             kinematics: PlateKinematicsConfig::new(7),
             migration: PlateMigrationConfig::default(),
             step_count: 4,

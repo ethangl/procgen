@@ -1,6 +1,4 @@
-use crate::{
-    BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, PlatePartition,
-};
+use crate::{BoundaryClass, BoundaryClassification, CellCrust, CrustClass, PlatePartition};
 use procgen_sphere_mesh::SphereMesh;
 use std::{cmp::Reverse, fmt};
 
@@ -57,7 +55,7 @@ impl PlateMigration {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlateMigrationError {
     CellCountMismatch,
-    PlateCountMismatch,
+    CrustCountMismatch,
     BoundaryCountMismatch,
 }
 
@@ -67,8 +65,8 @@ impl fmt::Display for PlateMigrationError {
             Self::CellCountMismatch => {
                 formatter.write_str("plate assignments must match the mesh cell count")
             }
-            Self::PlateCountMismatch => {
-                formatter.write_str("plate classes must match the partition plate count")
+            Self::CrustCountMismatch => {
+                formatter.write_str("crust birth steps must match the mesh cell count")
             }
             Self::BoundaryCountMismatch => {
                 formatter.write_str("per-edge arrays must match the mesh edge count")
@@ -107,8 +105,9 @@ pub(crate) fn accumulate_closing_distances(
 ///
 /// An edge proposes a change only once its accumulated closing distance
 /// reaches `cell_width`, so a fast boundary proposes most steps and a slow one
-/// rarely. Continental plates override oceanic plates; equal-crust boundaries
-/// advance whichever plate has the greater local velocity toward the edge.
+/// rarely. A continental cell overrides an oceanic one, whichever plates they
+/// belong to; equal-crust boundaries advance whichever plate has the greater
+/// local velocity toward the edge.
 /// When several edges target one cell, the strongest convergence wins,
 /// followed by the lower advancing plate id and edge id for deterministic
 /// ties. The caller subtracts one cell width from each winning edge.
@@ -120,7 +119,7 @@ pub(crate) fn accumulate_closing_distances(
 pub fn migrate_plates_once(
     mesh: &SphereMesh,
     partition: &PlatePartition,
-    crust: &CrustClassification,
+    crust: CellCrust<'_>,
     boundaries: &BoundaryClassification,
     closing: &[f32],
     cell_width: f32,
@@ -128,8 +127,8 @@ pub fn migrate_plates_once(
     if partition.cell_plates.len() != mesh.cell_count() {
         return Err(PlateMigrationError::CellCountMismatch);
     }
-    if crust.plate_classes.len() != partition.plate_count {
-        return Err(PlateMigrationError::PlateCountMismatch);
+    if crust.cell_birth.len() != mesh.cell_count() {
+        return Err(PlateMigrationError::CrustCountMismatch);
     }
     if boundaries.validate(mesh).is_err() || closing.len() != mesh.edge_count() {
         return Err(PlateMigrationError::BoundaryCountMismatch);
@@ -145,7 +144,7 @@ pub fn migrate_plates_once(
         }
 
         let plates = edge.cells.map(|cell| partition.cell_plates[cell]);
-        let classes = plates.map(|plate| crust.plate_classes[plate]);
+        let classes = edge.cells.map(|cell| crust.class(cell));
         let normal_speeds = boundaries.edge_normal_speeds[edge_index];
         // Continental dominates, then faster approach, then lower plate id.
         let side_key = |side: usize| {
@@ -201,11 +200,11 @@ mod tests {
     use super::*;
     use crate::field::mean_cell_width;
     use crate::test_support::{
-        empty_boundaries, fingerprint, reference_partition, two_plate_boundary_partition,
+        classified_cell_birth, empty_boundaries, fingerprint, plate_cell_birth,
+        reference_crust_config, reference_partition, two_plate_boundary_partition,
     };
     use crate::{
-        CrustClassificationConfig, PlateKinematicsConfig, classify_boundaries, classify_crust,
-        generate_plate_kinematics,
+        PlateKinematicsConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
     };
 
     /// One step long enough for every edge above the minimum convergence to
@@ -223,41 +222,49 @@ mod tests {
         closing
     }
 
+    fn crust(cell_birth: &[Option<i32>]) -> CellCrust<'_> {
+        CellCrust { cell_birth }
+    }
+
     fn fixture() -> (
         SphereMesh,
         PlatePartition,
-        CrustClassification,
+        Vec<Option<i32>>,
         BoundaryClassification,
     ) {
         let (mesh, partition) = reference_partition();
-        let crust = classify_crust(&mesh, &partition, CrustClassificationConfig::new(17)).unwrap();
-        let kinematics =
-            generate_plate_kinematics(&mesh, &partition, &crust, PlateKinematicsConfig::new(7))
-                .unwrap();
+        let classification = classify_crust(&mesh, reference_crust_config()).unwrap();
+        let kinematics = generate_plate_kinematics(
+            &mesh,
+            &partition,
+            &classification,
+            PlateKinematicsConfig::new(7),
+        )
+        .unwrap();
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
-        (mesh, partition, crust, boundaries)
+        let cell_birth = classified_cell_birth(&classification);
+        (mesh, partition, cell_birth, boundaries)
     }
 
     fn two_plate_convergent_fixture() -> (
         SphereMesh,
         usize,
         PlatePartition,
-        CrustClassification,
+        Vec<Option<i32>>,
         BoundaryClassification,
     ) {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let crust = CrustClassification {
-            plate_classes: vec![CrustClass::Continental, CrustClass::Oceanic],
-        };
+        let cell_birth =
+            plate_cell_birth(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 0.0];
-        (mesh, edge_index, partition, crust, boundaries)
+        (mesh, edge_index, partition, cell_birth, boundaries)
     }
 
     #[test]
-    fn one_step_is_deterministic_simultaneous_and_keeps_plate_classes() {
-        let (mesh, partition, crust, boundaries) = fixture();
+    fn one_step_is_deterministic_and_simultaneous() {
+        let (mesh, partition, cell_birth, boundaries) = fixture();
         let closing = closing_after(
             &mesh,
             &boundaries,
@@ -265,12 +272,13 @@ mod tests {
             IMMEDIATE_STEP,
         );
         let width = mean_cell_width(&mesh);
+        let crust = crust(&cell_birth);
         let first =
-            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap();
+            migrate_plates_once(&mesh, &partition, crust, &boundaries, &closing, width).unwrap();
 
         assert_eq!(
             first,
-            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap()
+            migrate_plates_once(&mesh, &partition, crust, &boundaries, &closing, width).unwrap()
         );
         assert!(first.migrated_cell_count() > 0);
         assert!(first.contested_cell_count > 0);
@@ -281,7 +289,7 @@ mod tests {
                 .iter()
                 .map(|&plate| plate as u64),
         );
-        assert_eq!(fingerprint, 4_842_646_029_839_611_517);
+        assert_eq!(fingerprint, 12_992_022_735_490_280_728);
     }
 
     #[test]
@@ -308,25 +316,26 @@ mod tests {
 
     #[test]
     fn an_edge_proposes_only_once_it_has_closed_a_cell_width() {
-        let (mesh, edge_index, partition, crust, boundaries) = two_plate_convergent_fixture();
+        let (mesh, edge_index, partition, cell_birth, boundaries) = two_plate_convergent_fixture();
         let width = mean_cell_width(&mesh);
+        let crust = crust(&cell_birth);
         let mut closing = vec![0.0; mesh.edge_count()];
         closing[edge_index] = width * 0.99;
 
         let waiting =
-            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap();
+            migrate_plates_once(&mesh, &partition, crust, &boundaries, &closing, width).unwrap();
         assert_eq!(waiting.proposal_count, 0);
         assert_eq!(waiting.partition, partition);
 
         closing[edge_index] = width;
         let moving =
-            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing, width).unwrap();
+            migrate_plates_once(&mesh, &partition, crust, &boundaries, &closing, width).unwrap();
         assert_eq!(moving.migrated_cell_count(), 1);
     }
 
     #[test]
-    fn continental_plate_overrides_oceanic_cell() {
-        let (mesh, edge_index, partition, crust, boundaries) = two_plate_convergent_fixture();
+    fn continental_cell_overrides_oceanic_cell() {
+        let (mesh, edge_index, partition, cell_birth, boundaries) = two_plate_convergent_fixture();
         let edge = mesh.edges[edge_index];
         let closing = closing_after(
             &mesh,
@@ -338,7 +347,7 @@ mod tests {
         let migration = migrate_plates_once(
             &mesh,
             &partition,
-            &crust,
+            crust(&cell_birth),
             &boundaries,
             &closing,
             mean_cell_width(&mesh),
@@ -355,13 +364,75 @@ mod tests {
 
         assert_eq!(migration.partition.cell_plates[edge.cells[1]], 0);
         assert_eq!(migration.migrated_cell_count(), 1);
-        assert!(crust.ocean_fraction(&mesh, &partition) > 0.0);
-        assert_eq!(crust.ocean_fraction(&mesh, &migration.partition), 0.0);
+    }
+
+    /// Two convergent edges of one plate that carries both crusts, chosen so
+    /// that its continental cell faces an oceanic neighbour across one and its
+    /// oceanic cell faces a continental neighbour across the other.
+    #[test]
+    fn a_mixed_crust_plate_overrides_and_is_overridden() {
+        let mesh = crate::test_support::mesh(32);
+        let overriding_edge = 0;
+        let [outside_oceanic, inside_continental] = mesh.edges[overriding_edge].cells;
+        // A second cell of the same plate, and a cell of the other plate
+        // across its own boundary edge.
+        let inside_oceanic = mesh
+            .cell_corners(inside_continental)
+            .iter()
+            .map(|corner| corner.neighbor)
+            .find(|&cell| cell != outside_oceanic)
+            .expect("the mesh is connected");
+        let overridden = *mesh
+            .cell_corners(inside_oceanic)
+            .iter()
+            .find(|corner| {
+                corner.neighbor != inside_continental && corner.neighbor != outside_oceanic
+            })
+            .expect("a cell has at least three neighbours");
+        let outside_continental = overridden.neighbor;
+
+        let mut cell_plates = vec![0; mesh.cell_count()];
+        cell_plates[inside_continental] = 1;
+        cell_plates[inside_oceanic] = 1;
+        let partition = PlatePartition {
+            cell_plates,
+            plate_count: 2,
+        };
+        let mut cell_birth = vec![None; mesh.cell_count()];
+        cell_birth[outside_oceanic] = Some(0);
+        cell_birth[inside_oceanic] = Some(0);
+
+        let mut boundaries = empty_boundaries(&mesh);
+        let mut closing = vec![0.0; mesh.edge_count()];
+        let width = mean_cell_width(&mesh);
+        for edge in [overriding_edge, overridden.edge] {
+            boundaries.edge_classes[edge] = BoundaryClass::Convergent;
+            closing[edge] = width;
+        }
+
+        let migration = migrate_plates_once(
+            &mesh,
+            &partition,
+            crust(&cell_birth),
+            &boundaries,
+            &closing,
+            width,
+        )
+        .unwrap();
+        // Plate 1's continental cell takes a cell from plate 0 across one
+        // edge, and loses one to plate 0's continental cell across the other.
+        assert_eq!(migration.partition.cell_plates[outside_oceanic], 1);
+        assert_eq!(migration.partition.cell_plates[inside_oceanic], 0);
+        assert_eq!(migration.migrated_cell_count(), 2);
+        assert_eq!(
+            migration.partition.cell_plates[outside_continental], 0,
+            "the overriding cell never moves"
+        );
     }
 
     #[test]
     fn minimum_convergence_suppresses_weaker_boundaries() {
-        let (mesh, _, partition, crust, boundaries) = two_plate_convergent_fixture();
+        let (mesh, _, partition, cell_birth, boundaries) = two_plate_convergent_fixture();
         let closing = closing_after(
             &mesh,
             &boundaries,
@@ -373,7 +444,7 @@ mod tests {
         let suppressed = migrate_plates_once(
             &mesh,
             &partition,
-            &crust,
+            crust(&cell_birth),
             &boundaries,
             &closing,
             mean_cell_width(&mesh),
@@ -387,9 +458,7 @@ mod tests {
     fn equal_crust_advances_the_faster_side() {
         let (mesh, edge_index, partition, _, boundaries) = two_plate_convergent_fixture();
         let edge = mesh.edges[edge_index];
-        let same_crust = CrustClassification {
-            plate_classes: vec![CrustClass::Continental; 2],
-        };
+        let same_crust = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
         let closing = closing_after(
             &mesh,
             &boundaries,
@@ -399,7 +468,7 @@ mod tests {
         let same_crust_migration = migrate_plates_once(
             &mesh,
             &partition,
-            &same_crust,
+            crust(&same_crust),
             &boundaries,
             &closing,
             mean_cell_width(&mesh),
@@ -441,13 +510,31 @@ mod tests {
 
     #[test]
     fn rejects_misaligned_inputs() {
-        let (mesh, partition, crust, boundaries) = fixture();
+        let (mesh, partition, cell_birth, boundaries) = fixture();
         let width = mean_cell_width(&mesh);
         let closing = vec![0.0; mesh.edge_count()];
 
         assert_eq!(
-            migrate_plates_once(&mesh, &partition, &crust, &boundaries, &closing[1..], width,),
+            migrate_plates_once(
+                &mesh,
+                &partition,
+                crust(&cell_birth),
+                &boundaries,
+                &closing[1..],
+                width,
+            ),
             Err(PlateMigrationError::BoundaryCountMismatch)
+        );
+        assert_eq!(
+            migrate_plates_once(
+                &mesh,
+                &partition,
+                crust(&cell_birth[1..]),
+                &boundaries,
+                &closing,
+                width,
+            ),
+            Err(PlateMigrationError::CrustCountMismatch)
         );
 
         let mut short_boundaries = boundaries;
@@ -456,7 +543,7 @@ mod tests {
             migrate_plates_once(
                 &mesh,
                 &partition,
-                &crust,
+                crust(&cell_birth),
                 &short_boundaries,
                 &closing,
                 width,
