@@ -153,6 +153,16 @@ fn base_elevation_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         );
         stat(
             ui,
+            "Dynamic topography",
+            format_field_range(&world.base_elevation.diagnostics.dynamic_topography),
+        );
+        stat(
+            ui,
+            "Basement",
+            format_field_range(&world.base_elevation.diagnostics.basement),
+        );
+        stat(
+            ui,
             "Oceanic cells",
             world.base_elevation.diagnostics.oceanic_cell_count,
         );

@@ -62,6 +62,15 @@ const FULL_DEFORMATION_TIME_RANGE: std::ops::RangeInclusive<f32> =
 // the unit range, so a clamp above one could never bite.
 const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
 const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+// Interior relief is broad and gentle on purpose. At the top of this range one
+// term alone spans a third of the way from the continental base to sea level,
+// which is where the two stop being relief on a plate and start deciding where
+// its coast is.
+const INTERIOR_RELIEF_AMPLITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.1;
+// A lattice feature spans about two cells, so the bottom is one basement
+// feature across most of a great circle and the top puts the third octave at
+// four or five cells of the default mesh, the shortest wavelength it carries.
+const BASEMENT_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.5..=8.0;
 
 pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
     section(ui, "Sampling", |ui| {
@@ -317,6 +326,31 @@ fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) 
         0.0..=1.0,
     );
     drag_value(ui, "Cooling age", &mut config.cooling_age, 1..=256, 1.0);
+    slider(
+        ui,
+        "Dynamic topography",
+        &mut config.dynamic_topography_amplitude,
+        INTERIOR_RELIEF_AMPLITUDE_RANGE,
+    );
+    slider(
+        ui,
+        "Basement relief",
+        &mut config.basement_amplitude,
+        INTERIOR_RELIEF_AMPLITUDE_RANGE,
+    );
+    slider(
+        ui,
+        "Basement frequency",
+        &mut config.basement_frequency,
+        BASEMENT_FREQUENCY_RANGE,
+    );
+    drag_value(
+        ui,
+        "Basement seed",
+        &mut config.seed,
+        u64::MIN..=u64::MAX,
+        1.0,
+    );
 }
 
 fn deformation_controls(

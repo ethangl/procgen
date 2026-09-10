@@ -111,8 +111,14 @@ Completed foundations:
   deterministic configured fallback age. Seafloor age is then the steps elapsed
   since each cell's birth. Base elevation keeps continental cells at their
   configured base and maps oceanic age through a configurable square-root
-  ridge-to-deep cooling curve. Tectonic elevation composes that base with
-  boundary deformation once before simultaneous smoothing and clamping.
+  ridge-to-deep cooling curve. Onto that curve it adds two low-frequency
+  interior-relief fields, both bounded well below the continental base's margin
+  over sea level: dynamic topography, the negated divergence of the same flow
+  field the plates were fitted to, normalized by that field's measured
+  root-mean-square and applied to every cell, and a continental basement of
+  three halving octaves of gradient noise on continental cells alone. Tectonic
+  elevation composes that base with boundary deformation once before
+  simultaneous smoothing and clamping.
 - `procgen-geology`: deterministic present-day geological fields derived from
   completed tectonic state without feeding changes back into tectonics. Seeded
   mantle hotspots have bounded decaying trails opposite final-owner plate
@@ -132,8 +138,8 @@ Completed foundations:
   bounded inside their source cells and strength-scaled diagnostic heights; it
   does not stamp cones, mutate elevation, or produce a dense terrain field. A
   separate geological elevation stage copies coarse tectonic elevation, then
-  applies hotspot uplift, volcanic-arc uplift, craton flattening toward the
-  configured continental base, and basin flattening toward each component's
+  applies hotspot uplift, volcanic-arc uplift, craton flattening toward each
+  cell's own tectonic base elevation, and basin flattening toward each component's
   original deterministic minimum, in that stable order. It reports the
   aggregate actual delta of each effect and does not consume the sparse oceanic
   peaks or mutate any input field. A final deterministic isostatic stage derives

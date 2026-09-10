@@ -84,6 +84,52 @@ impl PlateKinematicsConfig {
     }
 }
 
+/// The smooth global surface flow the kinematics fit reads, and the same field
+/// base elevation takes its dynamic topography from.
+///
+/// Three channels of the fixed-polynomial gradient noise at
+/// [`PlateKinematicsConfig::flow_frequency`], assembled into a model-space
+/// vector and projected onto the tangent plane, stand in for mantle
+/// convection. Building it from the config once and handing it to both
+/// consumers is what keeps them reading one field: the fit turns it into plate
+/// motion and base elevation turns its divergence into broad sag and swell,
+/// and neither may sample a field the other does not see.
+///
+/// Sampling stays on add and multiply alone, so no libm call sits between the
+/// field and the integer boundary classes the fitted velocities decide.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlowField {
+    /// Noise keys for the three model-space channels. Folding a per-channel
+    /// draw from the field's own stream, rather than the seed plus an offset,
+    /// keeps the field independent of the crack walk's arc noise, which folds
+    /// its own seed the same way and shares this seed's value by default.
+    keys: [u32; 3],
+    frequency: f32,
+}
+
+impl FlowField {
+    pub fn new(config: &PlateKinematicsConfig) -> Self {
+        let stream = RandomStream::new(config.seed, PLATE_FLOW_FIELD);
+        Self {
+            keys: [0, 1, 2].map(|channel| fold_seed_u64_to_u32(stream.sample_u64(channel, 0))),
+            frequency: config.flow_frequency,
+        }
+    }
+
+    /// Samples the field at a unit direction. The three noise channels form a
+    /// model-space vector, projected onto the tangent plane so what a plate is
+    /// fitted to is a surface flow.
+    pub fn velocity_at(&self, direction: Vec3) -> Vec3 {
+        let position = direction * self.frequency;
+        let sampled = Vec3::new(
+            gradient_noise_3d(self.keys[0], position).value,
+            gradient_noise_3d(self.keys[1], position).value,
+            gradient_noise_3d(self.keys[2], position).value,
+        );
+        sampled - direction * sampled.dot(direction)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlateKinematics {
     /// Euler rotation vector per plate. Direction is the rotation axis and
@@ -164,9 +210,9 @@ pub fn generate_plate_kinematics(
 
     let areas = partition.plate_areas(mesh);
     let reference_area = mesh.total_area() / partition.plate_count as f64;
-    let keys = flow_field_keys(config.seed);
+    let flow = FlowField::new(&config);
     let fitted = fit_plate_rotations(mesh, partition, &areas, |direction| {
-        flow_velocity(keys, config.flow_frequency, direction)
+        flow.velocity_at(direction)
     });
 
     let angular_velocities = fitted
@@ -280,28 +326,6 @@ fn plate_speed(
     let size_factor = (reference_area / plate_area).sqrt().sqrt() as f32;
     (random_speed(plate, config) * crust_factor * size_factor)
         .clamp(config.minimum_angular_speed, config.maximum_angular_speed)
-}
-
-/// Noise keys for the flow field's three model-space channels. Folding a
-/// per-channel draw from the field's own stream, rather than the seed plus an
-/// offset, keeps the field independent of the crack walk's arc noise, which
-/// folds its own seed the same way and shares this seed's value by default.
-fn flow_field_keys(seed: u64) -> [u32; 3] {
-    let stream = RandomStream::new(seed, PLATE_FLOW_FIELD);
-    [0, 1, 2].map(|channel| fold_seed_u64_to_u32(stream.sample_u64(channel, 0)))
-}
-
-/// Samples the flow field at a unit direction. The three noise channels form a
-/// model-space vector, projected onto the tangent plane so what a plate is
-/// fitted to is a surface flow.
-fn flow_velocity(keys: [u32; 3], frequency: f32, direction: Vec3) -> Vec3 {
-    let position = direction * frequency;
-    let sampled = Vec3::new(
-        gradient_noise_3d(keys[0], position).value,
-        gradient_noise_3d(keys[1], position).value,
-        gradient_noise_3d(keys[2], position).value,
-    );
-    sampled - direction * sampled.dot(direction)
 }
 
 /// Area-weighted normal equations `matrix * ω = vector` for one plate.
@@ -512,12 +536,9 @@ mod tests {
             ..PlateKinematicsConfig::new(7)
         };
         let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
+        let flow = FlowField::new(&config);
         let flow_fits = fit_plate_rotations(&mesh, &partition, &areas, |direction| {
-            flow_velocity(
-                flow_field_keys(config.seed),
-                config.flow_frequency,
-                direction,
-            )
+            flow.velocity_at(direction)
         });
         for (plate, velocity) in kinematics.angular_velocities.iter().enumerate() {
             let expected = flow_fits[plate].unwrap().normalized();
@@ -601,12 +622,9 @@ mod tests {
         let config = PlateKinematicsConfig::new(7);
         let areas = partition.plate_areas(&mesh);
 
+        let flow = FlowField::new(&config);
         let fits = fit_plate_rotations(&mesh, &partition, &areas, |direction| {
-            flow_velocity(
-                flow_field_keys(config.seed),
-                config.flow_frequency,
-                direction,
-            )
+            flow.velocity_at(direction)
         });
         assert!(fits[1].is_none(), "a one-cell plate has no rotation to fit");
 
@@ -668,13 +686,18 @@ mod tests {
     #[test]
     fn flow_field_velocity_is_tangent_and_follows_the_seed() {
         let direction = Vec3::new(0.3, 0.5, -0.8).normalized();
-        let keys = flow_field_keys(7);
-        let velocity = flow_velocity(keys, 1.5, direction);
+        let config = PlateKinematicsConfig {
+            flow_frequency: 1.5,
+            ..PlateKinematicsConfig::new(7)
+        };
+        let field = FlowField::new(&config);
+        let velocity = field.velocity_at(direction);
+        let other = FlowField::new(&PlateKinematicsConfig { seed: 8, ..config });
 
         assert!(velocity.dot(direction).abs() < 1.0e-6);
         assert!(velocity.length() > 0.0);
-        assert_ne!(keys, flow_field_keys(8));
-        assert_ne!(velocity, flow_velocity(flow_field_keys(8), 1.5, direction));
+        assert_ne!(field, other);
+        assert_ne!(velocity, other.velocity_at(direction));
     }
 
     #[test]

@@ -4,11 +4,12 @@ use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation, CellCrust,
     CoarseElevation, CoarseElevationConfig, CrustBirthPrior, CrustBirthPriorConfig,
-    CrustBirthPriorDiagnostics, CrustClassification, CrustClassificationConfig, PlateEvolution,
-    PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionInputs, PlateKinematics,
-    PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, SeafloorAge, classify_boundaries,
-    classify_crust, compose_coarse_elevation, derive_base_elevation, derive_crust_birth_prior,
-    derive_seafloor_age, evolve_plate_ownership, generate_plate_kinematics, partition_plates,
+    CrustBirthPriorDiagnostics, CrustClassification, CrustClassificationConfig, FlowField,
+    PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionInputs,
+    PlateKinematics, PlateKinematicsConfig, PlatePartition, PlatePartitionConfig, SeafloorAge,
+    classify_boundaries, classify_crust, compose_coarse_elevation, derive_base_elevation,
+    derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
+    generate_plate_kinematics, partition_plates,
 };
 use std::error::Error;
 
@@ -156,7 +157,18 @@ impl TectonicsWorld {
             ..
         } = birth_prior;
         let base_elevation = timings.record("Base elevation", || {
-            derive_base_elevation(&seafloor_age, config.base_elevation)
+            derive_base_elevation(
+                &voronoi,
+                &seafloor_age,
+                CellCrust {
+                    cell_birth: &cell_birth,
+                },
+                // The field the plates were fitted to, rebuilt from the same
+                // config the fit read, so its dynamic topography and their
+                // motion describe one flow.
+                &FlowField::new(&config.kinematics),
+                config.base_elevation,
+            )
         })?;
         let elevation = timings.record("Tectonic elevation", || {
             compose_coarse_elevation(&voronoi, &base_elevation, &deformation, config.elevation)

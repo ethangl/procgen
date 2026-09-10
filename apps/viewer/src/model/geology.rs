@@ -117,7 +117,7 @@ impl GeologyWorld {
                     volcanic_arcs: &volcanic_arcs,
                     cratons: &cratons,
                     basins: &basins,
-                    continental_base: tectonics.config.base_elevation.continental_base,
+                    base_elevation: &tectonics.base_elevation,
                 },
                 config.geological_elevation,
             )
