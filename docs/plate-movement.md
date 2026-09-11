@@ -1216,6 +1216,15 @@ maximum of exactly zero through; it is validated positive now, because a world
 in which no plate can move leaves every stage that measures a length against a
 plate speed with nothing to divide by.
 
+The config is the one input to the prior that is not a stage output, so the
+prior holds it to the kinematics stage's own rules rather than taking it on
+trust: `motion::validate_config` is `pub(crate)` and the prior calls it, so a
+raw config with a zero maximum is an error at the door instead of a NaN in
+every ridge cell. That gives the prior a stage error enum of its own,
+`CrustBirthPriorError`, wrapping `PlateKinematicsError` and `StageInputError`
+the way the sibling stages wrap theirs. It had returned `StageInputError`
+directly, which no config rule can travel through.
+
 `PlateEvolution` carries `elapsed_time`, and `derive_seafloor_age(mesh,
 evolution)` has dropped the `elapsed_steps` argument a caller had to keep in
 agreement with the run. `BaseElevationConfig::cooling_age` is `0.56` model

@@ -250,7 +250,11 @@ pub fn generate_plate_kinematics(
     Ok(PlateKinematics { angular_velocities })
 }
 
-fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
+/// The one place the motion config's rules live. It is `pub(crate)` because
+/// the crust-birth prior scales a hop by `maximum_angular_speed` and so has to
+/// hold the config to the same rules this stage does, rather than keep a
+/// second, weaker copy of them.
+pub(crate) fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
     // The maximum has to be positive, not merely non-negative: a maximum of
     // zero fits every plate at rest, which leaves every boundary interior and
     // every stage that scales a length against a plate speed with nothing to

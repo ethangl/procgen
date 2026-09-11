@@ -14,10 +14,12 @@
 
 use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
-    PlateEvolution, PlateKinematicsConfig, PlatePartition, field::mean_cell_width,
+    PlateEvolution, PlateKinematicsConfig, PlateKinematicsError, PlatePartition,
+    field::mean_cell_width, motion::validate_config as validate_motion_config,
     stage::StageInputError,
 };
 use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CrustBirthPriorConfig {
@@ -68,6 +70,35 @@ impl CrustBirthPrior {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrustBirthPriorError {
+    Motion(PlateKinematicsError),
+    Input(StageInputError),
+}
+
+impl fmt::Display for CrustBirthPriorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Motion(error) => error.fmt(formatter),
+            Self::Input(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for CrustBirthPriorError {}
+
+impl From<PlateKinematicsError> for CrustBirthPriorError {
+    fn from(error: PlateKinematicsError) -> Self {
+        Self::Motion(error)
+    }
+}
+
+impl From<StageInputError> for CrustBirthPriorError {
+    fn from(error: StageInputError) -> Self {
+        Self::Input(error)
+    }
+}
+
 /// The model time one hop of the prior's walk stands for: what a plate at the
 /// configured maximum angular speed takes to cross one mean cell width.
 ///
@@ -79,8 +110,8 @@ impl CrustBirthPrior {
 /// It reads the configured maximum rather than the fitted plates. The fit is
 /// what the run starts from, not what made the crust the prior stands in for,
 /// and a world whose fit happened to come out slow would otherwise re-date its
-/// whole ocean. The maximum is validated positive where it is configured, so
-/// this always has a speed to divide by.
+/// whole ocean. The caller holds the config to the kinematics stage's own
+/// rules before this runs, so there is always a positive speed to divide by.
 fn hop_duration(mesh: &SphereMesh, kinematics: PlateKinematicsConfig) -> f32 {
     mean_cell_width(mesh.radius, mesh.cell_count())
         / (kinematics.maximum_angular_speed * mesh.radius)
@@ -109,7 +140,11 @@ pub fn derive_crust_birth_prior(
     kinematics: PlateKinematicsConfig,
     boundaries: &BoundaryClassification,
     config: CrustBirthPriorConfig,
-) -> Result<CrustBirthPrior, StageInputError> {
+) -> Result<CrustBirthPrior, CrustBirthPriorError> {
+    // The motion config is the one input here that is not a stage output, so
+    // it is held to the rules of the stage that owns it rather than taken on
+    // trust: a maximum speed of zero would otherwise divide a hop by nothing.
+    validate_motion_config(kinematics)?;
     partition.validate(mesh)?;
     crust.validate(mesh)?;
     boundaries.validate(mesh)?;
@@ -443,7 +478,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(StageInputError::Cells)
+            Err(CrustBirthPriorError::Input(StageInputError::Cells))
         );
 
         let wrong_crust = CrustClassification {
@@ -459,7 +494,7 @@ mod tests {
                 &boundaries,
                 Default::default()
             ),
-            Err(StageInputError::CrustClasses)
+            Err(CrustBirthPriorError::Input(StageInputError::CrustClasses))
         );
 
         let mut wrong_boundaries = boundaries;
@@ -473,7 +508,29 @@ mod tests {
                 &wrong_boundaries,
                 Default::default()
             ),
-            Err(StageInputError::Boundaries)
+            Err(CrustBirthPriorError::Input(StageInputError::Boundaries))
+        );
+
+        // A hop is a cell width over a plate speed, so a world whose plates
+        // cannot move has no hop to date crust by. The prior holds the config
+        // to the kinematics stage's rule rather than dividing by nothing.
+        let at_rest = PlateKinematicsConfig {
+            minimum_angular_speed: 0.0,
+            maximum_angular_speed: 0.0,
+            ..kinematics
+        };
+        assert_eq!(
+            derive_crust_birth_prior(
+                &mesh,
+                &partition,
+                &crust,
+                at_rest,
+                &empty_boundaries(&mesh),
+                Default::default()
+            ),
+            Err(CrustBirthPriorError::Motion(
+                PlateKinematicsError::InvalidAngularSpeedRange
+            ))
         );
     }
 

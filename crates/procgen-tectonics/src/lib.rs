@@ -64,8 +64,8 @@ pub use partition::{
     partition_plates,
 };
 pub use seafloor_age::{
-    CrustBirthPrior, CrustBirthPriorConfig, CrustBirthPriorDiagnostics, SeafloorAge,
-    SeafloorAgeDiagnostics, derive_crust_birth_prior, derive_seafloor_age,
+    CrustBirthPrior, CrustBirthPriorConfig, CrustBirthPriorDiagnostics, CrustBirthPriorError,
+    SeafloorAge, SeafloorAgeDiagnostics, derive_crust_birth_prior, derive_seafloor_age,
 };
 pub use stage::StageInputError;
 pub use step::PoleDriftConfig;
