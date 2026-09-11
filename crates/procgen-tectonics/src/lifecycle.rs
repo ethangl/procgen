@@ -656,12 +656,12 @@ mod tests {
         let run = fixture.evolve(config);
         assert!(run.diagnostics.born_particle_count > 0);
         let born: Vec<usize> = (0..fixture.mesh.cell_count())
-            .filter(|&cell| run.cell_birth[cell].is_some_and(|birth| birth >= 0))
+            .filter(|&cell| run.cell_birth[cell].is_some_and(|birth| birth >= 0.0))
             .collect();
         assert!(!born.is_empty(), "the rift made no oceanic crust");
         for &cell in &born {
             assert!(
-                run.cell_birth[cell].is_some_and(|birth| birth < config.step_count as i32),
+                run.cell_birth[cell].is_some_and(|birth| birth < run.elapsed_time),
                 "cell {cell} was born during the run"
             );
             assert_eq!(run.cell_crust().class(cell), CrustClass::Oceanic);

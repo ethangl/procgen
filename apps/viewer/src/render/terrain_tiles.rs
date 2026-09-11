@@ -601,7 +601,7 @@ mod tests {
             .insert_resource(QuadtreeSelection::default())
             .insert_resource(TileResidency::default())
             .insert_resource(TerrainGridMesh(Handle::default()))
-            .insert_resource(Fixture::new(64, 70).into_world())
+            .insert_resource(Fixture::new(64, 71).into_world())
             .add_systems(
                 Update,
                 initialize_gpu_world.run_if(resource_changed::<GeneratedWorld>),

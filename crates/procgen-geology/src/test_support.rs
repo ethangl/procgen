@@ -9,11 +9,11 @@ use procgen_tectonics::{CrustClass, CrustClassification};
 /// The birth field an initial per-cell classification implies, for the stages
 /// tested without running evolution: oceanic crust born at step zero,
 /// continental crust that nothing has re-made.
-pub(crate) fn classified_cell_birth(crust: &CrustClassification) -> Vec<Option<i32>> {
+pub(crate) fn classified_cell_birth(crust: &CrustClassification) -> Vec<Option<f32>> {
     crust
         .cell_classes
         .iter()
-        .map(|&class| (class == CrustClass::Oceanic).then_some(0))
+        .map(|&class| (class == CrustClass::Oceanic).then_some(0.0))
         .collect()
 }
 

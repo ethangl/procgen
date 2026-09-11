@@ -23,6 +23,14 @@ pub const REFERENCE_STEP_DURATION: f32 = 0.15;
 /// Kinematics seed of the reference fixtures, and so of their flow field.
 const REFERENCE_MOTION_SEED: u64 = 7;
 
+/// The motion config the reference fixtures fit against, and the one the crust
+/// birth prior scales a hop by. The fixtures that build their kinematics by
+/// hand turn their plates at unit speed, which is this config's maximum, so
+/// they date their ocean by the same hop as the fitted ones.
+fn reference_motion_config() -> PlateKinematicsConfig {
+    PlateKinematicsConfig::new(REFERENCE_MOTION_SEED)
+}
+
 /// No pole drift, for the fixtures whose assertions are about what one fixed
 /// motion does over several steps. Their steps are long enough that the
 /// default rates would turn an axis a large fraction of a right angle each.
@@ -88,11 +96,11 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
     PlateEvolutionConfig {
         step_duration: REFERENCE_STEP_DURATION,
         pole_drift: PoleDriftConfig {
-            // Drift rates are per unit time and this step is eleven times the
-            // default one, so scaling them by the same ratio gives the
-            // reference run the per-step wander the viewer's defaults produce.
-            axis_drift_rate: default.pole_drift.axis_drift_rate * time_scale,
-            speed_drift_rate: default.pole_drift.speed_drift_rate * time_scale,
+            // Drift rates are per unit root time, so the ratio that gives the
+            // reference run the per-step wander the viewer's defaults produce
+            // is the root of the ratio of the two steps.
+            axis_drift_rate: default.pole_drift.axis_drift_rate * time_scale.sqrt(),
+            speed_drift_rate: default.pole_drift.speed_drift_rate * time_scale.sqrt(),
             ..default.pole_drift
         },
         deformation: BoundaryDeformationConfig {
@@ -153,18 +161,14 @@ pub fn evolution_fixture() -> EvolutionFixture {
 fn fixture_over_crust(crust_config: CrustClassificationConfig) -> EvolutionFixture {
     let (mesh, partition) = reference_partition();
     let crust = classify_crust(&mesh, crust_config).unwrap();
-    let kinematics = generate_plate_kinematics(
-        &mesh,
-        &partition,
-        &crust,
-        PlateKinematicsConfig::new(REFERENCE_MOTION_SEED),
-    )
-    .unwrap();
+    let kinematics =
+        generate_plate_kinematics(&mesh, &partition, &crust, reference_motion_config()).unwrap();
     let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
     let birth_prior = derive_crust_birth_prior(
         &mesh,
         &partition,
         &crust,
+        reference_motion_config(),
         &boundaries,
         CrustBirthPriorConfig::default(),
     )
@@ -198,7 +202,7 @@ fn final_state_fixture_with_crust(
 pub struct BaseElevationFixture {
     pub mesh: SphereMesh,
     pub age: SeafloorAge,
-    pub cell_birth: Vec<Option<i32>>,
+    pub cell_birth: Vec<Option<f32>>,
     pub flow: FlowField,
 }
 
@@ -227,13 +231,44 @@ pub fn base_elevation_fixture_with_crust(
     crust_config: CrustClassificationConfig,
 ) -> BaseElevationFixture {
     let (mesh, _, evolution) = final_state_fixture_with_crust(crust_config);
-    let age =
-        derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count).unwrap();
+    let age = derive_seafloor_age(&mesh, &evolution).unwrap();
     BaseElevationFixture {
         mesh,
         age,
         cell_birth: evolution.cell_birth,
         flow: reference_flow_field(),
+    }
+}
+
+/// Stands in for a cell with no birth where a float fingerprint needs one
+/// number per cell. It is six orders of magnitude outside any model time a run
+/// produces, so it cannot collide with a real birth on the 1/1024 grid.
+const NO_BIRTH_MARKER: f32 = 1.0e6;
+
+/// Fingerprints a per-cell birth or age field, original continental crust
+/// included.
+pub fn birth_fingerprint(cell_birth: &[Option<f32>]) -> u64 {
+    quantized_fingerprint(
+        cell_birth
+            .iter()
+            .map(|birth| birth.unwrap_or(NO_BIRTH_MARKER)),
+    )
+}
+
+/// The base-elevation config scaled to the reference world, the way
+/// [`reference_evolution_config`] scales the run that feeds it.
+///
+/// A hop on the 512-cell mesh is eleven times the default mesh's, and the
+/// reference step with it, so the ages that world reaches are eleven times the
+/// ages the default world reaches and the age at which the floor is reached
+/// has to scale with them. At the shipped default four fifths of the reference
+/// ocean would sit flat on the deep floor and the curve these fixtures pin
+/// would be a constant.
+pub fn reference_base_elevation_config() -> BaseElevationConfig {
+    let default = BaseElevationConfig::default();
+    BaseElevationConfig {
+        cooling_age: default.cooling_age * REFERENCE_STEP_DURATION / DEFAULT_STEP_DURATION,
+        ..default
     }
 }
 
@@ -243,8 +278,26 @@ pub fn no_interior_relief() -> BaseElevationConfig {
     BaseElevationConfig {
         dynamic_topography_amplitude: 0.0,
         basement_amplitude: 0.0,
-        ..BaseElevationConfig::default()
+        ..reference_base_elevation_config()
     }
+}
+
+/// The reference world with every plate at rest, so that a run moves no
+/// material at all and the only thing a step advances is the clock.
+///
+/// That is what lets one run be compared against the same run sliced twice as
+/// finely: with nothing moving, which particle wins a cell and where a gap
+/// opens can no longer differ between the two. The birth prior is untouched by
+/// the freezing — it reads the configured plate speed, not the fitted plates —
+/// so the fixture keeps a real spread of birth times for a run to age.
+pub fn still_world_fixture() -> EvolutionFixture {
+    let mut fixture = evolution_fixture();
+    fixture.kinematics = PlateKinematics {
+        angular_velocities: vec![Vec3::ZERO; fixture.partition.plate_count],
+    };
+    fixture.boundaries =
+        classify_boundaries(&fixture.mesh, &fixture.partition, &fixture.kinematics).unwrap();
+    fixture
 }
 
 /// Rigid rotations that carry the two cells of `edge` along their own
@@ -269,6 +322,7 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
         &mesh,
         &partition,
         &crust,
+        reference_motion_config(),
         &boundaries,
         CrustBirthPriorConfig::default(),
     )
@@ -286,7 +340,7 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
 /// A run on the two-plate fixture that isolates pole drift: the step is far
 /// too short to move any material out of its own cell, so nothing but the
 /// drifting motion can change what the boundaries are. The default rates over
-/// a step this long turn an axis about seventeen degrees.
+/// a step this long turn an axis about fifteen degrees.
 pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
     PlateEvolutionConfig {
         step_count,
@@ -355,11 +409,11 @@ pub fn empty_boundaries(mesh: &SphereMesh) -> BoundaryClassification {
 pub fn plate_cell_birth(
     partition: &PlatePartition,
     plate_classes: &[CrustClass],
-) -> Vec<Option<i32>> {
+) -> Vec<Option<f32>> {
     partition
         .cell_plates
         .iter()
-        .map(|&plate| (plate_classes[plate] == CrustClass::Oceanic).then_some(0))
+        .map(|&plate| (plate_classes[plate] == CrustClass::Oceanic).then_some(0.0))
         .collect()
 }
 
@@ -564,6 +618,7 @@ fn fixture_over(
         &mesh,
         &partition,
         &crust,
+        reference_motion_config(),
         &boundaries,
         CrustBirthPriorConfig::default(),
     )

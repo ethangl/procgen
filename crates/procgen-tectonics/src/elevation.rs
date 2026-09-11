@@ -207,13 +207,10 @@ fn smooth(mesh: &SphereMesh, elevation: &mut Vec<f32>, passes: usize, weight: f3
 mod tests {
     use super::*;
     use crate::test_support::{
-        final_state_fixture, reference_evolution_config, reference_flow_field,
+        final_state_fixture, reference_base_elevation_config, reference_flow_field,
         two_plate_boundary_partition,
     };
-    use crate::{
-        BaseElevationConfig, BaseElevationDiagnostics, CellCrust, derive_base_elevation,
-        derive_seafloor_age,
-    };
+    use crate::{BaseElevationDiagnostics, CellCrust, derive_base_elevation, derive_seafloor_age};
 
     /// The datum the pipeline defaults to, which several cases here vary from.
     fn default_sea_level() -> f32 {
@@ -222,8 +219,7 @@ mod tests {
 
     fn final_fixture() -> (SphereMesh, BaseElevation, BoundaryDeformation) {
         let (mesh, _, evolution) = final_state_fixture();
-        let age = derive_seafloor_age(&mesh, &evolution, reference_evolution_config().step_count)
-            .unwrap();
+        let age = derive_seafloor_age(&mesh, &evolution).unwrap();
         let base = derive_base_elevation(
             &mesh,
             &age,
@@ -231,7 +227,7 @@ mod tests {
                 cell_birth: &evolution.cell_birth,
             },
             &reference_flow_field(),
-            BaseElevationConfig::default(),
+            reference_base_elevation_config(),
         )
         .unwrap();
         (mesh, base, evolution.deformation)

@@ -454,7 +454,7 @@ mod tests {
     };
     use std::collections::BTreeSet;
 
-    fn crust(cell_birth: &[Option<i32>]) -> CellCrust<'_> {
+    fn crust(cell_birth: &[Option<f32>]) -> CellCrust<'_> {
         CellCrust { cell_birth }
     }
 
@@ -463,7 +463,7 @@ mod tests {
     ) -> (
         SphereMesh,
         PlatePartition,
-        Vec<Option<i32>>,
+        Vec<Option<f32>>,
         BoundaryClassification,
     ) {
         let mesh = build_sphere_mesh(
@@ -577,7 +577,7 @@ mod tests {
         let cell_birth: Vec<_> = mesh
             .cell_centers
             .iter()
-            .map(|center| (center.z < 0.0).then_some(0))
+            .map(|center| (center.z < 0.0).then_some(0.0))
             .collect();
 
         let field =

@@ -409,7 +409,7 @@ mod tests {
     struct Fixture {
         mesh: SphereMesh,
         plates: PlatePartition,
-        cell_birth: Vec<Option<i32>>,
+        cell_birth: Vec<Option<f32>>,
         kinematics: PlateKinematics,
     }
 

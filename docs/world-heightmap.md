@@ -98,7 +98,7 @@ Completed foundations:
   two continental plates that have collided for long enough suture into one,
   so plate count, crust classes, and kinematics all change during a run and
   the run's end compacts away the ids it emptied. Crust classes describe
-  plates; a cell's crust is read from its birth step, so a rifting continental
+  plates; a cell's crust is read from its birth time, so a rifting continental
   plate grows an oceanic margin and a cell overridden at a subduction zone
   takes the overriding material's class. Each step also raises signed per-cell deformation from the
   boundaries current in that step, over the crust and ownership current in it,
@@ -116,10 +116,11 @@ Completed foundations:
   nothing and a bend raises or subsides one cell according to its sign.
   Oceanic ridges remain solely owned by bathymetry. A crust-birth prior
   derives oceanic-cell hop distance from the initial divergent boundaries,
-  negated into birth steps that predate step zero; propagation
+  scaled by the time a plate at the configured maximum speed takes to cross a
+  cell and negated into birth times that predate step zero; propagation
   stays within initial plate ownership and ridge-less oceanic plates receive a
-  deterministic configured fallback age. Seafloor age is then the steps elapsed
-  since each cell's birth. Base elevation keeps continental cells at their
+  deterministic configured fallback age in hops. Seafloor age is then the model
+  time elapsed since each cell's birth, not a count of evolution steps. Base elevation keeps continental cells at their
   configured base and maps oceanic age through a configurable square-root
   ridge-to-deep cooling curve. The continental base is tapered down to a
   configured shelf edge over the outermost few continental cells, measured as

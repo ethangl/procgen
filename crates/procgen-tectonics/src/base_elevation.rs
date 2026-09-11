@@ -20,7 +20,8 @@
 //!
 
 use crate::{
-    CellCrust, CrustClass, FieldSummary, FlowField, SeafloorAge, StageInputError,
+    CellCrust, CrustClass, DEFAULT_STEP_DURATION, FieldSummary, FlowField, SeafloorAge,
+    StageInputError,
     interior_relief::{basement_field, dynamic_topography_field, validate_interior_relief},
 };
 use procgen_noise::{OctaveConfig, Validated};
@@ -36,13 +37,16 @@ pub struct BaseElevationConfig {
     pub ridge_elevation: f32,
     /// Minimum elevation reached by sufficiently old oceanic crust.
     pub deep_ocean_elevation: f32,
-    /// Seafloor age in evolution steps at which oceanic crust reaches the
+    /// Seafloor age, as model time, at which oceanic crust reaches the
     /// deep-ocean floor. Age spans one step, for crust born at a ridge during
     /// the run, to the prior's hop age plus the whole run for crust that
     /// predates it, so this belongs near the top of that span: below it the
     /// whole ocean sits on the deep floor and only crust made during the run
     /// carries any gradient.
-    pub cooling_age: usize,
+    ///
+    /// It is a time rather than a step count, so a run sliced more finely
+    /// cools its floor to the same depth over the same span of model time.
+    pub cooling_age: f32,
     /// Swell raised where the flow field's divergence is one root-mean-square
     /// of its own, and the sag where it converges by the same. Applies to
     /// every cell. See the module documentation for why this and
@@ -84,7 +88,9 @@ impl Default for BaseElevationConfig {
             continental_base: 0.65,
             ridge_elevation: 0.30,
             deep_ocean_elevation: 0.08,
-            cooling_age: 40,
+            // Forty default steps, which is where the step count this was
+            // tuned as still puts it.
+            cooling_age: 40.0 * DEFAULT_STEP_DURATION,
             dynamic_topography_amplitude: 0.03,
             basement_amplitude: 0.05,
             basement_frequency: 3.0,
@@ -180,7 +186,7 @@ impl From<StageInputError> for BaseElevationError {
 /// with the square root of age over `cooling_age`, and ages at or above it use
 /// the deep floor; continental crust starts from `continental_base`, tapered
 /// to `margin_edge_elevation` over the outermost `margin_width_hops` cells.
-/// Crust that predates the run carries the prior's age plus the steps the run
+/// Crust that predates the run carries the prior's age plus the time the run
 /// took, so an old ocean reaches the deep floor and crust born at a ridge
 /// during the run does not. Onto that go the dynamic topography of the flow
 /// field's divergence, everywhere, and the continental basement's octaves, on
@@ -256,12 +262,12 @@ pub fn derive_base_elevation(
 /// The cooling curve's own answer for one cell, before interior relief.
 /// `None` is continental crust, which the curve does not describe; that cell
 /// takes the margin taper's `continental_base` instead.
-fn cooled(age: Option<usize>, continental_base: f32, config: BaseElevationConfig) -> f32 {
+fn cooled(age: Option<f32>, continental_base: f32, config: BaseElevationConfig) -> f32 {
     match age {
         None => continental_base,
         Some(age) if age >= config.cooling_age => config.deep_ocean_elevation,
         Some(age) => {
-            let progress = (age as f32 / config.cooling_age as f32).sqrt();
+            let progress = (age / config.cooling_age).sqrt();
             config.ridge_elevation
                 + (config.deep_ocean_elevation - config.ridge_elevation) * progress
         }
@@ -337,7 +343,8 @@ fn validate_config(
         .iter()
         .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
         || config.ridge_elevation < config.deep_ocean_elevation
-        || config.cooling_age == 0
+        || !config.cooling_age.is_finite()
+        || config.cooling_age <= 0.0
     {
         return Err(BaseElevationError::InvalidConfig);
     }
@@ -355,7 +362,8 @@ mod tests {
     use super::*;
     use crate::test_support::{
         BaseElevationFixture, base_elevation_fixture, base_elevation_fixture_with_crust, mesh,
-        no_interior_relief, quantized_fingerprint, reference_crust_config,
+        no_interior_relief, quantized_fingerprint, reference_base_elevation_config,
+        reference_crust_config,
     };
     use crate::{
         CoarseElevationConfig, CrustClassificationConfig, PlateKinematicsConfig,
@@ -399,8 +407,8 @@ mod tests {
 
     /// Elevations only, for the fixtures whose crust is chosen rather than
     /// evolved. Ages and births agree because both come from one birth field.
-    fn from_ages(ages: Vec<Option<usize>>) -> (SeafloorAge, Vec<Option<i32>>) {
-        let cell_birth = ages.iter().map(|age| age.map(|_| 0)).collect();
+    fn from_ages(ages: Vec<Option<f32>>) -> (SeafloorAge, Vec<Option<f32>>) {
+        let cell_birth = ages.iter().map(|age| age.map(|_| 0.0)).collect();
         (
             SeafloorAge {
                 cell_ages: ages,
@@ -433,16 +441,17 @@ mod tests {
         assert_eq!(first.diagnostics.margin_depth, FieldSummary::default());
         // Switching both interior-relief terms off and the taper's width to
         // zero leaves the age curve alone, which is what this pin holds. It
-        // moves whenever the reference run's crust does: last with the rift
-        // minimum area, which gives that run a rift it did not have.
+        // moves whenever the reference run's crust or its ages do: last with
+        // ages becoming model time, which re-dated every cell and scaled the
+        // cooling age these fixtures read to match.
         //
-        // The curve is add, multiply, divide, and square root over an integer
-        // age, so it is bit-identical on every machine; the grid is what keeps
-        // the pin exact anyway, and it is fine enough to separate the two
-        // oldest ages, whose elevations sit 0.0028 apart.
+        // The curve is add, multiply, divide, and square root over a model
+        // time, so it is bit-identical on every machine; the grid is what
+        // keeps the pin exact anyway, and it is fine enough to separate the
+        // two oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
             quantized_fingerprint(first.cell_elevations.iter().copied()),
-            3_019_583_540_681_191_582
+            8_282_608_213_790_981_193
         );
     }
 
@@ -529,14 +538,14 @@ mod tests {
     fn crust_born_during_the_run_grows_shelves_on_its_own_margins() {
         let fixture = base_elevation_fixture();
         let hops = ocean_hops(&fixture);
-        let width = BaseElevationConfig::default().margin_width_hops;
+        let width = reference_base_elevation_config().margin_width_hops;
         let margin = |cell: usize| hops[cell].is_some_and(|hops| (1..=width).contains(&hops));
 
         let mut checked = 0;
         for (cell, &birth) in fixture.cell_birth.iter().enumerate() {
             // Crust the run made, rather than crust the prior placed at or
             // before step zero: a rift's new ocean floor.
-            if birth.is_none_or(|birth| birth <= 0) {
+            if birth.is_none_or(|birth| birth <= 0.0) {
                 continue;
             }
             for corner in fixture.mesh.cell_corners(cell) {
@@ -556,7 +565,7 @@ mod tests {
     #[test]
     fn interior_relief_is_deterministic_and_moves_the_field() {
         let fixture = base_elevation_fixture();
-        let config = BaseElevationConfig::default();
+        let config = reference_base_elevation_config();
         let first = fixture.derive(config);
 
         assert_eq!(first, fixture.derive(config));
@@ -581,10 +590,10 @@ mod tests {
             (0..mesh.cell_count())
                 .map(|cell| match cell {
                     0 => None,
-                    1 => Some(0),
-                    2 => Some(2),
-                    3 => Some(8),
-                    _ => Some(20),
+                    1 => Some(0.0),
+                    2 => Some(2.0),
+                    3 => Some(8.0),
+                    _ => Some(20.0),
                 })
                 .collect(),
         );
@@ -592,7 +601,7 @@ mod tests {
             continental_base: 0.7,
             ridge_elevation: 0.3,
             deep_ocean_elevation: 0.1,
-            cooling_age: 8,
+            cooling_age: 8.0,
             // The one continental cell here is surrounded by ocean, so a
             // taper would put it on the shelf edge rather than the base this
             // test is about.
@@ -618,9 +627,9 @@ mod tests {
     #[test]
     fn crust_older_than_the_cooling_age_sits_on_the_deep_floor() {
         let mesh = mesh(32);
-        let (age, cell_birth) = from_ages(vec![Some(13); mesh.cell_count()]);
+        let (age, cell_birth) = from_ages(vec![Some(13.0); mesh.cell_count()]);
         let config = BaseElevationConfig {
-            cooling_age: 8,
+            cooling_age: 8.0,
             ..no_interior_relief()
         };
         let base = BaseElevationFixture {
@@ -642,7 +651,7 @@ mod tests {
     #[test]
     fn the_default_field_is_normalized_and_leaves_every_continental_interior_above_sea_level() {
         let fixture = base_elevation_fixture();
-        let config = BaseElevationConfig::default();
+        let config = reference_base_elevation_config();
         let base = fixture.derive(config);
         let hops = ocean_hops(&fixture);
         let sea_level = CoarseElevationConfig::default().sea_level;
@@ -678,7 +687,7 @@ mod tests {
         let cases = [
             (
                 BaseElevationConfig {
-                    cooling_age: 0,
+                    cooling_age: 0.0,
                     ..base
                 },
                 BaseElevationError::InvalidConfig,

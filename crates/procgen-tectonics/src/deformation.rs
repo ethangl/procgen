@@ -446,7 +446,7 @@ mod tests {
     fn deform_once(
         mesh: &SphereMesh,
         partition: &PlatePartition,
-        cell_birth: &[Option<i32>],
+        cell_birth: &[Option<f32>],
         boundaries: &BoundaryClassification,
         config: BoundaryDeformationConfig,
     ) -> Vec<f32> {
@@ -463,7 +463,7 @@ mod tests {
     fn accumulate(
         mesh: &SphereMesh,
         partition: &PlatePartition,
-        cell_birth: &[Option<i32>],
+        cell_birth: &[Option<f32>],
         boundaries: &BoundaryClassification,
         config: &BoundaryDeformationConfig,
         scale: f32,

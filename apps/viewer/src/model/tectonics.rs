@@ -73,9 +73,9 @@ pub struct TectonicsWorld {
     /// the run ended on, because that is what its final boundaries express.
     pub kinematics: PlateKinematics,
     pub boundaries: BoundaryClassification,
-    /// Step at which each cell's crust was created; the only per-cell answer
-    /// to what crust a cell carries.
-    pub cell_birth: Vec<Option<i32>>,
+    /// Model time at which each cell's crust was created; the only per-cell
+    /// answer to what crust a cell carries.
+    pub cell_birth: Vec<Option<f32>>,
     pub birth_prior: CrustBirthPriorDiagnostics,
     pub evolution: PlateEvolutionDiagnostics,
     pub seafloor_age: SeafloorAge,
@@ -124,6 +124,7 @@ impl TectonicsWorld {
                 &voronoi,
                 &initial_plates,
                 &initial_crust,
+                config.kinematics,
                 &initial_boundaries,
                 config.birth_prior,
             )
@@ -141,13 +142,16 @@ impl TectonicsWorld {
             )
         })?;
         let seafloor_age = timings.record("Seafloor age", || {
-            derive_seafloor_age(&voronoi, &evolution_result, config.evolution.step_count)
+            derive_seafloor_age(&voronoi, &evolution_result)
         })?;
         let PlateEvolution {
             partition: plates,
             kinematics,
             boundaries,
             cell_birth,
+            // Seafloor age has already read it, and it is the run's own copy
+            // of two settings this phase still carries.
+            elapsed_time: _,
             deformation,
             diagnostics: evolution,
         } = evolution_result;
@@ -219,7 +223,31 @@ impl TectonicsWorld {
 
 #[cfg(test)]
 mod tests {
+    use super::WORLD_RADIUS;
     use crate::test_support::{tectonics_settings, tectonics_world};
+    use procgen_tectonics::{maximum_step_duration, mean_cell_width};
+
+    /// The test meshes are far coarser than the default one and their step is
+    /// scaled up to match, so this is the assertion that the scaling stays
+    /// inside what transport can see rather than only looking as though it
+    /// does.
+    #[test]
+    fn the_test_meshes_keep_their_step_inside_the_transport_reach() {
+        for cell_count in [32, 64, 128, 192, 1_024] {
+            let settings = tectonics_settings(cell_count, 7);
+            let bound = maximum_step_duration(
+                settings.kinematics.maximum_angular_speed,
+                WORLD_RADIUS,
+                mean_cell_width(WORLD_RADIUS, cell_count),
+                &settings.evolution,
+            );
+            assert!(
+                settings.evolution.step_duration <= bound,
+                "{cell_count} cells: {} against {bound}",
+                settings.evolution.step_duration
+            );
+        }
+    }
 
     #[test]
     fn tectonics_runs_without_the_later_phases() {

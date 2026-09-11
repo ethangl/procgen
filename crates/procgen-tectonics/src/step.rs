@@ -14,11 +14,12 @@
 //! relative motion at a boundary that has not moved, and the accumulated
 //! fields would record a scaled copy of the final state.
 //!
-//! The two per-cell fields a run produces — the step a parcel of crust was
-//! created and the deformation the boundaries have raised on it — belong to
-//! the particles in [`crate::transport`] rather than to the cells. A cell's
-//! answer is whichever particle won it, so the fields move with the material
-//! by construction instead of by a rule that copies them between cells.
+//! The two per-cell fields a run produces — the model time at which a parcel
+//! of crust was created, and the deformation the boundaries have raised on it
+//! — belong to the particles in [`crate::transport`] rather than to the
+//! cells. A cell's answer is whichever particle won it, so the fields move
+//! with the material by construction instead of by a rule that copies them
+//! between cells.
 
 use crate::{
     BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
@@ -37,12 +38,15 @@ use std::collections::BTreeMap;
 /// four samples.
 const DRIFT_DRAWS_PER_STEP: u64 = 4;
 
-/// How far a plate's rotation vector moves per unit of model time, and how
-/// far from the motion it started with it may end up.
+/// How far a plate's rotation vector moves per unit of root model time, and
+/// how far from the motion it started with it may end up.
 ///
-/// Both rates are per unit time rather than per step, so changing the step
-/// duration changes how many steps a given amount of wander takes rather than
-/// how much wander a run produces. Zero means no drift.
+/// Both rates are per unit root time rather than per step or per unit time,
+/// because both drifts are random walks and a random walk's spread grows with
+/// the root of the time it takes. A rate against `sqrt(step_duration)` is
+/// therefore the one that leaves a run's total wander where it is when the
+/// run is sliced more finely: a rate against the step itself would halve the
+/// variance every time the step halved. Zero means no drift.
 ///
 /// The defaults are modest on purpose. Drift is what makes a boundary change
 /// regime during a run, which is the whole point of carrying accumulated
@@ -51,15 +55,15 @@ const DRIFT_DRAWS_PER_STEP: u64 = 4;
 /// a record.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PoleDriftConfig {
-    /// Angle in model radians per unit time by which the rotation axis turns,
-    /// toward a fresh hashed direction perpendicular to it each step. The
-    /// angle per step is fixed and only the direction is hashed, so an axis
-    /// takes a random walk on the sphere of directions: over `n` steps of
+    /// Angle in model radians per unit root time by which the rotation axis
+    /// turns, toward a fresh hashed direction perpendicular to it each step.
+    /// The angle per step is fixed and only the direction is hashed, so an
+    /// axis takes a random walk on the sphere of directions: over `n` steps of
     /// angle `theta` the expected total wander is roughly `theta * sqrt(n)`.
     pub axis_drift_rate: f32,
-    /// Fractional change of angular speed per unit time. One step multiplies
-    /// the speed by `1 + s * rate * step_duration` for a hashed `s` in
-    /// `[-1, 1)`.
+    /// Fractional change of angular speed per unit root time. One step
+    /// multiplies the speed by `1 + s * rate * sqrt(step_duration)` for a
+    /// hashed `s` in `[-1, 1)`.
     pub speed_drift_rate: f32,
     /// Fraction either side of the speed a plate began the run with that its
     /// drifted speed may reach. The band is relative to the fitted motion
@@ -75,15 +79,15 @@ impl Default for PoleDriftConfig {
     fn default() -> Self {
         Self {
             // A default fifteen-step run at `DEFAULT_STEP_DURATION` turns an
-            // axis by `15 * 0.014 = 0.21` radians per step, and
-            // `0.21 * sqrt(15)` is 0.81 radians: about forty-seven degrees of
+            // axis by `1.8 * sqrt(0.014) = 0.213` radians per step, and
+            // `0.213 * sqrt(15)` is 0.83 radians: about forty-seven degrees of
             // expected total wander, enough for boundaries to change regime
             // several times and little enough that they do not flicker.
-            axis_drift_rate: 15.0,
-            // `7.5 * 0.014` is 0.105, so a step changes a plate's speed by at
-            // most about a tenth.
-            speed_drift_rate: 7.5,
-            // A step's expected change is `0.105 / sqrt(3)`, so a default
+            axis_drift_rate: 1.8,
+            // `0.9 * sqrt(0.014)` is 0.106, so a step changes a plate's speed
+            // by at most about a tenth.
+            speed_drift_rate: 0.9,
+            // A step's expected change is `0.106 / sqrt(3)`, so a default
             // fifteen-step walk is expected to stray about a quarter. At a
             // half the band bounds the tail of that walk without shaping the
             // bulk of it: five of the 111 plates at the viewer's defaults
@@ -91,6 +95,16 @@ impl Default for PoleDriftConfig {
             speed_drift_limit: 0.5,
         }
     }
+}
+
+/// Half the angle one drift turns a plate's axis through, which is the number
+/// the half-angle tangent form in [`EvolvingWorld::drift`] takes.
+///
+/// It is here rather than inline in the substep so that the angle a step turns
+/// through can be read directly, by the substep and by the test that checks
+/// how it scales, instead of being recovered from a rotated vector.
+pub(crate) fn half_axis_turn(drift: PoleDriftConfig, step_duration: f32) -> f32 {
+    0.5 * drift.axis_drift_rate * step_duration.sqrt()
 }
 
 /// The state one step advances, together with the inputs every step reads.
@@ -124,7 +138,7 @@ pub(crate) struct EvolvingWorld<'a> {
     /// run's output and neither is state a step reads back into the
     /// particles: a transport writes them, and the next step's deformation
     /// and lifecycle read the crust they imply.
-    pub(crate) cell_birth: Vec<Option<i32>>,
+    pub(crate) cell_birth: Vec<Option<f32>>,
     pub(crate) cell_deformation: Vec<f32>,
     /// Model time each adjacent continental pair has spent in collision,
     /// keyed by the pair in ascending id order. A pair that stops colliding
@@ -151,7 +165,7 @@ impl<'a> EvolvingWorld<'a> {
                 .map(|rotation| rotation.length())
                 .collect(),
             kinematics: inputs.kinematics.clone(),
-            cell_width: mean_cell_width(mesh),
+            cell_width: mean_cell_width(mesh.radius, mesh.cell_count()),
             partition: inputs.partition.clone(),
             particles: initial_particles(
                 mesh,
@@ -220,8 +234,8 @@ impl<'a> EvolvingWorld<'a> {
         if config.axis_drift_rate == 0.0 && config.speed_drift_rate == 0.0 {
             return;
         }
-        let half_tangent = 0.5 * config.axis_drift_rate * self.config.step_duration;
-        let speed_span = config.speed_drift_rate * self.config.step_duration;
+        let half_tangent = half_axis_turn(config, self.config.step_duration);
+        let speed_span = config.speed_drift_rate * self.config.step_duration.sqrt();
         let stream = RandomStream::new(self.config.seed, PLATE_POLE_DRIFT);
         let starting = &self.starting_speeds;
         for (plate, rotation) in self.kinematics.angular_velocities.iter_mut().enumerate() {
@@ -259,11 +273,11 @@ mod tests {
     use crate::CrustClass;
     use crate::test_support::{drift_config, two_plate_fixture};
 
-    /// The angle a drift turns an axis through, recovered from the half-angle
-    /// tangent the substep is written in. Scaffolding: the substep itself
-    /// never calls libm.
+    /// The angle a drift turns an axis through, read off the substep's own
+    /// half-angle tangent. The `atan` is scaffolding: the substep itself never
+    /// calls libm.
     fn per_step_angle(config: PlateEvolutionConfig) -> f32 {
-        2.0 * (0.5 * config.pole_drift.axis_drift_rate * config.step_duration).atan()
+        2.0 * half_axis_turn(config.pole_drift, config.step_duration).atan()
     }
 
     #[test]

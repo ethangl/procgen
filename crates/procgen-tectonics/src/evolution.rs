@@ -6,7 +6,7 @@
 //! the state it hands on.
 //!
 //! What survives a step: the material itself — one particle per parcel of
-//! crust, each holding its birth step and the deformation the boundaries have
+//! crust, each holding its birth time and the deformation the boundaries have
 //! raised on it — the ownership and the two fields the cells read off it, the
 //! plate set itself with its count and its motion, and how long each
 //! continental pair has been colliding. Crust is not one of them. It is read
@@ -25,10 +25,12 @@ use crate::{
     BoundaryClassification, BoundaryClassificationError, BoundaryDeformation,
     BoundaryDeformationConfig, BoundaryDeformationDiagnostics, BoundaryDeformationError, CellCrust,
     CrustBirthPrior, MAX_GAP_RADIUS, MaterialTransportConfig, PlateKinematics,
-    PlateLifecycleConfig, PlatePartition, PoleDriftConfig, StageInputError, classify_boundaries,
+    PlateLifecycleConfig, PlatePartition, PoleDriftConfig, StageInputError, TRANSPORT_REACH_HOPS,
+    classify_boundaries,
     deformation::validate_config,
-    field::DEFAULT_STEP_DURATION,
+    field::{DEFAULT_STEP_DURATION, mean_cell_width},
     lifecycle::{self, LifecycleEvents},
+    maximum_step_duration,
     step::EvolvingWorld,
     transport::TransportCounts,
 };
@@ -50,6 +52,12 @@ pub struct PlateEvolutionConfig {
     /// smaller cell width and moves more cells per step for the same motion,
     /// which is what a fixed model time per step should do. Zero freezes the
     /// world. See [`DEFAULT_STEP_DURATION`] for where the default sits.
+    ///
+    /// Bounded above by [`maximum_step_duration`]: past it a step carries
+    /// material further than transport can see, so material jumps trenches
+    /// without subducting and deformation is painted at boundary positions the
+    /// plates have already left. That is not a coarser version of the same
+    /// run, so evolution rejects it rather than running it.
     pub step_duration: f32,
     pub transport: MaterialTransportConfig,
     /// Profiles the boundaries current in each step raise into the carried
@@ -161,10 +169,15 @@ pub struct PlateEvolution {
     /// classified and raised against motion that had already drifted.
     pub kinematics: PlateKinematics,
     pub boundaries: BoundaryClassification,
-    /// Step at which each cell's crust was created. Negative steps come from
-    /// the prior for crust that predates step zero; `None` is original
+    /// Model time at which each cell's crust was created. Negative times come
+    /// from the prior for crust that predates step zero; `None` is original
     /// continental crust that evolution never re-made.
-    pub cell_birth: Vec<Option<i32>>,
+    pub cell_birth: Vec<Option<f32>>,
+    /// Model time the run covered, `step_count * step_duration`. It rides with
+    /// the result because every age read off `cell_birth` is measured against
+    /// it, and a caller keeping its own copy of the step count could disagree
+    /// with the run that produced these births.
+    pub elapsed_time: f32,
     /// Deformation summed over every step's boundaries and carried with the
     /// crust, so it records where boundaries were as well as where they are.
     pub deformation: BoundaryDeformation,
@@ -191,6 +204,7 @@ impl PlateEvolution {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlateEvolutionError {
     InvalidStepDuration,
+    StepOutrunsReach,
     InvalidGapRadius,
     InvalidPoleDriftRate,
     InvalidSpeedDriftLimit,
@@ -210,6 +224,11 @@ impl fmt::Display for PlateEvolutionError {
             Self::InvalidStepDuration => {
                 formatter.write_str("step duration must be finite and non-negative")
             }
+            Self::StepOutrunsReach => write!(
+                formatter,
+                "step duration must not carry a plate further than the \
+                 {TRANSPORT_REACH_HOPS} cells transport looks"
+            ),
             Self::InvalidGapRadius => {
                 write!(formatter, "gap radius must lie in [0, {MAX_GAP_RADIUS}]")
             }
@@ -294,6 +313,25 @@ pub fn evolve_plate_ownership(
     inputs.kinematics.validate(inputs.partition)?;
     inputs.boundaries.validate(mesh)?;
     inputs.birth_prior.validate(mesh)?;
+    // Last, because it reads both a validated config and a validated motion:
+    // a nonsensical drift band would otherwise report itself as a step that
+    // outruns the reach it inflates.
+    let fastest_plate = inputs
+        .kinematics
+        .angular_velocities
+        .iter()
+        .map(|rotation| rotation.length())
+        .fold(0.0, f32::max);
+    if config.step_duration
+        > maximum_step_duration(
+            fastest_plate,
+            mesh.radius,
+            mean_cell_width(mesh.radius, mesh.cell_count()),
+            &config,
+        )
+    {
+        return Err(PlateEvolutionError::StepOutrunsReach);
+    }
 
     let mut world = EvolvingWorld::new(mesh, inputs, config);
     let mut boundaries = inputs.boundaries.clone();
@@ -305,7 +343,8 @@ pub fn evolve_plate_ownership(
 
     for step in 0..config.step_count {
         source_cell_count += world.deform(&boundaries);
-        let active = diagnostics.record_transport(world.transport(&boundaries, step as i32));
+        let birth_time = step as f32 * config.step_duration;
+        let active = diagnostics.record_transport(world.transport(&boundaries, birth_time));
         diagnostics.active_step_count += usize::from(active);
         world.drift(step as i32);
         diagnostics.record_lifecycle(world.lifecycle(&boundaries, step as i32));
@@ -326,6 +365,7 @@ pub fn evolve_plate_ownership(
         kinematics: world.kinematics,
         boundaries,
         cell_birth: world.cell_birth,
+        elapsed_time: config.step_count as f32 * config.step_duration,
         deformation: BoundaryDeformation {
             diagnostics: BoundaryDeformationDiagnostics::summarize(
                 &cell_deformation,
@@ -340,11 +380,13 @@ pub fn evolve_plate_ownership(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::step::half_axis_turn;
     use crate::test_support::REFERENCE_STEP_DURATION;
     use crate::test_support::{
-        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, drift_config,
-        empty_boundaries, evolution_fixture, fingerprint, forced_rift_fixture, opposed_kinematics,
-        reference_evolution_config, two_plate_boundary_partition, two_plate_fixture,
+        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint, convergent_fixture,
+        drift_config, empty_boundaries, evolution_fixture, fingerprint, forced_rift_fixture,
+        opposed_kinematics, reference_evolution_config, two_plate_boundary_partition,
+        two_plate_fixture,
     };
     use crate::{BoundaryClass, CrustClass};
     use procgen_core::Vec3;
@@ -359,15 +401,6 @@ mod tests {
         )
     }
 
-    fn birth_fingerprint(evolution: &PlateEvolution) -> u64 {
-        fingerprint(
-            evolution
-                .cell_birth
-                .iter()
-                .map(|birth| birth.map_or(u64::MAX, |birth| birth as u32 as u64)),
-        )
-    }
-
     #[test]
     fn multi_step_evolution_is_deterministic_and_has_stable_aggregates() {
         let fixture = evolution_fixture();
@@ -377,30 +410,35 @@ mod tests {
         assert_eq!(first, fixture.evolve(config));
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
-        assert_eq!(first.diagnostics.owner_change_count, 433);
-        assert_eq!(first.diagnostics.subducted_particle_count, 127);
-        assert_eq!(first.diagnostics.born_particle_count, 23);
+        assert_eq!(first.diagnostics.owner_change_count, 396);
+        assert_eq!(first.diagnostics.subducted_particle_count, 195);
+        assert_eq!(first.diagnostics.born_particle_count, 29);
         // Cell areas vary, so a rigid rotation alone leaves a third of the
-        // cells empty at any moment, and the run makes ocean floor in only 23
-        // of the 881 cells that found nothing of their own. The collision
+        // cells empty at any moment, and the run makes ocean floor in only 29
+        // of the 954 cells that found nothing of their own. The collision
         // count excludes the doubling that same variance causes, so it is
-        // small beside them.
-        assert_eq!(first.diagnostics.collided_cell_count, 191);
-        assert_eq!(first.diagnostics.maximum_collision_stack, 4);
-        assert_eq!(first.diagnostics.sampled_cell_count, 881);
+        // small beside them, and it fell by two thirds when the trench rule
+        // reached as far as a step travels: material that used to stack
+        // inside the overriding plate now subducts.
+        assert_eq!(first.diagnostics.collided_cell_count, 64);
+        assert_eq!(first.diagnostics.maximum_collision_stack, 3);
+        assert_eq!(first.diagnostics.sampled_cell_count, 954);
         assert_eq!(first.diagnostics.starting_continental_particle_count, 174);
         assert_eq!(first.diagnostics.final_continental_particle_count, 174);
         // Plates of the reference world clear the minimum continental area a
-        // rift needs: three draws pass over the run, two splitting their
-        // plate and one leaving it in a single piece. Four pairs merge, and
-        // transport empties others of the thirty-three plates the run started
-        // with. Compaction removes every id left owning nothing.
-        assert_eq!(first.diagnostics.rift_count, 2);
-        assert_eq!(first.diagnostics.failed_rift_count, 1);
+        // rift needs: three draws pass over the run and each splits its
+        // plate. Four pairs merge, and transport empties others of the
+        // thirty-three plates the run started with. Compaction removes every
+        // id left owning nothing.
+        assert_eq!(first.diagnostics.rift_count, 3);
+        assert_eq!(first.diagnostics.failed_rift_count, 0);
         assert_eq!(first.diagnostics.suture_count, 4);
-        assert_eq!(first.partition.plate_count, 25);
-        assert_eq!(ownership_fingerprint(&first), 2_496_247_802_890_013_671);
-        assert_eq!(birth_fingerprint(&first), 10_835_211_203_217_484_955);
+        assert_eq!(first.partition.plate_count, 26);
+        assert_eq!(ownership_fingerprint(&first), 2_116_839_557_307_681_552);
+        assert_eq!(
+            birth_fingerprint(&first.cell_birth),
+            4_386_359_728_091_928_121
+        );
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.
@@ -430,7 +468,7 @@ mod tests {
     /// The angle one step turns an axis through, recovered from the
     /// half-angle tangent the drift is written in.
     fn per_step_angle(config: PlateEvolutionConfig) -> f32 {
-        2.0 * (0.5 * config.pole_drift.axis_drift_rate * config.step_duration).atan()
+        2.0 * half_axis_turn(config.pole_drift, config.step_duration).atan()
     }
 
     fn angle_between(first: Vec3, second: Vec3) -> f32 {
@@ -465,15 +503,17 @@ mod tests {
                 .iter()
                 .all(|rotation| fixture.kinematics.angular_velocities.contains(rotation))
         );
-        // Both are re-pinned by the margin taper's `continental_fraction`
-        // retune: the initial mask the birth prior reads decides which cells
-        // are oceanic, and a cell's resolution reads the crust each particle
-        // carries.
+        // Both are re-pinned by the trench rule reaching as far as a step
+        // travels, which subducts material that used to stack, and by birth
+        // becoming model time.
         assert_eq!(
             ownership_fingerprint(&evolution),
-            12_957_810_193_975_737_552
+            11_350_531_112_301_863_314
         );
-        assert_eq!(birth_fingerprint(&evolution), 5_122_638_643_250_736_967);
+        assert_eq!(
+            birth_fingerprint(&evolution.cell_birth),
+            18_056_323_793_271_814_511
+        );
     }
 
     #[test]
@@ -626,9 +666,9 @@ mod tests {
             evolution.diagnostics.starting_continental_particle_count
         );
         for (cell, birth) in evolution.cell_birth.iter().enumerate() {
-            if birth.is_some_and(|birth| birth >= 0) {
+            if birth.is_some_and(|birth| birth >= 0.0) {
                 assert!(
-                    birth.is_some_and(|birth| birth < config.step_count as i32),
+                    birth.is_some_and(|birth| birth < evolution.elapsed_time),
                     "cell {cell} was born during the run"
                 );
                 assert_eq!(evolution.cell_crust().class(cell), CrustClass::Oceanic);

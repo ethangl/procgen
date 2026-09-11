@@ -11,13 +11,15 @@ use procgen_geology::{
     SedimentaryBasinField, VolcanicArcField,
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{BoundaryClass, BoundaryClassification, SeafloorAge};
+use procgen_tectonics::{
+    BoundaryClass, BoundaryClassification, DEFAULT_STEP_DURATION, SeafloorAge,
+};
 
 /// Coefficients for converting completed coarse fields into normalized detail controls.
 ///
 /// Baselines and positive weights are in `[0, 1]`; signed deltas are in `[-1, 1]`.
 /// `boundary_strength_saturation` is in upstream velocity units and must be positive.
-/// `abyssal_age_saturation` is in mesh hops and must be positive. Every composed channel
+/// `abyssal_age_saturation` is model time and must be positive. Every composed channel
 /// is clamped to `[0, 1]` after its terms are applied.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainControlConfig {
@@ -51,8 +53,10 @@ pub struct TerrainControlConfig {
     pub basin_octave_gain_delta: f32,
     /// Normalized-elevation abyssal amplitude at age zero.
     pub maximum_abyssal_amplitude: f32,
-    /// Mesh-hop age at which abyssal amplitude reaches zero.
-    pub abyssal_age_saturation: usize,
+    /// Seafloor age, as model time, at which abyssal amplitude reaches zero.
+    /// A time rather than a hop count, because that is what a seafloor age is:
+    /// the same stretch of a floor's life whatever mesh or step produced it.
+    pub abyssal_age_saturation: f32,
     /// Unitless hotspot stamp strength in `[0, 1]`.
     pub hotspot_stamp_strength: f32,
     /// Unitless attenuation applied to volcanic-arc peak strength.
@@ -79,7 +83,9 @@ impl Default for TerrainControlConfig {
             craton_octave_gain_delta: -0.12,
             basin_octave_gain_delta: -0.18,
             maximum_abyssal_amplitude: 0.12,
-            abyssal_age_saturation: 8,
+            // Eight default steps, which is where the hop count this was
+            // tuned as still puts it.
+            abyssal_age_saturation: 8.0 * DEFAULT_STEP_DURATION,
             hotspot_stamp_strength: 1.0,
             volcanic_arc_stamp_scale: 0.8,
             oceanic_peak_stamp_scale: 1.0,
@@ -118,7 +124,8 @@ impl TerrainControlConfig {
                 .any(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
             || !self.boundary_strength_saturation.is_finite()
             || self.boundary_strength_saturation <= 0.0
-            || self.abyssal_age_saturation == 0
+            || !self.abyssal_age_saturation.is_finite()
+            || self.abyssal_age_saturation <= 0.0
         {
             return Err(TerrainControlError::InvalidConfig);
         }
@@ -207,9 +214,8 @@ pub fn compose_terrain_controls(
                 + basin * config.basin_octave_gain_delta)
                 .clamp(0.0, 1.0);
             let abyssal_amplitude = inputs.seafloor_age.cell_ages[cell].map_or(0.0, |age| {
-                let youth = 1.0
-                    - (age.min(config.abyssal_age_saturation) as f32
-                        / config.abyssal_age_saturation as f32);
+                let youth =
+                    1.0 - age.min(config.abyssal_age_saturation) / config.abyssal_age_saturation;
                 youth * config.maximum_abyssal_amplitude
             });
             TerrainCellControls {
@@ -509,8 +515,8 @@ mod tests {
         );
 
         let mut age = Fixture::new();
-        age.ages.cell_ages[0] = Some(0);
-        age.ages.cell_ages[1] = Some(config.abyssal_age_saturation / 2);
+        age.ages.cell_ages[0] = Some(0.0);
+        age.ages.cell_ages[1] = Some(config.abyssal_age_saturation / 2.0);
         age.ages.cell_ages[2] = Some(config.abyssal_age_saturation);
         let cells = age.compose().unwrap().cells;
         assert_eq!(cells[0].abyssal_amplitude, config.maximum_abyssal_amplitude);
@@ -526,7 +532,7 @@ mod tests {
         let mut fixture = Fixture::new();
         fixture.cratons.cell_strengths.fill(1.0);
         fixture.arcs.cell_strengths.fill(1.0);
-        fixture.ages.cell_ages.fill(Some(0));
+        fixture.ages.cell_ages.fill(Some(0.0));
         for edge in 0..fixture.mesh.edge_count() {
             fixture.boundaries.edge_classes[edge] = BoundaryClass::Convergent;
             fixture.boundaries.edge_normal_speeds[edge] = [10.0, 10.0];
