@@ -10,6 +10,12 @@ The first source project is the C# world-generation pipeline at
 and rebuild it incrementally; do not attempt a one-shot translation. See
 `docs/world-heightmap.md`.
 
+## Communication
+
+Be clear and concise in your communication and PR descripions. Do not invent
+terminology. Use ASD-STE100. Do not add code attribution to commits or PR
+descriptions.
+
 ## Architecture
 
 - Keep `procgen-core` dependency-free and limited to backend-neutral value

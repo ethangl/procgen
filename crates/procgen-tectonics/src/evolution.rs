@@ -369,22 +369,24 @@ mod tests {
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
         assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
-        assert_eq!(first.diagnostics.proposal_count, 261);
+        assert_eq!(first.diagnostics.proposal_count, 264);
         assert_eq!(first.diagnostics.contested_cell_count, 36);
-        assert_eq!(first.diagnostics.migrated_cell_count, 225);
-        assert_eq!(first.diagnostics.born_cell_count, 101);
-        // No plate of the reference world holds the minimum continental area
-        // a rift needs, so the run draws for none; one pair merges, and
-        // migration empties another four of the thirty-three plates it started
-        // with. Compaction removes every id left owning nothing.
-        assert_eq!(first.diagnostics.rift_count, 0);
-        assert_eq!(first.diagnostics.failed_rift_count, 0);
+        assert_eq!(first.diagnostics.migrated_cell_count, 228);
+        assert_eq!(first.diagnostics.born_cell_count, 102);
+        // Plates of the reference world now clear the minimum continental
+        // area a rift needs, where none did before the retune: two draws pass
+        // over the run, one splitting its plate and one leaving it in a
+        // single piece. One pair merges, and migration empties another four
+        // of the thirty-three plates the run started with. Compaction removes
+        // every id left owning nothing.
+        assert_eq!(first.diagnostics.rift_count, 1);
+        assert_eq!(first.diagnostics.failed_rift_count, 1);
         assert_eq!(first.diagnostics.suture_count, 1);
-        assert_eq!(first.partition.plate_count, 28);
+        assert_eq!(first.partition.plate_count, 29);
         // Convergence is a float reduction, so machines differ in the last bits.
         assert!((first.diagnostics.maximum_convergence - 1.875_788).abs() < 1.0e-3);
-        assert_eq!(ownership_fingerprint(&first), 9_507_204_561_242_162_617);
-        assert_eq!(birth_fingerprint(&first), 11_187_235_701_870_888_513);
+        assert_eq!(ownership_fingerprint(&first), 9_936_074_511_533_659_768);
+        assert_eq!(birth_fingerprint(&first), 11_715_277_558_234_678_678);
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.

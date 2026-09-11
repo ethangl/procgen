@@ -431,10 +431,10 @@ mod tests {
         assert_eq!(first.diagnostics.basement, FieldSummary::default());
         assert_eq!(first.diagnostics.margin_cell_count, 0);
         assert_eq!(first.diagnostics.margin_depth, FieldSummary::default());
-        // The fingerprint pinned before interior relief and the margin taper
-        // existed: switching both terms off and the taper's width to zero has
-        // to leave the field bit for bit as it was, at the target area it was
-        // pinned over.
+        // Switching both interior-relief terms off and the taper's width to
+        // zero leaves the age curve alone, which is what this pin holds. It
+        // moves whenever the reference run's crust does: last with the rift
+        // minimum area, which gives that run a rift it did not have.
         assert_eq!(
             fingerprint(
                 first
@@ -442,7 +442,7 @@ mod tests {
                     .iter()
                     .map(|value| value.to_bits() as u64)
             ),
-            11_860_571_570_007_501_935
+            4_828_514_870_540_622_964
         );
     }
 

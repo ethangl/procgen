@@ -105,7 +105,11 @@ Completed foundations:
   magnitude, so belts widen where a boundary converged for many steps and a
   suture stays where a boundary used to be. Continental divergent boundaries
   use a configurable graben profile: strength-scaled central subsidence, a
-  steep transition to weaker negative flanks, then bounded decay to zero.
+  step out to flanks that stand above the plateau behind them, then bounded
+  decay to zero, which is the shoulder every real rift valley carries. A
+  transform boundary scales its profile by the signed residual convergence
+  left after classification rather than by shear, so pure lateral slip raises
+  nothing and a bend raises or subsides one cell according to its sign.
   Oceanic ridges remain solely owned by bathymetry. A crust-birth prior
   derives oceanic-cell hop distance from the initial divergent boundaries,
   negated into birth steps that predate step zero; propagation

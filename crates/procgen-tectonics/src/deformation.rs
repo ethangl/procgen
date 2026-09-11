@@ -27,11 +27,17 @@ pub struct BoundaryEffect {
     pub depth: usize,
 }
 
+/// Graben and shoulders of a continental divergent boundary. A rift valley
+/// sits below flanks that stand above the plateau behind them: the East
+/// African floor lies about a kilometre under shoulders one to two kilometres
+/// over their plateau. The flank may therefore be either sign, as long as it
+/// is above the centre.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContinentalRiftProfile {
     /// Subsidence at a continental divergent boundary cell.
     pub center_offset: f32,
-    /// Weaker subsidence one mesh hop away from the boundary.
+    /// Offset one mesh hop away from the boundary. Positive raises rift
+    /// shoulders over the plateau; negative widens the depression.
     pub flank_offset: f32,
     /// Mesh hop at which the flank reaches zero within the owning plate.
     pub decay_depth: usize,
@@ -43,8 +49,8 @@ impl ContinentalRiftProfile {
     pub fn is_valid(&self) -> bool {
         self.center_offset.is_finite()
             && self.flank_offset.is_finite()
-            && self.center_offset < self.flank_offset
-            && self.flank_offset < 0.0
+            && self.center_offset < 0.0
+            && self.flank_offset > self.center_offset
             && self.decay_depth >= Self::MIN_DECAY_DEPTH
     }
 }
@@ -54,6 +60,13 @@ pub struct BoundaryDeformationConfig {
     pub convergent: BoundaryEffect,
     /// Continental side of a divergent boundary.
     pub rift: ContinentalRiftProfile,
+    /// Profile a transform boundary raises per unit of *residual convergence*,
+    /// rather than per unit of shear: pure lateral slip builds no relief, and
+    /// what a transform makes comes from the small normal component at a bend,
+    /// positive where the bend is transpressive and negative where it pulls
+    /// apart. The default depth is 1 because that relief is narrow — a
+    /// restraining bend is a range one cell wide at this resolution, not the
+    /// belt a convergent boundary spreads over six.
     pub transform: BoundaryEffect,
     /// Continental side of a mixed-crust convergent boundary.
     pub collision: BoundaryEffect,
@@ -72,10 +85,10 @@ pub struct BoundaryDeformationConfig {
     pub full_deformation_time: f32,
     /// Magnitude the accumulated field is clamped to. The default is the
     /// largest offset the default profiles can raise — the collision centre at
-    /// 0.5, against 0.4 for the convergent, transform, and rift centres and
-    /// 0.2 for the trench — so it bites only where a boundary held one regime
-    /// for longer than [`Self::full_deformation_time`]: 284 of the 65,536
-    /// cells at the viewer's defaults.
+    /// 0.5, against 0.4 for the convergent and transform centres and 0.2 for
+    /// the trench and the rift centre — so it bites only where a boundary held
+    /// one regime for longer than [`Self::full_deformation_time`]: 164 of the
+    /// 65,536 cells at the viewer's defaults.
     pub maximum_magnitude: f32,
 }
 
@@ -87,13 +100,13 @@ impl Default for BoundaryDeformationConfig {
                 depth: 6,
             },
             rift: ContinentalRiftProfile {
-                center_offset: -0.4,
-                flank_offset: -0.1,
-                decay_depth: 4,
+                center_offset: -0.2,
+                flank_offset: 0.08,
+                decay_depth: 3,
             },
             transform: BoundaryEffect {
                 offset: 0.4,
-                depth: 3,
+                depth: 1,
             },
             collision: BoundaryEffect {
                 offset: 0.5,
@@ -172,7 +185,7 @@ impl fmt::Display for BoundaryDeformationError {
             ),
             Self::InvalidRiftProfile => write!(
                 formatter,
-                "rift profile must satisfy center < flank < 0 and decay depth >= {}",
+                "rift profile must satisfy center < 0 and center < flank, and decay depth >= {}",
                 ContinentalRiftProfile::MIN_DECAY_DEPTH
             ),
         }
@@ -223,12 +236,11 @@ fn collect_boundary_sources(
     let mut sources = vec![None; mesh.cell_count()];
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let class = boundaries.edge_classes[edge_index];
-        let Some(strength) = boundaries.strength(edge_index) else {
+        let Some(scale) = source_scale(boundaries, edge_index, config) else {
             continue;
         };
 
         let classes = edge.cells.map(|cell| crust.class(cell));
-        let scale = (strength / config.saturation_speed).min(1.0);
         for side in 0..2 {
             let Some(source) = boundary_source(config, class, classes[side], classes[1 - side])
             else {
@@ -240,6 +252,27 @@ fn collect_boundary_sources(
         }
     }
     sources
+}
+
+/// Signed fraction of its profile the edge's motion raises, or `None` where
+/// the edge is not a boundary.
+///
+/// A convergent or divergent edge scales by its own strength, which is a
+/// magnitude. A transform edge scales by its *signed residual convergence*
+/// instead: lateral slip alone makes no relief, so what is left of the normal
+/// component after classification decides both how much a transform raises and
+/// which way. A negative scale turns the profile upside down, which is the
+/// pull-apart basin a transtensional bend opens.
+fn source_scale(
+    boundaries: &BoundaryClassification,
+    edge: usize,
+    config: &BoundaryDeformationConfig,
+) -> Option<f32> {
+    let speed = match boundaries.edge_classes[edge] {
+        BoundaryClass::Transform => boundaries.convergence(edge),
+        _ => boundaries.strength(edge)?,
+    };
+    Some((speed / config.saturation_speed).clamp(-1.0, 1.0))
 }
 
 fn boundary_source(
@@ -516,19 +549,15 @@ mod tests {
     }
 
     #[test]
-    fn continental_rift_uses_normal_strength_and_transform_uses_shear() {
+    fn continental_rift_scales_with_its_normal_strength() {
         let (mesh, edge_index, partition) = two_plate_boundary_partition();
         let edge = mesh.edges[edge_index];
         let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
         let config = BoundaryDeformationConfig {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
-                flank_offset: -0.1,
+                flank_offset: 0.1,
                 decay_depth: 3,
-            },
-            transform: BoundaryEffect {
-                depth: 0,
-                ..BoundaryDeformationConfig::default().transform
             },
             saturation_speed: 4.0,
             ..Default::default()
@@ -536,6 +565,7 @@ mod tests {
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
         boundaries.edge_normal_speeds[edge_index] = [-0.5, -0.5];
+        // Shear a transform would read, which a divergent edge must not.
         boundaries.edge_shear[edge_index] = 3.0;
         let divergent = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         for cell in edge.cells {
@@ -548,12 +578,76 @@ mod tests {
                 .enumerate()
                 .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == expected_flank)
         );
+    }
 
+    #[test]
+    fn transform_relief_follows_the_sign_of_its_residual_convergence() {
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
+        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
+        let config = BoundaryDeformationConfig {
+            transform: BoundaryEffect {
+                offset: 0.4,
+                depth: 1,
+            },
+            saturation_speed: 4.0,
+            ..Default::default()
+        };
+        let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
-        let transform = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        boundaries.edge_shear[edge_index] = 3.0;
+
+        // Lateral slip alone, however fast, makes no relief.
+        let slipping = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert!(slipping.iter().all(|&value| value == 0.0));
+
+        // A restraining bend raises, a releasing bend subsides, and both take
+        // the same fraction of the profile as their residual is of saturation.
+        boundaries.edge_normal_speeds[edge_index] = [0.5, 0.5];
+        let restraining = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        boundaries.edge_normal_speeds[edge_index] = [-0.5, -0.5];
+        let releasing = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         for cell in edge.cells {
-            assert_eq!(transform[cell], config.transform.offset * 3.0 / 4.0);
+            assert_eq!(restraining[cell], config.transform.offset / 4.0);
         }
+        // A pull-apart basin is the same shape upside down, flank included.
+        assert!(
+            releasing
+                .iter()
+                .zip(&restraining)
+                .all(|(released, raised)| *released == -raised)
+        );
+    }
+
+    #[test]
+    fn a_boundary_that_only_slips_accumulates_no_deformation() {
+        let (mesh, _, partition) = two_plate_boundary_partition();
+        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
+        let mut boundaries = empty_boundaries(&mesh);
+        for (edge_index, edge) in mesh.edges.iter().enumerate() {
+            let [first, second] = edge.cells.map(|cell| partition.cell_plates[cell]);
+            if first != second {
+                boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
+                boundaries.edge_shear[edge_index] = 3.0;
+            }
+        }
+
+        let mut accumulated = vec![0.0; mesh.cell_count()];
+        for _ in 0..4 {
+            let source_cell_count = accumulate_boundary_deformation(
+                &mesh,
+                &partition,
+                CellCrust {
+                    cell_birth: &cell_birth,
+                },
+                &boundaries,
+                &BoundaryDeformationConfig::default(),
+                0.25,
+                &mut accumulated,
+            );
+            assert_eq!(source_cell_count, 0);
+        }
+        assert!(accumulated.iter().all(|&value| value == 0.0));
     }
 
     #[test]
@@ -608,21 +702,21 @@ mod tests {
     }
 
     #[test]
-    fn continental_rift_has_a_deep_center_weak_flank_and_bounded_decay_to_zero() {
+    fn continental_rift_has_a_deep_center_raised_shoulders_and_bounded_decay_to_zero() {
         let source = PropagationProfile::from(ContinentalRiftProfile {
             center_offset: -0.8,
-            flank_offset: -0.2,
+            flank_offset: 0.2,
             decay_depth: 4,
         });
 
         assert_eq!(source.offset_at(0), -0.8);
-        assert_eq!(source.offset_at(1), -0.2);
-        assert!((source.offset_at(2) - -0.2 * (2.0 / 3.0)).abs() < f32::EPSILON);
-        assert!((source.offset_at(3) - -0.2 * (1.0 / 3.0)).abs() < f32::EPSILON);
+        assert_eq!(source.offset_at(1), 0.2);
+        assert!((source.offset_at(2) - 0.2 * (2.0 / 3.0)).abs() < f32::EPSILON);
+        assert!((source.offset_at(3) - 0.2 * (1.0 / 3.0)).abs() < f32::EPSILON);
         assert_eq!(source.offset_at(4), 0.0);
         assert!(
-            (0..=source.depth()).all(|depth| source.offset_at(depth) <= 0.0),
-            "a continental rift must never create positive shoulders"
+            (1..=source.depth()).all(|depth| source.offset_at(depth) > 0.0),
+            "a shoulder stands above the plateau until it decays to zero"
         );
     }
 
@@ -777,13 +871,20 @@ mod tests {
                 Err(BoundaryDeformationError::InvalidConfig)
             );
         }
+        // A negative flank is the pre-shoulder graben and stays legal.
+        assert_eq!(
+            validate_config(BoundaryDeformationConfig {
+                rift: ContinentalRiftProfile {
+                    flank_offset: -0.1,
+                    ..BoundaryDeformationConfig::default().rift
+                },
+                ..Default::default()
+            }),
+            Ok(())
+        );
         for rift in [
             ContinentalRiftProfile {
                 center_offset: 0.1,
-                ..BoundaryDeformationConfig::default().rift
-            },
-            ContinentalRiftProfile {
-                flank_offset: 0.1,
                 ..BoundaryDeformationConfig::default().rift
             },
             ContinentalRiftProfile {

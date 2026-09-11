@@ -211,7 +211,9 @@ holds is 1.3% of the sphere, well under `rift_minimum_area_fraction` of 0.04,
 so the default world no longer rifts at all, while the coarser reference world
 below (eighteen plates) still rifts once. Lowering that default to about 0.01
 would restore it; a default retune is its own change with its own
-measurements.
+measurements. That retune has since landed at 0.012, with the rift rate swept
+alongside it — see "Profile retune" in `docs/plate-movement.md` — so the
+default world rifts again, once over fifteen steps.
 
 **Measured.** Both worlds are the viewer's defaults at 65,536 cells: 15
 evolution steps for the first, and the reference world's sampling seed 9,
