@@ -156,6 +156,27 @@ impl CellCrust<'_> {
         material_order(self.cell_birth[left], self.cell_birth[right])
     }
 
+    /// Area-weighted continental share of each plate, the same question
+    /// [`CrustClassification::plate_continental_fraction`] answers over the
+    /// classification a run starts from. [`crate::plate_speed`] reads it every
+    /// step, so a plate that loses its continent to a trench speeds up.
+    pub fn plate_continental_fraction(
+        &self,
+        mesh: &SphereMesh,
+        partition: &PlatePartition,
+    ) -> Vec<f64> {
+        let mut continental = vec![0.0; partition.plate_count];
+        for (cell, &plate) in partition.cell_plates.iter().enumerate() {
+            if self.class(cell) == CrustClass::Continental {
+                continental[plate] += f64::from(mesh.cell_areas[cell]);
+            }
+        }
+        for (share, area) in continental.iter_mut().zip(partition.plate_areas(mesh)) {
+            *share /= area;
+        }
+        continental
+    }
+
     /// Cells of each crust class, in [`CrustClass::ALL`] order. Both counts
     /// come from one scan, because a consumer showing either usually shows
     /// both.

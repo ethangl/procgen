@@ -70,17 +70,18 @@ Completed foundations:
   they cross as walls; the connected components between the walls are the
   primary faces, and a configured fraction of them split into minor plates by
   integer-cost growth confined to their own face. It also derives rigid plate
-  angular velocities, fitted per plate to a smooth global flow field and scaled
-  by each plate's continental area fraction and its size, local spherical
+  angular velocities, fitted per plate to a smooth global flow field for
+  direction and scaled by each plate's continental area fraction and by the
+  share of its perimeter that is subducting slab, local spherical
   tangent motion, static convergent, divergent, and transform boundary
   classification, and per-cell continental crust grown from farthest-first
   nuclei by integer-cost growth to a target continental area, ignoring plate
   boundaries so that most of the coastline is a passive margin. Those
-  velocities are only where a run starts: every evolution step ends by
-  drifting each plate's rotation vector, turning its axis through a fixed
-  angle toward a fresh hashed direction and scaling its speed by a hashed
-  fraction, bounded to a band around the speed the plate started with, so
-  boundaries change regime during a run. It
+  velocities are only where a run starts: every evolution step turns each
+  plate's axis through a fixed angle toward a fresh hashed direction and then
+  recomputes its speed from the crust and the trenches the plate then has,
+  times a hashed drift factor bounded to a band around one, so boundaries
+  change regime during a run and a plate that gains a trench speeds up. It
   repeatedly reclassifies current boundaries and, for a configured step count,
   moves the crust itself: the material lives in particles, one per cell before
   step zero, each rotating rigidly with its plate, and every cell then takes

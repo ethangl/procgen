@@ -320,16 +320,19 @@ mod tests {
             .unwrap()
         );
         assert_eq!(first.cell_birth.len(), mesh.cell_count());
+        // The prior reads the fixture's boundaries, which the slab rule
+        // reclassified: a world whose plates all start near the trenchless
+        // quarter of their base has more ridge and shorter walks from it.
         assert_eq!(
             first.diagnostics,
             CrustBirthPriorDiagnostics {
                 hops: FieldSummary {
                     minimum: 0.0,
-                    maximum: 9.0,
-                    mean: 1.801_775_1,
+                    maximum: 8.0,
+                    mean: 1.588_757_4,
                 },
                 oceanic_cell_count: 338,
-                ridge_cell_count: 103,
+                ridge_cell_count: 110,
                 ridge_plate_count: 29,
                 // One plate of the reference world owns oceanic crust with no
                 // ridge of its own, so its cells take the fallback age.
@@ -339,7 +342,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            7_845_085_305_370_493_663
+            6_623_232_938_112_620_950
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0.0),
@@ -561,7 +564,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_ages),
-            11_586_516_672_180_657_809
+            1_946_493_741_869_383_192
         );
     }
 

@@ -59,16 +59,23 @@ pub const MAX_GAP_RADIUS: f32 = TRANSPORT_REACH_HOPS as f32;
 /// have to move together: a step longer than this carries material past
 /// everything this module looks at.
 ///
-/// The fastest plate is not the fastest fitted one. Pole drift may raise a
-/// speed by `speed_drift_limit`, and a rift opens its two halves apart at
+/// The fastest plate is the configured ceiling, not the fastest a fit
+/// produced: every step's respeed clamps to that ceiling, so a plate that
+/// gains a trench reaches it. Pole drift may raise a speed by
+/// `speed_drift_limit` on top, and a rift opens its two halves apart at
 /// `rift_opening_speed` on top of the parent's motion, so both are in the
 /// bound. Switching either off gives back the reach they reserved. A world in
 /// which nothing can move has no bound at all, and this returns infinity.
 ///
-/// Callers pass the speed they want bounded: evolution passes the fastest
-/// plate its inputs actually hold, and the viewer the fastest the kinematics
-/// config could produce, because a user editing a step duration has not fitted
-/// the plates yet.
+/// The rift term is reserve the respeed no longer spends: a half's opening
+/// sets its direction and the respeed that ends the same step sets its length
+/// back inside the ceiling. It is kept because the bound also has to hold for
+/// step zero, whose transport reads the motion the caller supplied rather than
+/// a respeeded one.
+///
+/// Evolution and the viewer pass the same number, the kinematics config's own
+/// maximum: a user editing a step duration has not fitted the plates yet, and
+/// a run no longer moves at the speed its plates were fitted at.
 pub fn maximum_step_duration(
     maximum_angular_speed: f32,
     radius: f32,
@@ -667,12 +674,10 @@ mod tests {
         let config = reference_evolution_config();
         let radius = fixture.mesh.radius;
         let cell_width = mean_cell_width(radius, fixture.mesh.cell_count());
-        let fastest = fixture
-            .kinematics
-            .angular_velocities
-            .iter()
-            .map(|rotation| rotation.length())
-            .fold(0.0, f32::max);
+        // The configured ceiling, not the fastest plate the fit produced: a
+        // plate that gains a trench is respeeded up to that ceiling, so it is
+        // the speed the bound has to hold.
+        let fastest = PlateKinematicsConfig::new(7).maximum_angular_speed;
         let bound = |config: &PlateEvolutionConfig| {
             maximum_step_duration(fastest, radius, cell_width, config)
         };
@@ -938,6 +943,7 @@ mod tests {
         };
         let kinematics = PlateKinematics {
             angular_velocities: vec![Vec3::Z],
+            base_speeds: vec![1.0],
         };
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
         let birth_prior = derive_crust_birth_prior(
@@ -956,6 +962,17 @@ mod tests {
             PlateEvolutionInputs {
                 partition: &partition,
                 kinematics: &kinematics,
+                // Every speed factor at one, so each step's respeed hands the
+                // plate back the unit speed it was given and the cap crosses
+                // the forty cells this fixture is built around. What the slab
+                // rule does to a speed is `motion.rs`'s to state; this is
+                // about what a pure rotation conserves.
+                kinematics_config: PlateKinematicsConfig {
+                    oceanic_speed_factor: 1.0,
+                    continental_speed_factor: 1.0,
+                    trenchless_speed_factor: 1.0,
+                    ..PlateKinematicsConfig::new(0)
+                },
                 boundaries: &boundaries,
                 birth_prior: &birth_prior,
             },

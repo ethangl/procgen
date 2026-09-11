@@ -23,6 +23,12 @@ pub const REFERENCE_STEP_DURATION: f32 = 0.15;
 /// Kinematics seed of the reference fixtures, and so of their flow field.
 const REFERENCE_MOTION_SEED: u64 = 7;
 
+/// Base speed of the fixtures that build their kinematics by hand. It is the
+/// reference motion config's maximum, which is the unit speed those fixtures
+/// turn their plates at, so a respeed can only slow a plate down and never
+/// carry one past the step bound the config states.
+const HAND_BUILT_BASE_SPEED: f32 = 1.0;
+
 /// The motion config the reference fixtures fit against, and the one the crust
 /// birth prior scales a hop by. The fixtures that build their kinematics by
 /// hand turn their plates at unit speed, which is this config's maximum, so
@@ -144,6 +150,7 @@ impl EvolutionFixture {
         PlateEvolutionInputs {
             partition: &self.partition,
             kinematics: &self.kinematics,
+            kinematics_config: reference_motion_config(),
             boundaries: &self.boundaries,
             birth_prior: &self.birth_prior,
         }
@@ -294,6 +301,7 @@ pub fn still_world_fixture() -> EvolutionFixture {
     let mut fixture = evolution_fixture();
     fixture.kinematics = PlateKinematics {
         angular_velocities: vec![Vec3::ZERO; fixture.partition.plate_count],
+        base_speeds: vec![0.0; fixture.partition.plate_count],
     };
     fixture.boundaries =
         classify_boundaries(&fixture.mesh, &fixture.partition, &fixture.kinematics).unwrap();
@@ -309,6 +317,7 @@ pub fn opposed_kinematics(mesh: &SphereMesh, edge: usize, outward: f32) -> Plate
     let apart = (second - first).normalized() * outward;
     PlateKinematics {
         angular_velocities: vec![first.cross(-apart), second.cross(apart)],
+        base_speeds: vec![HAND_BUILT_BASE_SPEED; 2],
     }
 }
 
@@ -468,9 +477,9 @@ pub fn reference_crust_config() -> CrustClassificationConfig {
 /// itself: a closed arc's wall has its mean center at the sphere's own, which
 /// leaves the opening direction undefined. The draw always passes, and after
 /// the split each half is below the minimum area, so the plate breaks up
-/// exactly once. The step is long enough for the parting halves to travel a
-/// cell width of this mesh in a few steps, so the ridge the rift opened has
-/// time to make crust.
+/// exactly once. The run is long enough for the parting halves to travel
+/// several cell widths of this mesh, so the ridge the rift opened has time to
+/// make crust.
 pub fn forced_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
     let (mesh, partition, config) = rift_cap_world();
     let crust = plate_crust(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
@@ -511,7 +520,10 @@ fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
         plate_count: 2,
     };
     let config = PlateEvolutionConfig {
-        step_count: 6,
+        // The halves part at the speed the slab rule gives them, which for a
+        // continent with no trench is a quarter of its base: slower than the
+        // opening term alone, so the gap takes eight steps rather than six.
+        step_count: 8,
         step_duration: 0.25,
         pole_drift: NO_POLE_DRIFT,
         lifecycle: PlateLifecycleConfig {
@@ -530,11 +542,15 @@ fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
     (mesh, partition, config)
 }
 
-/// Plates at rest, so a rift's opening term is the whole of the halves'
-/// motion and the boundary it makes is the only one a run can open.
+/// Plates fitted at rest, so a rift's opening term is the only direction a
+/// half has to part in and the boundary it makes is the only one a run can
+/// open. They keep a base speed: a plate at rest has no axis and stays at
+/// rest, but a half the opening gave an axis moves at the speed the slab rule
+/// gives it.
 fn at_rest(plate_count: usize) -> PlateKinematics {
     PlateKinematics {
         angular_velocities: vec![Vec3::ZERO; plate_count],
+        base_speeds: vec![HAND_BUILT_BASE_SPEED; plate_count],
     }
 }
 

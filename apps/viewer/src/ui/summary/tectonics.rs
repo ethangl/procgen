@@ -7,6 +7,7 @@ pub(super) fn summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
     crust_summary(ui, world);
     birth_prior_summary(ui, world);
     evolution_summary(ui, world);
+    speed_summary(ui, world);
     boundary_summary(ui, world);
     seafloor_age_summary(ui, world);
     deformation_summary(ui, world);
@@ -88,6 +89,18 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         stat(ui, "Rifts", world.evolution.rift_count);
         stat(ui, "Failed rifts", world.evolution.failed_rift_count);
         stat(ui, "Sutures", world.evolution.suture_count);
+    });
+}
+
+/// The spread the slab rule produced, which is the measure of whether a world
+/// has fast plates and slow ones or only one speed.
+fn speed_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
+    stat_grid(ui, "Final plate speeds", "plate_speeds", |ui| {
+        let speeds = world.kinematics.speed_summary();
+        stat(ui, "Minimum", format!("{:.3}", speeds.minimum));
+        stat(ui, "Median", format!("{:.3}", speeds.median));
+        stat(ui, "Maximum", format!("{:.3}", speeds.maximum));
+        stat(ui, "Fastest over slowest", format!("{:.2}", speeds.ratio()));
     });
 }
 

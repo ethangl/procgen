@@ -37,6 +37,7 @@ pub use base_elevation::{
 };
 pub use boundaries::{
     BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
+    subducting_fractions,
 };
 pub use boundary_profiles::{
     BoundaryDeformationConfig, BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile,
@@ -57,8 +58,8 @@ pub use evolution::{
 pub use field::{DEFAULT_STEP_DURATION, FieldSummary, mean_cell_width};
 pub use lifecycle::PlateLifecycleConfig;
 pub use motion::{
-    FlowField, PlateKinematics, PlateKinematicsConfig, PlateKinematicsError,
-    generate_plate_kinematics,
+    FlowField, PlateKinematics, PlateKinematicsConfig, PlateKinematicsError, PlateSpeedSummary,
+    generate_plate_kinematics, plate_speed,
 };
 pub use partition::{
     MAX_GROWTH_ROUGHNESS, PlatePartition, PlatePartitionConfig, PlatePartitionError,

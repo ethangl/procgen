@@ -27,7 +27,9 @@
 //!
 //! Both halves start from the parent's rotation vector plus and minus an
 //! opening term along `n x m`, where `n` is the normal of the great circle the
-//! wall lies closest to and `m` is the wall's mean center. That axis is the
+//! wall lies closest to and `m` is the wall's mean center. Both inherit the
+//! parent's base speed and drift factor, so the opening decides which way a
+//! half goes and the step's respeed decides how fast. That axis is the
 //! one whose velocity at the rift is normal to the rift, so the relative
 //! motion across the new boundary is pure opening and it classifies divergent.
 //! An arc that closed on itself is the one case with no such axis: its wall's
@@ -38,7 +40,8 @@
 //! time by the step; a pair below it starts over, so a pair that stopped
 //! colliding begins its next collision from nothing. At `suture_time` the
 //! plate with more area absorbs the other, taking the area-weighted mean of
-//! the two rotation vectors, and the absorbed id is left owning nothing.
+//! the two rotation vectors, of their base speeds, and of their drift
+//! factors, and the absorbed id is left owning nothing.
 //!
 //! **Compaction.** The run ends by removing every plate id that owns no cell
 //! — the ones suturing emptied and the ones transport did — and remapping
@@ -341,11 +344,13 @@ impl EvolvingWorld<'_> {
         self.kinematics
             .angular_velocities
             .push(rotations[1 - keeps]);
-        // Each half is a plate that has just come into being, so the drift
-        // band that follows is around the speed it parted with rather than
-        // around the parent's.
-        self.starting_speeds[plate] = rotations[keeps].length();
-        self.starting_speeds.push(rotations[1 - keeps].length());
+        // A half is the parent's own crust on the parent's own base speed,
+        // carrying the drift the parent had walked to. The opening sets its
+        // direction and the respeed that ends this step sets its length, so
+        // what the two halves keep of the opening is the way they part.
+        let base = self.kinematics.base_speeds[plate];
+        self.kinematics.base_speeds.push(base);
+        self.drift_factors.push(self.drift_factors[plate]);
         true
     }
 
@@ -414,8 +419,9 @@ impl EvolvingWorld<'_> {
 
     /// Absorbs the smaller of a colliding pair into the larger: every cell of
     /// the absorbed plate takes the absorber's id, the absorber's rotation
-    /// becomes the area-weighted mean of the two, and the absorbed id is left
-    /// owning nothing until [`Self::compact`] removes it.
+    /// vector, base speed, and drift factor each become the area-weighted mean
+    /// of the pair's, and the absorbed id is left owning nothing until
+    /// [`Self::compact`] removes it.
     fn merge_plates(&mut self, pair: (usize, usize)) {
         // Both plates own the cells of a shared boundary edge, so neither
         // area is zero and the weights are well defined.
@@ -427,14 +433,16 @@ impl EvolvingWorld<'_> {
         };
 
         let total = areas[absorber] + areas[absorbed];
-        let weight = |plate: usize| (areas[plate] / total) as f32;
-        let merged = self.kinematics.angular_velocities[absorber] * weight(absorber)
-            + self.kinematics.angular_velocities[absorbed] * weight(absorbed);
-        self.kinematics.angular_velocities[absorber] = merged;
-        // The merged plate starts again from the motion the merge gave it.
-        // Left at the absorber's original speed, the drift band would snap
-        // the mean straight back and undo the merge.
-        self.starting_speeds[absorber] = merged.length();
+        let weights = [absorber, absorbed].map(|plate| (areas[plate] / total) as f32);
+        let rotations = [absorber, absorbed].map(|plate| self.kinematics.angular_velocities[plate]);
+        self.kinematics.angular_velocities[absorber] =
+            rotations[0] * weights[0] + rotations[1] * weights[1];
+        // The merged plate is one plate, so it has one base speed and one
+        // drift factor. Left at the absorber's own, the smaller plate would
+        // bring nothing to the motion the next respeed derives.
+        let mean = |values: &[f32]| values[absorber] * weights[0] + values[absorbed] * weights[1];
+        self.kinematics.base_speeds[absorber] = mean(&self.kinematics.base_speeds);
+        self.drift_factors[absorber] = mean(&self.drift_factors);
         for plate in self.partition.cell_plates.iter_mut() {
             if *plate == absorbed {
                 *plate = absorber;
@@ -477,9 +485,13 @@ impl EvolvingWorld<'_> {
             .iter()
             .map(|&plate| self.kinematics.angular_velocities[plate])
             .collect();
-        self.starting_speeds = live
+        self.kinematics.base_speeds = live
             .iter()
-            .map(|&plate| self.starting_speeds[plate])
+            .map(|&plate| self.kinematics.base_speeds[plate])
+            .collect();
+        self.drift_factors = live
+            .iter()
+            .map(|&plate| self.drift_factors[plate])
             .collect();
         self.partition.plate_count = live.len();
     }
@@ -561,6 +573,7 @@ fn opening_rotation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CrustClass;
     use crate::test_support::EvolutionFixture;
     use crate::test_support::{
         NO_LIFECYCLE, closed_arc_rift_fixture, empty_boundaries, evolution_fixture,
@@ -774,17 +787,66 @@ mod tests {
         assert_eq!(merged.kinematics.angular_velocities.len(), 1);
         merged.validate(&fixture.mesh).unwrap();
 
-        // The larger plate absorbed the smaller, and its motion is the
-        // area-weighted mean of the pair's.
+        // The larger plate absorbed the smaller, and the direction it goes in
+        // is the area-weighted mean of the pair's. Only the direction: the
+        // respeed that ends the same step sets the length from the merged
+        // plate's own crust and trenches.
         let areas = fixture.partition.plate_areas(&fixture.mesh);
         let total = areas[0] + areas[1];
-        let expected = waiting.kinematics.angular_velocities[0] * (areas[0] / total) as f32
-            + waiting.kinematics.angular_velocities[1] * (areas[1] / total) as f32;
+        let expected = (waiting.kinematics.angular_velocities[0] * (areas[0] / total) as f32
+            + waiting.kinematics.angular_velocities[1] * (areas[1] / total) as f32)
+            .normalized();
         assert!(
-            (merged.kinematics.angular_velocities[0] - expected).length() < 1.0e-6,
+            (merged.kinematics.angular_velocities[0].normalized() - expected).length() < 1.0e-6,
             "{:?} against {expected:?}",
             merged.kinematics.angular_velocities[0]
         );
+    }
+
+    /// The base speed and the drift a merged plate keeps, which its every
+    /// later respeed reads. Driven a substep at a time, because a whole run
+    /// gives both plates the same base and could not tell a mean from either.
+    #[test]
+    fn a_suture_takes_the_area_weighted_mean_of_base_speed_and_drift() {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental; 2]);
+        let (_, config, steps) = forced_suture_fixture();
+        let colliding = fixture.boundaries.clone();
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        world.kinematics.base_speeds = vec![0.4, 0.9];
+        world.drift_factors = vec![0.8, 1.2];
+
+        for step in 0..steps {
+            world.lifecycle(&colliding, step as i32);
+        }
+
+        // The one-cell plate is the smaller, so the plate around it absorbs.
+        let areas = fixture.partition.plate_areas(&fixture.mesh);
+        let weights = [
+            areas[0] / (areas[0] + areas[1]),
+            areas[1] / (areas[0] + areas[1]),
+        ];
+        let mean = |values: [f32; 2]| values[0] * weights[0] as f32 + values[1] * weights[1] as f32;
+        assert_eq!(world.kinematics.base_speeds[0], mean([0.4, 0.9]));
+        assert_eq!(world.drift_factors[0], mean([0.8, 1.2]));
+    }
+
+    /// Both halves of a rift are the parent's crust on the parent's base speed
+    /// and the drift it had walked to, so the opening decides which way each
+    /// goes and the respeed decides how fast.
+    #[test]
+    fn a_rift_gives_both_halves_the_parents_base_speed_and_drift() {
+        let (fixture, config) = forced_rift_fixture();
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        world.kinematics.base_speeds = vec![0.6, 0.3];
+        world.drift_factors = vec![1.1, 0.7];
+
+        let events = world.lifecycle(&empty_boundaries(&fixture.mesh), 0);
+
+        assert_eq!(events.rift_count, 1);
+        assert_eq!(world.partition.plate_count, 3);
+        // The parent keeps its id and the new half takes the next one.
+        assert_eq!(world.kinematics.base_speeds, vec![0.6, 0.3, 0.6]);
+        assert_eq!(world.drift_factors, vec![1.1, 0.7, 1.1]);
     }
 
     #[test]
@@ -851,13 +913,17 @@ mod tests {
         }
         let plate_count = world.partition.plate_count;
         let motions = world.kinematics.angular_velocities.clone();
-        let speeds = world.starting_speeds.clone();
+        let bases = world.kinematics.base_speeds.clone();
+        // Distinct per plate, so a factor that moved to the wrong id shows.
+        world.drift_factors = (0..plate_count).map(|plate| plate as f32).collect();
 
         world.compact();
 
         assert_eq!(world.partition.plate_count, plate_count - 1);
         world.partition.validate(&fixture.mesh).unwrap();
         let survivors: Vec<usize> = (0..plate_count).filter(|&p| p != ABSORBED).collect();
+        let kept =
+            |values: &[f32]| -> Vec<f32> { survivors.iter().map(|&plate| values[plate]).collect() };
         assert_eq!(
             world.kinematics.angular_velocities,
             survivors
@@ -865,11 +931,12 @@ mod tests {
                 .map(|&plate| motions[plate])
                 .collect::<Vec<_>>()
         );
+        assert_eq!(world.kinematics.base_speeds, kept(&bases));
         assert_eq!(
-            world.starting_speeds,
+            world.drift_factors,
             survivors
                 .iter()
-                .map(|&plate| speeds[plate])
+                .map(|&plate| plate as f32)
                 .collect::<Vec<_>>()
         );
         for (cell, &plate) in fixture.partition.cell_plates.iter().enumerate() {
