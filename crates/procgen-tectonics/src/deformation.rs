@@ -19,7 +19,7 @@ use crate::{
     stage::StageInputError,
 };
 use procgen_sphere_mesh::SphereMesh;
-use std::collections::VecDeque;
+use std::{cmp::Ordering, collections::VecDeque};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BoundaryDeformationDiagnostics {
@@ -122,13 +122,16 @@ fn collect_boundary_sources(
             continue;
         };
 
-        let classes = edge.cells.map(|cell| crust.class(cell));
         for side in 0..2 {
-            let Some(source) = boundary_source(config, class, classes[side], classes[1 - side])
-            else {
+            let source_cell = edge.cells[side];
+            let Some(source) = boundary_source(
+                config,
+                class,
+                crust.class(source_cell),
+                crust.order(source_cell, edge.cells[1 - side]),
+            ) else {
                 continue;
             };
-            let source_cell = edge.cells[side];
             let source = source.scaled(scale);
             retain_stronger_source(&mut sources[source_cell], source);
         }
@@ -157,20 +160,35 @@ fn source_scale(
     Some((speed / config.saturation_speed).clamp(-1.0, 1.0))
 }
 
+/// The profile one side of one boundary edge raises, from its own crust class
+/// and from [`crate::material_order`] over the two sides' crust.
+///
+/// A convergent edge is read by its polarity, which is the one rule
+/// [`crate::material_order`] states: the side that covers the other is the
+/// overriding plate and the side it covers is the slab going down. Continental
+/// over oceanic is the Andean pair, the collision belt against a trench.
+/// Oceanic over oceanic is the Marianas pair, a narrow island arc against a
+/// trench. `Equal` has no polarity — two continents, or two floors of one age
+/// — and both sides take the symmetric `convergent` belt.
+///
+/// Divergent and transform edges do not read the order: a rift is a property
+/// of the crust on the side, and a transform's relief is its residual normal
+/// component whatever lies across it.
 fn boundary_source(
     config: &BoundaryDeformationConfig,
     class: BoundaryClass,
     own: CrustClass,
-    other: CrustClass,
+    order: Ordering,
 ) -> Option<PropagationProfile> {
-    match (class, own, other) {
-        (BoundaryClass::Convergent, CrustClass::Continental, CrustClass::Oceanic) => {
+    match (class, own, order) {
+        (BoundaryClass::Convergent, _, Ordering::Equal) => Some(config.convergent.into()),
+        (BoundaryClass::Convergent, _, Ordering::Less) => Some(config.trench.into()),
+        (BoundaryClass::Convergent, CrustClass::Continental, Ordering::Greater) => {
             Some(config.collision.into())
         }
-        (BoundaryClass::Convergent, CrustClass::Oceanic, CrustClass::Continental) => {
-            Some(config.trench.into())
+        (BoundaryClass::Convergent, CrustClass::Oceanic, Ordering::Greater) => {
+            Some(config.island_arc.into())
         }
-        (BoundaryClass::Convergent, _, _) => Some(config.convergent.into()),
         (BoundaryClass::Divergent, CrustClass::Oceanic, _) => None,
         (BoundaryClass::Divergent, CrustClass::Continental, _) => Some(config.rift.into()),
         (BoundaryClass::Transform, _, _) => Some(config.transform.into()),
@@ -233,8 +251,8 @@ mod tests {
     use super::*;
     use crate::test_support::{
         EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, empty_boundaries,
-        final_state_fixture, mesh as test_mesh, plate_cell_birth, two_plate_boundary_partition,
-        two_plate_fixture,
+        final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
+        two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::{
         BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig,
@@ -369,6 +387,73 @@ mod tests {
         let changed = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         assert!(changed[edge.cells[0]] < 0.0);
         assert!(changed[edge.cells[1]] > 0.0);
+    }
+
+    /// Ocean-ocean convergence is the Marianas pair: the younger floor
+    /// overrides, so it carries the arc and the older floor carries the
+    /// trench. Plate 0 is every cell but one, so the arc has room to
+    /// propagate its whole depth inside it.
+    #[test]
+    fn ocean_ocean_convergence_arcs_the_younger_side_and_trenches_the_older() {
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
+        let cell_birth = plate_cell_birth_times(&partition, &[Some(0.5), Some(0.1)]);
+        let mut boundaries = empty_boundaries(&mesh);
+        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
+        boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
+        let config = BoundaryDeformationConfig::default();
+
+        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        assert_eq!(deformation[edge.cells[0]], config.island_arc.offset);
+        assert_eq!(deformation[edge.cells[1]], config.trench.offset);
+
+        let mut within = vec![false; mesh.cell_count()];
+        within[edge.cells[0]] = true;
+        for _ in 0..config.island_arc.depth {
+            within = (0..mesh.cell_count())
+                .map(|cell| {
+                    within[cell]
+                        || mesh
+                            .cell_corners(cell)
+                            .iter()
+                            .any(|corner| within[corner.neighbor])
+                })
+                .collect();
+        }
+        assert!(
+            deformation
+                .iter()
+                .enumerate()
+                .all(|(cell, &value)| within[cell] || value == 0.0),
+            "the arc reached further than its own depth"
+        );
+        assert!(
+            deformation
+                .iter()
+                .enumerate()
+                .any(|(cell, &value)| cell != edge.cells[0]
+                    && partition.cell_plates[cell] == 0
+                    && value > 0.0),
+            "the arc is a belt behind the boundary, not one cell"
+        );
+    }
+
+    /// Two floors of one age have no polarity, so neither side is the
+    /// overriding plate and both take the symmetric belt.
+    #[test]
+    fn ocean_ocean_convergence_of_one_age_stays_symmetric() {
+        let (mesh, edge_index, partition) = two_plate_boundary_partition();
+        let edge = mesh.edges[edge_index];
+        let cell_birth = plate_cell_birth_times(&partition, &[Some(0.5); 2]);
+        let mut boundaries = empty_boundaries(&mesh);
+        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
+        boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
+        let config = BoundaryDeformationConfig::default();
+
+        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+        for cell in edge.cells {
+            assert_eq!(deformation[cell], config.convergent.offset);
+        }
     }
 
     #[test]
@@ -691,6 +776,7 @@ mod tests {
                     offset: -0.2,
                     depth,
                 },
+                island_arc: effect,
                 rift: ContinentalRiftProfile {
                     decay_depth: depth + 1,
                     ..config.deformation.rift

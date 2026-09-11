@@ -62,8 +62,21 @@ pub struct BoundaryDeformationConfig {
     pub transform: BoundaryEffect,
     /// Continental side of a mixed-crust convergent boundary.
     pub collision: BoundaryEffect,
-    /// Oceanic side of a mixed-crust convergent boundary.
+    /// Older oceanic side of any convergent boundary that has a polarity: the
+    /// floor going down, whether the plate above it is a continent or a
+    /// younger floor.
     pub trench: BoundaryEffect,
+    /// Younger oceanic side of an ocean-ocean convergent boundary, which is
+    /// the overriding plate.
+    ///
+    /// An arc is narrow — a volcanic front 100 to 200 km behind the trench —
+    /// so the default depth is 2 hops rather than the six a collision belt
+    /// spreads over. The offset matches `convergent` so that a floor at 0.08
+    /// to 0.30 reaches the 0.5 datum once the boundary has held for the whole
+    /// of [`Self::full_deformation_time`] and the volcanic uplift lands on
+    /// top. That is what makes an arc an island chain rather than a submarine
+    /// ridge, and it is the number to retune if arcs stay drowned.
+    pub island_arc: BoundaryEffect,
     /// Motion magnitude at which a boundary effect reaches its full offset.
     pub saturation_speed: f32,
     /// Model time over which a saturated boundary raises its full profile
@@ -77,10 +90,11 @@ pub struct BoundaryDeformationConfig {
     pub full_deformation_time: f32,
     /// Magnitude the accumulated field is clamped to. The default is the
     /// largest offset the default profiles can raise — the collision centre at
-    /// 0.5, against 0.4 for the convergent and transform centres and 0.2 for
-    /// the trench and the rift centre — so it bites only where a boundary held
-    /// one regime for longer than [`Self::full_deformation_time`]: 164 of the
-    /// 65,536 cells at the viewer's defaults.
+    /// 0.5, against 0.4 for the convergent, transform, and island arc centres
+    /// and 0.2 for the trench and the rift centre — so it bites only where a
+    /// boundary held one regime for longer than
+    /// [`Self::full_deformation_time`]: 164 of the 65,536 cells at the
+    /// viewer's defaults.
     pub maximum_magnitude: f32,
 }
 
@@ -107,6 +121,10 @@ impl Default for BoundaryDeformationConfig {
             trench: BoundaryEffect {
                 offset: -0.2,
                 depth: 1,
+            },
+            island_arc: BoundaryEffect {
+                offset: 0.4,
+                depth: 2,
             },
             saturation_speed: 2.0,
             full_deformation_time: 9.0 * DEFAULT_STEP_DURATION,
@@ -149,6 +167,7 @@ pub(crate) fn validate_config(
         config.transform,
         config.collision,
         config.trench,
+        config.island_arc,
     ];
     let positives = [
         config.saturation_speed,

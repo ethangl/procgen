@@ -393,7 +393,7 @@ struct_codec! {
     BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width_hops, margin_edge_elevation }
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
-    BoundaryDeformationConfig { convergent, rift, transform, collision, trench, saturation_speed, full_deformation_time, maximum_magnitude }
+    BoundaryDeformationConfig { convergent, rift, transform, collision, trench, island_arc, saturation_speed, full_deformation_time, maximum_magnitude }
     CoarseElevationConfig { smoothing_passes, smoothing_weight, sea_level }
     HotspotFieldConfig { hotspot_count, maximum_trail_cells, province_fraction, province_radius_hops, province_rim_hops, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }

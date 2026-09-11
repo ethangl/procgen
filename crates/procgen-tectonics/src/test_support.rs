@@ -405,15 +405,31 @@ pub fn empty_boundaries(mesh: &SphereMesh) -> BoundaryClassification {
 }
 
 /// The per-cell birth field that reproduces plate crust classes cell by cell,
-/// for stages tested on a hand-built partition rather than a real run.
+/// for stages tested on a hand-built partition rather than a real run. Every
+/// oceanic plate is one age, so nothing that reads ocean-ocean polarity sees
+/// one here.
 pub fn plate_cell_birth(
     partition: &PlatePartition,
     plate_classes: &[CrustClass],
 ) -> Vec<Option<f32>> {
+    let births: Vec<_> = plate_classes
+        .iter()
+        .map(|&class| (class == CrustClass::Oceanic).then_some(0.0))
+        .collect();
+    plate_cell_birth_times(partition, &births)
+}
+
+/// The per-cell birth field that gives every cell of a plate one creation
+/// time, for the fixtures that choose crust ages rather than run them.
+/// `None` is continental crust that was never re-made.
+pub fn plate_cell_birth_times(
+    partition: &PlatePartition,
+    plate_births: &[Option<f32>],
+) -> Vec<Option<f32>> {
     partition
         .cell_plates
         .iter()
-        .map(|&plate| (plate_classes[plate] == CrustClass::Oceanic).then_some(0.0))
+        .map(|&plate| plate_births[plate])
         .collect()
 }
 
