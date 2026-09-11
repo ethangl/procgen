@@ -281,10 +281,12 @@ fn validate_inputs(
 }
 
 /// Claims every convergent boundary edge that has a polarity for its
-/// overriding cell, which is the one [`procgen_tectonics::material_order`] ranks greater: the
+/// overriding cell, which is the one [`material_order`] ranks greater: the
 /// plate above the slab is where an arc is built. `Equal` has no polarity and
 /// is skipped, which leaves continental collisions arc-free as they are on
 /// Earth and skips two floors of one age.
+///
+/// [`material_order`]: procgen_tectonics::material_order
 fn collect_boundary_data(
     mesh: &SphereMesh,
     crust: CellCrust<'_>,
