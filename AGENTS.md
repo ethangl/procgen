@@ -187,8 +187,11 @@ reviews. Treat them as the default bar for new work.
   Narrow seeds once on the host through one named public function.
 - Pin integer fingerprints exactly, and never pin float bits: libm and codegen
   differ across machines, so a hash over `to_bits()` pins the toolchain rather
-  than the algorithm. Where a float agreement test needs a tolerance, use a
-  round number with a one-line reason for where it sits, and calibrate it
+  than the algorithm. To pin a float field, hash the integer facts in it — cell
+  ids, counts, hop distances, ordering — or use
+  `procgen_core::quantized_fingerprint`, which hashes each value's step on a
+  coarse power-of-two grid. Where a float agreement test needs a tolerance, use
+  a round number with a one-line reason for where it sits, and calibrate it
   against measurements only if it fires.
 
 ### Tests and docs

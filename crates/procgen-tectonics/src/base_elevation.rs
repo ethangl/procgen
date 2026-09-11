@@ -354,8 +354,8 @@ fn validate_config(
 mod tests {
     use super::*;
     use crate::test_support::{
-        BaseElevationFixture, base_elevation_fixture, base_elevation_fixture_with_crust,
-        fingerprint, mesh, no_interior_relief, reference_crust_config,
+        BaseElevationFixture, base_elevation_fixture, base_elevation_fixture_with_crust, mesh,
+        no_interior_relief, quantized_fingerprint, reference_crust_config,
     };
     use crate::{
         CoarseElevationConfig, CrustClassificationConfig, PlateKinematicsConfig,
@@ -435,14 +435,14 @@ mod tests {
         // zero leaves the age curve alone, which is what this pin holds. It
         // moves whenever the reference run's crust does: last with the rift
         // minimum area, which gives that run a rift it did not have.
+        //
+        // The curve is add, multiply, divide, and square root over an integer
+        // age, so it is bit-identical on every machine; the grid is what keeps
+        // the pin exact anyway, and it is fine enough to separate the two
+        // oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
-            fingerprint(
-                first
-                    .cell_elevations
-                    .iter()
-                    .map(|value| value.to_bits() as u64)
-            ),
-            4_828_514_870_540_622_964
+            quantized_fingerprint(first.cell_elevations.iter().copied()),
+            1_613_837_875_145_704_898
         );
     }
 

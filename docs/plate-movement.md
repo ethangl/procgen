@@ -398,6 +398,16 @@ integers or exact multiples of the step length. Accumulated deformation is a
 float field and is tested for run-to-run equality and invariants only, never
 pinned across machines.
 
+A float field that does carry a fingerprint is pinned through
+`quantized_fingerprint`, which hashes each value's step on a 1/1024 grid
+rather than its bits. Scaling by a power of two is exact, so the grid step is
+an integer fact about the value, and the step is four orders of magnitude
+coarser than the last bit of an `f32` near one. Base elevation, isostatic
+support, and composed geological elevation are pinned this way; each one is
+built from add, multiply, divide, and square root alone, so nothing on those
+paths can cross a grid boundary between machines. Pinning `to_bits()` instead
+pinned the toolchain, because one differing last bit changes the whole hash.
+
 Slice 5 adds the arc walk, connected components, integer edge tallies, and
 area sums, all of which are exact, plus one plane fit and one cross product
 that use add, multiply, and square root alone. The floats that decide an
