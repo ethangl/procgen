@@ -5,8 +5,8 @@
 //! area, deterministic multi-step evolution of ownership, of the plate set
 //! itself as plates rift and suture, and of the material the plates carry —
 //! particles of crust that rotate rigidly with their plate, holding the birth
-//! step and the accumulated deformation each cell reads off them — seafloor
-//! age in evolution steps, oceanic bathymetric base elevation, and coarse
+//! time and the accumulated deformation each cell reads off them — seafloor
+//! age as model time, oceanic bathymetric base elevation, and coarse
 //! elevation composition live here. Geological effects remain separate later
 //! stages.
 
@@ -53,7 +53,7 @@ pub use evolution::{
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,
     PlateEvolutionInputs, evolve_plate_ownership,
 };
-pub use field::{DEFAULT_STEP_DURATION, FieldSummary};
+pub use field::{DEFAULT_STEP_DURATION, FieldSummary, mean_cell_width};
 pub use lifecycle::PlateLifecycleConfig;
 pub use motion::{
     FlowField, PlateKinematics, PlateKinematicsConfig, PlateKinematicsError,
@@ -69,4 +69,6 @@ pub use seafloor_age::{
 };
 pub use stage::StageInputError;
 pub use step::PoleDriftConfig;
-pub use transport::{MAX_GAP_RADIUS, MaterialTransportConfig};
+pub use transport::{
+    MAX_GAP_RADIUS, MaterialTransportConfig, TRANSPORT_REACH_HOPS, maximum_step_duration,
+};

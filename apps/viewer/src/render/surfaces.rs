@@ -50,10 +50,7 @@ pub(super) fn seafloor_age_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
         .cell_ages
         .iter()
         .map(|age| match age {
-            Some(age) => opaque_color(piecewise_lerp(
-                *age as f32 / maximum_age,
-                SEAFLOOR_AGE_COLOR_STOPS,
-            )),
+            Some(age) => opaque_color(piecewise_lerp(*age / maximum_age, SEAFLOOR_AGE_COLOR_STOPS)),
             None => Color::srgb(0.18, 0.16, 0.14),
         })
         .collect()

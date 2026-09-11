@@ -138,7 +138,7 @@ mod tests {
     fn fixture(
         cell_count: usize,
         arc_count: usize,
-    ) -> (SphereMesh, PlatePartition, Vec<Option<i32>>, Vec<f32>) {
+    ) -> (SphereMesh, PlatePartition, Vec<Option<f32>>, Vec<f32>) {
         let mesh = build_sphere_mesh(
             fibonacci_sphere(FibonacciConfig {
                 count: cell_count,
@@ -170,7 +170,7 @@ mod tests {
         (mesh, plates, cell_birth, elevations)
     }
 
-    fn crust(cell_birth: &[Option<i32>]) -> CellCrust<'_> {
+    fn crust(cell_birth: &[Option<f32>]) -> CellCrust<'_> {
         CellCrust { cell_birth }
     }
 
@@ -326,7 +326,7 @@ mod tests {
             .map(|(cell, _)| cell)
             .unwrap();
         elevations[boundary_cell] = CoarseElevationConfig::default().sea_level;
-        cell_birth[interior_cell] = Some(0);
+        cell_birth[interior_cell] = Some(0.0);
 
         let ramped = derive_craton_field(
             &mesh,

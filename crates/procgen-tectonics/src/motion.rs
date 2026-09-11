@@ -49,6 +49,12 @@ const SINGULAR_DETERMINANT_FRACTION: f64 = 1.0e-6;
 pub struct PlateKinematicsConfig {
     pub seed: u64,
     pub minimum_angular_speed: f32,
+    /// Ceiling every fitted speed is clamped to, so it is the fastest plate a
+    /// world can hold and not merely the top of the hashed draw. Must be
+    /// positive: at zero every plate is fitted at rest, every boundary is
+    /// interior, and the stages that measure a length against a plate speed
+    /// have nothing to divide by. [`crate::derive_crust_birth_prior`] reads it
+    /// as the speed one hop of its walk is crossed at.
     pub maximum_angular_speed: f32,
     /// Lattice frequency of the flow field, in cycles per unit direction. A
     /// flow cell has to be much larger than a plate for adjacent plates to
@@ -167,7 +173,8 @@ impl fmt::Display for PlateKinematicsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidAngularSpeedRange => formatter.write_str(
-                "angular speeds must be finite, non-negative, and ordered minimum to maximum",
+                "angular speeds must be finite and ordered minimum to maximum, \
+                 with a non-negative minimum and a positive maximum",
             ),
             Self::InvalidFlowFrequency => {
                 formatter.write_str("flow frequency must be finite and positive")
@@ -244,9 +251,14 @@ pub fn generate_plate_kinematics(
 }
 
 fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
+    // The maximum has to be positive, not merely non-negative: a maximum of
+    // zero fits every plate at rest, which leaves every boundary interior and
+    // every stage that scales a length against a plate speed with nothing to
+    // divide by. The crust-birth prior is one of those.
     if !config.minimum_angular_speed.is_finite()
         || !config.maximum_angular_speed.is_finite()
         || config.minimum_angular_speed < 0.0
+        || config.maximum_angular_speed <= 0.0
         || config.minimum_angular_speed > config.maximum_angular_speed
     {
         return Err(PlateKinematicsError::InvalidAngularSpeedRange);
@@ -704,6 +716,16 @@ mod tests {
             (
                 PlateKinematicsConfig {
                     maximum_angular_speed: f32::NAN,
+                    ..base
+                },
+                PlateKinematicsError::InvalidAngularSpeedRange,
+            ),
+            // A world in which no plate can move is not a slow world; it is one
+            // that leaves every consumer of a plate speed without one.
+            (
+                PlateKinematicsConfig {
+                    minimum_angular_speed: 0.0,
+                    maximum_angular_speed: 0.0,
                     ..base
                 },
                 PlateKinematicsError::InvalidAngularSpeedRange,

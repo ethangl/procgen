@@ -7,6 +7,7 @@ use procgen_tectonics::{
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
     DEFAULT_STEP_DURATION, MAX_GAP_RADIUS, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig,
     PlateKinematicsConfig, PlateLifecycleConfig, PlatePartitionConfig, PoleDriftConfig,
+    maximum_step_duration, mean_cell_width,
 };
 
 // The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
@@ -30,20 +31,12 @@ const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 // the bottom every cell a rigid rotation left empty makes floor it should not
 // have.
 const GAP_RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.5..=MAX_GAP_RADIUS;
-// Zero freezes the world; the top of the range moves the fastest plates about
-// ten cells per step on the default mesh, past which a step skips terrain it
-// should have crossed.
-const STEP_DURATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=DEFAULT_STEP_DURATION * 10.0;
-// Drift rates are per unit time, so both ranges are stated as the change one
-// default step may make and divided back out. The tops sit where a boundary
-// starts changing regime within a step or two, which blurs the accumulated
-// fields instead of recording them.
+// Drift rates are per unit root time, so both ranges are stated as the change
+// one default step may make and divided back out by the root of that step. The
+// tops sit where a boundary starts changing regime within a step or two, which
+// blurs the accumulated fields instead of recording them.
 const MAXIMUM_AXIS_DRIFT_PER_STEP: f32 = 0.5;
-const AXIS_DRIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
-    0.0..=MAXIMUM_AXIS_DRIFT_PER_STEP / DEFAULT_STEP_DURATION;
 const MAXIMUM_SPEED_DRIFT_PER_STEP: f32 = 0.25;
-const SPEED_DRIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
-    0.0..=MAXIMUM_SPEED_DRIFT_PER_STEP / DEFAULT_STEP_DURATION;
 // A rift rate is stated as the chance one default step draws, and divided
 // back out. At the top a large plate breaks up almost every step.
 const MAXIMUM_RIFT_CHANCE_PER_STEP: f32 = 1.0;
@@ -52,19 +45,18 @@ const RIFT_RATE_RANGE: std::ops::RangeInclusive<f32> =
 // A plate below a cell's worth of the default mesh cannot rift at all, and
 // nothing above a fifth of the sphere is a plate.
 const RIFT_AREA_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.2;
-// A suture takes at least one step and at most the longest run the step range
-// allows.
-const SUTURE_TIME_RANGE: std::ops::RangeInclusive<f32> =
+// Model times the user sets here all span one default step to the longest run
+// the step range allows: a suture, a boundary reaching its full profile, and
+// the ocean floor cooling to the deep floor all happen inside a run.
+const MODEL_TIME_RANGE: std::ops::RangeInclusive<f32> =
     DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * *EVOLUTION_STEP_RANGE.end() as f32;
 // Zero merges any pair of touching continents; the top is a collision front
 // spanning a good fraction of a default-mesh plate's perimeter.
 const SUTURE_SHARED_EDGE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
-const CRUST_BIRTH_PRIOR_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+// A hop count, not a time: the prior walks the mesh and turns hops into model
+// time itself.
+const RIDGE_LESS_HOP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
-// A boundary reaches its full profile in one default step at the bottom and
-// over the longest run the step range allows at the top.
-const FULL_DEFORMATION_TIME_RANGE: std::ops::RangeInclusive<f32> =
-    DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * *EVOLUTION_STEP_RANGE.end() as f32;
 // A single profile offset is bounded to one, and tectonic elevation clamps to
 // the unit range, so a clamp above one could never bite.
 const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
@@ -109,7 +101,12 @@ pub(super) fn controls(ui: &mut egui::Ui, settings: &mut TectonicsSettings) {
         birth_prior_controls(ui, &mut settings.birth_prior)
     });
     section(ui, "Plate evolution", |ui| {
-        evolution_controls(ui, &mut settings.evolution, settings.kinematics)
+        evolution_controls(
+            ui,
+            &mut settings.evolution,
+            settings.kinematics,
+            settings.fibonacci.count,
+        )
     });
     section(ui, "Boundary deformation", |ui| {
         deformation_controls(ui, &mut settings.evolution.deformation, settings.kinematics)
@@ -236,6 +233,7 @@ fn evolution_controls(
     ui: &mut egui::Ui,
     config: &mut PlateEvolutionConfig,
     kinematics: PlateKinematicsConfig,
+    cell_count: usize,
 ) {
     drag_value(
         ui,
@@ -244,11 +242,21 @@ fn evolution_controls(
         EVOLUTION_STEP_RANGE,
         1.0,
     );
+    // Zero freezes the world, and the top is as far as a step may carry
+    // material before it outruns what transport can see. The fastest plate the
+    // kinematics config could fit bounds it, because the plates are not fitted
+    // until the phase is generated.
+    let longest_step = maximum_step_duration(
+        kinematics.maximum_angular_speed,
+        WORLD_RADIUS,
+        mean_cell_width(WORLD_RADIUS, cell_count),
+        config,
+    );
     slider(
         ui,
         "Step duration",
         &mut config.step_duration,
-        STEP_DURATION_RANGE,
+        0.0..=longest_step,
     );
     slider(
         ui,
@@ -272,13 +280,13 @@ fn pole_drift_controls(ui: &mut egui::Ui, config: &mut PoleDriftConfig) {
         ui,
         "Axis drift",
         &mut config.axis_drift_rate,
-        AXIS_DRIFT_RATE_RANGE,
+        0.0..=MAXIMUM_AXIS_DRIFT_PER_STEP / DEFAULT_STEP_DURATION.sqrt(),
     );
     slider(
         ui,
         "Speed drift",
         &mut config.speed_drift_rate,
-        SPEED_DRIFT_RATE_RANGE,
+        0.0..=MAXIMUM_SPEED_DRIFT_PER_STEP / DEFAULT_STEP_DURATION.sqrt(),
     );
     // One is the whole of a plate's fitted speed: the band then reaches zero.
     slider(
@@ -315,12 +323,7 @@ fn lifecycle_controls(
         &mut config.rift_opening_speed,
         0.0..=kinematics.maximum_angular_speed,
     );
-    slider(
-        ui,
-        "Suture time",
-        &mut config.suture_time,
-        SUTURE_TIME_RANGE,
-    );
+    slider(ui, "Suture time", &mut config.suture_time, MODEL_TIME_RANGE);
     drag_value(
         ui,
         "Suture edges",
@@ -333,9 +336,9 @@ fn lifecycle_controls(
 fn birth_prior_controls(ui: &mut egui::Ui, config: &mut CrustBirthPriorConfig) {
     drag_value(
         ui,
-        "Ridge-less age",
+        "Ridge-less hops",
         &mut config.ridge_less_age,
-        CRUST_BIRTH_PRIOR_RANGE,
+        RIDGE_LESS_HOP_RANGE,
         1.0,
     );
 }
@@ -359,7 +362,7 @@ fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) 
         &mut config.deep_ocean_elevation,
         0.0..=1.0,
     );
-    drag_value(ui, "Cooling age", &mut config.cooling_age, 1..=256, 1.0);
+    slider(ui, "Cooling age", &mut config.cooling_age, MODEL_TIME_RANGE);
     slider(
         ui,
         "Dynamic topography",
@@ -421,7 +424,7 @@ fn deformation_controls(
         ui,
         "Full deformation time",
         &mut config.full_deformation_time,
-        FULL_DEFORMATION_TIME_RANGE,
+        MODEL_TIME_RANGE,
     );
     slider(
         ui,

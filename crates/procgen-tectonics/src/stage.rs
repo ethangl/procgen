@@ -30,10 +30,10 @@ impl fmt::Display for StageInputError {
                 formatter.write_str("crust classes must match the mesh cell count")
             }
             Self::CrustBirth => {
-                formatter.write_str("crust birth steps must match the mesh cell count")
+                formatter.write_str("crust birth times must match the mesh cell count")
             }
             Self::CrustBirthAfterRun => {
-                formatter.write_str("no crust can be born after the run's last step")
+                formatter.write_str("no crust can be born after the run's elapsed time")
             }
             Self::Elevation => {
                 formatter.write_str("elevation values must match the mesh cell count")

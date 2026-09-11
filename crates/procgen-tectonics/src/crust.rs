@@ -125,15 +125,15 @@ impl CrustClassification {
     }
 }
 
-/// Per-cell crust class after evolution, read from the step at which each
-/// cell's crust was created: crust with a birth step is oceanic, crust with
-/// none is original continental crust that has never been re-made.
+/// Per-cell crust class after evolution, read from the model time at which
+/// each cell's crust was created: crust with a birth time is oceanic, crust
+/// with none is original continental crust that has never been re-made.
 ///
 /// This is the only per-cell answer from step zero onward.
 /// [`CrustClassification`] is the initial condition it starts from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellCrust<'a> {
-    pub cell_birth: &'a [Option<i32>],
+    pub cell_birth: &'a [Option<f32>],
 }
 
 impl CellCrust<'_> {
@@ -383,10 +383,10 @@ mod tests {
     }
 
     #[test]
-    fn cell_crust_reads_the_birth_step_and_not_plate_ownership() {
+    fn cell_crust_reads_the_birth_time_and_not_plate_ownership() {
         let mesh = mesh(32);
         let cell_birth: Vec<_> = (0..mesh.cell_count())
-            .map(|cell| (cell % 3 != 0).then_some(-(cell as i32)))
+            .map(|cell| (cell % 3 != 0).then_some(-(cell as f32)))
             .collect();
         let crust = CellCrust {
             cell_birth: &cell_birth,

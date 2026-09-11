@@ -45,7 +45,7 @@ for that one.
 - `classify_boundaries` derives per-edge normal and shear speeds from the two
   owners' rotations and classifies each edge. It is correct and stays.
 - Evolution carries the material itself across steps, as one particle per
-  parcel of crust holding its birth step and its accumulated deformation, plus
+  parcel of crust holding its birth time and its accumulated deformation, plus
   the ownership and the two per-cell fields the cells read off it, the plate
   set with its motion, and how long each continental pair has been colliding.
   A step rotates every particle rigidly with its plate and each cell then
@@ -58,9 +58,11 @@ for that one.
   describe plates and still decide volcanic-arc grouping, and a cell's own
   crust decides which of two parcels in it wins. A rifting continental plate therefore grows an oceanic margin.
 - `derive_crust_birth_prior` is the old hop-distance algorithm, now producing
-  the birth field evolution starts from: `Some(-hops)` for oceanic cells,
-  `Some(-ridge_less_age)` for ridge-less oceanic plates, `None` for continental.
-  `derive_seafloor_age` is `step_count - birth`, in steps rather than hops.
+  the birth field evolution starts from, in model time:
+  `Some(-hops * hop_duration)` for oceanic cells,
+  `Some(-ridge_less_age * hop_duration)` for ridge-less oceanic plates, `None`
+  for continental. `derive_seafloor_age` is `elapsed_time - birth`. See "Time
+  and length units" for what a hop duration is and why both are times.
 - `step_duration` defaults to 0.014, the time a plate at the default maximum
   angular speed of 1.0 takes to cross one cell width on the 65,536-cell default
   mesh. The rest of this bullet, and every count in the four that follow it,
@@ -79,7 +81,8 @@ for that one.
   whole run, spanning 1 to 45 with a mean of 15. At 8 that put 92.6 percent of
   oceanic cells flat on the deep floor, leaving only crust made during the run
   with any gradient at all. At 40 it is 0.5 percent, and mean oceanic base
-  elevation rises from 0.084 to 0.169.
+  elevation rises from 0.084 to 0.169. It is `0.56` model time today, which is
+  those forty default steps; "Time and length units" says why it is a time.
 - Deformation is a second per-cell field carried with crust birth. Each step
   computes the profile its own boundaries raise, exactly as the removed
   `derive_boundary_deformation` did over the final ones, scales it by
@@ -108,23 +111,26 @@ for that one.
 - Kinematics is per-step state inside the evolving world rather than a fixed
   input. Every step ends, after deform and transport and before the
   next classification, by drifting each plate's rotation vector: the axis
-  turns through the fixed angle `axis_drift_rate * step_duration` toward a
-  fresh hashed direction perpendicular to it, and the speed is multiplied by
-  `1 + s * speed_drift_rate * step_duration` for a hashed `s` in `[-1, 1)`.
+  turns through the fixed angle `axis_drift_rate * sqrt(step_duration)` toward
+  a fresh hashed direction perpendicular to it, and the speed is multiplied by
+  `1 + s * speed_drift_rate * sqrt(step_duration)` for a hashed `s` in
+  `[-1, 1)`.
   Four `signed_f32` draws per plate per step, from a `PLATE_POLE_DRIFT`
   stream on evolution's own new seed, supply the direction and the speed.
   Because the angle per step is fixed and only the direction is hashed, an
   axis takes a random walk on the sphere of directions, whose expected total
-  wander over `n` steps is roughly `theta * sqrt(n)`.
+  wander over `n` steps is roughly `theta * sqrt(n)`. Both rates are therefore
+  per unit *root* time, not per unit time: see "Time and length units" below
+  for why, and for the retune that left a default step behaving as it did.
 - The drifted speed is bounded to `speed_drift_limit` either side of the
   speed the plate started the run with, not to the kinematics config's global
   angular-speed range. A random walk against fixed global limits eventually
   piles every plate against one of them; a band around the fitted speed keeps
   drift the perturbation of the flow field's answer that it is meant to be,
   and evolution needs nothing from the kinematics stage but its result.
-- `axis_drift_rate` defaults to 15.0 and `speed_drift_rate` to 7.5, both per
-  unit time, and `speed_drift_limit` to 0.5. At `DEFAULT_STEP_DURATION` the
-  first turns an axis 0.21 radians a step, so `0.21 * sqrt(15)` is about
+- `axis_drift_rate` defaults to 1.8 and `speed_drift_rate` to 0.9, both per
+  unit root time, and `speed_drift_limit` to 0.5. At `DEFAULT_STEP_DURATION`
+  the first turns an axis 0.213 radians a step, so `0.213 * sqrt(15)` is about
   forty-seven degrees of expected wander over a default fifteen-step run, and
   the second changes a speed by at most about a tenth a step, whose expected
   fifteen-step excursion is about a quarter. A half therefore bounds the tail
@@ -385,10 +391,24 @@ path's angular velocities, and it predates this slice:
 still a fifteen-percent share of every plate's direction at the default
 coherence. If a re-pinned integer fingerprint ever splits between the two
 machines, that is the first thing to replace, with a normalized triple of
-`signed_f32` as the crack walk already uses. Birth steps and accumulated displacement are
-integers or exact multiples of the step length. Accumulated deformation is a
+`signed_f32` as the crack walk already uses. Birth times are exact multiples of
+the step length or of the prior's hop duration, which is one divide over a
+cell width and a speed. Accumulated deformation is a
 float field and is tested for run-to-run equality and invariants only, never
 pinned across machines.
+
+A run's meaning does not depend on how the run is sliced, and one case of that
+is exact. Take a world whose every rotation vector is zero, with drift and the
+lifecycle off, and run it at `(step_duration, n)` and at `(step_duration / 2,
+2n)`. Halving a float and doubling a count are both exact, so the two runs
+cover the same elapsed time to the bit; nothing moves, so every cell keeps its
+own particle; and crust birth, seafloor age, and base elevation come out
+bit-identical.
+`slicing_a_still_run_twice_as_finely_changes_nothing` is that statement, over
+the reference world with its plates frozen; the prior it ages is untouched by
+the freezing, because the prior reads the configured plate speed rather than
+the fitted plates. A moving world cannot make the claim — see "Time and length
+units" for what it can claim instead.
 
 A float field that does carry a fingerprint is pinned through
 `quantized_fingerprint`, which hashes each value's step on a 1/1024 grid
@@ -1133,3 +1153,165 @@ reference fixture with and without drift and lifecycle, seafloor age, and base
 elevation, along with the reference run's aggregate counts and its final plate
 count. Each was re-pinned once. The geology and climate pins read synthetic
 elevation fields rather than an evolved one and did not move, as expected.
+
+## Time and length units
+
+Every configured quantity that describes a rate or an age now means the same
+thing whatever the step duration and whatever the mesh. Four things did not,
+and one of them was a live defect in the particle transport.
+
+### Drift rates are per unit root time
+
+Pole drift is a random walk, and a random walk's spread grows with the root of
+the time it takes. Turning an axis by `axis_drift_rate * step_duration` each
+step therefore gave a total wander over a fixed time `T` of
+`rate * sqrt(T * step_duration)`: halving the step halved the variance. The
+`PoleDriftConfig` doc claimed the opposite — that a shorter step only changes
+how many steps a given wander takes — and that claim was wrong.
+
+Both rates are now per unit root time: `half_tangent` is
+`0.5 * axis_drift_rate * sqrt(step_duration)` and the speed span is
+`speed_drift_rate * sqrt(step_duration)`. `sqrt` is IEEE-exact and was already
+on the path, so no libm call is added. The defaults were retuned so that a
+default step behaves as it did: `15 * 0.014` and `7.5 * 0.014` become
+`1.8 * sqrt(0.014)` and `0.9 * sqrt(0.014)`, which turn an axis 0.213 radians a
+step against 0.21 and scale a speed by at most 0.106 against 0.105. The
+viewer's two drift slider ranges were stated as a per-step maximum over
+`DEFAULT_STEP_DURATION`; they are now that maximum over its root.
+
+`half_axis_turn` exposes the per-step angle, so the test that checks how it
+scales reads it rather than recovering it from a rotated vector. The scaling is
+exact: `sqrt(1/4)` is 1/2 in IEEE, so the turn at `step_duration / 4` is
+exactly half the turn at `step_duration`, for any rate.
+
+### Birth and age are model time
+
+`cell_birth` was `Option<i32>` steps and the prior wrote `-hops` into it as if
+one hop were one step. `SeafloorAge` was steps. `cooling_age` (40),
+`maximum_young_age` (10), and `abyssal_age_saturation` (8) were integers whose
+meaning changed with the step and with the mesh. The one coincidence that made
+"hop" and "step" line up was `DEFAULT_STEP_DURATION` itself, which is defined
+as the time a plate at maximum speed takes to cross one cell of the
+65,536-cell mesh — true at the defaults and nowhere else.
+
+Birth is now `Option<f32>` model time, on the particle and in `cell_birth`. A
+particle born at step `k` gets `k * step_duration`; `None` is still original
+continental crust, so `is_continental` and `CellCrust` are unchanged. The prior
+writes `-hops * hop_duration`, where the hop duration is
+`mean_cell_width(mesh) / (maximum_angular_speed * radius)` — exactly what
+`DEFAULT_STEP_DURATION` was defined as, so at the defaults the prior's births
+are the values they were, and on any other mesh or at any other step they are
+what they were meant to be. `derive_crust_birth_prior` takes
+`PlateKinematicsConfig` for that one number. `ridge_less_age` stays a hop
+count, because that is what it is, and it is multiplied by the same hop
+duration.
+
+The speed is the configured maximum rather than the fastest fitted plate. Every
+fitted speed is clamped to that maximum, so it is the fastest plate a world can
+hold and not an approximation of one; reading it means the prior does not
+depend on the fit at all, a world whose fit came out slow does not re-date its
+whole ocean, and there is no motionless case to fall back from. The maximum was
+validated finite, non-negative, and above the minimum, which let a configured
+maximum of exactly zero through; it is validated positive now, because a world
+in which no plate can move leaves every stage that measures a length against a
+plate speed with nothing to divide by.
+
+`PlateEvolution` carries `elapsed_time`, and `derive_seafloor_age(mesh,
+evolution)` has dropped the `elapsed_steps` argument a caller had to keep in
+agreement with the run. `BaseElevationConfig::cooling_age` is `0.56` model
+time, `OceanicPeakFieldConfig::maximum_young_age` is `0.14`, and
+`TerrainControlConfig::abyssal_age_saturation` is `0.112` — the same forty,
+ten, and eight default steps they were. The oceanic-peak hill strength is now
+`1 - age / maximum_young_age` for `0 < age <= maximum_young_age`, the
+continuous form of the integer ramp it replaced.
+
+### The trench rule reaches as far as a step travels
+
+`subducts` looked for a convergent edge from the landing cell to a cell the
+loser's plate owned, one hop out. Measured at the viewer's defaults, the
+fastest plate moves 1.01 cell widths per step at the start, 1.52 once drift has
+taken it to the band edge, and 1.85 with a rift opening added. A particle that
+landed two cells deep found no such edge and stacked instead of subducting: at
+the end of a fifteen-step run 1,245 oceanic particles sat in cells another
+plate owned, where the rule intends only transform and divergent jitter to
+survive there.
+
+`TRANSPORT_REACH_HOPS` is now the one fact the empty-cell search, the gap
+radius bound, and the trench rule are all stated against. `subducts` asks
+whether the loser is oceanic, of another plate than the winner, and whether
+within that reach there is a convergent edge whose far cell the loser's plate
+owned before the step; it reuses the ring the empty-cell search builds rather
+than walking a second one.
+
+Measured before and after: at the viewer's defaults stranded oceanic particles
+fall from 1,245 to 0 and subducted particles rise from 12,068 to 15,404; on the
+reference fixture they fall from 29 to 0 and rise from 127 to 195. The rise
+exceeds the fall because a particle subducted on the step it arrives is not
+there to stack on any later step: owner changes fall from 42,722 to 37,860 and
+collided cells from 20,896 to 9,608 at the viewer's defaults.
+
+### The step is bounded
+
+`maximum_step_duration(maximum_angular_speed, radius, cell_width, config)`
+lives in `transport.rs` beside `TRANSPORT_REACH_HOPS`, because it is that reach
+restated as a time and the two have to move together. It returns
+`TRANSPORT_REACH_HOPS * cell_width / ((maximum_angular_speed *
+(1 + speed_drift_limit) + rift_opening_speed) * radius)`, and
+`evolve_plate_ownership` rejects a longer step with
+`PlateEvolutionError::StepOutrunsReach`, using the largest `|omega|` its inputs
+hold. Beyond that reach a step is not a coarser version of the same run:
+material jumps trenches without subducting, gaps open that no search can fill,
+and deformation is painted at boundary positions the plates left partway
+through the step.
+
+At the viewer's defaults the bound is `2 * 0.0138 / 1.83 = 0.01513`, so `0.014`
+passes with eight percent of the reach to spare. The viewer's step slider takes
+its top from the same function, evaluated with the kinematics config's
+`maximum_angular_speed` because the plates are not fitted until the phase runs;
+it used to stop at a fixed ten times the default, which moved ten cells a step.
+The test-support step for small meshes already scales by root cell count and
+stays under the bound, and
+`the_test_meshes_keep_their_step_inside_the_transport_reach` asserts it.
+
+### What this does not fix
+
+A moving world at `(step_duration / 2, 2n)` is not the world at
+`(step_duration, n)`. Cells resolve twice as often, so which particle wins a
+contested cell and when a gap opens can differ, and the half-angle tangent
+differs in the fourth decimal between one turn and two half turns. What is
+identical is the meaning of every configured quantity; the still-world test in
+"Determinism" is the exact form of that claim.
+
+Measured at the viewer's defaults, `(0.014, 15)` against `(0.007, 30)`:
+continental cells 18,466 against 18,429, land 16,887 against 16,594, born
+particles 4,851 against 4,887, subducted particles 15,404 against 16,199, and
+stranded oceanic particles 0 against 2. Continental particles are 19,365 at
+both, exactly, by construction. The oldest seafloor age is 0.54234 at both, to
+the bit: it belongs to crust the prior dated, which no slicing touches.
+
+`rift_rate * step_duration` is a per-step probability of a Poisson process and
+already scales correctly for small products. `suture_time` and
+`full_deformation_time` are already model time. None of these changed.
+
+### Pins that moved
+
+Ownership on the reference fixture, from the drift retune and the trench reach.
+Every birth and age pin, from the type change, re-pinned through
+`quantized_fingerprint` over the time field: the 1/1024 grid resolves a step of
+0.014 and a hop of 0.0138 comfortably. Base elevation and the oceanic-peak
+fingerprint moved from their age input; the oceanic-peak fixture builds a
+synthetic `SeafloorAge` and changed unit with it. The geology and climate pins
+that read synthetic elevation fields did not move.
+
+Nothing moved from taking the hop duration off the configured maximum speed
+rather than the fitted plates: the fit clamps to that maximum, and both the
+reference world and the viewer's own hold a plate at it.
+
+Two test fixtures were retuned rather than re-pinned. The reference
+base-elevation config now scales `cooling_age` to the 512-cell mesh the way
+`reference_evolution_config` already scales the run that feeds it: a hop there
+is eleven times the default mesh's, so without it four fifths of the reference
+ocean would sit flat on the deep floor and the curve those pins hold would be a
+constant. Two viewer fixture seeds moved to ones whose climate coupling
+converges on the new elevation field, which the fixture comment already says is
+per cell count.

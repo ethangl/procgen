@@ -520,8 +520,12 @@ mod tests {
         let mut app = app_with(cache, test_settings(128, 58));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
+        // The whole tectonics profile rather than the cell count alone: the
+        // step duration is scaled to the mesh, and a finer mesh with the
+        // coarser mesh's step would carry material further than transport can
+        // see.
         let mut edited = *app.world().resource::<GenerationSettings>();
-        edited.tectonics.fibonacci.count = 192;
+        edited.tectonics = test_settings(192, 58).tectonics;
         app.world_mut().insert_resource(edited);
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
@@ -595,10 +599,10 @@ mod tests {
     #[test]
     fn generating_every_phase_replaces_the_cached_snapshot() {
         let (cache_dir, cache) = test_cache("regenerate");
-        let previous = Fixture::generate(test_settings(32, 59));
+        let previous = Fixture::generate(test_settings(32, 60));
         cache.store(previous.complete()).unwrap();
         let mut app = app_with(cache.clone(), GenerationSettings::default());
-        let requested = test_settings(64, 59);
+        let requested = test_settings(64, 60);
         app.world_mut().insert_resource(requested);
 
         generate(&mut app, GenerateRequest::AllPhases);

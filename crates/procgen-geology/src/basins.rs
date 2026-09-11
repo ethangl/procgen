@@ -250,8 +250,8 @@ mod tests {
     use procgen_sphere_mesh::{build_sphere_mesh, multi_source_distances};
     use procgen_tectonics::CoarseElevationConfig;
 
-    /// An all-continental world: every cell without a birth step.
-    fn fixture(cell_count: usize) -> (SphereMesh, Vec<Option<i32>>) {
+    /// An all-continental world: every cell without a birth time.
+    fn fixture(cell_count: usize) -> (SphereMesh, Vec<Option<f32>>) {
         let mesh = build_sphere_mesh(
             fibonacci_sphere(FibonacciConfig {
                 count: cell_count,
@@ -441,7 +441,7 @@ mod tests {
 
         let mut values = vec![0.7; mesh.cell_count()];
         values[cell] = default_sea_level() + 0.01;
-        cell_birth[cell] = Some(0);
+        cell_birth[cell] = Some(0.0);
         let field = derive_sedimentary_basin_field(
             &mesh,
             CellCrust {

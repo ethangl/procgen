@@ -7,16 +7,19 @@ use procgen_core::{
     random_streams::{OCEANIC_PEAK_POSITION, OCEANIC_PEAK_PRESENCE},
 };
 use procgen_sphere_mesh::SphereMesh;
-use procgen_tectonics::{FieldSummary, SeafloorAge, StageInputError};
+use procgen_tectonics::{DEFAULT_STEP_DURATION, FieldSummary, SeafloorAge, StageInputError};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OceanicPeakFieldConfig {
-    /// Oldest seafloor age, in steps since birth, eligible for abyssal hills.
-    /// Hills form at the ridge and fade under sediment over a long stretch of
-    /// a floor's life rather than the youngest few percent of it, so the
-    /// default is a quarter of `BaseElevationConfig::cooling_age`.
-    pub maximum_young_age: usize,
+    /// Oldest seafloor age, as model time since birth, eligible for abyssal
+    /// hills. Hills form at the ridge and fade under sediment over a long
+    /// stretch of a floor's life rather than the youngest few percent of it,
+    /// so the default is a quarter of `BaseElevationConfig::cooling_age`.
+    ///
+    /// It is a time, so the window it opens is the same stretch of a floor's
+    /// life whatever step an evolution ran at.
+    pub maximum_young_age: f32,
     /// Maximum per-cell seamount candidate density.
     pub seamount_density_scale: f32,
     /// Maximum per-cell abyssal-hill candidate density.
@@ -33,7 +36,7 @@ pub struct OceanicPeakFieldConfig {
 impl OceanicPeakFieldConfig {
     pub const fn new(seed: u64) -> Self {
         Self {
-            maximum_young_age: 10,
+            maximum_young_age: 10.0 * DEFAULT_STEP_DURATION,
             seamount_density_scale: 0.75,
             abyssal_hill_density_scale: 0.35,
             maximum_position_offset: 0.8,
@@ -177,9 +180,11 @@ pub fn derive_oceanic_peak_field(
             aggregate.claim(cell, seamount_density, OceanicPeakKind::Seamount);
         }
 
-        if (1..=config.maximum_young_age).contains(&age) {
-            let age_strength =
-                (config.maximum_young_age + 1 - age) as f32 / config.maximum_young_age as f32;
+        if age > 0.0 && age <= config.maximum_young_age {
+            // Full strength at the ridge, falling to nothing at the window's
+            // edge. A cell exactly at the edge has no hills, which is what
+            // makes the window closed rather than a step down to a floor.
+            let age_strength = 1.0 - age / config.maximum_young_age;
             let hill_density = age_strength * config.abyssal_hill_density_scale;
             if hill_density > 0.0 {
                 young_seafloor_candidate_cell_count += 1;
@@ -240,7 +245,7 @@ fn validate_inputs(
     seafloor_age: &SeafloorAge,
     config: OceanicPeakFieldConfig,
 ) -> Result<(), OceanicPeakFieldError> {
-    if config.maximum_young_age == 0 {
+    if !config.maximum_young_age.is_finite() || config.maximum_young_age <= 0.0 {
         return Err(OceanicPeakFieldError::EmptyYoungAgeRange);
     }
     if [
@@ -332,9 +337,11 @@ mod tests {
             cell_plateau: vec![0.0; mesh.cell_count()],
             diagnostics: Default::default(),
         };
+        // Ages a default step apart, so the spread sits inside the default
+        // young-age window exactly as the step counts it replaces did.
         let seafloor_age = SeafloorAge {
             cell_ages: (0..mesh.cell_count())
-                .map(|cell| (cell % 7 != 0).then_some(cell % 8))
+                .map(|cell| (cell % 7 != 0).then_some((cell % 8) as f32 * DEFAULT_STEP_DURATION))
                 .collect(),
             diagnostics: Default::default(),
         };
@@ -397,7 +404,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(fingerprint(values), 16_106_792_758_415_618_232);
+        // Moved once with the young-age window becoming model time: the
+        // fixture's synthetic ages changed unit with it, and the hill ramp
+        // became the continuous form of the integer one it replaced.
+        assert_eq!(fingerprint(values), 3_235_462_980_219_206_461);
     }
 
     #[test]
@@ -409,11 +419,14 @@ mod tests {
         hotspots.cell_intensities[0] = 1.0;
         hotspots.cell_intensities[1] = 0.4;
         hotspots.cell_intensities[2] = 1.0;
-        ages.cell_ages[1] = Some(1);
-        ages.cell_ages[2] = Some(2);
-        ages.cell_ages[3] = Some(0);
-        ages.cell_ages[4] = Some(11);
+        // A window of one and ages at halves of it, so every strength the
+        // ramp produces here is exact.
+        ages.cell_ages[1] = Some(0.5);
+        ages.cell_ages[2] = Some(0.25);
+        ages.cell_ages[3] = Some(0.0);
+        ages.cell_ages[4] = Some(2.0);
         let config = OceanicPeakFieldConfig {
+            maximum_young_age: 1.0,
             seamount_density_scale: 0.75,
             abyssal_hill_density_scale: 0.75,
             ..OceanicPeakFieldConfig::new(7)
@@ -425,7 +438,7 @@ mod tests {
             "hotspots require oceanic age data"
         );
         assert_eq!(field.cell_kinds[1], Some(OceanicPeakKind::AbyssalHill));
-        assert_eq!(field.cell_densities[1], 0.75);
+        assert_eq!(field.cell_densities[1], 0.375);
         assert_eq!(field.cell_kinds[2], Some(OceanicPeakKind::Seamount));
         assert_eq!(field.cell_densities[2], 0.75);
         assert_eq!(field.cell_kinds[3], None, "ridge age zero is excluded");
@@ -439,20 +452,26 @@ mod tests {
         let (mut hotspots, mut ages) = inputs(&mesh);
         hotspots.cell_intensities.fill(0.0);
         ages.cell_ages.fill(None);
-        hotspots.cell_intensities[0] = 1.0;
-        ages.cell_ages[0] = Some(1);
+        // The ramp reaches full strength only at age zero, which is outside
+        // the window, so the tie is arranged just inside it: a hotspot of
+        // fifteen sixteenths against a floor a sixteenth of the way through.
+        // It has to stay above this seed's presence draw for the peak to be
+        // placed at all.
+        hotspots.cell_intensities[0] = 0.937_5;
+        ages.cell_ages[0] = Some(0.062_5);
         let config = OceanicPeakFieldConfig {
+            maximum_young_age: 1.0,
             seamount_density_scale: 1.0,
             abyssal_hill_density_scale: 1.0,
-            maximum_seamount_height: 0.8,
+            maximum_seamount_height: 0.5,
             ..OceanicPeakFieldConfig::new(1)
         };
         let field = derive_oceanic_peak_field(&mesh, &hotspots, &ages, config).unwrap();
 
         assert_eq!(field.cell_kinds[0], Some(OceanicPeakKind::Seamount));
         let peak = field.peaks.iter().find(|peak| peak.cell == 0).unwrap();
-        assert_eq!(peak.strength, 1.0);
-        assert_eq!(peak.height, 0.8);
+        assert_eq!(peak.strength, 0.937_5);
+        assert_eq!(peak.height, 0.468_75);
     }
 
     #[test]
@@ -474,7 +493,7 @@ mod tests {
                 &hotspots,
                 &ages,
                 OceanicPeakFieldConfig {
-                    maximum_young_age: 0,
+                    maximum_young_age: 0.0,
                     ..OceanicPeakFieldConfig::new(7)
                 }
             ),

@@ -124,14 +124,16 @@ pub(crate) fn validate_interior_relief(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{base_elevation_fixture, no_interior_relief};
+    use crate::test_support::{
+        base_elevation_fixture, no_interior_relief, reference_base_elevation_config,
+    };
 
     #[test]
     fn the_basement_reaches_continental_crust_alone() {
         let fixture = base_elevation_fixture();
         let config = BaseElevationConfig {
             dynamic_topography_amplitude: 0.0,
-            ..BaseElevationConfig::default()
+            ..reference_base_elevation_config()
         };
         let base = fixture.derive(config);
         let curve = fixture.derive(no_interior_relief());
@@ -163,7 +165,7 @@ mod tests {
         let config = BaseElevationConfig {
             dynamic_topography_amplitude: 0.01,
             basement_amplitude: 0.0,
-            ..BaseElevationConfig::default()
+            ..reference_base_elevation_config()
         };
         let base = fixture.derive(config);
         let doubled = fixture.derive(BaseElevationConfig {

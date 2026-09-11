@@ -5,13 +5,17 @@ use procgen_geology::{
     CratonFieldConfig, GeologicalElevationConfig, HotspotFieldConfig, IsostaticAdjustmentConfig,
     OceanicPeakFieldConfig, SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
-use procgen_tectonics::PlateKinematicsConfig;
+use procgen_tectonics::{DEFAULT_STEP_DURATION, PlateKinematicsConfig};
 
 const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const HOTSPOT_PROVINCE_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 const HOTSPOT_PROVINCE_RADIUS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
-const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+// The window is a seafloor age, so it is model time: one default evolution
+// step at the bottom, and at the top a stretch of a floor's life longer than
+// any run the tectonics phase allows leaves ocean floor young for.
+const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<f32> =
+    DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * 64.0;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
 const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
 const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
@@ -96,12 +100,11 @@ fn hotspot_controls(ui: &mut egui::Ui, config: &mut HotspotFieldConfig) {
 }
 
 fn oceanic_peak_controls(ui: &mut egui::Ui, config: &mut OceanicPeakFieldConfig) {
-    drag_value(
+    slider(
         ui,
         "Maximum young age",
         &mut config.maximum_young_age,
         OCEANIC_PEAK_AGE_RANGE,
-        1.0,
     );
     slider(
         ui,

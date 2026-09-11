@@ -196,7 +196,7 @@ mod tests {
     #[derive(Clone)]
     struct Fixture {
         mesh: SphereMesh,
-        cell_birth: Vec<Option<i32>>,
+        cell_birth: Vec<Option<f32>>,
         boundaries: BoundaryClassification,
         cratons: CratonField,
         basins: SedimentaryBasinField,
@@ -285,7 +285,7 @@ mod tests {
         fixture.elevation.sea_level = 0.42;
         // An oceanic cell keeps its elevation, so the only thing deciding
         // whether it is land is the datum the field carries.
-        fixture.cell_birth[0] = Some(0);
+        fixture.cell_birth[0] = Some(0.0);
         fixture.elevation.cell_elevations[0] = 0.41;
 
         let adjusted = fixture
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn oceanic_cells_and_basin_floors_are_unchanged() {
         let mut fixture = Fixture::new(8);
-        fixture.cell_birth[0] = Some(0);
+        fixture.cell_birth[0] = Some(0.0);
         fixture.elevation.cell_elevations[0] = 0.2;
         fixture.elevation.cell_elevations[1] = 0.42;
         fixture.basins.cell_basins[1] = Some(0);

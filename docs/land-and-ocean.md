@@ -26,7 +26,7 @@ real one.
   take the derived `plate_continental_fraction`. That was the second slice of
   this work; the measurements are below.
 - Since the displacement-migration slice, a cell's crust during and after
-  evolution is read from its birth step: `Some` is oceanic, `None` is original
+  evolution is read from its birth time: `Some` is oceanic, `None` is original
   continental crust. The classification is now purely the initial condition
   the birth prior reads, and evolution takes no classification at all.
 - Base elevation tapers `continental_base` down to `margin_edge_elevation`

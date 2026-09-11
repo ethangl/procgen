@@ -22,17 +22,61 @@
 //! particles has to answer with one of them. That resolution is where
 //! subduction, collision, and the ridge live.
 
-use crate::{BoundaryClass, BoundaryClassification, step::EvolvingWorld};
+use crate::{BoundaryClass, BoundaryClassification, PlateEvolutionConfig, step::EvolvingWorld};
 use procgen_core::Vec3;
 use procgen_sphere_mesh::SphereMesh;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, iter};
 
-/// Largest [`MaterialTransportConfig::gap_radius`] the search can honour. An
-/// empty cell looks through its one- and two-hop rings, which reach about two
-/// cell widths, so a radius beyond that is not a wider search but silent
-/// false floor: the cell would accept material it never looks at. Evolution
-/// rejects a larger radius and the viewer's slider stops here.
-pub const MAX_GAP_RADIUS: f32 = 2.0;
+/// How many hops out from a cell transport looks: the one fact every reach in
+/// this module is stated against.
+///
+/// It bounds three things that have to agree. An empty cell searches this many
+/// rings for material, so a gap radius beyond it would be a silent false floor
+/// rather than a wider search. A trench takes a losing particle only if a
+/// convergent edge lies within it, so a particle that landed further inside
+/// another plate than this would stack instead of subduct. And a step that
+/// carries a plate further than this outruns both: material jumps trenches
+/// without subducting, gaps open that no search can fill, and deformation is
+/// raised at boundary positions the plates left partway through the step.
+/// [`maximum_step_duration`] is that last one as a time.
+pub const TRANSPORT_REACH_HOPS: usize = 2;
+
+/// Largest [`MaterialTransportConfig::gap_radius`] the search can honour, in
+/// cell widths: one per hop of [`TRANSPORT_REACH_HOPS`]. A radius beyond it is
+/// not a wider search but silent false floor, because the cell would accept
+/// material it never looks at. Evolution rejects a larger radius and the
+/// viewer's slider stops here.
+pub const MAX_GAP_RADIUS: f32 = TRANSPORT_REACH_HOPS as f32;
+
+/// The longest step that keeps a run a coarser version of the same world:
+/// what the fastest plate a run can hold takes to cross
+/// [`TRANSPORT_REACH_HOPS`] cells.
+///
+/// It lives here because it is the reach above restated as a time, and the two
+/// have to move together: a step longer than this carries material past
+/// everything this module looks at.
+///
+/// The fastest plate is not the fastest fitted one. Pole drift may raise a
+/// speed by `speed_drift_limit`, and a rift opens its two halves apart at
+/// `rift_opening_speed` on top of the parent's motion, so both are in the
+/// bound. Switching either off gives back the reach they reserved. A world in
+/// which nothing can move has no bound at all, and this returns infinity.
+///
+/// Callers pass the speed they want bounded: evolution passes the fastest
+/// plate its inputs actually hold, and the viewer the fastest the kinematics
+/// config could produce, because a user editing a step duration has not fitted
+/// the plates yet.
+pub fn maximum_step_duration(
+    maximum_angular_speed: f32,
+    radius: f32,
+    cell_width: f32,
+    config: &PlateEvolutionConfig,
+) -> f32 {
+    let reach = TRANSPORT_REACH_HOPS as f32 * cell_width;
+    let fastest = maximum_angular_speed * (1.0 + config.pole_drift.speed_drift_limit)
+        + config.lifecycle.rift_opening_speed;
+    reach / (fastest * radius)
+}
 
 /// How an empty cell decides whether the plates opened a gap there.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,9 +117,9 @@ pub(crate) struct Particle {
     /// match.
     pub(crate) position: Vec3,
     pub(crate) plate: usize,
-    /// Step at which this material was created; `None` is original
+    /// Model time at which this material was created; `None` is original
     /// continental crust, exactly as in the field a cell carries.
-    pub(crate) birth: Option<i32>,
+    pub(crate) birth: Option<f32>,
     pub(crate) deformation: f32,
     /// The Voronoi cell holding `position`, and the Delaunay triangle the
     /// last location walk ended in. Both follow from `position`; locating is
@@ -182,7 +226,7 @@ fn incident_triangle(mesh: &SphereMesh, cell: usize) -> usize {
 pub(crate) fn initial_particles(
     mesh: &SphereMesh,
     cell_plates: &[usize],
-    cell_birth: &[Option<i32>],
+    cell_birth: &[Option<f32>],
 ) -> Vec<Particle> {
     (0..mesh.cell_count())
         .map(|cell| Particle {
@@ -201,14 +245,16 @@ impl EvolvingWorld<'_> {
     /// afterwards.
     ///
     /// `boundaries` are the boundaries the step began with, classified from
-    /// the ownership this transport reads and replaces.
+    /// the ownership this transport reads and replaces. `birth_time` is the
+    /// model time the step starts at, which is what ocean floor made here is
+    /// born at.
     pub(crate) fn transport(
         &mut self,
         boundaries: &BoundaryClassification,
-        step: i32,
+        birth_time: f32,
     ) -> TransportCounts {
         self.move_particles();
-        self.resolve_cells(boundaries, step)
+        self.resolve_cells(boundaries, birth_time)
     }
 
     /// Rotates every particle rigidly about its plate's rotation vector and
@@ -264,7 +310,11 @@ impl EvolvingWorld<'_> {
     /// of the one before it. Every cell reads the ownership the step began
     /// with, and the new ownership is written only once every cell has been
     /// decided, so the update stays simultaneous.
-    fn resolve_cells(&mut self, boundaries: &BoundaryClassification, step: i32) -> TransportCounts {
+    fn resolve_cells(
+        &mut self,
+        boundaries: &BoundaryClassification,
+        birth_time: f32,
+    ) -> TransportCounts {
         let mut resolution = Resolution {
             previous_owners: self.partition.cell_plates.clone(),
             occupancy: Occupancy::new(self.mesh.cell_count(), &self.particles),
@@ -273,7 +323,7 @@ impl EvolvingWorld<'_> {
             counts: TransportCounts::default(),
         };
         self.pick_winners(boundaries, &mut resolution);
-        self.fill_empty_cells(step, &mut resolution);
+        self.fill_empty_cells(birth_time, &mut resolution);
         self.project_to_cells(&mut resolution);
         self.drop_removed(&resolution.removed);
         resolution.counts
@@ -287,6 +337,7 @@ impl EvolvingWorld<'_> {
     /// the column of them is what a later slice will read as crustal
     /// thickness, so that is what the counts record.
     fn pick_winners(&self, boundaries: &BoundaryClassification, resolution: &mut Resolution) {
+        let mut ring = Vec::new();
         for cell in 0..self.mesh.cell_count() {
             let incumbent = resolution.previous_owners[cell];
             let occupants = resolution.occupancy.at(cell);
@@ -299,13 +350,27 @@ impl EvolvingWorld<'_> {
                     _ => best,
                 }
             });
+            if rest.is_empty() {
+                resolution.winners[cell] = Some(winner);
+                continue;
+            }
+            // Only a cell with a loser in it can have a trench to ask about,
+            // and most cells hold one particle.
+            self.reach_ring(cell, &mut ring);
 
             let mut foreign = 0;
             for &loser in occupants {
                 if loser == winner {
                     continue;
                 }
-                if self.subducts(cell, boundaries, &resolution.previous_owners, loser, winner) {
+                if self.subducts(
+                    cell,
+                    &ring,
+                    boundaries,
+                    &resolution.previous_owners,
+                    loser,
+                    winner,
+                ) {
                     resolution.removed[loser] = true;
                     resolution.counts.subducted_particle_count += 1;
                 } else if self.particles[loser].plate != self.particles[winner].plate {
@@ -328,7 +393,7 @@ impl EvolvingWorld<'_> {
     /// is still invisible to every other cell, because the search reads the
     /// occupancy snapshot rather than the particle list: two adjacent gap
     /// cells both make floor rather than one sampling the other's.
-    fn fill_empty_cells(&mut self, step: i32, resolution: &mut Resolution) {
+    fn fill_empty_cells(&mut self, birth_time: f32, resolution: &mut Resolution) {
         let mut ring = Vec::new();
         for cell in 0..self.mesh.cell_count() {
             if resolution.winners[cell].is_some() {
@@ -351,7 +416,7 @@ impl EvolvingWorld<'_> {
                     self.particles.push(Particle {
                         position: cell_direction(self.mesh, cell),
                         plate: incumbent,
-                        birth: Some(step),
+                        birth: Some(birth_time),
                         deformation: 0.0,
                         cell,
                         triangle: incident_triangle(self.mesh, cell),
@@ -406,9 +471,11 @@ impl EvolvingWorld<'_> {
             (
                 particle.is_continental(),
                 particle.is_continental() && particle.plate == incumbent,
-                particle.birth.unwrap_or(i32::MIN),
             )
         };
+        // Continental material has no birth and every parcel of it ties here,
+        // which is what leaves nearness to decide between two of them.
+        let birth = |index: usize| self.particles[index].birth.unwrap_or(f32::NEG_INFINITY);
         let nearness = |index: usize| {
             self.particles[index]
                 .position
@@ -416,20 +483,29 @@ impl EvolvingWorld<'_> {
         };
         class(left)
             .cmp(&class(right))
+            .then_with(|| birth(left).total_cmp(&birth(right)))
             .then_with(|| nearness(left).total_cmp(&nearness(right)))
             .then(right.cmp(&left))
     }
 
-    /// Whether the trench at this cell takes a losing particle.
+    /// Whether the trench within reach of this cell takes a losing particle.
     ///
-    /// Ocean floor of another plate, in a cell that plate is converging on:
-    /// that is the slab going under, and the material is gone. Everything
-    /// else stacks. Two parcels of one plate are lattice noise that spreads
-    /// back out next step, continental material is never destroyed, and a
-    /// parcel that crossed a transform or a ridge is not being subducted.
+    /// Ocean floor of another plate, landing inside a plate that is converging
+    /// on it: that is the slab going under, and the material is gone.
+    /// Everything else stacks. Two parcels of one plate are lattice noise that
+    /// spreads back out next step, continental material is never destroyed, and
+    /// a parcel that crossed a transform or a ridge is not being subducted.
+    ///
+    /// The trench is looked for over `ring`, the same [`TRANSPORT_REACH_HOPS`]
+    /// rings an empty cell samples through, rather than over the landing cell's
+    /// own edges alone: a step carries material up to that far, so a particle
+    /// that crossed a trench often lands a cell short of it. Searching one hop
+    /// while a step travelled two left that particle stacked in the overriding
+    /// plate for the rest of the run.
     fn subducts(
         &self,
         cell: usize,
+        ring: &[usize],
         boundaries: &BoundaryClassification,
         owners: &[usize],
         loser: usize,
@@ -439,10 +515,40 @@ impl EvolvingWorld<'_> {
         if loser.is_continental() || loser.plate == self.particles[winner].plate {
             return false;
         }
-        self.mesh.cell_corners(cell).iter().any(|corner| {
-            boundaries.edge_classes[corner.edge] == BoundaryClass::Convergent
-                && owners[corner.neighbor] == loser.plate
+        iter::once(cell).chain(ring.iter().copied()).any(|near| {
+            self.mesh.cell_corners(near).iter().any(|corner| {
+                boundaries.edge_classes[corner.edge] == BoundaryClass::Convergent
+                    && owners[corner.neighbor] == loser.plate
+            })
         })
+    }
+
+    /// The cells within [`TRANSPORT_REACH_HOPS`] of `cell`, excluding `cell`
+    /// itself, in hop order and then in corner order.
+    ///
+    /// One walk for both readers: the trench rule and the empty-cell search
+    /// have to look exactly as far as each other, and as far as a step can
+    /// carry material, or one of them silently disagrees with the step.
+    fn reach_ring(&self, cell: usize, ring: &mut Vec<usize>) {
+        ring.clear();
+        ring.extend(
+            self.mesh
+                .cell_corners(cell)
+                .iter()
+                .map(|corner| corner.neighbor),
+        );
+        let mut frontier = 0;
+        for _ in 1..TRANSPORT_REACH_HOPS {
+            let reached = ring.len();
+            for index in frontier..reached {
+                for corner in self.mesh.cell_corners(ring[index]) {
+                    if corner.neighbor != cell && !ring.contains(&corner.neighbor) {
+                        ring.push(corner.neighbor);
+                    }
+                }
+            }
+            frontier = reached;
+        }
     }
 
     /// The particle an empty cell samples: the nearest one within the gap
@@ -450,8 +556,8 @@ impl EvolvingWorld<'_> {
     ///
     /// This is a raster fill rather than a material event. The cell reads
     /// what the particle carries and the particle stays where it is, so
-    /// nothing is created, moved, or counted twice. Only the one- and two-hop
-    /// rings are searched, which is as far as the gap radius can reach.
+    /// nothing is created, moved, or counted twice. Only the reach rings are
+    /// searched, which is as far as the gap radius can reach.
     fn sample_nearby(
         &self,
         cell: usize,
@@ -466,20 +572,7 @@ impl EvolvingWorld<'_> {
         let limit = self.config.transport.gap_radius * self.cell_width * self.mesh.radius.recip();
         let nearest = 1.0 - 0.5 * limit * limit;
 
-        ring.clear();
-        ring.extend(
-            self.mesh
-                .cell_corners(cell)
-                .iter()
-                .map(|corner| corner.neighbor),
-        );
-        for index in 0..ring.len() {
-            for corner in self.mesh.cell_corners(ring[index]) {
-                if corner.neighbor != cell && !ring.contains(&corner.neighbor) {
-                    ring.push(corner.neighbor);
-                }
-            }
-        }
+        self.reach_ring(cell, ring);
 
         let mut best: Option<(bool, f32, usize)> = None;
         for &neighbor in ring.iter() {
@@ -556,14 +649,79 @@ fn sample_precedes(candidate: (bool, f32, usize), current: (bool, f32, usize)) -
 mod tests {
     use super::*;
     use crate::test_support::{
-        NO_LIFECYCLE, NO_POLE_DRIFT, fingerprint, forced_rift_fixture, mesh as test_mesh,
-        two_plate_fixture,
+        NO_LIFECYCLE, NO_POLE_DRIFT, evolution_fixture, fingerprint, forced_rift_fixture,
+        mesh as test_mesh, reference_evolution_config, two_plate_fixture,
     };
     use crate::{
         CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationDiagnostics,
-        PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics, PlatePartition,
-        classify_boundaries, derive_crust_birth_prior, evolve_plate_ownership,
+        PlateEvolutionConfig, PlateEvolutionError, PlateEvolutionInputs, PlateKinematics,
+        PlateKinematicsConfig, PlatePartition, classify_boundaries, derive_crust_birth_prior,
+        evolve_plate_ownership, mean_cell_width,
     };
+
+    #[test]
+    fn a_step_that_outruns_the_transport_reach_is_rejected() {
+        let fixture = evolution_fixture();
+        let config = reference_evolution_config();
+        let radius = fixture.mesh.radius;
+        let cell_width = mean_cell_width(radius, fixture.mesh.cell_count());
+        let fastest = fixture
+            .kinematics
+            .angular_velocities
+            .iter()
+            .map(|rotation| rotation.length())
+            .fold(0.0, f32::max);
+        let bound = |config: &PlateEvolutionConfig| {
+            maximum_step_duration(fastest, radius, cell_width, config)
+        };
+        let run = |step_duration| {
+            evolve_plate_ownership(
+                &fixture.mesh,
+                fixture.inputs(),
+                PlateEvolutionConfig {
+                    step_duration,
+                    ..config
+                },
+            )
+        };
+
+        assert!(
+            config.step_duration < bound(&config),
+            "the reference run must sit inside its own bound"
+        );
+        assert!(run(bound(&config)).is_ok());
+        assert_eq!(
+            run(bound(&config) * 1.001),
+            Err(PlateEvolutionError::StepOutrunsReach)
+        );
+        assert_eq!(
+            PlateEvolutionError::StepOutrunsReach.to_string(),
+            "step duration must not carry a plate further than the 2 cells transport looks"
+        );
+
+        // Drift may raise a speed and a rift opens its halves apart on top of
+        // the motion, so both reserve part of the reach; switching them off
+        // hands it back and a step between the two bounds becomes legal.
+        let still = PlateEvolutionConfig {
+            pole_drift: NO_POLE_DRIFT,
+            lifecycle: NO_LIFECYCLE,
+            ..config
+        };
+        assert!(bound(&still) > bound(&config));
+        let between = 0.5 * (bound(&config) + bound(&still));
+        assert_eq!(run(between), Err(PlateEvolutionError::StepOutrunsReach));
+        assert!(
+            evolve_plate_ownership(
+                &fixture.mesh,
+                fixture.inputs(),
+                PlateEvolutionConfig {
+                    step_duration: between,
+                    ..still
+                },
+            )
+            .is_ok()
+        );
+    }
 
     /// A run over the two-plate fixture that moves no material at all, so a
     /// test can place a particle by hand and see what one resolution does to
@@ -578,50 +736,82 @@ mod tests {
     }
 
     /// One step over the two-plate fixture with an extra oceanic particle of
-    /// the small plate placed in the large plate's cell across their shared
-    /// edge, which is what arriving at a trench looks like, and that edge
-    /// classified as `class`.
-    fn one_arrival(class: BoundaryClass) -> (usize, TransportCounts) {
+    /// the small plate placed `hops` cells inside the large plate, which is
+    /// what arriving across a boundary looks like, and the whole of the
+    /// boundary between the two plates classified as `class`.
+    ///
+    /// Every boundary edge takes the class, not just the one the particle
+    /// crossed: the small plate is one cell, so its whole perimeter is within
+    /// the reach the trench rule searches, and leaving the rest of it
+    /// convergent would test nothing about the class under test.
+    fn one_arrival(class: BoundaryClass, hops: usize) -> (usize, TransportCounts) {
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
-        let [overriding, arriving] = fixture.mesh.edges[0].cells;
+        let arriving = fixture.mesh.edges[0].cells[1];
+        let touches_arriving = |cell: usize| {
+            cell == arriving
+                || fixture
+                    .mesh
+                    .cell_corners(arriving)
+                    .iter()
+                    .any(|corner| corner.neighbor == cell)
+        };
+        let mut landing = fixture.mesh.edges[0].cells[0];
+        for _ in 1..hops {
+            landing = fixture
+                .mesh
+                .cell_corners(landing)
+                .iter()
+                .map(|corner| corner.neighbor)
+                .find(|&neighbor| !touches_arriving(neighbor))
+                .expect("the large plate reaches further than one cell from the small one");
+        }
         let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), still_config());
         world.particles.push(Particle {
-            position: cell_direction(&fixture.mesh, overriding),
+            position: cell_direction(&fixture.mesh, landing),
             plate: fixture.partition.cell_plates[arriving],
-            birth: Some(0),
+            birth: Some(0.0),
             deformation: 0.0,
-            cell: overriding,
-            triangle: incident_triangle(&fixture.mesh, overriding),
+            cell: landing,
+            triangle: incident_triangle(&fixture.mesh, landing),
         });
 
         let mut boundaries = fixture.boundaries.clone();
-        boundaries.edge_classes[0] = class;
-        let counts = world.transport(&boundaries, 1);
-        (overriding, counts)
+        for corner in fixture.mesh.cell_corners(arriving) {
+            boundaries.edge_classes[corner.edge] = class;
+        }
+        let counts = world.transport(&boundaries, 1.0);
+        (landing, counts)
     }
 
     #[test]
     fn a_trench_takes_the_floor_that_arrives_under_it() {
-        let (overriding, counts) = one_arrival(BoundaryClass::Convergent);
+        // Two hops as well as one: a step moves the fastest plate about a
+        // cell and can move it two, so material that crossed a trench often
+        // lands a cell short of the trench it crossed.
+        for hops in 1..=TRANSPORT_REACH_HOPS {
+            let (landing, counts) = one_arrival(BoundaryClass::Convergent, hops);
 
-        assert_eq!(counts.subducted_particle_count, 1);
-        assert_eq!(
-            counts.collided_cell_count, 0,
-            "cell {overriding} kept only the material that won it"
-        );
+            assert_eq!(counts.subducted_particle_count, 1, "{hops} hops in");
+            assert_eq!(
+                counts.collided_cell_count, 0,
+                "cell {landing} kept only the material that won it"
+            );
+        }
     }
 
     #[test]
     fn material_that_crossed_a_transform_is_not_being_subducted() {
         for class in [BoundaryClass::Transform, BoundaryClass::Divergent] {
-            let (overriding, counts) = one_arrival(class);
+            for hops in 1..=TRANSPORT_REACH_HOPS {
+                let (landing, counts) = one_arrival(class, hops);
 
-            assert_eq!(counts.subducted_particle_count, 0, "{class:?}");
-            assert_eq!(
-                counts.collided_cell_count, 1,
-                "cell {overriding} must stack the {class:?} arrival rather than lose it"
-            );
-            assert_eq!(counts.maximum_collision_stack, 2, "{class:?}");
+                assert_eq!(counts.subducted_particle_count, 0, "{class:?}, {hops} hops");
+                assert_eq!(
+                    counts.collided_cell_count, 1,
+                    "cell {landing} must stack the {class:?} arrival rather than lose it"
+                );
+                assert_eq!(counts.maximum_collision_stack, 2, "{class:?}");
+            }
         }
     }
 
@@ -647,7 +837,7 @@ mod tests {
             + cell_direction(&fixture.mesh, neighbor) * 0.55)
             .normalized();
 
-        let counts = world.transport(&fixture.boundaries, 1);
+        let counts = world.transport(&fixture.boundaries, 1.0);
 
         assert_eq!(counts.sampled_cell_count, 1);
         assert_eq!(counts.born_particle_count, 0);
@@ -671,12 +861,12 @@ mod tests {
         let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
         world.particles.remove(emptied);
 
-        let counts = world.transport(&fixture.boundaries, 7);
+        let counts = world.transport(&fixture.boundaries, 7.0);
 
         assert_eq!(counts.born_particle_count, 1);
         assert_eq!(counts.sampled_cell_count, 0);
         assert_eq!(world.partition.cell_plates[emptied], incumbent);
-        assert_eq!(world.cell_birth[emptied], Some(7));
+        assert_eq!(world.cell_birth[emptied], Some(7.0));
         assert_eq!(world.cell_deformation[emptied], 0.0);
     }
 
@@ -752,6 +942,9 @@ mod tests {
             &mesh,
             &partition,
             &crust,
+            // The plate below turns at unit speed, which this config's
+            // maximum is, so a hop of the prior is one cell width of travel.
+            PlateKinematicsConfig::new(0),
             &boundaries,
             CrustBirthPriorConfig::default(),
         )
@@ -768,7 +961,7 @@ mod tests {
                 step_count: 40,
                 // One cell width per step at the unit speed above, so the cap
                 // crosses forty cells over the run.
-                step_duration: crate::field::mean_cell_width(&mesh),
+                step_duration: crate::mean_cell_width(mesh.radius, mesh.cell_count()),
                 pole_drift: NO_POLE_DRIFT,
                 lifecycle: NO_LIFECYCLE,
                 ..PlateEvolutionConfig::default()
