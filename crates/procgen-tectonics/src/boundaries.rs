@@ -127,17 +127,7 @@ pub fn classify_boundaries(
     if partition.plate_count != kinematics.angular_velocities.len() {
         return Err(BoundaryClassificationError::PlateCountMismatch);
     }
-    Ok(classify_validated(mesh, partition, kinematics))
-}
 
-/// The classification itself, over inputs already known to agree. The
-/// kinematics stage classifies its own first pass to reach the subducting
-/// fractions, and it has validated both sides already.
-pub(crate) fn classify_validated(
-    mesh: &SphereMesh,
-    partition: &PlatePartition,
-    kinematics: &PlateKinematics,
-) -> BoundaryClassification {
     let mut edge_classes = Vec::with_capacity(mesh.edge_count());
     let mut edge_normal_speeds = Vec::with_capacity(mesh.edge_count());
     let mut edge_shear = Vec::with_capacity(mesh.edge_count());
@@ -172,11 +162,11 @@ pub(crate) fn classify_validated(
         edge_shear.push(shear);
     }
 
-    BoundaryClassification {
+    Ok(BoundaryClassification {
         edge_classes,
         edge_normal_speeds,
         edge_shear,
-    }
+    })
 }
 
 /// The share of each plate's boundary edges that are subducting slab: the

@@ -320,29 +320,30 @@ mod tests {
             .unwrap()
         );
         assert_eq!(first.cell_birth.len(), mesh.cell_count());
-        // The prior reads the fixture's boundaries, which the slab rule
-        // reclassified: a world whose plates all start near the trenchless
-        // quarter of their base has more ridge and shorter walks from it.
+        // The prior reads the fixture's boundaries, which the crust factor
+        // alone now scales the motion behind: every plate keeps a ridge of its
+        // own where one used to have none.
         assert_eq!(
             first.diagnostics,
             CrustBirthPriorDiagnostics {
                 hops: FieldSummary {
                     minimum: 0.0,
-                    maximum: 8.0,
-                    mean: 1.588_757_4,
+                    maximum: 9.0,
+                    mean: 1.778_106_5,
                 },
                 oceanic_cell_count: 338,
-                ridge_cell_count: 110,
-                ridge_plate_count: 29,
-                // One plate of the reference world owns oceanic crust with no
-                // ridge of its own, so its cells take the fallback age.
-                ridge_less_plate_count: 1,
-                fallback_cell_count: 7,
+                ridge_cell_count: 102,
+                ridge_plate_count: 30,
+                ridge_less_plate_count: 0,
+                // A plate can hold a ridge and still leave cells the walk
+                // never reaches, in a piece of itself the ridge is not on.
+                // Those take the fallback age too.
+                fallback_cell_count: 6,
             }
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            6_623_232_938_112_620_950
+            13_907_807_829_833_123_813
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0.0),
@@ -564,7 +565,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_ages),
-            1_946_493_741_869_383_192
+            16_070_050_445_168_748_665
         );
     }
 

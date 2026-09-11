@@ -24,14 +24,18 @@ for that one.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
-  scales the fitted direction by `plate_speed`: the plate's hashed base speed
-  times a crust factor times a slab factor, clamped to
-  `maximum_angular_speed`. A `coherence` fraction blends the axis back toward
-  the hashed random one. Plates too small to fit — one or two cells — keep the
-  hashed axis; the speed rule is the same for every plate. Nothing on the path
-  uses a libm call, so the integer boundary classes the angular velocities
-  decide stay exact. See "Slab pull" below for the speed rule and for the size
-  factor it replaced.
+  scales the fitted direction by `crust_scaled_speed`: the plate's hashed base
+  speed times a crust factor, clamped to `maximum_angular_speed`. A
+  `coherence` fraction blends the axis back toward the hashed random one.
+  Plates too small to fit — one or two cells — keep the hashed axis; the speed
+  rule is the same for every plate. Nothing on the path uses a libm call, so
+  the integer boundary classes the angular velocities decide stay exact.
+- That is not the speed a plate turns at. `plate_speed` in `speed.rs` is, and
+  it reads the share of a plate's perimeter that is subducting slab, which no
+  stage can answer until the crust-birth prior has dated the ocean. Evolution
+  applies it: once before step zero and once at the end of every step. See
+  "Slab pull" below for the rule, the ordering it forces, and the size factor
+  it replaced.
 - The default flow frequency is 1.0. Averaged over the adjacent plate pairs at
   the viewer's defaults, the signed alignment of their rotation axes is 0.34 to
   0.44 across three motion seeds, against 0.03 or less for the independent
@@ -1469,6 +1473,7 @@ geology elevation and isostasy pins read synthetic fields and do not move.
 
 ## Slab pull
 
+`speed.rs` owns the rule and `motion.rs` the fit that gives it a direction.
 `plate_speed` was `hashed base × crust factor × size factor`, clamped to
 `[minimum_angular_speed, maximum_angular_speed]`, where the size factor was
 the fourth root of the mean plate area over the plate's own. Two things were
@@ -1534,24 +1539,35 @@ compaction guarantees does not exist, would read zero.
 passes the boundaries its step began with over the ownership transport has
 since moved, which is the Jacobi convention every other substep keeps.
 
-### The kinematics stage uses it once
 
-`generate_plate_kinematics` fits directions as before, draws the hashed base,
-and then needs a classification to know the fractions — which needs speeds. It
-makes one extra pass: speeds at `base × crust factor`, classify, take the
-fractions, then the final speeds through `plate_speed`. Only the lengths change
-between the two passes, so the boundary edges the fractions counted are the
-same edges either way, though a few of them change regime; the classification
-a run starts from is the caller's, taken from the motion the stage returns, so
-the birth prior and evolution's first step both see the slab-pulled world.
+### Two stages, because the rule needs an age
 
-Before step zero no ocean floor has an age — the birth prior runs *after* this
-stage — so an ocean-ocean convergence ranks `Equal` and only a continent
-standing over floor is slab. At the viewer's defaults that leaves 35 of 111
-plates with a nonzero fraction and a mean of 0.003, so almost every plate
-starts near the trenchless quarter of its base. Evolution's own per-step
-recomputation reads the aged birth field and sees the rest, which is why the
-measured spread widens over a run rather than starting wide.
+The rule reads a subducting fraction, the fraction needs a classification, the
+classification needs a motion — and the polarity of an ocean-ocean trench
+needs the floor's *age*, which the crust-birth prior supplies and which the
+prior cannot supply until it has a classification to find its ridges in. The
+ordering is therefore fixed, and the kinematics stage is on the wrong side of
+it:
+
+1. `generate_plate_kinematics` fits each axis and scales it by
+   `crust_scaled_speed` — the base speed times the crust factor, clamped to
+   the ceiling. This is not the speed a plate turns at, and the stage's doc
+   says so.
+2. The caller classifies that motion.
+3. `derive_crust_birth_prior` reads that classification and dates the ocean.
+4. `evolve_plate_ownership` begins by respeeding over the prior's real ages
+   and that classification — the same `respeed` it runs every step — and
+   classifies once more. Step zero then moves a slab-pulled world.
+
+An earlier draft of this slice had the stage do it all, by inventing a birth
+field of one age for every oceanic cell so it could reach step 2 itself. That
+is fabricated data and it showed: with every floor the same age, every
+ocean-ocean trench ranks `Equal`, only 35 of 111 plates at the viewer's
+defaults had any slab at all, the mean fraction was 0.003, and every plate
+began the run at the trenchless quarter of its base. Giving evolution the
+first respeed deletes the invented crust, the stage's second pass, and the
+internal classification helper it needed, and it raises those numbers to 100
+of 111 plates and a mean of 0.082.
 
 ### Evolution recomputes speed every step
 
@@ -1569,13 +1585,14 @@ it rather than a walk of the speed itself.
 - **Drift.** The axis turn is unchanged. The speed walk becomes
   `drift_factor *= 1 + s × speed_drift_rate × sqrt(step_duration)`, clamped to
   `[1 − speed_drift_limit, 1 + speed_drift_limit]`.
-- **Respeed**, a new substep between lifecycle and reclassification, sets
-  `|ω| = plate_speed(base, continental_fraction, subducting_fraction, config)
-  × drift_factor` for every plate, with the continental fraction from the
-  current cell crust and ownership and the subducting fraction from the
-  boundaries the step began with over the current ownership. Direction is
-  preserved; only the length is set, and a plate whose rotation vector is zero
-  has no direction to keep and stays at rest.
+- **Respeed** sets `|ω| = plate_speed(base, continental_fraction,
+  subducting_fraction, config) × drift_factor` for every plate, with the
+  continental fraction from the current cell crust and ownership and the
+  subducting fraction from the boundaries the step began with over the current
+  ownership. Direction is preserved; only the length is set, and a plate whose
+  rotation vector is zero has no direction to keep and stays at rest. It runs
+  once before step zero and then between each step's lifecycle and the
+  reclassification that ends it.
 - **Lifecycle.** A rift's halves inherit the parent's base speed and drift
   factor; the opening is added to the rotation vector as before and the next
   respeed sets the length, so `rift_opening_speed` decides which way a half
@@ -1583,76 +1600,79 @@ it rather than a walk of the speed itself.
   of the two bases and of the two drift factors as well as of the two rotation
   vectors. Compaction remaps both.
 - The step order is deform, transport, drift, lifecycle, respeed, reclassify.
+- A run of no steps is no longer the identity: it respeeds and reclassifies,
+  which is the rule the stage could not apply. That is what its test now says.
 
 ### Measured
 
 Both worlds are 65,536 cells: the viewer's defaults at sampling seed 7, jitter
 0.8, and 15 steps, and the reference world at sampling seed 9, subdivided
 faces 0.2, and 30 steps. "Before" is the pipeline as it stood at "Island
-arcs".
+arcs". The start of a run is after its opening respeed, which is what a
+zero-step run returns.
 
 | Measure | Defaults, before | Defaults, after | Reference, before | Reference, after |
 | --- | --- | --- | --- | --- |
-| Start speed minimum | 0.500 | 0.134 | 0.668 | 0.162 |
-| Start speed median | 1.000 | 0.247 | 1.000 | 0.249 |
-| Start speed maximum | 1.000 | 0.381 | 1.000 | 0.386 |
-| Start maximum over minimum | 2.00 | 2.84 | 1.50 | 2.38 |
-| End speed minimum | 0.272 | 0.108 | 0.535 | 0.183 |
-| End speed median | 0.876 | 0.388 | 1.034 | 0.379 |
-| End speed maximum | 1.500 | 0.844 | 1.460 | 0.695 |
-| End maximum over minimum | 5.52 | 7.79 | 2.73 | 3.79 |
-| Rank correlation, fraction against speed | 0.313 | 0.629 | −0.236 | 0.745 |
-| Rank correlation, area against speed | −0.289 | −0.137 | −0.110 | −0.155 |
-| Convergent edges | 6,539 | 5,525 | 2,252 | 1,401 |
-| Divergent edges | 6,928 | 5,978 | 2,220 | 1,627 |
-| Transform edges | 6,109 | 4,983 | 2,101 | 1,235 |
-| Land cells at the datum | 16,328 | 16,694 | 17,316 | 16,920 |
-| Born particles | 4,851 | 1,339 | 4,036 | 1,519 |
-| Subducted particles | 15,404 | 8,019 | 10,490 | 5,193 |
+| Start speed minimum | 0.500 | 0.134 | 0.668 | 0.156 |
+| Start speed median | 1.000 | 0.404 | 1.000 | 0.437 |
+| Start speed maximum | 1.000 | 1.000 | 1.000 | 0.698 |
+| Start maximum over minimum | 2.00 | 7.45 | 1.50 | 4.48 |
+| Start plates with any slab | — | 100 of 111 | — | 16 of 18 |
+| Start mean trench share | — | 0.082 | — | 0.099 |
+| End speed minimum | 0.272 | 0.096 | 0.535 | 0.190 |
+| End speed median | 0.876 | 0.389 | 1.034 | 0.405 |
+| End speed maximum | 1.500 | 0.879 | 1.460 | 0.670 |
+| End maximum over minimum | 5.52 | 9.18 | 2.73 | 3.53 |
+| Rank correlation, fraction against speed | 0.313 | 0.626 | −0.236 | 0.500 |
+| Rank correlation, area against speed | −0.289 | −0.070 | −0.110 | −0.159 |
+| Convergent edges | 6,539 | 5,593 | 2,252 | 1,742 |
+| Divergent edges | 6,928 | 6,033 | 2,220 | 1,883 |
+| Transform edges | 6,109 | 5,070 | 2,101 | 1,617 |
+| Land cells at the datum | 16,328 | 16,732 | 17,316 | 17,048 |
+| Born particles | 4,851 | 1,418 | 4,036 | 1,681 |
+| Subducted particles | 15,404 | 8,127 | 10,490 | 5,848 |
 | Rifts | 2 | 3 | 2 | 3 |
-| Sutures | 14 | 14 | 7 | 10 |
+| Sutures | 14 | 12 | 7 | 8 |
 | Continental particles | 19,365 to 19,365 | 19,365 to 19,365 | 19,358 to 19,358 | 19,358 to 19,358 |
-| Final plates | 99 | 100 | 13 | 11 |
+| Final plates | 99 | 102 | 13 | 13 |
 
 The spread is there and it comes from the trenches. The end-of-run rank
 correlation between subducting fraction and speed goes from 0.31 to 0.63 at
-the defaults and from −0.24 to 0.75 at the reference world — it had the wrong
-sign before — while the correlation with plate area falls to −0.14 and −0.16,
-which is the size factor going away. The end-of-run spread widens from 5.5 to
-7.8 and from 2.7 to 3.8.
+the defaults and from −0.24 to 0.50 at the reference world — it had the wrong
+sign before — while the correlation with plate area falls to −0.07 and −0.16,
+which is the size factor going away. The spread widens from 2.0 to 7.5 at the
+start and from 5.5 to 9.2 at the end.
 
-Every plate is slower. The start-of-run median falls by four, which is the
-trenchless factor applied to a world whose ocean has no ages yet, and the
-end-of-run median by a bit over two. Subducted particles fall by about half
-and born particles by about two thirds at both worlds, because a slower world
-opens fewer gaps and overrides fewer cells. Boundary edges fall by about a
-sixth at the defaults and a third at the reference world, for the same reason:
-less migration leaves plates in fewer pieces. Continental particles are exact
-either side, as they must be.
+Plates are slower on the whole: slab pull is a multiplier below one for every
+plate short of saturation, and no plate of either world is half trench. The
+median falls by a bit over two at both ends of both runs, subducted particles
+by about half, and born particles by about two thirds. Boundary edges fall by
+about a sixth, because a slower world migrates less and leaves plates in fewer
+pieces. Continental particles are exact either side, as they must be.
 
-Land moves by about two percent in opposite directions at the two worlds —
-up 366 cells at the defaults and down 396 at the reference — which is
-deformation following the boundaries rather than any rule about land.
+Land moves by about two percent in opposite directions at the two worlds — up
+404 cells at the defaults and down 268 at the reference — which is deformation
+following the boundaries rather than any rule about land.
 
 A sixty-step run at the defaults, the speed and subducting fraction of the two
 fastest and two slowest plates at every tenth step:
 
 | Step | Fastest | Slowest |
 | --- | --- | --- |
-| 0 | 0.381 at 0.09, 0.374 at 0.11 | 0.135 at 0.06, 0.134 at 0.00 |
-| 10 | 1.023 at 0.17, 0.802 at 0.16 | 0.128 at 0.02, 0.112 at 0.00 |
-| 20 | 0.950 at 0.15, 0.844 at 0.12 | 0.122 at 0.04, 0.103 at 0.02 |
-| 30 | 1.092 at 0.28, 0.993 at 0.14 | 0.088 at 0.01, 0.077 at 0.01 |
-| 40 | 0.940 at 0.17, 0.860 at 0.15 | 0.143 at 0.07, 0.133 at 0.07 |
-| 50 | 0.956 at 0.15, 0.909 at 0.17 | 0.131 at 0.08, 0.120 at 0.03 |
-| 60 | 0.971 at 0.21, 0.897 at 0.14 | 0.136 at 0.10, 0.116 at 0.02 |
+| 0 | 1.000 at 0.16, 0.993 at 0.27 | 0.135 at 0.00, 0.134 at 0.00 |
+| 10 | 1.080 at 0.18, 0.824 at 0.25 | 0.112 at 0.00, 0.110 at 0.01 |
+| 20 | 0.947 at 0.15, 0.796 at 0.13 | 0.108 at 0.03, 0.095 at 0.02 |
+| 30 | 0.918 at 0.14, 0.911 at 0.25 | 0.125 at 0.04, 0.081 at 0.02 |
+| 40 | 0.922 at 0.16, 0.865 at 0.16 | 0.158 at 0.09, 0.156 at 0.12 |
+| 50 | 1.128 at 0.24, 0.949 at 0.21 | 0.139 at 0.09, 0.131 at 0.06 |
+| 60 | 1.168 at 0.27, 0.950 at 0.16 | 0.158 at 0.04, 0.120 at 0.05 |
 
-The fastest plates carry two to ten times the trench share of the slowest at
-every sample, and the fast end is eight times the slow end from step ten on,
-against a factor of three at step zero. The same run before the change had
-its fastest plates pinned at 1.500, the drift band's ceiling over a speed the
-run could not otherwise change, with trench shares of 0.00 to 0.21 — no
-relation at all.
+The separation is there from step zero, which is what the opening respeed
+buys: the two fastest plates carry trench shares of 0.16 and 0.27 and the two
+slowest carry none at all, and the fast end is seven times the slow end. The
+same run before the change had its fastest plates pinned at 1.500, the drift
+band's ceiling over a speed the run could not otherwise change, with trench
+shares of 0.00 to 0.21 — no relation at all.
 
 ### What this deliberately does not do
 
@@ -1667,23 +1687,35 @@ relation at all.
   `maximum_angular_speed`.
 - `maximum_step_duration` still reserves `rift_opening_speed` on top of the
   ceiling. The respeed now clamps a rift's halves back inside the ceiling
-  within the same step, so that reserve is only spent by step zero's transport,
-  which reads the motion the caller supplied. Removing it would loosen the
-  bound and is a separate change.
+  within the same step, so that reserve is unspendable. Removing it would
+  loosen the bound and is a separate change.
 
 ### Pins
 
 Every ownership, birth, seafloor-age, and base-elevation pin moved: speeds
 changed for every plate. Each was re-pinned once. The reference run's
-aggregates moved with them — owner changes 396 to 134, subducted particles 195
-to 101, born particles 29 to 1, plates 26 to 24, rifts 3 to 2 with two that
-separated nothing, sutures 4 to 9 — all of which is a slower world overriding
-less and colliding for longer.
+aggregates moved with them — owner changes 396 to 149, subducted particles 195
+to 112, born particles 29 to 5, rifts 3 to 2 with two that separated nothing,
+sutures 4 to 7 — which is a slower world overriding less and colliding for
+longer. The crust-birth prior's own aggregates moved too, because it reads a
+classification of the crust-scaled motion rather than of the old
+crust-and-size one: every plate of the reference world now holds a ridge where
+one used to hold none.
 
-The volcanic-arc reference fingerprint moved too, against the expectation that
-it would not: that fixture fits its own plate motion before building its
-boundaries, so the speed rule reaches it. Its arcs are still all continental
-and its island counts still zero. The geology and climate pins that read
-synthetic fields did not move. One viewer cache fixture had to change seed:
-climate coupling does not reach a fixed point on every 32-cell world, and seed
-30 stopped converging under the new tectonics.
+The volcanic-arc reference fingerprint did not move. That fixture fits its own
+plate motion, so it would have moved under the draft that made the stage apply
+the slab factor; with the stage stopping at the crust factor its boundaries
+classify as they did. The geology and climate pins that read synthetic fields
+did not move. One viewer cache fixture had to change seed: climate coupling
+does not reach a fixed point on every 32-cell world, and seed 30 stopped
+converging under the new tectonics.
+
+### Files
+
+`motion.rs`, `evolution.rs`, `lifecycle.rs`, and `transport.rs` each crossed a
+thousand lines, so each gave up a concept it was only housing: `speed.rs`
+takes the speed rule, its factors, and the spread summary; `evolution_error.rs`
+takes the run's error enum; `rifting.rs` takes the half of the plate lifecycle
+that creates a plate, leaving suturing and compaction behind; and `reach.rs`
+takes the one ring count and the two bounds derived from it, which evolution
+and the viewer both read.

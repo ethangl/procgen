@@ -853,10 +853,7 @@ mod tests {
             .chain(segment.peaks.iter().map(|&peak| peak as u64))
         });
 
-        // The fixture fits its own plate motion, so the pin moves whenever the
-        // speed rule does: last when speed became slab pull, which changed
-        // which of this world's edges converge.
-        assert_eq!(fingerprint(values), 2_867_691_010_387_046_577);
+        assert_eq!(fingerprint(values), 14_285_577_073_894_833_531);
     }
 
     #[test]
