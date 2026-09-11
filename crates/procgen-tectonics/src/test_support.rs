@@ -3,15 +3,15 @@ pub use procgen_core::{fingerprint, quantized_fingerprint};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
-use crate::field::{DEFAULT_STEP_DURATION, mean_cell_width};
+use crate::field::DEFAULT_STEP_DURATION;
 use crate::{
     BaseElevation, BaseElevationConfig, BoundaryClass, BoundaryClassification,
     BoundaryDeformationConfig, CellCrust, CrustBirthPrior, CrustBirthPriorConfig, CrustClass,
     CrustClassification, CrustClassificationConfig, CrustClassificationDiagnostics, FlowField,
     PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
-    PlateKinematicsConfig, PlateLifecycleConfig, PlateMigrationConfig, PlatePartition,
-    PlatePartitionConfig, PoleDriftConfig, SeafloorAge, classify_boundaries, classify_crust,
-    derive_base_elevation, derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
+    PlateKinematicsConfig, PlateLifecycleConfig, PlatePartition, PlatePartitionConfig,
+    PoleDriftConfig, SeafloorAge, classify_boundaries, classify_crust, derive_base_elevation,
+    derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
     generate_plate_kinematics, partition_plates,
 };
 
@@ -283,84 +283,49 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
     }
 }
 
-/// A step long enough to travel one cell width on the 32-cell mesh, with
-/// migration off: the one-cell plate the rifting fixture opens from would
-/// otherwise be swallowed by its own convergent edge before it opened
-/// anything.
-pub fn opening_config(step_count: usize) -> PlateEvolutionConfig {
-    PlateEvolutionConfig {
-        step_count,
-        step_duration: 0.7,
-        migration: PlateMigrationConfig {
-            minimum_convergence: f32::MAX,
-        },
-        pole_drift: NO_POLE_DRIFT,
-        lifecycle: NO_LIFECYCLE,
-        ..PlateEvolutionConfig::default()
-    }
-}
-
-/// A run on the two-plate fixture that isolates pole drift: migration is off
-/// and the step is far too short for a cell to travel a cell width, so
-/// nothing but the drifting motion can change what the boundaries are. The
-/// default rates over a step this long turn an axis about seventeen degrees.
+/// A run on the two-plate fixture that isolates pole drift: the step is far
+/// too short to move any material out of its own cell, so nothing but the
+/// drifting motion can change what the boundaries are. The default rates over
+/// a step this long turn an axis about seventeen degrees.
 pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
     PlateEvolutionConfig {
         step_count,
         step_duration: 0.02,
-        migration: PlateMigrationConfig {
-            minimum_convergence: f32::MAX,
-        },
         lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
     }
 }
 
-/// The first step at which a convergent edge closing at `convergence` has
-/// paid for a whole cell width.
-fn paying_step(cell_width: f32, convergence: f32, step_duration: f32) -> usize {
-    (1..)
-        .find(|steps| *steps as f32 * convergence * step_duration >= cell_width)
-        .unwrap()
-}
-
-fn strongest_convergence(fixture: &EvolutionFixture) -> f32 {
-    (0..fixture.mesh.edge_count())
-        .map(|edge| fixture.boundaries.convergence(edge))
-        .fold(f32::MIN, f32::max)
-}
-
-/// A two-plate world in which exactly one edge clears the migration minimum,
-/// so one cell can ever migrate and the whole schedule is that edge's debt.
-/// Returns the fixture, its config, and the step at which the debt pays.
-pub fn single_edge_convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
+/// A two-plate world converging head on, and the step at which the
+/// continental plate's material first crosses into the oceanic cell.
+///
+/// The one-cell oceanic plate lies inside a continental one, so the whole of
+/// it is a trench: the continental material that arrives overrides it, and
+/// the oceanic particle under it is what subduction takes.
+pub fn convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
     let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
-    let convergence = strongest_convergence(&fixture);
-    // Only the strongest edge clears the minimum, so exactly one cell can
-    // ever migrate and its debt is the whole schedule.
     let config = PlateEvolutionConfig {
         step_count: 0,
         step_duration: 0.1,
-        migration: PlateMigrationConfig {
-            minimum_convergence: convergence * 0.999,
-        },
-        // The debt schedule below is the whole point of the fixture, and
-        // drift or a split plate would change the closing speed it is
-        // computed from.
+        // The schedule below is the whole point of the fixture, and drift or
+        // a split plate would change the speed it is computed from.
         pole_drift: NO_POLE_DRIFT,
         lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
     };
-    let qualifying = (0..fixture.mesh.edge_count())
-        .filter(|&edge| fixture.boundaries.convergence(edge) >= convergence * 0.999)
-        .count();
-    assert_eq!(qualifying, 1);
-    let steps = paying_step(
-        mean_cell_width(&fixture.mesh),
-        convergence,
-        config.step_duration,
-    );
-    assert!(steps > 1, "the debt must take more than one step to pay");
+    let steps = (1..)
+        .find(|&steps| {
+            fixture
+                .evolve(PlateEvolutionConfig {
+                    step_count: steps,
+                    ..config
+                })
+                .diagnostics
+                .owner_change_count
+                > 0
+        })
+        .expect("converging plates must eventually override a cell");
+    assert!(steps > 1, "the crossing must take more than one step");
     (fixture, config, steps)
 }
 
@@ -395,17 +360,6 @@ pub fn plate_cell_birth(
         .cell_plates
         .iter()
         .map(|&plate| (plate_classes[plate] == CrustClass::Oceanic).then_some(0))
-        .collect()
-}
-
-/// The birth field an initial per-cell classification implies, for the stages
-/// tested without running the birth prior: oceanic crust born at step zero,
-/// continental crust that nothing has re-made.
-pub fn classified_cell_birth(crust: &CrustClassification) -> Vec<Option<i32>> {
-    crust
-        .cell_classes
-        .iter()
-        .map(|&class| (class == CrustClass::Oceanic).then_some(0))
         .collect()
 }
 
@@ -571,7 +525,7 @@ pub fn closed_arc_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
 /// merges them. Returns the fixture, its config, and the step at which the
 /// collision time reaches `suture_time`.
 ///
-/// Migration is off and the step is far too short to advect anything, so the
+/// The step is far too short to move any material out of its own cell, so the
 /// pair's collision is the only thing the run advances.
 pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
     let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental; 2]);
@@ -580,9 +534,6 @@ pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize
     let config = PlateEvolutionConfig {
         step_count: steps,
         step_duration,
-        migration: PlateMigrationConfig {
-            minimum_convergence: f32::MAX,
-        },
         pole_drift: NO_POLE_DRIFT,
         lifecycle: PlateLifecycleConfig {
             rift_rate: 0.0,

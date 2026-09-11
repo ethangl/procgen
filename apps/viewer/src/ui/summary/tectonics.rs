@@ -54,18 +54,36 @@ fn birth_prior_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
 fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
     stat_grid(ui, "Plate evolution", "evolution", |ui| {
         stat(ui, "Active steps", world.evolution.active_step_count);
-        stat(ui, "Proposals", world.evolution.proposal_count);
+        stat(ui, "Owner changes", world.evolution.owner_change_count);
         stat(
             ui,
-            "Contested cell events",
-            world.evolution.contested_cell_count,
+            "Subducted particles",
+            world.evolution.subducted_particle_count,
         );
-        stat(ui, "Migration events", world.evolution.migrated_cell_count);
-        stat(ui, "Crust creation events", world.evolution.born_cell_count);
+        stat(ui, "Born particles", world.evolution.born_particle_count);
         stat(
             ui,
-            "Strongest migration",
-            format!("{:.3}", world.evolution.maximum_convergence),
+            "Collided cell events",
+            world.evolution.collided_cell_count,
+        );
+        stat(
+            ui,
+            "Deepest collision",
+            world.evolution.maximum_collision_stack,
+        );
+        stat(
+            ui,
+            "Sampled cell events",
+            world.evolution.sampled_cell_count,
+        );
+        stat(
+            ui,
+            "Continental particles",
+            format!(
+                "{} to {}",
+                world.evolution.starting_continental_particle_count,
+                world.evolution.final_continental_particle_count
+            ),
         );
         stat(ui, "Rifts", world.evolution.rift_count);
         stat(ui, "Failed rifts", world.evolution.failed_rift_count);

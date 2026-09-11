@@ -81,14 +81,18 @@ Completed foundations:
   angle toward a fresh hashed direction and scaling its speed by a hashed
   fraction, bounded to a band around the speed the plate started with, so
   boundaries change regime during a run. It
-  repeatedly reclassifies current boundaries and applies deterministic,
-  simultaneous ownership migration and crust advection for a configured step
-  count, each proportional to speed times step duration and each spending a
-  whole cell width of accumulated displacement per cell moved. The result
+  repeatedly reclassifies current boundaries and, for a configured step count,
+  moves the crust itself: the material lives in particles, one per cell before
+  step zero, each rotating rigidly with its plate, and every cell then takes
+  whichever particle won it. Continental material covers ocean floor, a cell
+  keeps its own plate's material over a newcomer's, and younger floor covers
+  older; a losing oceanic particle is destroyed only where a trench takes it,
+  and a cell nothing reached makes ocean floor. Continental material is
+  therefore neither created nor destroyed by a run. The result
   retains final ownership, the motion the run ended on, final boundaries, the
-  two fields each cell carries — the step its crust was created and the
-  deformation raised on it — and aggregate evolution diagnostics, without step
-  history.
+  two fields each cell reads off the material — the step its crust was created
+  and the deformation raised on it — and aggregate evolution diagnostics,
+  without step history.
   The plate set is not fixed by the partition: a large continental plate rifts
   along a fresh crack arc into two continental halves that part across it, and
   two continental plates that have collided for long enough suture into one,

@@ -209,22 +209,29 @@ impl std::error::Error for BoundaryDeformationError {}
 ///
 /// `config` must have passed [`validate_config`]; evolution runs that once
 /// rather than once per step.
-pub(crate) fn accumulate_boundary_deformation(
+impl BoundaryDeformationConfig {
+    /// Adds one step's increment to what a parcel of crust already carries.
+    /// The clamp is the whole of the accumulation rule, so it is written
+    /// once here rather than at each caller.
+    pub(crate) fn accumulate(&self, carried: f32, increment: f32) -> f32 {
+        (carried + increment).clamp(-self.maximum_magnitude, self.maximum_magnitude)
+    }
+}
+
+pub(crate) fn boundary_deformation_increment(
     mesh: &SphereMesh,
     partition: &PlatePartition,
     crust: CellCrust<'_>,
     boundaries: &BoundaryClassification,
     config: &BoundaryDeformationConfig,
     scale: f32,
-    accumulated: &mut [f32],
-) -> usize {
+) -> (Vec<f32>, usize) {
     let sources = collect_boundary_sources(mesh, crust, boundaries, config);
-    let increment = propagate_boundary_effects(mesh, partition, &sources);
-    let limit = config.maximum_magnitude;
-    for (total, offset) in accumulated.iter_mut().zip(increment) {
-        *total = (*total + offset * scale).clamp(-limit, limit);
+    let mut increment = propagate_boundary_effects(mesh, partition, &sources);
+    for offset in &mut increment {
+        *offset *= scale;
     }
-    sources.iter().flatten().count()
+    (increment, sources.iter().flatten().count())
 }
 
 fn collect_boundary_sources(
@@ -429,11 +436,11 @@ fn propagate_boundary_effects(
 mod tests {
     use super::*;
     use crate::test_support::{
-        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, empty_boundaries, final_state_fixture,
-        mesh as test_mesh, plate_cell_birth, single_edge_convergent_fixture,
-        two_plate_boundary_partition, two_plate_fixture,
+        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, empty_boundaries,
+        final_state_fixture, mesh as test_mesh, plate_cell_birth, two_plate_boundary_partition,
+        two_plate_fixture,
     };
-    use crate::{BoundaryClass, PlateEvolutionConfig, PlateMigrationConfig};
+    use crate::{BoundaryClass, PlateEvolutionConfig};
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
@@ -444,16 +451,36 @@ mod tests {
         config: BoundaryDeformationConfig,
     ) -> Vec<f32> {
         let mut field = vec![0.0; mesh.cell_count()];
-        accumulate_boundary_deformation(
+        accumulate(
+            mesh, partition, cell_birth, boundaries, &config, 1.0, &mut field,
+        );
+        field
+    }
+
+    /// What [`EvolvingWorld::deform`] does to one particle, driven over a
+    /// per-cell field so that a test can run several steps of one static
+    /// boundary without a whole world around it.
+    fn accumulate(
+        mesh: &SphereMesh,
+        partition: &PlatePartition,
+        cell_birth: &[Option<i32>],
+        boundaries: &BoundaryClassification,
+        config: &BoundaryDeformationConfig,
+        scale: f32,
+        accumulated: &mut [f32],
+    ) -> usize {
+        let (increment, source_cell_count) = boundary_deformation_increment(
             mesh,
             partition,
             CellCrust { cell_birth },
             boundaries,
-            &config,
-            1.0,
-            &mut field,
+            config,
+            scale,
         );
-        field
+        for (total, offset) in accumulated.iter_mut().zip(increment) {
+            *total = config.accumulate(*total, offset);
+        }
+        source_cell_count
     }
 
     #[test]
@@ -496,12 +523,10 @@ mod tests {
 
         let mut accumulated = vec![0.0; mesh.cell_count()];
         for expected in [0.1, 0.2, 0.3, 0.4, 0.5, 0.5] {
-            let source_cell_count = accumulate_boundary_deformation(
+            let source_cell_count = accumulate(
                 &mesh,
                 &partition,
-                CellCrust {
-                    cell_birth: &cell_birth,
-                },
+                &cell_birth,
                 &boundaries,
                 &config,
                 0.25,
@@ -634,12 +659,10 @@ mod tests {
 
         let mut accumulated = vec![0.0; mesh.cell_count()];
         for _ in 0..4 {
-            let source_cell_count = accumulate_boundary_deformation(
+            let source_cell_count = accumulate(
                 &mesh,
                 &partition,
-                CellCrust {
-                    cell_birth: &cell_birth,
-                },
+                &cell_birth,
                 &boundaries,
                 &BoundaryDeformationConfig::default(),
                 0.25,
@@ -906,9 +929,9 @@ mod tests {
             );
         }
     }
-    /// A convergent two-plate run whose boundary never moves: migration is off
-    /// and the step is far too short for any cell to travel a cell width, so
-    /// every step classifies the same boundaries and raises the same profile.
+    /// A convergent two-plate run whose boundary never moves: the step is far
+    /// too short for any material to leave its own cell, so every step
+    /// classifies the same boundaries and raises the same profile.
     fn static_boundary_fixture(
         step_count: usize,
         maximum_magnitude: f32,
@@ -916,14 +939,17 @@ mod tests {
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
         let config = PlateEvolutionConfig {
             step_count,
-            step_duration: 0.1,
-            migration: PlateMigrationConfig {
-                minimum_convergence: f32::MAX,
-            },
+            // Short enough that no particle leaves its own cell: two cells of
+            // this coarse mesh have centres 0.0034 apart, and a cell that
+            // sampled its neighbour would raise a different increment on the
+            // next step. Two to the minus fourteen, with a full deformation
+            // time of ten times it, so the tenth of a profile a step raises
+            // is exactly a tenth and the assertions below can be exact.
+            step_duration: 0.000_061_035_156,
             deformation: BoundaryDeformationConfig {
                 // A tenth of the profile per step, and every boundary here
                 // closes far faster than this, so every source saturates.
-                full_deformation_time: 1.0,
+                full_deformation_time: 0.000_610_351_56,
                 saturation_speed: 0.1,
                 maximum_magnitude,
                 ..BoundaryDeformationConfig::default()
@@ -1028,7 +1054,7 @@ mod tests {
 
     #[test]
     fn a_boundary_that_has_moved_on_leaves_its_deformation_behind() {
-        let (fixture, config, steps) = single_edge_convergent_fixture();
+        let (fixture, config, steps) = convergent_fixture();
         let config = PlateEvolutionConfig {
             step_count: steps,
             deformation: BoundaryDeformationConfig {
@@ -1041,22 +1067,20 @@ mod tests {
 
         // The overridden cell was the whole of its plate, so the boundary that
         // deformed these cells no longer exists anywhere.
-        assert_eq!(run.diagnostics.migrated_cell_count, 1);
+        assert_eq!(run.partition.plate_count, 1);
         assert!(
             run.boundaries
                 .edge_classes
                 .iter()
                 .all(|class| *class == BoundaryClass::Interior)
         );
-        let mut current = vec![0.0; fixture.mesh.cell_count()];
-        accumulate_boundary_deformation(
+        let (current, _) = boundary_deformation_increment(
             &fixture.mesh,
             &run.partition,
             run.cell_crust(),
             &run.boundaries,
             &config.deformation,
             1.0,
-            &mut current,
         );
         assert!(current.iter().all(|&value| value == 0.0));
         assert!(

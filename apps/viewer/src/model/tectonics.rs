@@ -229,7 +229,7 @@ mod tests {
         let [oceanic, continental] = world.cell_crust().cell_counts();
         assert!(oceanic > 0 && continental > 0);
         assert!(world.crust.component_count >= 1);
-        assert!(world.evolution.migrated_cell_count > 0);
+        assert!(world.evolution.owner_change_count > 0);
         assert!(world.seafloor_age.diagnostics.oceanic_cell_count > 0);
         assert!(world.deformation.diagnostics.affected_cell_count() > 0);
         assert!(world.elevation.diagnostics.minimum >= 0.0);
