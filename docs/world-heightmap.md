@@ -147,10 +147,13 @@ Completed foundations:
   resolution, and a hashed subset of those whose source sits on continental
   crust also floods a flat-topped, sloped-rim flood basalt province out to a
   fixed hop radius through continental cells of the source's own plate.
-  Volcanic arcs group final mixed-crust convergent boundaries by overriding
-  continental plate, walk a bounded distance inland, and retain
-  strength-ranked peak candidates with stable segment, peak, and overlap
-  ordering. Craton strength applies only to continental cells above the
+  Volcanic arcs group the final convergent boundaries that have a polarity by
+  overriding plate and overriding crust class, walk a bounded distance inland
+  over that plate's crust of that class, and retain strength-ranked peak
+  candidates with stable segment, peak, and overlap ordering. The overriding
+  side is the one `material_order` ranks greater, so a continent over ocean
+  floor builds a continental arc and the younger of two floors builds an
+  island arc, and a boundary with no polarity builds neither. Craton strength applies only to continental cells above the
   elevation field's own sea-level datum, and ramps with graph distance from
   final plate boundaries. It reads but never
   mutates tectonic elevation and does not infer plate-continuity history.

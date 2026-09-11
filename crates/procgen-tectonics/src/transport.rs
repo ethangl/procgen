@@ -22,7 +22,10 @@
 //! particles has to answer with one of them. That resolution is where
 //! subduction, collision, and the ridge live.
 
-use crate::{BoundaryClass, BoundaryClassification, PlateEvolutionConfig, step::EvolvingWorld};
+use crate::{
+    BoundaryClass, BoundaryClassification, PlateEvolutionConfig, crust::material_order,
+    step::EvolvingWorld,
+};
 use procgen_core::Vec3;
 use procgen_sphere_mesh::SphereMesh;
 use std::{cmp::Ordering, iter};
@@ -458,32 +461,31 @@ impl EvolvingWorld<'_> {
 
     /// Orders two particles in one cell, greatest first.
     ///
-    /// Continental material covers ocean floor whichever plates the two
-    /// belong to. Among continental material the cell's own plate keeps it,
-    /// so a boundary cell does not flicker between the two plates that share
-    /// it. Among ocean floor the younger subducts the older, which is the
-    /// polarity of an island arc. What is left is two parcels of one plate,
-    /// where the nearer to the cell's centre is the better answer for it, and
-    /// the lower index breaks an exact tie.
+    /// [`material_order`] decides first, and it is the whole of the physical
+    /// rule: continental material covers ocean floor whichever plates the two
+    /// belong to, and among ocean floor the younger subducts the older, which
+    /// is the polarity of an island arc. Deformation and the volcanic arcs
+    /// read the same function, so no stage can disagree with this one about
+    /// who is on top.
+    ///
+    /// The rest breaks the ties it leaves. Among continental material the
+    /// cell's own plate keeps it, so a boundary cell does not flicker between
+    /// the two plates that share it. What is left is two parcels the rule
+    /// cannot separate, where the nearer to the cell's centre is the better
+    /// answer for it, and the lower index breaks an exact tie.
     fn occupant_order(&self, cell: usize, incumbent: usize, left: usize, right: usize) -> Ordering {
-        let class = |index: usize| {
+        let birth = |index: usize| self.particles[index].birth;
+        let held = |index: usize| {
             let particle = self.particles[index];
-            (
-                particle.is_continental(),
-                particle.is_continental() && particle.plate == incumbent,
-            )
+            particle.is_continental() && particle.plate == incumbent
         };
-        // Continental material has no birth and every parcel of it ties here,
-        // which is what leaves nearness to decide between two of them.
-        let birth = |index: usize| self.particles[index].birth.unwrap_or(f32::NEG_INFINITY);
         let nearness = |index: usize| {
             self.particles[index]
                 .position
                 .dot(self.mesh.cell_centers[cell])
         };
-        class(left)
-            .cmp(&class(right))
-            .then_with(|| birth(left).total_cmp(&birth(right)))
+        material_order(birth(left), birth(right))
+            .then_with(|| held(left).cmp(&held(right)))
             .then_with(|| nearness(left).total_cmp(&nearness(right)))
             .then(right.cmp(&left))
     }

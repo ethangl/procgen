@@ -413,6 +413,7 @@ fn deformation_controls(
     boundary_effect_controls(ui, "Transform", &mut config.transform);
     boundary_effect_controls(ui, "Collision", &mut config.collision);
     boundary_effect_controls(ui, "Trench", &mut config.trench);
+    boundary_effect_controls(ui, "Island arc", &mut config.island_arc);
     let maximum_strength = kinematics.maximum_convergence(WORLD_RADIUS).max(0.01);
     slider(
         ui,

@@ -3,7 +3,7 @@ use procgen_sphere_mesh::{SphereMesh, connected_components};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CellCrust, CrustClass, PlatePartition, StageInputError,
 };
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolcanicArcFieldConfig {
@@ -36,12 +36,24 @@ pub struct VolcanicArcCell {
     pub strength: f32,
 }
 
+/// What the overriding plate carries the arc on. A continental arc is the
+/// Andes and an island arc is the Marianas: the same construction, over a
+/// continent or over ocean floor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArcKind {
+    Continental,
+    Island,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolcanicArcSegment {
     pub overriding_plate: usize,
+    /// Crust the overriding cells carry, which every cell of a segment
+    /// shares because grouping and the inland walk both stay on one class.
+    pub kind: ArcKind,
     /// Qualifying mesh edge ids in ascending order.
     pub boundary_edges: Vec<usize>,
-    /// Continental boundary cells in ascending order.
+    /// Overriding boundary cells in ascending order.
     pub boundary_cells: Vec<usize>,
     /// Inland cells in ascending order.
     pub arc_cells: Vec<VolcanicArcCell>,
@@ -58,6 +70,10 @@ pub struct VolcanicArcDiagnostics {
     pub discarded_short_segment_count: usize,
     pub discarded_landlocked_segment_count: usize,
     pub arc_cell_count: usize,
+    /// Segments of [`ArcKind::Island`], which the rest of the counts include.
+    pub island_segment_count: usize,
+    /// Arc cells of those segments, which `arc_cell_count` includes.
+    pub island_arc_cell_count: usize,
     pub affected_cell_count: usize,
     pub overlap_cell_count: usize,
     pub peak_count: usize,
@@ -161,12 +177,14 @@ struct BoundaryData {
 
 struct BoundaryGroup {
     overriding_plate: usize,
+    kind: ArcKind,
     boundary_edges: Vec<usize>,
     boundary_cells: Vec<usize>,
 }
 
-/// Derives present-day volcanic-arc fields from final mixed-crust convergent
-/// boundaries. This operation does not read or modify elevation.
+/// Derives present-day volcanic-arc fields from the final convergent
+/// boundaries that have a polarity. This operation does not read or modify
+/// elevation.
 pub fn derive_volcanic_arc_field(
     mesh: &SphereMesh,
     plates: &PlatePartition,
@@ -178,7 +196,7 @@ pub fn derive_volcanic_arc_field(
 
     let boundary = collect_boundary_data(mesh, crust, boundaries, config);
     let boundary_cell_count = boundary.claims.iter().flatten().count();
-    let mut groups = group_boundaries(mesh, plates, &boundary);
+    let mut groups = group_boundaries(mesh, plates, crust, &boundary);
     let original_group_count = groups.len();
     groups.retain(|group| group.boundary_edges.len() >= config.minimum_boundary_edges);
     let discarded_short_segment_count = original_group_count - groups.len();
@@ -208,6 +226,11 @@ pub fn derive_volcanic_arc_field(
     }
 
     let arc_cell_count = segments.iter().map(|segment| segment.arc_cells.len()).sum();
+    let islands = segments
+        .iter()
+        .filter(|segment| segment.kind == ArcKind::Island);
+    let island_segment_count = islands.clone().count();
+    let island_arc_cell_count = islands.map(|segment| segment.arc_cells.len()).sum();
     let peak_count = segments.iter().map(|segment| segment.peaks.len()).sum();
     let affected_cell_count = aggregate.affected_cell_count();
     let overlap_cell_count = aggregate.overlap_cell_count();
@@ -223,6 +246,8 @@ pub fn derive_volcanic_arc_field(
             discarded_short_segment_count,
             discarded_landlocked_segment_count,
             arc_cell_count,
+            island_segment_count,
+            island_arc_cell_count,
             affected_cell_count,
             overlap_cell_count,
             peak_count,
@@ -255,6 +280,13 @@ fn validate_inputs(
     Ok(())
 }
 
+/// Claims every convergent boundary edge that has a polarity for its
+/// overriding cell, which is the one [`material_order`] ranks greater: the
+/// plate above the slab is where an arc is built. `Equal` has no polarity and
+/// is skipped, which leaves continental collisions arc-free as they are on
+/// Earth and skips two floors of one age.
+///
+/// [`material_order`]: procgen_tectonics::material_order
 fn collect_boundary_data(
     mesh: &SphereMesh,
     crust: CellCrust<'_>,
@@ -270,14 +302,10 @@ fn collect_boundary_data(
         if boundaries.edge_classes[edge_index] != BoundaryClass::Convergent {
             continue;
         }
-        let classes = edge.cells.map(|cell| crust.class(cell));
-        if classes[0] == classes[1] {
-            continue;
-        }
-        let overriding_cell = if classes[0] == CrustClass::Continental {
-            edge.cells[0]
-        } else {
-            edge.cells[1]
+        let overriding_cell = match crust.order(edge.cells[0], edge.cells[1]) {
+            Ordering::Equal => continue,
+            Ordering::Greater => edge.cells[0],
+            Ordering::Less => edge.cells[1],
         };
         let claim = InlandClaim {
             strength: (boundaries.convergence(edge_index) / config.strength_saturation)
@@ -294,19 +322,28 @@ fn collect_boundary_data(
     data
 }
 
+/// Groups the claimed boundary cells into segments of one overriding plate and
+/// one crust class. A segment has one [`ArcKind`] because the class is what
+/// the inland walk stays on, so an arc that started over ocean floor never
+/// continues onto a continent.
 fn group_boundaries(
     mesh: &SphereMesh,
     plates: &PlatePartition,
+    crust: CellCrust<'_>,
     boundary: &BoundaryData,
 ) -> Vec<BoundaryGroup> {
     connected_components(
         mesh,
         |cell| boundary.claims[cell].is_some(),
-        |cell, neighbor| plates.cell_plates[cell] == plates.cell_plates[neighbor],
+        |cell, neighbor| {
+            plates.cell_plates[cell] == plates.cell_plates[neighbor]
+                && crust.class(cell) == crust.class(neighbor)
+        },
     )
     .into_iter()
     .map(|mut boundary_cells| {
         let overriding_plate = plates.cell_plates[boundary_cells[0]];
+        let kind = arc_kind(crust.class(boundary_cells[0]));
         let mut boundary_edges: Vec<_> = boundary_cells
             .iter()
             .flat_map(|&cell| &boundary.edges_by_cell[cell])
@@ -317,11 +354,19 @@ fn group_boundaries(
         boundary_edges.dedup();
         BoundaryGroup {
             overriding_plate,
+            kind,
             boundary_edges,
             boundary_cells,
         }
     })
     .collect()
+}
+
+const fn arc_kind(class: CrustClass) -> ArcKind {
+    match class {
+        CrustClass::Continental => ArcKind::Continental,
+        CrustClass::Oceanic => ArcKind::Island,
+    }
 }
 
 fn derive_segment(
@@ -337,13 +382,13 @@ fn derive_segment(
         plates,
         crust,
         boundary_claims,
-        group.overriding_plate,
-        &group.boundary_cells,
+        &group,
         config.inland_offset_cells,
     )?;
     let peaks = select_peak_candidates(&arc_cells, config.peak_density_divisor);
     Some(VolcanicArcSegment {
         overriding_plate: group.overriding_plate,
+        kind: group.kind,
         boundary_edges: group.boundary_edges,
         boundary_cells: group.boundary_cells,
         arc_cells,
@@ -353,17 +398,24 @@ fn derive_segment(
 }
 
 /// Steps the strongest claim inland cell by cell, over the overriding plate's
-/// own continental crust: an arc sits on the continent the trench is eating
-/// under, so the walk stops at the plate's coast as well as at its boundary.
+/// own crust of the segment's class: an arc sits on the plate the trench is
+/// eating under, so the walk stops at that plate's boundary, and it sits on
+/// one kind of crust, so a continental arc stops at the coast and an island
+/// arc stops where the plate's floor meets its own continent.
 fn walk_inland(
     mesh: &SphereMesh,
     plates: &PlatePartition,
     crust: CellCrust<'_>,
     boundary_claims: &[Option<InlandClaim>],
-    overriding_plate: usize,
-    boundary_cells: &[usize],
+    group: &BoundaryGroup,
     maximum_depth: usize,
 ) -> Option<(Vec<VolcanicArcCell>, usize)> {
+    let BoundaryGroup {
+        overriding_plate,
+        kind,
+        boundary_cells,
+        ..
+    } = group;
     let mut visited: Vec<_> = boundary_claims.iter().map(Option::is_some).collect();
     let mut claim_buffer = vec![None; mesh.cell_count()];
     let mut touched = Vec::new();
@@ -379,8 +431,8 @@ fn walk_inland(
             for corner in mesh.cell_corners(cell) {
                 let neighbor = corner.neighbor;
                 if visited[neighbor]
-                    || plates.cell_plates[neighbor] != overriding_plate
-                    || crust.class(neighbor) != CrustClass::Continental
+                    || plates.cell_plates[neighbor] != *overriding_plate
+                    || arc_kind(crust.class(neighbor)) != *kind
                 {
                     continue;
                 }
@@ -510,6 +562,15 @@ mod tests {
                 .unwrap()
         );
         assert!(!field.segments.is_empty());
+        // Every oceanic cell of this fixture is one age, so no ocean-ocean
+        // edge has a polarity and every segment stands on a continent.
+        assert!(
+            field
+                .segments
+                .iter()
+                .all(|segment| segment.kind == ArcKind::Continental)
+        );
+        assert_eq!(field.diagnostics.island_segment_count, 0);
         assert!(field.segments.windows(2).all(|pair| {
             (pair[0].overriding_plate, pair[0].boundary_edges[0])
                 < (pair[1].overriding_plate, pair[1].boundary_edges[0])
@@ -537,27 +598,26 @@ mod tests {
             assert!((1..=config.inland_offset_cells).contains(&segment.inland_depth));
             assert!(segment.arc_cells.iter().all(|arc_cell| {
                 plates.cell_plates[arc_cell.cell] == segment.overriding_plate
-                    && crust(&cell_birth).class(arc_cell.cell) == CrustClass::Continental
+                    && arc_kind(crust(&cell_birth).class(arc_cell.cell)) == segment.kind
                     && !segment.boundary_cells.contains(&arc_cell.cell)
             }));
             for &edge_index in &segment.boundary_edges {
                 let edge = mesh.edges[edge_index];
-                let classes = edge.cells.map(|cell| crust(&cell_birth).class(cell));
-                let continental_cell = if classes[0] == CrustClass::Continental {
-                    edge.cells[0]
-                } else {
-                    edge.cells[1]
+                let order = crust(&cell_birth).order(edge.cells[0], edge.cells[1]);
+                let overriding_cell = match order {
+                    Ordering::Equal => panic!("an edge with no polarity claims no cell"),
+                    Ordering::Greater => edge.cells[0],
+                    Ordering::Less => edge.cells[1],
                 };
                 assert_eq!(
                     boundaries.edge_classes[edge_index],
                     BoundaryClass::Convergent
                 );
-                assert_ne!(classes[0], classes[1]);
                 assert_eq!(
-                    plates.cell_plates[continental_cell],
+                    plates.cell_plates[overriding_cell],
                     segment.overriding_plate
                 );
-                assert!(segment.boundary_cells.contains(&continental_cell));
+                assert!(segment.boundary_cells.contains(&overriding_cell));
             }
         }
     }
@@ -587,6 +647,7 @@ mod tests {
         assert!(!field.segments.is_empty());
         let mut overriding = BTreeSet::new();
         for segment in &field.segments {
+            assert_eq!(segment.kind, ArcKind::Continental);
             overriding.insert(segment.overriding_plate);
             for &cell in &segment.boundary_cells {
                 assert_eq!(crust(&cell_birth).class(cell), CrustClass::Continental);
@@ -617,6 +678,147 @@ mod tests {
             overriding.intersection(&overridden).next().is_some(),
             "no plate both overrides and is overridden"
         );
+    }
+
+    /// Two plates split at the equator, every shared edge converging at the
+    /// same rate. The crust each plate carries is the test's to choose, so one
+    /// fixture covers every polarity a convergent boundary can have.
+    fn hemisphere_fixture(
+        cell_count: usize,
+    ) -> (SphereMesh, PlatePartition, BoundaryClassification) {
+        let mesh = build_sphere_mesh(
+            fibonacci_sphere(FibonacciConfig {
+                count: cell_count,
+                jitter: 0.5,
+                seed: 7,
+            })
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        let cell_plates: Vec<_> = mesh
+            .cell_centers
+            .iter()
+            .map(|center| usize::from(center.z < 0.0))
+            .collect();
+        let mut boundaries = BoundaryClassification {
+            edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
+            edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
+            edge_shear: vec![0.0; mesh.edge_count()],
+        };
+        for (edge_index, edge) in mesh.edges.iter().enumerate() {
+            if cell_plates[edge.cells[0]] != cell_plates[edge.cells[1]] {
+                boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
+                boundaries.edge_normal_speeds[edge_index] = [0.5, 0.5];
+            }
+        }
+        let plates = PlatePartition {
+            cell_plates,
+            plate_count: 2,
+        };
+        (mesh, plates, boundaries)
+    }
+
+    /// Per-cell birth that gives each plate of the fixture one crust.
+    fn plate_birth(plates: &PlatePartition, plate_births: [Option<f32>; 2]) -> Vec<Option<f32>> {
+        plates
+            .cell_plates
+            .iter()
+            .map(|&plate| plate_births[plate])
+            .collect()
+    }
+
+    /// Ocean-ocean convergence with a polarity is the Marianas: the younger
+    /// floor overrides, so the arc is a chain of islands on it and the older
+    /// plate carries only the trench.
+    #[test]
+    fn ocean_ocean_convergence_builds_an_island_arc_on_the_younger_plate() {
+        let (mesh, plates, boundaries) = hemisphere_fixture(1_024);
+        let cell_birth = plate_birth(&plates, [Some(0.5), Some(0.1)]);
+        let config = VolcanicArcFieldConfig::default();
+        let field =
+            derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
+                .unwrap();
+
+        let [segment] = &field.segments[..] else {
+            panic!("one boundary with one polarity is one segment");
+        };
+        assert_eq!(segment.kind, ArcKind::Island);
+        assert_eq!(segment.overriding_plate, 0);
+        assert!((1..=config.inland_offset_cells).contains(&segment.inland_depth));
+        assert_eq!(field.diagnostics.island_segment_count, 1);
+        assert_eq!(
+            field.diagnostics.island_arc_cell_count,
+            field.diagnostics.arc_cell_count
+        );
+        for &cell in &segment.boundary_cells {
+            assert_eq!(plates.cell_plates[cell], 0);
+        }
+        for arc_cell in &segment.arc_cells {
+            assert_eq!(plates.cell_plates[arc_cell.cell], 0);
+            assert_eq!(
+                crust(&cell_birth).class(arc_cell.cell),
+                CrustClass::Oceanic,
+                "an island arc stands on ocean floor"
+            );
+        }
+        assert!(
+            (0..mesh.cell_count())
+                .filter(|&cell| plates.cell_plates[cell] == 1)
+                .all(
+                    |cell| field.cell_strengths[cell] == 0.0 && field.cell_segments[cell].is_none()
+                ),
+            "the subducting plate carries no arc"
+        );
+    }
+
+    /// The same fixture, with a continent above the same subducting floor: the
+    /// Andean pair, resolved exactly as it was before island arcs existed.
+    #[test]
+    fn a_continent_over_the_same_floor_builds_a_continental_arc() {
+        let (mesh, plates, boundaries) = hemisphere_fixture(1_024);
+        let cell_birth = plate_birth(&plates, [None, Some(0.1)]);
+        let field = derive_volcanic_arc_field(
+            &mesh,
+            &plates,
+            crust(&cell_birth),
+            &boundaries,
+            VolcanicArcFieldConfig::default(),
+        )
+        .unwrap();
+
+        let [segment] = &field.segments[..] else {
+            panic!("one boundary with one polarity is one segment");
+        };
+        assert_eq!(segment.kind, ArcKind::Continental);
+        assert_eq!(segment.overriding_plate, 0);
+        assert_eq!(field.diagnostics.island_segment_count, 0);
+        assert_eq!(field.diagnostics.island_arc_cell_count, 0);
+        assert!(field.diagnostics.arc_cell_count > 0);
+    }
+
+    /// Convergence without a polarity builds nothing: two continents collide
+    /// into a belt with no arc over it, as Earth's do, and two floors of one
+    /// age have no younger side to put an arc on.
+    #[test]
+    fn convergence_without_a_polarity_produces_an_empty_field() {
+        let (mesh, plates, boundaries) = hemisphere_fixture(1_024);
+        for births in [[None, None], [Some(0.1), Some(0.1)]] {
+            let cell_birth = plate_birth(&plates, births);
+            let field = derive_volcanic_arc_field(
+                &mesh,
+                &plates,
+                crust(&cell_birth),
+                &boundaries,
+                VolcanicArcFieldConfig::default(),
+            )
+            .unwrap();
+
+            assert!(field.segments.is_empty());
+            assert!(field.cell_strengths.iter().all(|&strength| strength == 0.0));
+            assert!(field.cell_segments.iter().all(Option::is_none));
+            assert_eq!(field.diagnostics, VolcanicArcDiagnostics::default());
+        }
     }
 
     #[test]
@@ -707,26 +909,6 @@ mod tests {
                 expected.map_or(0.0, |value| value.1)
             );
         }
-    }
-
-    #[test]
-    fn no_mixed_convergence_produces_an_empty_field() {
-        let (mesh, plates, mut cell_birth, mut boundaries) = fixture(512);
-        cell_birth.fill(None);
-        boundaries.edge_classes.fill(BoundaryClass::Convergent);
-        let field = derive_volcanic_arc_field(
-            &mesh,
-            &plates,
-            crust(&cell_birth),
-            &boundaries,
-            VolcanicArcFieldConfig::default(),
-        )
-        .unwrap();
-
-        assert!(field.segments.is_empty());
-        assert!(field.cell_strengths.iter().all(|&strength| strength == 0.0));
-        assert!(field.cell_segments.iter().all(Option::is_none));
-        assert_eq!(field.diagnostics, VolcanicArcDiagnostics::default());
     }
 
     #[test]

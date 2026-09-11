@@ -74,6 +74,16 @@ fn volcanic_arc_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
         );
         stat(
             ui,
+            "Island segments",
+            world.volcanic_arcs.diagnostics.island_segment_count,
+        );
+        stat(
+            ui,
+            "Island arc cells",
+            world.volcanic_arcs.diagnostics.island_arc_cell_count,
+        );
+        stat(
+            ui,
             "Affected cells",
             world.volcanic_arcs.diagnostics.affected_cell_count,
         );

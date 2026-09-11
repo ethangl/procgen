@@ -12,6 +12,7 @@
 
 mod base_elevation;
 mod boundaries;
+mod boundary_profiles;
 mod cracks;
 mod crust;
 mod deformation;
@@ -37,14 +38,14 @@ pub use base_elevation::{
 pub use boundaries::{
     BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
 };
+pub use boundary_profiles::{
+    BoundaryDeformationConfig, BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile,
+};
 pub use crust::{
     CellCrust, CrustClass, CrustClassification, CrustClassificationConfig,
-    CrustClassificationDiagnostics, CrustClassificationError, classify_crust,
+    CrustClassificationDiagnostics, CrustClassificationError, classify_crust, material_order,
 };
-pub use deformation::{
-    BoundaryDeformation, BoundaryDeformationConfig, BoundaryDeformationDiagnostics,
-    BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile,
-};
+pub use deformation::{BoundaryDeformation, BoundaryDeformationDiagnostics};
 pub use elevation::{
     CoarseElevation, CoarseElevationConfig, CoarseElevationError, ElevationField,
     compose_coarse_elevation, is_land, land_elevation_meters,
