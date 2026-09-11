@@ -504,34 +504,42 @@ mod tests {
         }));
     }
 
+    /// Cells, plates, and counts only.
+    ///
+    /// The mantle position is the one float a hotspot carries, and it names
+    /// `source_cell` and nothing else, so the cell is the integer fact it
+    /// produces and the position itself never enters the pin. Trail intensity
+    /// is `1 - step / maximum_trail_cells`, which the trail length already
+    /// determines and
+    /// `trails_are_bounded_decaying_motion_opposed_and_owner_constrained`
+    /// asserts point by point.
+    ///
+    /// `nearest_cell` still reads a position that `RandomStream::unit_vector`
+    /// built from a sine and a cosine. That leaves one libm call deciding an
+    /// integer here, as `docs/plate-movement.md` records for plate motion; it
+    /// is the first thing to replace if this pin ever splits between the two
+    /// development machines.
     #[test]
     fn reference_field_has_stable_fingerprint() {
         let fixture = Fixture::new(512);
         let field = fixture.generate(reference_config()).unwrap();
         let values = field.hotspots.iter().flat_map(|hotspot| {
             [
-                u64::from(hotspot.mantle_position.x.to_bits()),
-                u64::from(hotspot.mantle_position.y.to_bits()),
-                u64::from(hotspot.mantle_position.z.to_bits()),
                 hotspot.source_cell as u64,
                 hotspot.plate as u64,
                 hotspot.trail.len() as u64,
             ]
             .into_iter()
-            .chain(
-                hotspot
-                    .trail
-                    .iter()
-                    .flat_map(|point| [point.cell as u64, u64::from(point.intensity.to_bits())]),
-            )
+            .chain(hotspot.trail.iter().map(|point| point.cell as u64))
         });
 
-        assert_eq!(fingerprint(values), 119_570_818_077_523_300);
+        assert_eq!(fingerprint(values), 16_868_552_496_129_063_622);
     }
 
-    /// The fingerprint above is the one this test pinned before provinces
-    /// existed, so a zero fraction leaves every hotspot and its trail exactly
-    /// where they were and adds nothing to the plateau field.
+    /// A zero province fraction leaves every hotspot and its trail exactly
+    /// where they were before provinces existed and adds nothing to the
+    /// plateau field, which is why the fingerprint above reads a config that
+    /// erupts none.
     fn no_province_field_matches_the_pre_slice_field(field: &HotspotField) {
         assert!(field.cell_plateau.iter().all(|&weight| weight == 0.0));
         assert!(

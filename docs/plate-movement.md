@@ -233,7 +233,8 @@ for that one.
   `PlateMigrationConfig` and `PoleDriftConfig`. A `rift_rate` of zero and a
   `suture_time` of infinity each disable their event; `test_support`'s
   `NO_LIFECYCLE` is both, as `NO_POLE_DRIFT` is for drift.
-- Defaults: `rift_rate` 4.5 per unit time, `rift_minimum_area_fraction` 0.04,
+- Defaults: `rift_rate` 4.5 per unit time, `rift_minimum_area_fraction` 0.04
+  at the time and 0.012 since the profile retune below,
   `rift_curvature` 8.0 (the partition's own), `rift_opening_speed` 0.33,
   `suture_time` eight default steps, and `suture_minimum_shared_edges` 20.
   They were calibrated by running the viewer's defaults over nine, fifteen,
@@ -255,7 +256,10 @@ for that one.
   and the numbers behind it. Lowering the minimum to about 0.01 would restore
   rifting at the defaults, which is its own change with its own pins. The
   reference world of eighteen larger plates still rifts, twice over thirty
-  steps.
+  steps. That change is the profile retune at the end of this document: the
+  minimum is 0.012, the rift rate 3.0, and the default world rifts once over
+  fifteen steps and twice over thirty, so the two bullets that follow describe
+  a state the retune left behind.
 - At the viewer's defaults a fifteen-step run produces 0 rifts, 0 failed
   rifts, 3 sutures, and 108 final plates, from the 111 the partition made:
   three merges and nothing migration emptied, since the run with the events
@@ -393,6 +397,16 @@ machines, that is the first thing to replace, with a normalized triple of
 integers or exact multiples of the step length. Accumulated deformation is a
 float field and is tested for run-to-run equality and invariants only, never
 pinned across machines.
+
+A float field that does carry a fingerprint is pinned through
+`quantized_fingerprint`, which hashes each value's step on a 1/1024 grid
+rather than its bits. Scaling by a power of two is exact, so the grid step is
+an integer fact about the value, and the step is four orders of magnitude
+coarser than the last bit of an `f32` near one. Base elevation, isostatic
+support, and composed geological elevation are pinned this way; each one is
+built from add, multiply, divide, and square root alone, so nothing on those
+paths can cross a grid boundary between machines. Pinning `to_bits()` instead
+pinned the toolchain, because one differing last bit changes the whole hash.
 
 Slice 5 adds the arc walk, connected components, integer edge tallies, and
 area sums, all of which are exact, plus one plane fit and one cross product
@@ -657,3 +671,241 @@ the configured continental base and its coast is wherever interior relief and
 deformation carry that patch across the datum. Replacing per-plate crust
 classification with per-cell continental nuclei is the next step, and it is
 what gives a margin its own shape for this datum to cut.
+
+## Profile retune
+
+The deformation constants were ported verbatim from the C# reference's
+`ElevationOps.cs` when the default mesh went to 32,768 cells, and only one of
+them has been re-decided since: the drift retune took the convergent profile's
+depth from 3 to 6 for wider belts, and the mesh has doubled again to 65,536
+under all of them. Two of the rest are wrong in sign or kind rather than in
+scale, and two other defaults changed unit or eligibility under later slices
+without being revisited. Five changes, all defaults and one rule, with the
+vertical scale read as the land mapping in `procgen-planet` gives it:
+normalized 1.0 is 10,000 m above the 0.5 datum, so 0.05 of normalized
+elevation is about a kilometre, and a hop is one cell width, about 88 km at
+Earth radius on the 65,536-cell mesh.
+
+### Transform relief follows the residual normal component
+
+`boundary_source` gave every transform edge the transform profile scaled by
+its *shear*, so pure lateral slip raised the same central offset as a
+convergent boundary and spread it over a 500 km belt. Eleven percent of the
+default world's land was built that way: zeroing the transform offset against
+the old defaults dropped land from 15,379 cells to 13,656 and moved 13,022
+cells by more than 0.05.
+
+Earth's transform boundaries make almost no relief. Oceanic fracture zones are
+sub-cell scarps, and continental transforms build ranges and basins only at
+bends, where the small normal component of the motion is compressive
+(Transverse Ranges) or extensional (Dead Sea, Salton Trough) — relief one cell
+wide at this resolution.
+
+`source_scale` now scales a `Transform` edge by its *signed residual
+convergence* over `saturation_speed`, clamped to ±1 and not clamped below
+zero; convergent and divergent edges still scale by their own strength, which
+is a magnitude. Pure shear raises nothing, a transpressive bend raises, and a
+transtensional one subsides. `retain_stronger_source` compares magnitudes, so
+a negative source already competes correctly, and
+`PropagationProfile::from(BoundaryEffect)` carries the sign into the flank, so
+a negative offset produces the pull-apart basin shape rather than a graben
+with raised edges. The transform profile keeps `offset: 0.4` and moves to
+`depth: 1`: at the same closing speed a bend raises what a convergent boundary
+would, over one cell instead of six, and at a typical transform obliquity —
+residual convergence 0.1 to 0.3 — it raises 0.02 to 0.06, half a kilometre to
+a kilometre.
+
+Against the new defaults, transform boundaries still build relief on 30,774
+cells at the defaults and 25,135 at the reference world, but only 149 and 179
+of those move by more than 0.05: land changes by 20 cells at the defaults and
+22 at the reference world, and mean tectonic elevation by 0.002. That is the
+intended reading — transforms are visible in the field and negligible in the
+coastline.
+
+### Continental rifts get raised shoulders
+
+`ContinentalRiftProfile` defaulted to centre −0.4, flank −0.1, decay depth 4,
+and `is_valid` required `center < flank < 0`: a 700 km depression with no
+edges. Suppressing it raised land from 15,379 cells to 16,521, so the old
+profile drowned about 1,100 continental cells along divergent boundaries.
+
+Rift shoulders stand high on Earth. The East African Rift's floor is about a
+kilometre below shoulders that rise one to two kilometres above the plateau
+behind them, and the Red Sea, the Rhine graben, and the Basin and Range flanks
+are the same shape: a valley one cell wide at this resolution with shoulders
+one to two.
+
+The defaults are now centre −0.2, flank +0.08, decay depth 3 — a one-cell
+graben as deep as the trench profile, shoulders about 1.6 km at saturation
+that fade to zero two hops out. `is_valid` became `center < 0 && flank >
+center`, so a positive flank is legal and the old all-negative graben still
+is; the `InvalidRiftProfile` message says so, and the validation test's
+positive-flank case flipped from invalid to valid with a flank below the
+centre taking its place. Suppressing the new profile raises land from 14,916
+to 15,268: it costs 352 land cells where the old one cost 1,142.
+
+**The opened ocean gets shoulders on both sides.** At the defaults, 2,096
+continental cells touch ocean that was born during the run. With every other
+profile zeroed so the rift profile is alone in the field, 522 of them carry
+positive deformation, the largest is 0.0616 against a flank of 0.08, and none
+exceeds `continental_base + flank` — the shoulders are bounded by the profile
+that raised them. In the full field 1,928 are raised and 578 exceed that
+bound, because a cell beside run-born ocean can also sit in a convergent belt,
+where `maximum_magnitude` rather than the rift profile is what bounds it.
+
+### Abyssal-hill age window was left in hops
+
+`OceanicPeakFieldConfig::maximum_young_age` was 4 and its doc comment still
+said "hop age". Seafloor age has been steps since birth since the
+displacement-migration slice, which is why `cooling_age` was retuned 8 to 40;
+this one was missed. At the defaults it made 3,497 of 48,490 oceanic cells
+eligible, seven percent, against ages that run p10 6, median 16, p90 23,
+maximum 40.
+
+Abyssal hills form at the ridge and are the most common landform on the
+planet; they fade under sediment over tens of millions of years, not within
+the youngest few percent of the floor. `maximum_young_age` is now 10, a
+quarter of `cooling_age`, and the doc comment says steps. At the defaults
+10,691 of 48,465 oceanic cells are eligible and 1,818 abyssal-hill peaks are
+placed, against 3,497 and 647 before; at the reference world 3,614 of 48,172
+and 621 hills, against 1,092 and 212. Seamount counts barely move — 44 to 43
+and 56 to 58 — since they read hotspot intensity rather than age, and shift
+only where a cell carrying both claims now goes to the hill instead.
+
+### Rift eligibility never fired at the defaults
+
+Since per-cell crust, eligibility is a plate's *continental* area rather than
+its extent, and the largest any plate holds at the viewer's defaults is 0.0127
+of the sphere against a `rift_minimum_area_fraction` of 0.04 — so the default
+world rifted at no step count, and the comment above the default still quoted
+the pre-per-cell figure of 0.044.
+
+The minimum is now 0.012. Swept at the defaults over fifteen and thirty steps,
+at the rift rate of 4.5 that stood at the time:
+
+| Minimum | Eligible at step zero | Rifts over 15 | Rifts over 30 |
+| ------- | --------------------- | ------------- | ------------- |
+| 0.008   | 10                    | 9             | 12 (1 failed) |
+| 0.010   | 5                     | 4             | 8             |
+| 0.012   | 4                     | 3             | 4             |
+| 0.014   | 0                     | 1             | 3             |
+| 0.016   | 0                     | 1             | 1             |
+| 0.040   | 0                     | 0             | 0             |
+
+The area fraction alone cannot land on one or two rifts over fifteen steps.
+0.01 gives four, and the values that do give one or two — 0.014 and above —
+reach it with *nothing* eligible at step zero: their rifts happen only after a
+suture has grown a plate past the threshold, which is the same accidental
+regime 0.04 was in. 0.012 is the value taken for eligibility: four plates
+eligible at step zero against a largest continental area of 0.0127 and a
+fourth largest of 0.0122, and not every eligible plate rifting.
+
+### The rift rate is swept against that minimum, not alone
+
+The two knobs decide the count together, so fixing eligibility and leaving the
+rate at 4.5 leaves the defaults at three rifts over fifteen steps. Swept at
+the new minimum, where the same four plates are eligible throughout:
+
+| `rift_rate` | Seed 7, 15 steps | Seed 7, 30 steps | Seeds 9 / 11 / 13, 15 steps |
+| ----------- | ---------------- | ---------------- | --------------------------- |
+| 1.50        | 0                | 0                | 1 / 0 / 0                   |
+| 2.25        | 0                | 0                | 1 / 0 / 1                   |
+| 3.00        | 1                | 2                | 1 / 0 / 1                   |
+| 4.50        | 3                | 4                | 1 / 0 / 3                   |
+
+`rift_rate` is now 3.0, a chance of one in twenty-four a step per eligible
+plate: one rift over fifteen steps and two over thirty, which is the density
+this knob was always meant to give, and it scales with run length rather than
+saturating. The response is lumpy rather than smooth — 2.25 gives none where
+3.0 gives one — because the draw is a hashed value per plate per step, not an
+expectation over many plates, so there is one value here rather than a range.
+Seed 11 is a 34-plate world whose single attempt fails to separate anything at
+every rate. The reference fixture's own rate is the default scaled by its step
+duration, and the two draws that pass at 4.5 still pass at 3.0, so this change
+moves no pin.
+
+### Measured
+
+Both worlds are 65,536 cells at the viewer's defaults: sampling seed 7, jitter
+0.8, and 15 evolution steps for the first, and the reference world's sampling
+seed 9, subdivided faces 0.2, and 30 steps for the second. "Before" is the
+pre-retune pipeline and "after" is what all four changes give together. Land
+and elevation are on tectonic elevation, where the viewer reports them.
+
+| Measure                    | Defaults, before | Defaults, after | Reference, before | Reference, after |
+| -------------------------- | ---------------- | --------------- | ----------------- | ---------------- |
+| Land cells at 0.5          | 15,379           | 14,916          | 17,311            | 15,537           |
+| Tectonic minimum           | 0.0683           | 0.0683          | 0.0003            | 0.0003           |
+| Tectonic maximum           | 1.0000           | 1.0000          | 1.0000            | 1.0000           |
+| Tectonic mean              | 0.3653           | 0.3447          | 0.3289            | 0.2977           |
+| Deformation minimum        | −0.3716          | −0.1891         | −0.3997           | −0.2156          |
+| Deformation maximum        | 0.5000           | 0.5000          | 0.5000            | 0.5000           |
+| Deformation mean           | 0.0992           | 0.0787          | 0.0921            | 0.0666           |
+| Affected cells             | 61,935           | 62,038          | 44,273            | 43,393           |
+| Rifts / failed / sutures   | 0 / 0 / 3        | 1 / 0 / 2       | 2 / 0 / 2         | 3 / 0 / 2        |
+| Final plates               | 108              | 110             | 18                | 18               |
+| Oceanic cells              | 48,490           | 48,465          | 47,425            | 48,172           |
+| Peak-eligible cells        | 3,497            | 10,691          | 1,092             | 3,614            |
+| Peaks, seamount / hill     | 44 / 647         | 43 / 1,818      | 56 / 212          | 58 / 621         |
+| Cells whose elevation moved| —                | 63,582          | —                 | 52,274           |
+| Cells moved by over 0.05   | —                | 11,807          | —                 | 22,049           |
+
+Land at the datum falls 3 percent at the defaults and 10 percent at the
+reference world. The defaults move little because the two changes that act on
+land pull against each other: transform boundaries stop building eleven
+percent of it, and the rift graben stops drowning about eleven hundred
+continental cells, leaving one new rift as the net loss. The reference world
+falls much further because it is the world where rifting was already happening
+and now happens half again as often, each rift opening ocean through a
+continent.
+
+Deformation's negative tail halves at both worlds — −0.19 against −0.37 at the
+defaults — which is the rift centre moving from −0.4 to −0.2 and the pull-apart
+side of a transform never reaching the old shear-scaled magnitudes. The
+positive extreme stays at `maximum_magnitude`, but far fewer cells reach it at
+the defaults: 121 of 65,536, against the 284 the pre-retune defaults recorded,
+because the clamp was mostly being fed by transform belts holding one regime
+for a whole run. The reference world, at twice the run length, reaches it on
+835.
+
+### Not changed, and why
+
+- `convergent` 0.4 / depth 6, `collision` 0.5 / 5, `trench` −0.2 / 1. The
+  Andean asymmetry is right and the trench is one cell as it should be. Depth
+  6 puts every collision belt at about 1,000 km total width, Tibet scale,
+  where 4 would be nearer the Andes and Alps; left as the visual choice the
+  drift retune made. The symmetric uplift at ocean–ocean convergence belongs
+  to the island-arc item.
+- `saturation_speed` 2.0, `full_deformation_time` nine default steps,
+  `maximum_magnitude` 0.5. Time-unit questions, left for the time-consistency
+  item.
+- Hop-based geology radii: cratons 3 + 3, isostasy 5, arc inland 2, hotspot
+  trail 8, province radius 5, basin minimum 3, margin width 3. All were tuned
+  at 125 km cells and now cover seventy percent of that distance, but each
+  still lands inside the Earth range for what it represents — arc–trench gap
+  100 to 250 km, cratons hundreds of km from boundaries, shelves 80 to 300 km.
+- Vertical constants: continental base 0.65, ridge 0.30, deep floor 0.08, and
+  the geology uplifts. Under the 0.05-per-km land mapping the deep floor is
+  8.4 km and the continental base 3 km, both stretched about 1.5× against
+  Earth, but they are stretched together and every downstream stage reads
+  them. A vertical-datum calibration is its own decision, probably alongside
+  erosion.
+- Plate count, speeds, migration threshold, drift, suture.
+
+### Pins
+
+Deformation is a float field tested for run-to-run equality and invariants and
+never pinned across machines, and base elevation's fingerprint is taken with
+interior relief off and does not read deformation, so the first two changes
+move no integer pin on their own. The rift minimum gives the reference fixture
+a rift it did not have — one split and one arc that separated nothing, against
+none of either — which moves that run's ownership and birth fingerprints and
+the base elevation and seafloor age fingerprints derived from them, along with
+its proposal, migration, and crust-creation counts and its final plate count.
+The rift rate moves nothing: that fixture's rate is the default scaled by its
+own step duration, and both draws that passed at 4.5 still pass at 3.0.
+The abyssal-hill window moves the oceanic-peak fingerprint, whose synthetic
+fixture holds ages in 0..8 and so gains cells in 5..=10. Each was re-pinned
+once. The ownership and birth fingerprints of a run with neither drift nor
+lifecycle are unchanged, which is what says nothing outside the lifecycle
+moved a cell.

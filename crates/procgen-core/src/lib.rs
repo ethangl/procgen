@@ -11,7 +11,7 @@ mod random;
 pub mod random_streams;
 mod scalar_field;
 
-pub use fingerprint::fingerprint;
+pub use fingerprint::{fingerprint, quantized_fingerprint};
 pub use hash32::{HASH_U32_TEST_VECTORS, hash_u32};
 pub use math::Vec3;
 pub use random::RandomStream;

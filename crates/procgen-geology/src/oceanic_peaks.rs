@@ -12,7 +12,10 @@ use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OceanicPeakFieldConfig {
-    /// Oldest nonzero hop age eligible for abyssal hills.
+    /// Oldest seafloor age, in steps since birth, eligible for abyssal hills.
+    /// Hills form at the ridge and fade under sediment over a long stretch of
+    /// a floor's life rather than the youngest few percent of it, so the
+    /// default is a quarter of `BaseElevationConfig::cooling_age`.
     pub maximum_young_age: usize,
     /// Maximum per-cell seamount candidate density.
     pub seamount_density_scale: f32,
@@ -30,7 +33,7 @@ pub struct OceanicPeakFieldConfig {
 impl OceanicPeakFieldConfig {
     pub const fn new(seed: u64) -> Self {
         Self {
-            maximum_young_age: 4,
+            maximum_young_age: 10,
             seamount_density_scale: 0.75,
             abyssal_hill_density_scale: 0.35,
             maximum_position_offset: 0.8,
@@ -394,7 +397,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(fingerprint(values), 11_270_971_428_283_730_323);
+        assert_eq!(fingerprint(values), 16_106_792_758_415_618_232);
     }
 
     #[test]
@@ -409,7 +412,7 @@ mod tests {
         ages.cell_ages[1] = Some(1);
         ages.cell_ages[2] = Some(2);
         ages.cell_ages[3] = Some(0);
-        ages.cell_ages[4] = Some(5);
+        ages.cell_ages[4] = Some(11);
         let config = OceanicPeakFieldConfig {
             seamount_density_scale: 0.75,
             abyssal_hill_density_scale: 0.75,

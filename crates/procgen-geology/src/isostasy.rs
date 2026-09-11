@@ -190,7 +190,7 @@ mod tests {
         SedimentaryBasin,
         test_support::{empty_basins, empty_cratons, mesh},
     };
-    use procgen_core::fingerprint;
+    use procgen_core::quantized_fingerprint;
     use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
@@ -267,14 +267,13 @@ mod tests {
         assert_eq!(fixture.cratons, original.cratons);
         assert_eq!(fixture.basins, original.basins);
         assert_eq!(fixture.elevation, original.elevation);
+        // Support is built from craton, basin, and boundary terms through add,
+        // multiply, and clamp alone, so it holds no libm result and the grid
+        // it is pinned on is four orders of magnitude coarser than the last
+        // bit of any value on it.
         assert_eq!(
-            fingerprint(
-                first
-                    .cell_support
-                    .iter()
-                    .map(|value| u64::from(value.to_bits()))
-            ),
-            16_615_095_888_973_175_191
+            quantized_fingerprint(first.cell_support.iter().copied()),
+            10_475_948_157_526_751_066
         );
     }
 

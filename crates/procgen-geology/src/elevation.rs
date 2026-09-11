@@ -186,7 +186,7 @@ mod tests {
         SedimentaryBasin,
         test_support::{empty_basins, empty_cratons, empty_hotspots, empty_volcanic_arcs, mesh},
     };
-    use procgen_core::fingerprint;
+    use procgen_core::quantized_fingerprint;
     use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
@@ -296,14 +296,13 @@ mod tests {
                 .iter()
                 .all(|value| (0.0..=1.0).contains(value))
         );
+        // Composition sums the geological terms onto tectonic elevation and
+        // clamps, so it holds no libm result and the grid it is pinned on is
+        // four orders of magnitude coarser than the last bit of any value in
+        // the range the assertion above bounds it to.
         assert_eq!(
-            fingerprint(
-                first
-                    .cell_elevations
-                    .iter()
-                    .map(|value| u64::from(value.to_bits()))
-            ),
-            14_138_733_168_948_866_849
+            quantized_fingerprint(first.cell_elevations.iter().copied()),
+            7_099_575_090_715_096_288
         );
     }
 

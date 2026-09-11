@@ -111,16 +111,23 @@ pub struct PlateLifecycleConfig {
 impl Default for PlateLifecycleConfig {
     fn default() -> Self {
         Self {
-            // At the viewer's defaults one or two continental plates clear the
-            // minimum area, and `4.5 * 0.014` is a chance of one in sixteen a
-            // step: about one break-up over a run of nine to fifteen steps.
-            // The count saturates above three or so, because both halves of a
-            // rift fall below the minimum area.
-            rift_rate: 4.5,
-            // The largest continental plate at the viewer's defaults covers
-            // 0.044 of the sphere, so a twenty-fifth makes one or two plates
-            // eligible where a twentieth makes none.
-            rift_minimum_area_fraction: 0.04,
+            // `3.0 * 0.014` is a chance of one in twenty-four a step per
+            // eligible plate: with the four plates the minimum area below
+            // makes eligible, the viewer's defaults break one up over fifteen
+            // steps and two over thirty. It is swept against that minimum
+            // rather than alone, because the two together decide the count:
+            // at 4.5 the same four plates give three rifts over fifteen steps
+            // and at 2.25 they give none, the draws being hashed and so lumpy
+            // rather than smooth. A half that a rift leaves is usually too
+            // small to be eligible again, which is what stops the count
+            // running away.
+            rift_rate: 3.0,
+            // Eligibility is a plate's continental area, which since per-cell
+            // crust is much less than its extent: the largest any plate holds
+            // at the viewer's defaults is 0.0127 of the sphere, and the fourth
+            // largest 0.0122, so this makes four plates eligible at step zero
+            // where 0.014 and above make none.
+            rift_minimum_area_fraction: 0.012,
             // The partition's own default, so a rift arc bends like the arcs
             // that drew the plate it splits.
             rift_curvature: 8.0,

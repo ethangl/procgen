@@ -1,5 +1,5 @@
 use procgen_core::Vec3;
-pub use procgen_core::fingerprint;
+pub use procgen_core::{fingerprint, quantized_fingerprint};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
 
