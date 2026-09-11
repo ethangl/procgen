@@ -898,8 +898,8 @@ for a whole run. The reference world, at twice the run length, reaches it on
   Andean asymmetry is right and the trench is one cell as it should be. Depth
   6 puts every collision belt at about 1,000 km total width, Tibet scale,
   where 4 would be nearer the Andes and Alps; left as the visual choice the
-  drift retune made. The symmetric uplift at ocean–ocean convergence belongs
-  to the island-arc item.
+  drift retune made. The symmetric uplift at ocean–ocean convergence is gone;
+  see "Island arcs".
 - `saturation_speed` 2.0, `full_deformation_time` nine default steps,
   `maximum_magnitude` 0.5. Time-unit questions, left for the time-consistency
   item.
@@ -1074,8 +1074,9 @@ restating it.
 - Subduction rate equals relative convergence: the overriding plate's arrivals
   find the subducting plate's cells vacated at that plate's speed and occupied
   otherwise.
-- Ocean–ocean polarity: the older floor subducts, which is the island-arc
-  item's first half.
+- Ocean–ocean polarity: the older floor subducts. "Island arcs" lifts that
+  rule out of `occupant_order` into `material_order` and gives deformation and
+  the volcanic arcs the same answer.
 - Continental collision stacks particles rather than destroying them. The
   depth of the stack is a thickness signal for a later slice; nothing reads it
   yet.
@@ -1324,3 +1325,139 @@ ocean would sit flat on the deep floor and the curve those pins hold would be a
 constant. Two viewer fixture seeds moved to ones whose climate coupling
 converges on the new elevation field, which the fixture comment already says is
 per cell count.
+
+## Island arcs
+
+Ocean-ocean convergence looked like nothing on Earth: `boundary_source` gave
+both sides of the edge the symmetric `convergent` belt, a 1,000 km swell on
+each side of the trench and no trench, and `collect_boundary_data` skipped
+every convergent edge whose two cells shared a class, so no arc could exist
+over ocean floor. The Marianas, the Aleutians, Tonga, and the Lesser Antilles
+are the opposite shape: a trench on the older plate, a narrow volcanic arc one
+or two cells behind it on the younger plate, and islands where that arc breaks
+the surface.
+
+### One precedence rule, stated once
+
+`material_order` in `crust.rs` says which of two parcels of crust covers the
+other: continental over oceanic, and among oceanic the younger over the older.
+`Equal` is two continents, or two floors of one age, and means no polarity.
+The arguments are birth times as `CellCrust` stores them, so `None` is
+continental crust nothing re-made and outranks any ocean floor;
+`CellCrust::order` is the same rule over two cells.
+
+Material transport already settled the polarity — `occupant_order` ranked
+continental over oceanic and the younger floor over the older — so this
+extracts what transport was doing rather than deciding anything new.
+`occupant_order` is now `material_order`, then the incumbent term, then
+nearness, then index, which is the same total order it had; the proof is that
+no ownership or birth pin moved. Deformation and the volcanic arcs read the
+same function, so the three stages cannot disagree about who is on top.
+
+### Ocean-ocean deformation takes a side
+
+`boundary_source` reads the order over the two cells' crust rather than their
+classes. For a convergent edge:
+
+| pair | side | profile |
+| --- | --- | --- |
+| continental over oceanic | continental | `collision` |
+| | oceanic | `trench` |
+| oceanic over oceanic | younger | `island_arc` |
+| | older | `trench` |
+| `Equal` | both | `convergent` |
+
+`convergent` is thereby the no-polarity profile: the continental collision
+belt, and the tie. `trench` is the older oceanic side of any convergent
+boundary that has a polarity, whether a continent or a younger floor stands
+over it. Divergent and transform edges do not read the order: a rift is a
+property of the crust on the side, and a transform's relief is its residual
+normal component whatever lies across it.
+
+`island_arc` defaults to `offset: 0.4, depth: 2`. An arc is narrow — a
+volcanic front 100 to 200 km behind the trench — so two hops, not the six a
+collision belt spreads over. The offset matches `convergent` so that a floor
+at 0.08 to 0.30 reaches the 0.5 datum once the boundary has held for the whole
+of `full_deformation_time` and the volcanic uplift lands on top. That is what
+makes an arc an island chain rather than a submarine ridge, and it is the
+number to retune if arcs stay drowned.
+
+### Arcs on an oceanic overriding plate
+
+`collect_boundary_data` claims the overriding cell of every convergent edge,
+which is the one `material_order` ranks greater. `Equal` skips the edge, which
+keeps continental collisions arc-free as they are on Earth and skips two
+floors of one age. The mixed-crust case resolves exactly as it did.
+
+Grouping and the inland walk stay on one crust class as well as one plate, so
+a segment has one `ArcKind`: a continental arc still stops at the coast, and
+an island arc stops where the overriding plate's floor meets its own continent
+or another plate. `VolcanicArcDiagnostics` counts island segments and their
+arc cells, and the viewer's arc summary shows both.
+
+Composition does not change. `volcanic_arc_uplift` applies to every arc cell
+whatever its kind, terrain controls read the arc field and not the kind, and
+cratons and basins read continental land and ignore islands, which is right.
+An island arc cell above the datum is oceanic land: it gets no margin taper,
+so it stands as a cliff, which is what a volcanic island does.
+
+### Measured
+
+Both worlds are 65,536 cells: the viewer's defaults at sampling seed 7, jitter
+0.8, and 15 steps, and the reference world at sampling seed 9, subdivided
+faces 0.2, and 30 steps. "Before" is the pipeline as it stood at "Time and
+length units".
+
+| Measure | Defaults, before | Defaults, after | Reference, before | Reference, after |
+| --- | --- | --- | --- | --- |
+| Ocean-ocean convergent edges, polarised | 3,978 | 3,978 | 1,640 | 1,640 |
+| Ocean-ocean convergent edges, tied | 536 | 536 | 53 | 53 |
+| Arc segments, continental | 115 | 115 | 35 | 35 |
+| Arc segments, island | 0 | 434 | 0 | 173 |
+| Island arc cells | 0 | 2,623 | 0 | 1,247 |
+| Island arc cells above the datum | 0 | 159 | 0 | 103 |
+| Land cells at 0.5 | 16,887 | 16,328 | 17,975 | 17,316 |
+| Tectonic minimum | 0.0692 | 0.0632 | 0.0000 | 0.0000 |
+| Tectonic maximum | 0.9488 | 0.9480 | 1.0000 | 1.0000 |
+| Tectonic mean | 0.3635 | 0.3406 | 0.3160 | 0.2887 |
+| Deformation minimum | −0.0618 | −0.0699 | −0.0404 | −0.1439 |
+| Deformation maximum | 0.5000 | 0.5000 | 0.5000 | 0.5000 |
+| Deformation mean | 0.0805 | 0.0575 | 0.0675 | 0.0402 |
+| Affected cells | 61,342 | 59,512 | 39,913 | 35,581 |
+| Oceanic cells | 47,070 | 47,070 | 46,446 | 46,446 |
+| Final plates | 99 | 99 | 13 | 13 |
+
+Islands exist. 159 island arc cells stand above the datum at the defaults and
+103 at the reference world, out of 2,623 and 1,247 arc cells: a sparse chain
+of volcanic islands over a mostly submarine ridge, which is the shape of a
+real arc. The island arc offset is left where it is, and no island-specific
+uplift is added.
+
+Ownership does not move. Oceanic cells and final plates are identical at both
+worlds, which is the check on the `occupant_order` rewrite, and the
+continental arc segment count is identical too, which is the check that the
+mixed-crust case resolves as it did.
+
+Nine tenths of the ocean-ocean convergence at both worlds has a polarity —
+3,978 edges against 536 at the defaults — so almost every ocean-ocean
+boundary now has a side. The 434 island segments at the defaults are short,
+about six arc cells each, because a segment ends wherever the overriding
+plate's floor ends, and the default world's ocean is cut into 99 plates.
+
+Land falls by about 3.5 percent at both worlds, and mean tectonic elevation by
+0.023 and 0.027. That is the symmetric swell going away: an ocean-ocean
+boundary used to raise a 0.4 belt six hops into *both* plates and now raises
+0.4 over two hops into one and −0.2 over one hop into the other. Deformation's
+mean falls with it and its affected cells fall by 1,830 and 4,332, because the
+arc reaches a third as far as the belt it replaced. The negative tail deepens
+at the reference world — −0.14 against −0.04 — which is the trench appearing
+where a swell used to be, on a world whose long run gives its trenches time to
+saturate.
+
+### Pins
+
+None moved. Deformation is never pinned. The volcanic arc reference
+fingerprint stands: that fixture's ocean is one age everywhere, so it has no
+ocean-ocean convergence with a polarity and builds no island arc. Ownership
+and birth pins stand, which is the check on the one precedence rule. The
+geology elevation and isostasy pins read synthetic fields and do not move.
