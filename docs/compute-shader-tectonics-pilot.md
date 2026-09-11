@@ -5,14 +5,17 @@
 Retired on 2026-09-10 after three slices. This document stays as the record of
 what was built and what it measured; the code is gone.
 
-Of the four questions in "Goal", the measurements below answer two in part and
-leave two open:
+What the three landed slices answered, against the four questions in "Goal":
 
-1. **Deterministic?** Unanswered across backends. The run-to-run and
-   schedule-invariance tests and the fused-multiply-add test vector ran on the
-   MacBook Pro through Metal only. Cross-backend agreement was to be settled by
-   measurement in slice 5, which never ran, so nothing here says whether the two
-   development machines agreed.
+1. **Deterministic?** Yes for integers, as far as it was checked. The pipeline
+   test pinned growth-label and evolved-ownership fingerprints for seeds 0, 1,
+   and 4242 at 128 and 256 texels per face, and it ran green on the RTX 5070
+   through Vulkan when slices 2 and 3 merged, so those integer outputs were
+   bit-identical between Metal and Vulkan. Ownership is the half that depends on
+   integers float comparisons decide, so the fused-multiply-add contraction
+   slice 5 was to measure did not change a result at those sizes. What never ran
+   is the success criterion's own bar of four seeds at 256 and 1024 texels per
+   face, and no float tolerance was ever recorded.
 2. **Interactive?** No, as built. At 1024 texels per face the pipeline measured
    1236 ms from partition through evolution, about five times the 250 ms budget,
    with plate growth alone at 940 ms and seeding at 68 ms. Neither was addressed;
