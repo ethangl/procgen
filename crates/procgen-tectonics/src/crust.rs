@@ -31,7 +31,7 @@ use procgen_core::{
     random_streams::{CRUST_GROWTH_COST, CRUST_NUCLEUS},
 };
 use procgen_sphere_mesh::{SphereMesh, connected_components};
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -151,6 +151,11 @@ impl CellCrust<'_> {
         }
     }
 
+    /// [`material_order`] over the crust two cells carry.
+    pub fn order(&self, left: usize, right: usize) -> Ordering {
+        material_order(self.cell_birth[left], self.cell_birth[right])
+    }
+
     /// Cells of each crust class, in [`CrustClass::ALL`] order. Both counts
     /// come from one scan, because a consumer showing either usually shows
     /// both.
@@ -161,6 +166,26 @@ impl CellCrust<'_> {
             .filter(|birth| birth.is_some())
             .count();
         [oceanic, self.cell_birth.len() - oceanic]
+    }
+}
+
+/// Which of two parcels of crust covers the other where they meet:
+/// continental over oceanic, and among oceanic the younger over the older.
+/// `Equal` is two continents, or two floors of one age, and means no
+/// polarity.
+///
+/// The arguments are birth times, as [`CellCrust`] stores them: `None` is
+/// continental crust that was never re-made and outranks any ocean floor.
+/// Transport reads this to decide which parcel owns a contested cell,
+/// deformation to decide which side of a convergent edge gets the trench, and
+/// the volcanic arcs to decide which plate the arc sits on, so the three
+/// stages cannot disagree about who is on top.
+pub fn material_order(left: Option<f32>, right: Option<f32>) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(left), Some(right)) => left.total_cmp(&right),
     }
 }
 

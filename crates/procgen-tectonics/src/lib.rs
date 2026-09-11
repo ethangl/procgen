@@ -43,7 +43,7 @@ pub use boundary_profiles::{
 };
 pub use crust::{
     CellCrust, CrustClass, CrustClassification, CrustClassificationConfig,
-    CrustClassificationDiagnostics, CrustClassificationError, classify_crust,
+    CrustClassificationDiagnostics, CrustClassificationError, classify_crust, material_order,
 };
 pub use deformation::{BoundaryDeformation, BoundaryDeformationDiagnostics};
 pub use elevation::{
