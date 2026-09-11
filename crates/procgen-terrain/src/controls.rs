@@ -317,7 +317,7 @@ mod tests {
     use crate::test_support::test_sea_level;
     use procgen_geology::GeologyInputError;
     use procgen_geology::{
-        CratonDiagnostics, Hotspot, HotspotDiagnostics, IsostaticAdjustmentDiagnostics,
+        ArcKind, CratonDiagnostics, Hotspot, HotspotDiagnostics, IsostaticAdjustmentDiagnostics,
         OceanicPeak, OceanicPeakDiagnostics, SedimentaryBasin, SedimentaryBasinDiagnostics,
         VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcSegment,
     };
@@ -588,6 +588,9 @@ mod tests {
         fixture.hotspots.cell_hotspots[cell] = Some(0);
         fixture.arcs.segments.push(VolcanicArcSegment {
             overriding_plate: 0,
+            // Terrain reads the arc field, not the kind: an island arc peak
+            // stamps exactly as a continental one does.
+            kind: ArcKind::Island,
             boundary_edges: vec![],
             boundary_cells: vec![],
             arc_cells: vec![VolcanicArcCell {

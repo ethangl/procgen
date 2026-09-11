@@ -43,6 +43,6 @@ pub use oceanic_peaks::{
     OceanicPeakFieldError, OceanicPeakKind, derive_oceanic_peak_field,
 };
 pub use volcanic_arcs::{
-    VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcField, VolcanicArcFieldConfig,
+    ArcKind, VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcField, VolcanicArcFieldConfig,
     VolcanicArcFieldError, VolcanicArcSegment, derive_volcanic_arc_field,
 };

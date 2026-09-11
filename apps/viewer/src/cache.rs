@@ -440,8 +440,8 @@ struct_codec! {
     OceanicPeakDiagnostics { oceanic_cell_count, hotspot_candidate_cell_count, young_seafloor_candidate_cell_count, overlap_cell_count, density, peak_count, seamount_peak_count, abyssal_hill_peak_count, height }
     OceanicPeakField { cell_densities, cell_kinds, peaks, diagnostics }
     VolcanicArcCell { cell, strength }
-    VolcanicArcSegment { overriding_plate, boundary_edges, boundary_cells, arc_cells, peaks, inland_depth }
-    VolcanicArcDiagnostics { qualifying_edge_count, boundary_cell_count, discarded_short_segment_count, discarded_landlocked_segment_count, arc_cell_count, affected_cell_count, overlap_cell_count, peak_count }
+    VolcanicArcSegment { overriding_plate, kind, boundary_edges, boundary_cells, arc_cells, peaks, inland_depth }
+    VolcanicArcDiagnostics { qualifying_edge_count, boundary_cell_count, discarded_short_segment_count, discarded_landlocked_segment_count, arc_cell_count, island_segment_count, island_arc_cell_count, affected_cell_count, overlap_cell_count, peak_count }
     VolcanicArcField { segments, cell_strengths, cell_segments, diagnostics }
     CratonDiagnostics { boundary_cell_count, continental_land_cell_count, craton_cell_count, full_strength_cell_count, maximum_boundary_distance, strength }
     CratonField { cell_strengths, diagnostics }
@@ -496,6 +496,10 @@ enum_codec!(BoundaryClass {
     BoundaryClass::Convergent = 1,
     BoundaryClass::Divergent = 2,
     BoundaryClass::Transform = 3,
+});
+enum_codec!(ArcKind {
+    ArcKind::Continental = 0,
+    ArcKind::Island = 1,
 });
 enum_codec!(OceanicPeakKind {
     OceanicPeakKind::Seamount = 0,

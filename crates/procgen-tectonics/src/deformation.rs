@@ -13,9 +13,7 @@
 
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CellCrust, CrustClass,
-    FieldSummary, PlatePartition,
-    boundary_profiles::PropagationProfile,
-    field::summarize_field,
+    FieldSummary, PlatePartition, boundary_profiles::PropagationProfile, field::summarize_field,
     stage::StageInputError,
 };
 use procgen_sphere_mesh::SphereMesh;
@@ -254,9 +252,7 @@ mod tests {
         final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
         two_plate_boundary_partition, two_plate_fixture,
     };
-    use crate::{
-        BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig,
-    };
+    use crate::{BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig};
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
