@@ -27,7 +27,7 @@ use crate::{
     CrustBirthPrior, MAX_GAP_RADIUS, MaterialTransportConfig, PlateKinematics,
     PlateLifecycleConfig, PlatePartition, PoleDriftConfig, StageInputError, TRANSPORT_REACH_HOPS,
     classify_boundaries,
-    deformation::validate_config,
+    boundary_profiles::validate_config,
     field::{DEFAULT_STEP_DURATION, mean_cell_width},
     lifecycle::{self, LifecycleEvents},
     maximum_step_duration,
