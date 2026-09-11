@@ -243,27 +243,6 @@ pub fn generate_plate_kinematics(
     Ok(PlateKinematics { angular_velocities })
 }
 
-/// Generates independent rigid-rotation vectors per plate: a hashed uniform
-/// axis and a hashed speed within the configured bounds, with no field, crust,
-/// or size involved.
-///
-/// This is the interim source of motion for the raster tectonics pilot, which
-/// has no per-plate reduction on the GPU yet. The mesh path's
-/// [`generate_plate_kinematics`] reads the same rotations as the coherence
-/// blend's random end and as its fallback for plates too small to fit.
-pub fn generate_random_plate_kinematics(
-    plate_count: usize,
-    config: PlateKinematicsConfig,
-) -> Result<PlateKinematics, PlateKinematicsError> {
-    validate_config(config)?;
-
-    Ok(PlateKinematics {
-        angular_velocities: (0..plate_count)
-            .map(|plate| random_rotation(plate, config))
-            .collect(),
-    })
-}
-
 fn validate_config(config: PlateKinematicsConfig) -> Result<(), PlateKinematicsError> {
     if !config.minimum_angular_speed.is_finite()
         || !config.maximum_angular_speed.is_finite()
@@ -297,10 +276,6 @@ fn random_speed(plate: usize, config: PlateKinematicsConfig) -> f32 {
     config.minimum_angular_speed
         + speeds.unit_f32(plate as u64, 0)
             * (config.maximum_angular_speed - config.minimum_angular_speed)
-}
-
-fn random_rotation(plate: usize, config: PlateKinematicsConfig) -> Vec3 {
-    random_axis(plate, config) * random_speed(plate, config)
 }
 
 /// Blends the hashed axis toward the fitted one. Both ends are unit vectors,
@@ -663,22 +638,6 @@ mod tests {
             (kinematics.angular_velocities[1].length() - expected).abs()
                 < SPEED_TOLERANCE * expected
         );
-    }
-
-    #[test]
-    fn random_kinematics_stay_independent_and_bounded() {
-        let config = PlateKinematicsConfig::new(17);
-        let first = generate_random_plate_kinematics(12, config).unwrap();
-
-        assert_eq!(first, generate_random_plate_kinematics(12, config).unwrap());
-        assert_ne!(
-            first,
-            generate_random_plate_kinematics(12, PlateKinematicsConfig::new(18)).unwrap()
-        );
-        assert!(first.angular_velocities.iter().all(|velocity| {
-            (config.minimum_angular_speed..=config.maximum_angular_speed)
-                .contains(&velocity.length())
-        }));
     }
 
     #[test]

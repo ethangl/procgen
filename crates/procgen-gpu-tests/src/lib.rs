@@ -10,15 +10,6 @@ use std::{
 use bytemuck::Pod;
 
 pub fn request_device(label: &str) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
-    request_device_with_limits(label, wgpu::Limits::downlevel_defaults())
-}
-
-/// Requests a device that meets `limits`, for pipelines that need more than the
-/// downlevel baseline the agreement tests share.
-pub fn request_device_with_limits(
-    label: &str,
-    limits: wgpu::Limits,
-) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
     let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -35,7 +26,7 @@ pub fn request_device_with_limits(
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
         required_features: wgpu::Features::empty(),
-        required_limits: limits,
+        required_limits: wgpu::Limits::downlevel_defaults(),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         trace: wgpu::Trace::Off,

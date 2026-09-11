@@ -34,8 +34,7 @@ pub use base_elevation::{
     derive_base_elevation,
 };
 pub use boundaries::{
-    BoundaryClass, BoundaryClassification, BoundaryClassificationError,
-    CONVERGENCE_TO_SHEAR_THRESHOLD, classify_boundaries,
+    BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
 };
 pub use crust::{
     CellCrust, CrustClass, CrustClassification, CrustClassificationConfig,
@@ -60,7 +59,7 @@ pub use migration::{
 };
 pub use motion::{
     FlowField, PlateKinematics, PlateKinematicsConfig, PlateKinematicsError,
-    generate_plate_kinematics, generate_random_plate_kinematics,
+    generate_plate_kinematics,
 };
 pub use partition::{
     MAX_GROWTH_ROUGHNESS, PlatePartition, PlatePartitionConfig, PlatePartitionError,

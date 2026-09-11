@@ -1,5 +1,41 @@
 # Compute-shader tectonics pilot
 
+## Outcome
+
+Retired on 2026-09-10 after three slices. This document stays as the record of
+what was built and what it measured; the code is gone.
+
+Of the four questions in "Goal", the measurements below answer two in part and
+leave two open:
+
+1. **Deterministic?** Unanswered across backends. The run-to-run and
+   schedule-invariance tests and the fused-multiply-add test vector ran on the
+   MacBook Pro through Metal only. Cross-backend agreement was to be settled by
+   measurement in slice 5, which never ran, so nothing here says whether the two
+   development machines agreed.
+2. **Interactive?** No, as built. At 1024 texels per face the pipeline measured
+   1236 ms from partition through evolution, about five times the 250 ms budget,
+   with plate growth alone at 940 ms and seeding at 68 ms. Neither was addressed;
+   the interactivity slice that was to choose how never ran.
+3. **Does it look acceptable?** Partly, and only at 256 texels per face, where
+   boundaries do not read as grid-aligned at the default roughness. The
+   distance-driven fields the question is really about — deformation and
+   elevation — were never built, so the diamond-contour half is untested.
+4. **Same kind of world?** Partly. Plate areas keep the same distribution across
+   resolutions because the major plates' head start is configured as an arc, and
+   the evolution reaches the requested ocean fraction to within a thousandth at
+   every resolution. Boundary class proportions and elevation range were never
+   compared, because bathymetry and relief never landed.
+
+The pilot is retired because the mesh path won. Its premise was a 1.4 s coarse
+pipeline whose cost was coupled to resolution, with the viewer frozen while the
+pilot caught up. Since then the dev-profile fix brought Delaunay from 700 ms to
+about 130 ms, tectonics runs in 230 to 250 ms end to end, the cell cap rose to
+262,144, and eight slices landed on the mesh — five of plate movement, interior
+relief, flood basalts, three of land and ocean — that the pilot mirrored none
+of. Its kernels no longer describe the same tectonics, and nobody is going to
+bring them forward.
+
 ## Goal
 
 Build tectonics as a GPU-resident pipeline on a cube-sphere raster: plate

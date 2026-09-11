@@ -21,11 +21,6 @@ and rebuild it incrementally; do not attempt a one-shot translation. See
   crate per function or algorithm.
 - Keep generation crates data-oriented and independent of rendering, UI,
   engines, and export formats.
-- Raster stages on the cube-sphere are GPU pipelines. WGSL compute through
-  wgpu is their only implementation; they have no CPU path, and none is
-  written or proposed. Keep algorithm and data contracts (configs, buffer
-  layouts, constants) separate from dispatch code so callers are not coupled
-  to a backend.
 - Mesh stages and pure primitives (hashing, noise, mapping) keep CPU
   implementations. Where a CPU implementation and a kernel both exist, the CPU
   result is canonical and serves reproducible export. CPU implementations use
@@ -49,8 +44,7 @@ and rebuild it incrementally; do not attempt a one-shot translation. See
   Windows host. Reconsider CUDA only for a workload that needs something wgpu
   cannot provide, and record the reason in the design doc.
 - Where both a CPU implementation and a kernel exist, callers select the
-  backend explicitly. There is no automatic fallback, because a raster
-  pipeline has nothing to fall back to.
+  backend explicitly. There is no automatic fallback.
 - Port one experiment end to end, extracting reusable pieces as they become
   evident; avoid designing the entire framework in advance.
 - Add dependencies narrowly and avoid coupling foundational crates to heavy
@@ -150,11 +144,6 @@ reviews. Treat them as the default bar for new work.
 - Mirror sibling stages in shape: same config, result, error, and validation
   layout. When a change adds a module and leaves the crate half-migrated,
   finish the migration in the same change.
-- A raster stage is a sequence of dispatches over cell or border-edge buffers.
-  Host code packs configs and sequences dispatches; it holds no per-cell
-  logic. Relaxations are frontier-based with indirect dispatch, and no stage
-  reads back mid-pipeline. Outputs stay resident and a settings change reruns
-  from the first dirty stage.
 
 ### Module and crate layout
 
@@ -184,11 +173,6 @@ reviews. Treat them as the default bar for new work.
 - Where a CPU implementation exists, it is the canonical reference. Settle
   expression order, seed narrowing, and kernel structure before a kernel pins
   them; kernel lines are expensive to change, so compactness pays.
-- GPU-only stages are deterministic by construction. Every integer result is
-  the fixed point of a lexicographic minimum or a per-cell gather in fixed
-  neighbor order, so it is bit-identical run to run, across dispatch
-  schedules, and across backends. Integer diagnostics use atomic counters;
-  float diagnostics use fixed-order reductions, never float atomics.
 - No transcendental function sits on a path that decides an integer. Evaluate
   such functions with a fixed polynomial using add and multiply only,
   identical in Rust and WGSL. Quantize host-computed inputs to a fixed grid
@@ -200,10 +184,6 @@ reviews. Treat them as the default bar for new work.
   than the algorithm. Where a float agreement test needs a tolerance, use a
   round number with a one-line reason for where it sits, and calibrate it
   against measurements only if it fires.
-- GPU pipeline tests assert run-to-run and schedule invariance across
-  workgroup and frontier chunk sizes, and structural invariants read back at
-  full resolution. Expected values at small resolution may be computed in test
-  code; that is scaffolding, not a CPU path.
 
 ### Tests and docs
 
@@ -250,34 +230,14 @@ control-face baking cached in generated-world snapshots, plus the canonical CPU
 terrain-height function, coastline domain warp, canonical CPU and WGSL tiles,
 and complete viewer LOD through level 12 with spacing-derived octave fading,
 skirts, relative tile origins, resident GPU slots, and bounded tile-generation
-scheduling. Slices 15 and 16, tile export, follow the pilot's evaluation.
+scheduling. Slices 15 and 16, tile export, are not started.
 
-The active work is the compute-shader tectonics pilot
-(`docs/compute-shader-tectonics-pilot.md`): a GPU-only tectonics pipeline on a
-1024-texel-per-face cube-sphere raster in `procgen-raster-tectonics` and
-`apps/raster-viewer`, the intended successor to the viewer. Slices 1 through 3
-have landed: cube-sphere raster addressing with chamfer links, canonical
-border-edge ids, texel solid angles, texel-center directions, and the
-polynomial tangent in Rust and WGSL; the plate seed and growth kernels with
-their frontier relaxation; crust classification, boundary classification, and
-the simultaneous migration step the evolution repeats; and the pilot
-application rendering six face grids coloured by plate, crust, or boundary
-class at a selectable face resolution, with stage timings and readback
-diagnostics. Bathymetry, relief, and interactivity follow. The current viewer
-is frozen while the pilot runs. The pilot's evaluation decides whether geology
-and climate follow, and the future of the Voronoi path.
+The compute-shader tectonics pilot ran three slices and was retired on
+2026-09-10; `docs/compute-shader-tectonics-pilot.md` stays as the record, and
+its Outcome section says what it answered and why it ended.
 
-The pilot's kernels sit at `wgpu`'s default limit of eight storage buffers per
-stage, so new per-cell state consolidates into an existing buffer rather than
-adding a binding. Fused multiply-add contraction is enabled on Metal through
-`wgpu` and cannot be turned off from there, so integers that float comparisons
-decide are expected to agree across backends only within what slice 5
-measures.
-
-`procgen-core` owns the WGSL mirror of the four-word hash; `procgen-noise`,
-`procgen-terrain`, and `procgen-raster-tectonics` compose it rather than
-restating it. `procgen-viewer-support` owns what both applications need to
-present a world: the orbit controls and the identity colour ramp.
+`procgen-core` owns the WGSL mirror of the four-word hash; `procgen-noise` and
+`procgen-terrain` compose it rather than restating it.
 
 Crate boundaries and the per-stage conventions in "Code quality" are
 established. New stages should follow the sibling shapes rather than introduce

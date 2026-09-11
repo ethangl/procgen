@@ -40,9 +40,6 @@ real one.
   adjustment carry it alongside the tectonic field, and climate's inputs and
   the viewer's surface take the field rather than a vector and a loose `f32`.
   That was the first slice of this work.
-- The raster pilot still classifies crust per plate on the GPU, and now owns
-  `RasterCrustClassificationConfig` for it rather than borrowing the mesh
-  path's, so the two disagree about crust until the pilot's own crust slice.
 
 ## Design
 
@@ -171,9 +168,6 @@ defaults, once, when slice 2 lands.
 - The margin is a base-elevation term, not a geology stage. It is what a
   continental edge is at rest, before anything acts on it, and base elevation
   is where that lives.
-- The raster pilot keeps its per-plate crust kernel until its own slice. The
-  mesh path is canonical, and the two will disagree about crust until then,
-  which the pilot's doc records.
 
 ## Non-goals
 
