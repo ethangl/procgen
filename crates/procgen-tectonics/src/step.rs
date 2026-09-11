@@ -1,33 +1,31 @@
 //! One evolution step: the state it advances and the five moves it makes.
 //!
-//! A step raises deformation along the boundaries it starts from, moves
-//! ownership across the edges whose closing debt has paid for a cell, pulls
-//! what the cells carry one cell upstream, drifts every plate's rotation
-//! vector, and finally rifts and sutures plates. The first happens before the
-//! next two because uplift happens at the boundary and the material moves
-//! afterwards; the drift happens fourth, so a step's three moves all read the
-//! motion the step began with and the next classification reads the drifted
-//! motion; the lifecycle in [`crate::lifecycle`] happens last, so the next
-//! classification also reads the new plate set.
+//! A step raises deformation along the boundaries it starts from, moves every
+//! particle of crust with its plate and resolves what each cell then holds,
+//! drifts every plate's rotation vector, and finally rifts and sutures plates.
+//! The deformation happens first because uplift happens at the boundary and
+//! the material moves afterwards; the drift happens third, so the step's two
+//! moves both read the motion the step began with and the next classification
+//! reads the drifted motion; the lifecycle in [`crate::lifecycle`] happens
+//! last, so the next classification also reads the new plate set.
 //!
-//! Kinematics is therefore per-step state like ownership and the carried
-//! fields, not a fixed input. Without the drift every step would classify the
-//! same relative motion at a boundary that has not moved, and the accumulated
+//! Kinematics is therefore per-step state like ownership and the material,
+//! not a fixed input. Without the drift every step would classify the same
+//! relative motion at a boundary that has not moved, and the accumulated
 //! fields would record a scaled copy of the final state.
 //!
-//! Two per-cell fields travel with the crust rather than being recomputed from
-//! the current state: the step a cell's crust was created, and the deformation
-//! the boundaries have raised on it. Both move under one rule, so
-//! [`CarriedFields`] holds them together and one decision per cell applies
-//! to both: migration moves what the advancing cell carries onto the cell it
-//! overrides, advection moves what the upstream neighbour carries, and new
-//! crust starts flat and born now.
+//! The two per-cell fields a run produces — the step a parcel of crust was
+//! created and the deformation the boundaries have raised on it — belong to
+//! the particles in [`crate::transport`] rather than to the cells. A cell's
+//! answer is whichever particle won it, so the fields move with the material
+//! by construction instead of by a rule that copies them between cells.
 
 use crate::{
-    BoundaryClass, BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs,
-    PlateKinematics, PlateMigration, PlateMigrationError, PlatePartition,
-    deformation::accumulate_boundary_deformation, field::mean_cell_width, migrate_plates_once,
-    migration::accumulate_closing_distances,
+    BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
+    PlatePartition,
+    deformation::boundary_deformation_increment,
+    field::mean_cell_width,
+    transport::{Particle, initial_particles},
 };
 use procgen_core::{RandomStream, Vec3, random_streams::PLATE_POLE_DRIFT};
 use procgen_sphere_mesh::SphereMesh;
@@ -95,48 +93,13 @@ impl Default for PoleDriftConfig {
     }
 }
 
-/// Everything a cell carries across a step, held column by column so that
-/// consumers can borrow the birth field on its own.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CarriedFields {
-    /// Step at which each cell's crust was created; `None` is original
-    /// continental crust that evolution never re-made.
-    pub(crate) birth: Vec<Option<i32>>,
-    /// Signed deformation accumulated on each cell at the boundaries current
-    /// in each step it has lived through.
-    pub(crate) deformation: Vec<f32>,
-}
-
-impl CarriedFields {
-    /// The fields a run starts from: the birth prior, and crust nothing has
-    /// deformed yet.
-    pub(crate) fn new(birth: Vec<Option<i32>>) -> Self {
-        Self {
-            deformation: vec![0.0; birth.len()],
-            birth,
-        }
-    }
-
-    /// Moves everything `from` carried in `previous` onto `to`. Migration and
-    /// advection are this one move; they differ only in which cell they read.
-    fn move_onto(&mut self, previous: &Self, to: usize, from: usize) {
-        self.birth[to] = previous.birth[from];
-        self.deformation[to] = previous.deformation[from];
-    }
-
-    /// Replaces a cell with crust made this step: new crust is flat.
-    fn reborn(&mut self, cell: usize, step: i32) {
-        self.birth[cell] = Some(step);
-        self.deformation[cell] = 0.0;
-    }
-}
-
 /// The state one step advances, together with the inputs every step reads.
 ///
-/// Ownership, what the cells carry, and the two debts move together once per
-/// step and nothing outside evolution owns a step, so holding them in one
-/// place keeps the per-step solves in `migration.rs` pure functions of the
-/// current state rather than functions that also return several vectors.
+/// Ownership, the material, and what each cell samples from it move together
+/// once per step and nothing outside evolution owns a step, so holding them
+/// in one place keeps the per-step solves in `transport.rs` and
+/// `lifecycle.rs` methods on one state rather than functions that also return
+/// several vectors.
 pub(crate) struct EvolvingWorld<'a> {
     pub(crate) mesh: &'a SphereMesh,
     pub(crate) config: PlateEvolutionConfig,
@@ -147,29 +110,32 @@ pub(crate) struct EvolvingWorld<'a> {
     /// for one a rift or a suture made, so a plate the lifecycle creates
     /// drifts around the speed it was created with.
     pub(crate) starting_speeds: Vec<f32>,
-    /// The one distance every accumulated displacement is measured against.
-    cell_width: f32,
+    /// The one distance a gap radius is measured against.
+    pub(crate) cell_width: f32,
     /// Read between steps to reclassify, and taken when the run ends. The
     /// initial motion belongs to the caller; a run drifts its own copy.
     pub(crate) kinematics: PlateKinematics,
-    /// Read between steps to reclassify, and taken when the run ends.
+    /// Read between steps to reclassify, and taken when the run ends. Cell
+    /// ownership is what the particles in each cell resolved to.
     pub(crate) partition: PlatePartition,
-    /// Taken when the run ends; the two fields it holds are the run's output.
-    pub(crate) carried: CarriedFields,
+    /// The material itself. Everything a run conserves is conserved here.
+    pub(crate) particles: Vec<Particle>,
+    /// What each cell sampled from the particle that won it. Both are the
+    /// run's output and neither is state a step reads back into the
+    /// particles: a transport writes them, and the next step's deformation
+    /// and lifecycle read the crust they imply.
+    pub(crate) cell_birth: Vec<Option<i32>>,
+    pub(crate) cell_deformation: Vec<f32>,
     /// Model time each adjacent continental pair has spent in collision,
     /// keyed by the pair in ascending id order. A pair that stops colliding
     /// drops out and starts over.
     pub(crate) collisions: BTreeMap<(usize, usize), f32>,
-    /// Closing distance accumulated per boundary edge, in model units.
-    edge_closing: Vec<f32>,
-    /// Distance travelled per cell since its last pull, in model units.
-    cell_travel: Vec<f32>,
 }
 
 impl<'a> EvolvingWorld<'a> {
-    /// The world before step zero: the given ownership and birth prior, no
-    /// deformation, and no debt. `inputs` must already have been validated
-    /// against `mesh`.
+    /// The world before step zero: the given ownership and birth prior, one
+    /// particle per cell at the cell's own centre, and no deformation.
+    /// `inputs` must already have been validated against `mesh`.
     pub(crate) fn new(
         mesh: &'a SphereMesh,
         inputs: PlateEvolutionInputs<'a>,
@@ -187,10 +153,14 @@ impl<'a> EvolvingWorld<'a> {
             kinematics: inputs.kinematics.clone(),
             cell_width: mean_cell_width(mesh),
             partition: inputs.partition.clone(),
-            carried: CarriedFields::new(inputs.birth_prior.cell_birth.clone()),
+            particles: initial_particles(
+                mesh,
+                &inputs.partition.cell_plates,
+                &inputs.birth_prior.cell_birth,
+            ),
+            cell_birth: inputs.birth_prior.cell_birth.clone(),
+            cell_deformation: vec![0.0; mesh.cell_count()],
             collisions: BTreeMap::new(),
-            edge_closing: vec![0.0; mesh.edge_count()],
-            cell_travel: vec![0.0; mesh.cell_count()],
         }
     }
 
@@ -198,123 +168,38 @@ impl<'a> EvolvingWorld<'a> {
     /// answer, which every substep that asks about crust reads.
     pub(crate) fn cell_crust(&self) -> CellCrust<'_> {
         CellCrust {
-            cell_birth: &self.carried.birth,
+            cell_birth: &self.cell_birth,
         }
     }
 
-    /// Raises this step's share of the boundary profiles onto the cells the
-    /// current boundaries run through, and returns how many cells sourced one.
+    /// Raises this step's share of the boundary profiles onto the material
+    /// lying in the cells the current boundaries run through, and returns how
+    /// many cells sourced one.
     ///
     /// A step spends `step_duration` of the full deformation time, so a
     /// boundary that stays saturated for that whole time reaches the full
     /// profile offset and one that passes through leaves a fraction of it.
+    /// Every particle in a cell takes the cell's increment, stacked ones
+    /// included: material under a collision is being deformed too.
     pub(crate) fn deform(&mut self, boundaries: &BoundaryClassification) -> usize {
         let config = self.config.deformation;
-        accumulate_boundary_deformation(
+        let (increment, source_cell_count) = boundary_deformation_increment(
             self.mesh,
             &self.partition,
             // Spelled out rather than through `cell_crust`, so the borrow is
-            // of the birth column alone and deformation stays mutable.
+            // of the birth column alone and the particles stay mutable.
             CellCrust {
-                cell_birth: &self.carried.birth,
+                cell_birth: &self.cell_birth,
             },
             boundaries,
             &config,
             self.config.step_duration / config.full_deformation_time,
-            &mut self.carried.deformation,
-        )
-    }
-
-    /// Advances every edge's closing debt and applies the migrations the debts
-    /// have paid for. A migrating cell takes everything the advancing cell
-    /// carries across the edge, and the winning edge's debt drops by one cell
-    /// width.
-    pub(crate) fn migrate(
-        &mut self,
-        boundaries: &BoundaryClassification,
-    ) -> Result<PlateMigration, PlateMigrationError> {
-        accumulate_closing_distances(
-            boundaries,
-            &mut self.edge_closing,
-            self.config.migration,
-            self.config.step_duration,
         );
-        let migration = migrate_plates_once(
-            self.mesh,
-            &self.partition,
-            self.cell_crust(),
-            boundaries,
-            &self.edge_closing,
-            self.cell_width,
-        )?;
-
-        let previous = self.carried.clone();
-        for (cell, change) in migration.cell_changes.iter().enumerate() {
-            let Some(change) = change else { continue };
-            let cells = self.mesh.edges[change.boundary_edge].cells;
-            let advancing = if cells[0] == cell { cells[1] } else { cells[0] };
-            self.carried.move_onto(&previous, cell, advancing);
-            self.edge_closing[change.boundary_edge] -= self.cell_width;
+        for particle in &mut self.particles {
+            particle.deformation =
+                config.accumulate(particle.deformation, increment[particle.cell]);
         }
-        self.partition.clone_from(&migration.partition);
-        Ok(migration)
-    }
-
-    /// Advances every cell's travel debt and pulls what the cells that have
-    /// paid for it carry upstream by one cell.
-    ///
-    /// A cell's upstream neighbour is the same-plate neighbour lying most
-    /// nearly opposite its velocity. A cell with none is at the plate's
-    /// trailing edge: if the boundary behind it is a ridge it is new crust
-    /// born this step, flat because nothing has deformed it yet, and otherwise
-    /// it keeps what it has. Every pull reads the fields as they stood before
-    /// this substep, so the update is simultaneous.
-    pub(crate) fn advect(&mut self, boundaries: &BoundaryClassification, step: i32) -> usize {
-        let mesh = self.mesh;
-        let previous = self.carried.clone();
-        let mut born_cell_count = 0;
-
-        for cell in 0..mesh.cell_count() {
-            let plate = self.partition.cell_plates[cell];
-            let center = mesh.cell_centers[cell];
-            let velocity = self.kinematics.velocity_at(plate, center);
-            self.cell_travel[cell] += velocity.length() * self.config.step_duration;
-            if self.cell_travel[cell] < self.cell_width {
-                continue;
-            }
-            self.cell_travel[cell] -= self.cell_width;
-
-            let mut upstream: Option<(f32, usize)> = None;
-            let mut behind: Option<(f32, usize)> = None;
-            for corner in mesh.cell_corners(cell) {
-                let opposition = (mesh.cell_centers[corner.neighbor] - center).dot(-velocity);
-                if opposition <= 0.0 {
-                    continue;
-                }
-                if behind.is_none_or(|(best, _)| opposition > best) {
-                    behind = Some((opposition, corner.edge));
-                }
-                if self.partition.cell_plates[corner.neighbor] == plate
-                    && upstream.is_none_or(|(best, _)| opposition > best)
-                {
-                    upstream = Some((opposition, corner.neighbor));
-                }
-            }
-
-            match upstream {
-                Some((_, neighbor)) => self.carried.move_onto(&previous, cell, neighbor),
-                None => {
-                    let opening = behind.is_some_and(|(_, edge)| {
-                        boundaries.edge_classes[edge] == BoundaryClass::Divergent
-                    });
-                    if opening {
-                        self.carried.reborn(cell, step);
-                        born_cell_count += 1;
-                    }
-                }
-            }
-        }
-        born_cell_count
+        source_cell_count
     }
 
     /// Steps every plate's rotation vector once: a turn of the axis through a
@@ -372,45 +257,7 @@ impl<'a> EvolvingWorld<'a> {
 mod tests {
     use super::*;
     use crate::CrustClass;
-    use crate::test_support::{drift_config, opening_config, two_plate_fixture};
-
-    /// Birth out of every cell's reach, so a cell carrying it was reborn rather
-    /// than handed it by a neighbour.
-    const REBIRTH_STEP: i32 = 1_000;
-
-    #[test]
-    fn advection_pulls_deformation_from_the_cell_it_pulls_birth_from() {
-        // Driven a substep at a time: the rule is about what one advection does
-        // to one cell, which a whole run's boundaries would bury.
-        let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
-        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), opening_config(1));
-        // Stamp each cell with its own index in both fields, so where a value
-        // ends up names the cell it came from.
-        for cell in 0..fixture.mesh.cell_count() {
-            world.carried.birth[cell] = Some(cell as i32);
-            world.carried.deformation[cell] = cell as f32;
-        }
-
-        let born_cell_count = world.advect(&fixture.boundaries, REBIRTH_STEP);
-        assert!(born_cell_count > 0, "the fixture must rift somewhere");
-        let mut pulled_cell_count = 0;
-        for cell in 0..fixture.mesh.cell_count() {
-            match world.carried.birth[cell].unwrap() {
-                REBIRTH_STEP => assert_eq!(
-                    world.carried.deformation[cell], 0.0,
-                    "cell {cell} is new crust and nothing has deformed it"
-                ),
-                source => {
-                    pulled_cell_count += usize::from(source as usize != cell);
-                    assert_eq!(
-                        world.carried.deformation[cell], source as f32,
-                        "cell {cell} took its deformation from a different cell than its birth"
-                    );
-                }
-            }
-        }
-        assert!(pulled_cell_count > 0, "the fixture must advect somewhere");
-    }
+    use crate::test_support::{drift_config, two_plate_fixture};
 
     /// The angle a drift turns an axis through, recovered from the half-angle
     /// tangent the substep is written in. Scaffolding: the substep itself

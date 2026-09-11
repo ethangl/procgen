@@ -211,8 +211,9 @@ reviews. Treat them as the default bar for new work.
 
 The coarse pipeline described in `docs/world-heightmap.md` is in place on a
 65,536-cell default mesh: Fibonacci sampling, spherical Delaunay/Voronoi
-topology, tectonics through tectonic elevation, whose evolution changes the
-plate set as continents rift and suture, geology through isostatic adjustment,
+topology, tectonics through tectonic elevation, whose evolution moves crust as
+particles that rotate rigidly with their plate and changes the plate set as
+continents rift and suture, geology through isostatic adjustment,
 and climate (solar forcing, radiative equilibrium, seasonal thermal response,
 circulation, moisture transport, cryosphere, and bounded coupling). Sea level
 is a configured datum every elevation field carries, tectonic and geological

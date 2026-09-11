@@ -44,35 +44,29 @@ for that one.
   Coherence is not the limit: 1.0 measures within 0.02 of 0.85 everywhere.
 - `classify_boundaries` derives per-edge normal and shear speeds from the two
   owners' rotations and classifies each edge. It is correct and stays.
-- Evolution carries five things across steps: ownership, a birth step and an
-  accumulated deformation per cell, a closing debt per edge, and a travel debt
-  per cell. Debts are distances in model units measured against the mesh's one
-  cell width, `sqrt(total_area / cell_count)`. A convergent edge at or above
-  `minimum_convergence` adds `convergence * step_duration` each step and moves
-  one cell across itself once it has closed a whole cell width, carrying the
-  remainder forward; every other edge's debt resets to zero. The retreating
-  cell takes the advancing plate's id and everything the advancing cell
-  carries, so the overriding plate's material covers it.
-  `minimum_convergence` is now the speed below which nothing accumulates
-  rather than a binary gate.
-- Every cell accumulates `|velocity| * step_duration` and, on reaching a cell
-  width, pulls what the same-plate neighbour behind it carries. A cell with no
-  neighbour behind it is at the plate's trailing edge: if the boundary there is
-  a ridge it is reborn as crust made this step, flat because nothing has
-  deformed it yet, and otherwise it keeps what it has. Both updates read the
-  fields as they stood before the substep.
+- Evolution carries the material itself across steps, as one particle per
+  parcel of crust holding its birth step and its accumulated deformation, plus
+  the ownership and the two per-cell fields the cells read off it, the plate
+  set with its motion, and how long each continental pair has been colliding.
+  A step rotates every particle rigidly with its plate and each cell then
+  resolves whatever landed in it. The closing and travel debts, and the
+  ownership migration and field advection they paid for, are gone; see
+  "Material transport" below for why and for what replaced them.
 - Cell crust is derived from birth and never stored: `Some` is oceanic, `None`
   is original continental crust. `CrustClassification::cell_class` is gone, and
   every consumer reads `PlateEvolution::cell_crust`. Plate classes still
-  describe plates and still decide migration precedence and volcanic-arc
-  grouping. A rifting continental plate therefore grows an oceanic margin.
+  describe plates and still decide volcanic-arc grouping, and a cell's own
+  crust decides which of two parcels in it wins. A rifting continental plate therefore grows an oceanic margin.
 - `derive_crust_birth_prior` is the old hop-distance algorithm, now producing
   the birth field evolution starts from: `Some(-hops)` for oceanic cells,
   `Some(-ridge_less_age)` for ridge-less oceanic plates, `None` for continental.
   `derive_seafloor_age` is `step_count - birth`, in steps rather than hops.
 - `step_duration` defaults to 0.014, the time a plate at the default maximum
   angular speed of 1.0 takes to cross one cell width on the 65,536-cell default
-  mesh. At the viewer's defaults nine steps produce 6473 proposals, 5752
+  mesh. The rest of this bullet, and every count in the four that follow it,
+  was measured while ownership moved by closing debt and the fields by
+  upstream pull. They are kept as the record of what those rules did; the
+  material-transport section replaced them. At the viewer's defaults nine steps produce 6473 proposals, 5752
   migration events over 4494 distinct cells, and 1847 crust-creation events,
   against 16010 migration events and no crust creation before. Boundary edges
   after nine steps are 3297 convergent, 3706 divergent, and 3103 transform,
@@ -110,11 +104,9 @@ for that one.
   `BoundaryDeformation`, whose diagnostics sum source-cell events across steps
   and summarize the final field.
 - What a step does moved out of `evolution.rs` into `step.rs`, which owns the
-  step state and the two fields it carries. `CarriedFields` holds birth and
-  deformation together and exposes one `move_onto` that migration and
-  advection both call, so the upstream-neighbour search is written once.
+  step state.
 - Kinematics is per-step state inside the evolving world rather than a fixed
-  input. Every step ends, after deform, migrate, and advect and before the
+  input. Every step ends, after deform and transport and before the
   next classification, by drifting each plate's rotation vector: the axis
   turns through the fixed angle `axis_drift_rate * step_duration` toward a
   fresh hashed direction perpendicular to it, and the speed is multiplied by
@@ -156,7 +148,7 @@ for that one.
   together give 111 plates at sampling seed 7 against 57 from fewer, larger
   crack faces split more often; oceanic speed factor from 1.4 to 1.5 and
   continental from 0.7 to 1.0, so crust class separates speeds less; evolution
-  steps from 9 to 15 and minimum convergence from 0.3 to 0.5; and the
+  steps from 9 to 15 and the then minimum convergence from 0.3 to 0.5; and the
   convergent profile's depth from 3 to 6, for wider belts.
 - At the viewer's retuned defaults, boundary edges after fifteen steps are
   5326 convergent, 5896 divergent, and 5326 transform, against 4842, 5660,
@@ -225,12 +217,12 @@ for that one.
   ownership, the rotation vectors, and the plate classes are remapped to
   `0..live_count` in id order. `PlatePartition::validate` now requires that
   every id below `plate_count` owns a cell. Compaction removes the ids
-  migration empties as well as the ones suturing does — migration could
-  already wipe out a plate before this slice — so plate ids are no longer
+  transport empties as well as the ones suturing does — the ownership move of
+  the day could already wipe out a plate before this slice — so plate ids are no longer
   stable across a run, and a run's output plate count differs from the
   partition stage's in both directions.
 - `PlateLifecycleConfig` sits under `PlateEvolutionConfig` beside
-  `PlateMigrationConfig` and `PoleDriftConfig`. A `rift_rate` of zero and a
+  `MaterialTransportConfig` and `PoleDriftConfig`. A `rift_rate` of zero and a
   `suture_time` of infinity each disable their event; `test_support`'s
   `NO_LIFECYCLE` is both, as `NO_POLE_DRIFT` is for drift.
 - Defaults: `rift_rate` 4.5 per unit time, `rift_minimum_area_fraction` 0.04
@@ -385,9 +377,9 @@ Kinematics is a float result and always was, and angular velocities are
 quantized to a power-of-two grid. Slice 1 keeps that: the fit uses add,
 multiply, divide, and square root, and its output is quantized once on the host
 by the existing function. Boundary
-classes and migration decisions are integers derived from those quantized
-floats through comparisons, so they stay bit-identical run to run and across
-the two development machines. One libm call remains in reach of the mesh
+classes and the ownership a cell resolves to are integers derived from those
+quantized floats through comparisons, so they stay bit-identical run to run
+and across the two development machines. One libm call remains in reach of the mesh
 path's angular velocities, and it predates this slice:
 `RandomStream::unit_vector` takes a sine and a cosine, and the hashed axis is
 still a fifteen-percent share of every plate's direction at the default
@@ -416,6 +408,15 @@ already depends on. Nothing on the lifecycle path calls libm, so the plate ids
 it produces and the boundary classes the new rotation vectors decide stay
 bit-identical across the two development machines.
 
+Material transport adds no libm call either. A particle's rotation is add,
+multiply, and divide in the same half-angle tangent form the pole drift uses;
+its location is dot and cross products in f64 on unit directions, which is
+what the hull already does; and a cell's resolution is comparisons with
+integer tie-breaks. Cell owners and births are therefore integers decided by
+float comparisons, the same class of result as the boundary classes, exact on
+one machine and expected to agree between the two. Particle positions
+themselves are a float field and are never pinned.
+
 ## Decisions
 
 - Keep rigid rotations. Plates are rigid to first order, and the Euler-vector
@@ -423,16 +424,19 @@ bit-identical across the two development machines.
 - Fit to a field rather than simulate forces. Slab pull and ridge push would
   need a mantle model; a smooth field with crust and size factors gets the
   large-scale pattern at a fraction of the complexity.
-- Keep evolution as simultaneous steps. Everything here is a Jacobi update,
-  which is what keeps the GPU mirror well-defined.
+- Keep evolution as simultaneous steps. Everything here is a Jacobi update:
+  every cell resolves against the ownership the step began with, and the new
+  ownership is written only once every cell has been decided. That is what
+  keeps a GPU mirror well-defined, and it holds for material transport too.
 - Birth step, not age, is the stored fact; age is derived from the current
   step. Store one fact and derive the rest.
 
 ## Non-goals
 
 - No mantle convection model, no force balance, no plate-boundary forces.
-- No continuous advection of cell contents. Cells change owner or are re-born;
-  they do not move.
+- No moving cells. The mesh is fixed: cells change owner and read what the
+  material lying in them carries. The material does move, as particles under
+  each plate's own rotation; see "Material transport".
 - No history retained per step in the output beyond the accumulated fields.
   The viewer shows the end state and aggregate diagnostics, as today.
 - No change to the partition stage.
@@ -909,3 +913,223 @@ fixture holds ages in 0..8 and so gains cells in 5..=10. Each was re-pinned
 once. The ownership and birth fingerprints of a run with neither drift nor
 lifecycle are unchanged, which is what says nothing outside the lifecycle
 moved a cell.
+
+## Material transport
+
+One slice, after the profile retune. It replaces the two transport substeps of
+an evolution step — ownership migration by closing debt and field advection by
+travel debt — with one. Material lives in particles that rotate rigidly with
+their plate, and cells sample them. The output of a run keeps its shape, so
+nothing downstream of `PlateEvolution` changed.
+
+### Why particles, not patched rules
+
+Neither of the two rules conserved anything, and the loss was structural
+rather than a tuning error. Measured at the viewer's defaults by comparing the
+initial continental mask to the final one read from birth steps, the
+continental area fraction went 0.297 at step zero, 0.260 at fifteen steps,
+0.261 at thirty, 0.334 at sixty, and 0.447 at a hundred and twenty: a fifteen
+percent loss that turned into a fifty percent gain. Attribution over the
+fifteen-step run, per substep: migration +2,568 cells of continental copying
+onto the oceanic cell it overrode, advection −4,862, of which the rebirth of
+continental trailing cells was only 666.
+
+The rest of the advection loss was the upstream pull itself. The pull map at
+step zero had 21,191 cells pulled by two or more downstream cells and 22,243
+pulled by none, so a third of the material was duplicated and a third dropped
+every time a plate moved one cell. A single plate under a pure rotation with
+no boundaries at all lost 5.5 percent of a continental cap in forty steps.
+
+A cell-to-cell scheme cannot fix that. A per-step permutation of cells along
+the flow does not exist on this mesh: a deferred-acceptance matching of every
+cell to a downstream neighbour leaves 9,186 of 65,536 unmatched under a pure
+rotation and forms no cycles, so a chain scheme that moves only complete
+chains stalls the whole plate. Conservation needs the material to be points,
+not cells.
+
+### What a step does
+
+`transport.rs` owns the particle, the config, the substep, and every write to
+a particle's plate that a lifecycle event implies; `migration.rs` is gone. A particle is a unit position, a plate, a birth step,
+a deformation, and the cell and Delaunay triangle its last location walk
+found. `EvolvingWorld` holds the particles and, as the projection every
+consumer reads, the ownership, birth, and deformation each cell sampled from
+the particle that won it. `CarriedFields`, `edge_closing`, and `cell_travel`
+are gone with the rules they served.
+
+A step is deform, transport, drift, lifecycle, reclassify — the same slots as
+before with migrate and advect merged into one.
+
+- **Deform.** The per-cell boundary profile as before, added to every particle
+  in the cell, stacked ones included, and clamped to `maximum_magnitude` per
+  particle. `accumulate_boundary_deformation` became
+  `boundary_deformation_increment`, which returns the scaled per-cell
+  increment and leaves the accumulation to its caller.
+- **Move.** Each particle turns about its plate's rotation vector by
+  `|ω| · step_duration`. The position splits into the part along the axis,
+  which the rotation leaves alone, and the part across it, which
+  `Vec3::rotated_toward` turns toward `axis × position` — a vector
+  perpendicular to it and of its own length, which is what makes the turn
+  preserve that length. This is the same libm-free half-angle tangent form the
+  pole drift uses, and the realized angle is short by four parts in ten
+  thousand at the default step. Every particle of one plate goes through the
+  same linear map, so a plate's material is rigid by construction rather than
+  by tolerance. The design for this slice prescribed rotating the whole
+  position toward the normalized velocity instead; that form ignores the sine
+  of the angle from the axis, over-rotates everything off the plate's equator,
+  and is not rigid, so the conservation test it asks for would not have
+  passed.
+- **Locate.** `SphereMesh::locate_delaunay(position, hint)` with the
+  particle's previous triangle as the hint, so a step costs a short walk per
+  particle. The particle's cell is the located triangle's corner cell with the
+  greatest dot product with the position.
+- **Resolve.** Each cell takes the particle that wins it, by one lexicographic
+  order: continental over oceanic; then, among continental, the cell's
+  previous owner over a newcomer; then, among oceanic, the younger; then the
+  nearer to the cell's centre; then the lower particle index. The
+  incumbent-then-age split is what the design asked for, written as one total
+  order rather than a pairwise rule, because the pairwise rule is not
+  transitive — three particles on two plates can cycle, and the winner would
+  then depend on the order they were compared in.
+- **Subduct.** A losing particle is removed when it is oceanic, belongs to a
+  different plate than the winner, and the cell has an edge to a cell of the
+  loser's plate that the current classification calls convergent. That is the
+  trench and nothing else. Every other loser survives, stacked: two parcels of
+  one plate are lattice noise that spreads back out next step, continental
+  material is never destroyed, and a parcel that crossed a transform or a
+  ridge is not being subducted.
+- **Sample.** A cell no particle reached takes the nearest particle within
+  `gap_radius` cell widths of its centre, preferring particles of its previous
+  owner, searching the occupants of its one- and two-hop rings. This is a
+  raster fill, not a material event: the cell reads what the particle carries
+  and no particle is created or moved.
+- **Make floor.** No particle within `gap_radius`: one is created at the cell
+  centre, oceanic, born this step, flat, on the cell's previous plate. This is
+  the ridge, and it is the only place a run creates material. A particle made
+  here is invisible to the rest of the substep, so two adjacent gap cells both
+  make floor rather than one sampling the other's — the same Jacobi rule every
+  other substep follows.
+
+The lifecycle carries material too, through two methods on the evolving world
+that `transport.rs` owns, so `lifecycle.rs` never touches the particles
+itself. `relabel_particles(from, to, scope)` is the one loop all of it needs:
+a suture takes the `WholePlate` of what it absorbs, and a rift takes only the
+material in `OwnCells` — the cells the new half now owns — so the halves part
+carrying their crust and the arc between them opens a real gap. The design
+said "every particle in a cell of the new half"; a particle of a third plate
+stacked there is not the parent's to give away and keeps the plate it belongs
+to. `remap_particle_plates` is the second, for compaction: it drops the
+particles of a plate the run left owning no cell at all, which only compaction
+can do, because that material is stacked under other plates' cells and nothing
+moves it again.
+
+### `gap_radius`
+
+`MaterialTransportConfig::gap_radius` defaults to 1.5 cell widths and is the
+only knob the slice adds; `PlateMigrationConfig::minimum_convergence` and its
+viewer control are gone.
+
+Cell areas vary, so a rigid rotation on its own leaves a third of the cells
+empty and a quarter doubled at any moment — that is jitter, not transport, and
+none of it may be read as a gap. Measured on the default mesh after rigid
+rotations of 1, 7, and 50 cell widths, no empty cell's nearest particle was
+further than 1.5 cell widths: zero false gaps at all three distances, where a
+radius of 1.0 would have made 2, 672, and 949 cells of false floor. The real
+gaps are much wider: after five steps of the viewer's actual plate motion with
+no resampling, 756 cells exceeded 1.5 widths and 103 had no particle within
+two hops at all.
+
+The radius has a ceiling as well as a default. The search reads the one- and
+two-hop rings, which reach about two cell widths, so a larger radius is not a
+wider search but silent false floor: the cell would accept material it never
+looks at. `MAX_GAP_RADIUS` is that ceiling, `evolve_plate_ownership` rejects a
+radius above it, and the viewer's slider reads the constant rather than
+restating it.
+
+### What comes out for free
+
+- Boundaries move with the plates. Two plates moving together carry their
+  shared boundary along; a plate moving away from a stationary one opens ocean
+  behind it at its own speed.
+- Subduction rate equals relative convergence: the overriding plate's arrivals
+  find the subducting plate's cells vacated at that plate's speed and occupied
+  otherwise.
+- Ocean–ocean polarity: the older floor subducts, which is the island-arc
+  item's first half.
+- Continental collision stacks particles rather than destroying them. The
+  depth of the stack is a thickness signal for a later slice; nothing reads it
+  yet.
+- A rift opens an ocean by moving the halves apart, not by turning the wall
+  into floor.
+
+### Measured
+
+At the viewer's defaults — sampling seed 7, jitter 0.8, 15 steps — and at the
+reference world of sampling seed 9, subdivided faces 0.2, and 30 steps:
+
+| | viewer defaults | reference world |
+| --- | --- | --- |
+| continental particles, start to end | 19,365 to 19,365 | 19,358 to 19,358 |
+| continental cells, start to end | 19,365 to 18,252 | 19,358 to 18,936 |
+| land at the 0.5 datum | 17,010 (0.260) | 18,167 (0.277) |
+| born particles | 4,437 | 3,804 |
+| subducted particles | 12,068 | 8,625 |
+| owner changes | 42,722 | 32,446 |
+| collided-cell events / deepest collision | 20,896 / 8 | 13,972 / 8 |
+| sampled-cell events | 372,326 | 722,692 |
+| rifts / failed rifts / sutures | 2 / 0 / 14 | 2 / 1 / 6 |
+| final plates | 99 | 14 |
+| oceanic age p10 / median / p90 | 5 / 17 / 23 | 13 / 38 / 55 |
+| evolution, per step | 52 ms | 41 ms |
+
+The continental particle count is exact at both, which is the whole claim.
+
+A collided cell is one holding material of more than one plate after
+subduction, and the depth is the foreign material plus the parcel that won the
+cell. Counting every cell with two parcels in it instead gives 232,726 and 9
+at the defaults, nine tenths of which is the same cell-area variance that
+leaves a third of the cells empty — a count of the lattice, not of collisions.
+
+The continental *cell* series at the viewer's defaults, which replaces the one
+this section opened with: 0.279 at fifteen steps, 0.272 at thirty, 0.258 at
+sixty, 0.244 at a hundred and twenty, from 0.295 at step zero, which is what
+the configured target of 0.297 grew to. The target was
+a flat line and this is a slow decline of five points over a hundred and
+twenty steps, against a swing from 0.260 to 0.447 before. The decline is the
+collision stack: continental material that ends a run under another
+continent's cell occupies no cell of its own. It is the thickness signal
+arriving as a cell-count deficit, and a later slice that reads the stack is
+where it belongs.
+
+Cost is 52 ms a step at 65,536 cells against a whole tectonics phase of
+0.89 s. Of that, about 13 ms is the move — the location walks — and about
+14 ms the resolution, of which the empty-cell ring search is most. The ring
+buffer is reused across cells; allocating it per empty cell cost 6 ms a step
+on its own.
+
+### Risks, measured
+
+- **Continental ghosting.** Two continents that collide stack for up to
+  `suture_time` before the lifecycle merges them, and the losing plate's
+  particles keep moving through the winner's cells until then. At the viewer's
+  defaults 908 of 19,365 continental particles, 4.7 percent, end a run in a
+  cell owned by another plate. That is a few hundred kilometres of
+  underthrust, which is the real thing, so the blocking rule the design held
+  in reserve is not needed.
+- **Boundary flicker.** An empty boundary cell sampled from a neighbour can
+  change owner step to step, and incumbent preference is the mitigation. There
+  are 42,722 owner changes at the defaults, against 17,588 migration events
+  measured at the same settings with the lifecycle disabled — not the same
+  quantity, but the same order. The reason not to expect speckle in the
+  deformation field is structural rather than measured: the field rides the
+  particles, so a cell that flickers between two plates reads two parcels the
+  same boundary has been raising. Looking at the two worlds side by side is
+  still outstanding.
+
+### Pins that moved
+
+Every integer fingerprint downstream of a run: ownership and birth on the
+reference fixture with and without drift and lifecycle, seafloor age, and base
+elevation, along with the reference run's aggregate counts and its final plate
+count. Each was re-pinned once. The geology and climate pins read synthetic
+elevation fields rather than an evolved one and did not move, as expected.

@@ -35,13 +35,13 @@
 //!
 //! **Suturing.** Each step counts, for every adjacent pair of plates, the
 //! shared edges that are convergent with continental crust on both sides. A pair at or above `suture_minimum_shared_edges` grows its collision
-//! time by the step; a pair below it starts over, the same convention the
-//! closing debt uses for an edge that stopped converging. At `suture_time` the
+//! time by the step; a pair below it starts over, so a pair that stopped
+//! colliding begins its next collision from nothing. At `suture_time` the
 //! plate with more area absorbs the other, taking the area-weighted mean of
 //! the two rotation vectors, and the absorbed id is left owning nothing.
 //!
 //! **Compaction.** The run ends by removing every plate id that owns no cell
-//! — the ones suturing emptied and the ones migration did — and remapping
+//! — the ones suturing emptied and the ones transport did — and remapping
 //! ownership and kinematics to `0..live_count` in id order, so every plate
 //! identity a consumer sees owns cells and no id means the same plate either
 //! side of a run.
@@ -57,6 +57,7 @@ use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, PlateEvolutionError,
     cracks::{Cracks, adopt_unassigned_cells},
     step::EvolvingWorld,
+    transport::MaterialScope,
 };
 use procgen_core::{RandomStream, Vec3, random_streams::PLATE_RIFT};
 use procgen_sphere_mesh::{SphereMesh, connected_components};
@@ -97,7 +98,8 @@ pub struct PlateLifecycleConfig {
     pub rift_curvature: f32,
     /// Angular speed each half gains away from the rift, on top of the
     /// parent's motion. It is what makes the new boundary classify divergent,
-    /// so it has to clear the migration minimum to open anything.
+    /// so it has to part the halves faster than
+    /// [`crate::MaterialTransportConfig::gap_radius`] to open anything.
     pub rift_opening_speed: f32,
     /// Model time a continental pair must stay in collision before it merges.
     /// Infinity never merges anything.
@@ -131,10 +133,9 @@ impl Default for PlateLifecycleConfig {
             // The partition's own default, so a rift arc bends like the arcs
             // that drew the plate it splits.
             rift_curvature: 8.0,
-            // A third of the default maximum angular speed: enough for the new
-            // boundary to clear the default minimum convergence on its own,
-            // little enough that the halves stay part of the flow field's
-            // pattern.
+            // A third of the default maximum angular speed: enough for the
+            // halves to part a cell width in about three default steps, and
+            // little enough that they stay part of the flow field's pattern.
             rift_opening_speed: 0.33,
             // Eight default steps. Together with the edge count below, the
             // viewer's defaults suture once over a nine- or fifteen-step run
@@ -183,8 +184,8 @@ impl EvolvingWorld<'_> {
     /// Rifts the large continental plates whose draw passes and merges the
     /// continental pairs whose collision has lasted long enough.
     ///
-    /// `boundaries` are the boundaries the step began with, which is what the
-    /// closing debt accumulates against too.
+    /// `boundaries` are the boundaries the step began with, which is what
+    /// the transport read to decide its trenches too.
     pub(crate) fn lifecycle(
         &mut self,
         boundaries: &BoundaryClassification,
@@ -330,6 +331,10 @@ impl EvolvingWorld<'_> {
         }
         self.partition.plate_count += 1;
 
+        // The half's material leaves with it, so the two halves part carrying
+        // their own crust and the arc between them opens a real gap.
+        self.relabel_particles(plate, new_plate, MaterialScope::OwnCells);
+
         let parent = self.kinematics.angular_velocities[plate];
         let rotations = [parent + opening, parent - opening];
         self.kinematics.angular_velocities[plate] = rotations[keeps];
@@ -435,6 +440,7 @@ impl EvolvingWorld<'_> {
                 *plate = absorber;
             }
         }
+        self.relabel_particles(absorbed, absorber, MaterialScope::WholePlate);
         self.collisions
             .retain(|&(low, high), _| low != absorbed && high != absorbed);
     }
@@ -442,7 +448,7 @@ impl EvolvingWorld<'_> {
     /// Removes every plate id that owns no cell, remapping ownership, the
     /// rotation vectors, and the plate classes to `0..live_count` in id order.
     ///
-    /// Suturing empties the id it absorbs, and migration can take the last
+    /// Suturing empties the id it absorbs, and transport can take the last
     /// cell of a plate on its own; both leave a hole this closes, so plate ids
     /// are not stable across a run.
     pub(crate) fn compact(&mut self) {
@@ -466,6 +472,7 @@ impl EvolvingWorld<'_> {
         for plate in self.partition.cell_plates.iter_mut() {
             *plate = compacted[*plate];
         }
+        self.remap_particle_plates(&compacted);
         self.kinematics.angular_velocities = live
             .iter()
             .map(|&plate| self.kinematics.angular_velocities[plate])
@@ -647,6 +654,7 @@ mod tests {
         // Only crust born during the run counts: the prior already dated the
         // oceanic plate the cap sits in.
         let run = fixture.evolve(config);
+        assert!(run.diagnostics.born_particle_count > 0);
         let born: Vec<usize> = (0..fixture.mesh.cell_count())
             .filter(|&cell| run.cell_birth[cell].is_some_and(|birth| birth >= 0))
             .collect();

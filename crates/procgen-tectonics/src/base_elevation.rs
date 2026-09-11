@@ -442,7 +442,7 @@ mod tests {
         // oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
             quantized_fingerprint(first.cell_elevations.iter().copied()),
-            1_613_837_875_145_704_898
+            3_019_583_540_681_191_582
         );
     }
 

@@ -13,7 +13,7 @@
 //! The fit sets direction only. Speed is the plate's hashed base speed scaled
 //! by crust and by plate size, because where the field does make adjacent
 //! plates move together those factors are the only contrast left for a
-//! boundary to clear the migration threshold with. A `coherence` fraction
+//! boundary to move any material across itself. A `coherence` fraction
 //! blends the fitted axis back toward the hashed random one, so zero
 //! reproduces independent random motion apart from those speed factors.
 //!

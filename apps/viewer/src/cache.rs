@@ -385,10 +385,10 @@ struct_codec! {
     PlatePartitionConfig { arc_count, curvature, subdivided_fraction, piece_fraction, growth_roughness, seed }
     CrustClassificationConfig { continental_fraction, nucleus_count, growth_roughness, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
-    PlateMigrationConfig { minimum_convergence }
+    MaterialTransportConfig { gap_radius }
     PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_edges }
-    PlateEvolutionConfig { seed, step_count, step_duration, migration, deformation, pole_drift, lifecycle }
+    PlateEvolutionConfig { seed, step_count, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width_hops, margin_edge_elevation }
     BoundaryEffect { offset, depth }
@@ -422,7 +422,7 @@ struct_codec! {
     CrustClassificationDiagnostics { continental_fraction, component_count }
     PlateKinematics { angular_velocities }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
-    PlateEvolutionDiagnostics { active_step_count, proposal_count, contested_cell_count, migrated_cell_count, born_cell_count, maximum_convergence, rift_count, failed_rift_count, suture_count }
+    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, collided_cell_count, maximum_collision_stack, sampled_cell_count, starting_continental_particle_count, final_continental_particle_count, rift_count, failed_rift_count, suture_count }
     FieldSummary { minimum, maximum, mean }
     CrustBirthPriorDiagnostics { hops, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
     SeafloorAgeDiagnostics { summary, oceanic_cell_count }

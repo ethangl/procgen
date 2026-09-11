@@ -5,8 +5,8 @@ use procgen_sphere::FibonacciConfig;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
-    DEFAULT_STEP_DURATION, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlateLifecycleConfig, PlatePartitionConfig, PoleDriftConfig,
+    DEFAULT_STEP_DURATION, MAX_GAP_RADIUS, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig,
+    PlateKinematicsConfig, PlateLifecycleConfig, PlatePartitionConfig, PoleDriftConfig,
 };
 
 // The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
@@ -26,6 +26,10 @@ const NUCLEUS_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=128;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+// The top is the crate's own ceiling, which is how far the search reaches. At
+// the bottom every cell a rigid rotation left empty makes floor it should not
+// have.
+const GAP_RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.5..=MAX_GAP_RADIUS;
 // Zero freezes the world; the top of the range moves the fastest plates about
 // ten cells per step on the default mesh, past which a step skips terrain it
 // should have crossed.
@@ -248,9 +252,9 @@ fn evolution_controls(
     );
     slider(
         ui,
-        "Minimum convergence",
-        &mut config.migration.minimum_convergence,
-        0.0..=kinematics.maximum_convergence(WORLD_RADIUS),
+        "Gap radius",
+        &mut config.transport.gap_radius,
+        GAP_RADIUS_RANGE,
     );
     pole_drift_controls(ui, &mut config.pole_drift);
     lifecycle_controls(ui, &mut config.lifecycle, kinematics);

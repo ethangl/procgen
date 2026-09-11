@@ -5,15 +5,16 @@
 //! this module owns the run: its config, its inputs, the totals it keeps, and
 //! the state it hands on.
 //!
-//! What survives a step: ownership, the plate set itself — its count and its
-//! motion — the two fields each cell carries, its birth step and the
-//! deformation the boundaries have raised on it, the closing and travel
-//! debts, and how long each continental pair has been colliding. Crust is not
-//! one of them. It is read from birth, so a continental plate that rifts grows
-//! an oceanic margin and an overridden cell takes the overriding material's
-//! class without anything storing a second answer to the question. A run reads
-//! no crust classification at all: the birth prior has already turned the
-//! initial one into the birth field it starts from.
+//! What survives a step: the material itself — one particle per parcel of
+//! crust, each holding its birth step and the deformation the boundaries have
+//! raised on it — the ownership and the two fields the cells read off it, the
+//! plate set itself with its count and its motion, and how long each
+//! continental pair has been colliding. Crust is not one of them. It is read
+//! from birth, so a continental plate that rifts grows an oceanic margin and
+//! an overridden cell takes the overriding material's class without anything
+//! storing a second answer to the question. A run reads no crust
+//! classification at all: the birth prior has already turned the initial one
+//! into the birth field it starts from.
 //!
 //! Deformation therefore records where the boundaries have been as well as
 //! where they are: belts widen where a boundary converged for many steps, a
@@ -23,12 +24,13 @@
 use crate::{
     BoundaryClassification, BoundaryClassificationError, BoundaryDeformation,
     BoundaryDeformationConfig, BoundaryDeformationDiagnostics, BoundaryDeformationError, CellCrust,
-    CrustBirthPrior, PlateKinematics, PlateLifecycleConfig, PlateMigration, PlateMigrationConfig,
-    PlateMigrationError, PlatePartition, PoleDriftConfig, StageInputError, classify_boundaries,
+    CrustBirthPrior, MAX_GAP_RADIUS, MaterialTransportConfig, PlateKinematics,
+    PlateLifecycleConfig, PlatePartition, PoleDriftConfig, StageInputError, classify_boundaries,
     deformation::validate_config,
     field::DEFAULT_STEP_DURATION,
     lifecycle::{self, LifecycleEvents},
-    step::{CarriedFields, EvolvingWorld},
+    step::EvolvingWorld,
+    transport::TransportCounts,
 };
 use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
@@ -40,8 +42,8 @@ pub struct PlateEvolutionConfig {
     /// kinematics seed so that re-rolling the drift does not re-roll the
     /// motion it starts from.
     pub seed: u64,
-    /// Number of complete boundary-classification, deformation, migration,
-    /// advection, and pole-drift transitions.
+    /// Number of complete boundary-classification, deformation, transport,
+    /// and pole-drift transitions.
     pub step_count: usize,
     /// Model time advanced per step. Every displacement is a speed times this
     /// duration measured against the mesh's cell width, so a finer mesh has a
@@ -49,10 +51,10 @@ pub struct PlateEvolutionConfig {
     /// which is what a fixed model time per step should do. Zero freezes the
     /// world. See [`DEFAULT_STEP_DURATION`] for where the default sits.
     pub step_duration: f32,
-    pub migration: PlateMigrationConfig,
+    pub transport: MaterialTransportConfig,
     /// Profiles the boundaries current in each step raise into the carried
     /// deformation field. It sits here rather than beside evolution because
-    /// deformation is a substage of a step exactly as migration is: a config
+    /// deformation is a substage of a step exactly as transport is: a config
     /// evolution reads, not a result it is handed.
     pub deformation: BoundaryDeformationConfig,
     /// How far each plate's rotation vector moves at the end of a step.
@@ -68,7 +70,7 @@ impl Default for PlateEvolutionConfig {
             seed: 0,
             step_count: 5,
             step_duration: DEFAULT_STEP_DURATION,
-            migration: PlateMigrationConfig::default(),
+            transport: MaterialTransportConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
             pole_drift: PoleDriftConfig::default(),
             lifecycle: PlateLifecycleConfig::default(),
@@ -77,20 +79,34 @@ impl Default for PlateEvolutionConfig {
 }
 
 /// Totals accumulated without retaining per-step history.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlateEvolutionDiagnostics {
-    /// Steps that changed ownership or created crust.
+    /// Steps that changed ownership or made ocean floor.
     pub active_step_count: usize,
-    /// Qualifying convergent-edge proposals across all steps.
-    pub proposal_count: usize,
-    /// Contested-cell events across all steps. A cell can contribute once per step.
-    pub contested_cell_count: usize,
-    /// Ownership-change events across all steps. A cell can migrate more than once.
-    pub migrated_cell_count: usize,
-    /// Crust-creation events at trailing divergent boundaries across all
-    /// steps. A cell can be reborn more than once.
-    pub born_cell_count: usize,
-    pub maximum_convergence: f32,
+    /// Cells whose owner changed, summed over steps. A cell can change more
+    /// than once.
+    pub owner_change_count: usize,
+    /// Particles a trench destroyed across all steps.
+    pub subducted_particle_count: usize,
+    /// Particles made in cells no material reached across all steps. This is
+    /// the only place a run creates material.
+    pub born_particle_count: usize,
+    /// Cells holding material of more than one plate after subduction,
+    /// summed over steps. A collision stacks rather than destroys, and this
+    /// counts only that: two parcels of one plate are lattice noise that
+    /// spreads back out next step.
+    pub collided_cell_count: usize,
+    /// Deepest such column over all steps, the foreign material plus the
+    /// parcel that won the cell. Zero for a run in which nothing collided.
+    pub maximum_collision_stack: usize,
+    /// Cells that held no particle and read one nearby, summed over steps.
+    pub sampled_cell_count: usize,
+    /// Continental particles before step zero and after the last step. The
+    /// two are equal for every run: continental material is neither created
+    /// nor destroyed. The continental *cell* count is a raster of that
+    /// material and is not.
+    pub starting_continental_particle_count: usize,
+    pub final_continental_particle_count: usize,
     /// Continental plates that split in two across all steps.
     pub rift_count: usize,
     /// Rift arcs that failed to separate a plate into two pieces, which left
@@ -101,16 +117,17 @@ pub struct PlateEvolutionDiagnostics {
 }
 
 impl PlateEvolutionDiagnostics {
-    /// Records one step's migration and returns how many cells it moved.
-    fn record_migration(&mut self, migration: &PlateMigration) -> usize {
-        let migrated_cell_count = migration.migrated_cell_count();
-        self.proposal_count += migration.proposal_count;
-        self.contested_cell_count += migration.contested_cell_count;
-        self.migrated_cell_count += migrated_cell_count;
-        self.maximum_convergence = self
-            .maximum_convergence
-            .max(migration.maximum_convergence());
-        migrated_cell_count
+    /// Records one step's transport and returns whether it changed anything.
+    fn record_transport(&mut self, counts: TransportCounts) -> bool {
+        self.owner_change_count += counts.owner_change_count;
+        self.subducted_particle_count += counts.subducted_particle_count;
+        self.born_particle_count += counts.born_particle_count;
+        self.collided_cell_count += counts.collided_cell_count;
+        self.maximum_collision_stack = self
+            .maximum_collision_stack
+            .max(counts.maximum_collision_stack);
+        self.sampled_cell_count += counts.sampled_cell_count;
+        counts.owner_change_count > 0 || counts.born_particle_count > 0
     }
 
     fn record_lifecycle(&mut self, events: LifecycleEvents) {
@@ -174,7 +191,7 @@ impl PlateEvolution {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlateEvolutionError {
     InvalidStepDuration,
-    InvalidMinimumConvergence,
+    InvalidGapRadius,
     InvalidPoleDriftRate,
     InvalidSpeedDriftLimit,
     InvalidRiftRate,
@@ -185,7 +202,6 @@ pub enum PlateEvolutionError {
     Deformation(BoundaryDeformationError),
     Input(StageInputError),
     Boundary(BoundaryClassificationError),
-    Migration(PlateMigrationError),
 }
 
 impl fmt::Display for PlateEvolutionError {
@@ -194,8 +210,8 @@ impl fmt::Display for PlateEvolutionError {
             Self::InvalidStepDuration => {
                 formatter.write_str("step duration must be finite and non-negative")
             }
-            Self::InvalidMinimumConvergence => {
-                formatter.write_str("minimum convergence must be finite and non-negative")
+            Self::InvalidGapRadius => {
+                write!(formatter, "gap radius must lie in [0, {MAX_GAP_RADIUS}]")
             }
             Self::InvalidPoleDriftRate => {
                 formatter.write_str("pole drift rates must be finite and non-negative")
@@ -221,7 +237,6 @@ impl fmt::Display for PlateEvolutionError {
             Self::Deformation(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
             Self::Boundary(error) => error.fmt(formatter),
-            Self::Migration(error) => error.fmt(formatter),
         }
     }
 }
@@ -246,16 +261,10 @@ impl From<BoundaryClassificationError> for PlateEvolutionError {
     }
 }
 
-impl From<PlateMigrationError> for PlateEvolutionError {
-    fn from(error: PlateMigrationError) -> Self {
-        Self::Migration(error)
-    }
-}
-
 /// Repeatedly classifies current boundaries, raises deformation along them,
-/// applies one simultaneous migration transition, advects what the cells
-/// carry one cell width at a time, and drifts every plate's rotation vector
-/// before the next classification.
+/// rotates every particle of crust with its plate and resolves what each cell
+/// then holds, and drifts every plate's rotation vector before the next
+/// classification.
 ///
 /// [`PlateEvolution::cell_crust`] is what a cell carries when the run ends.
 pub fn evolve_plate_ownership(
@@ -266,10 +275,8 @@ pub fn evolve_plate_ownership(
     if !config.step_duration.is_finite() || config.step_duration < 0.0 {
         return Err(PlateEvolutionError::InvalidStepDuration);
     }
-    if !config.migration.minimum_convergence.is_finite()
-        || config.migration.minimum_convergence < 0.0
-    {
-        return Err(PlateEvolutionError::InvalidMinimumConvergence);
+    if !(0.0..=MAX_GAP_RADIUS).contains(&config.transport.gap_radius) {
+        return Err(PlateEvolutionError::InvalidGapRadius);
     }
     let drift = config.pole_drift;
     if [drift.axis_drift_rate, drift.speed_drift_rate]
@@ -290,34 +297,35 @@ pub fn evolve_plate_ownership(
 
     let mut world = EvolvingWorld::new(mesh, inputs, config);
     let mut boundaries = inputs.boundaries.clone();
-    let mut diagnostics = PlateEvolutionDiagnostics::default();
+    let mut diagnostics = PlateEvolutionDiagnostics {
+        starting_continental_particle_count: world.continental_particle_count(),
+        ..PlateEvolutionDiagnostics::default()
+    };
     let mut source_cell_count = 0;
 
     for step in 0..config.step_count {
         source_cell_count += world.deform(&boundaries);
-        let migrated_cell_count = diagnostics.record_migration(&world.migrate(&boundaries)?);
-        let born_cell_count = world.advect(&boundaries, step as i32);
-        diagnostics.born_cell_count += born_cell_count;
-        diagnostics.active_step_count +=
-            usize::from(migrated_cell_count > 0 || born_cell_count > 0);
+        let active = diagnostics.record_transport(world.transport(&boundaries, step as i32));
+        diagnostics.active_step_count += usize::from(active);
         world.drift(step as i32);
         diagnostics.record_lifecycle(world.lifecycle(&boundaries, step as i32));
         boundaries = classify_boundaries(mesh, &world.partition, &world.kinematics)?;
     }
+    // Read before compaction, which drops the material of a plate the run
+    // left owning no cell at all: that plate's particles are stacked under
+    // other plates' cells, and nothing moves them again.
+    diagnostics.final_continental_particle_count = world.continental_particle_count();
     // Compaction is a bijection on the ids that own cells and carries each
     // plate's motion with it, so the boundaries the loop left behind describe
     // the same edges either side of it and are not reclassified.
     world.compact();
 
-    let CarriedFields {
-        birth: cell_birth,
-        deformation: cell_deformation,
-    } = world.carried;
+    let cell_deformation = world.cell_deformation;
     Ok(PlateEvolution {
         partition: world.partition,
         kinematics: world.kinematics,
         boundaries,
-        cell_birth,
+        cell_birth: world.cell_birth,
         deformation: BoundaryDeformation {
             diagnostics: BoundaryDeformationDiagnostics::summarize(
                 &cell_deformation,
@@ -332,10 +340,11 @@ pub fn evolve_plate_ownership(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::REFERENCE_STEP_DURATION;
     use crate::test_support::{
-        NO_LIFECYCLE, NO_POLE_DRIFT, drift_config, empty_boundaries, evolution_fixture,
-        fingerprint, opening_config, opposed_kinematics, reference_evolution_config,
-        single_edge_convergent_fixture, two_plate_boundary_partition, two_plate_fixture,
+        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, drift_config,
+        empty_boundaries, evolution_fixture, fingerprint, forced_rift_fixture, opposed_kinematics,
+        reference_evolution_config, two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::{BoundaryClass, CrustClass};
     use procgen_core::Vec3;
@@ -368,25 +377,30 @@ mod tests {
         assert_eq!(first, fixture.evolve(config));
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count);
-        assert!(first.diagnostics.proposal_count >= first.diagnostics.migrated_cell_count);
-        assert_eq!(first.diagnostics.proposal_count, 264);
-        assert_eq!(first.diagnostics.contested_cell_count, 36);
-        assert_eq!(first.diagnostics.migrated_cell_count, 228);
-        assert_eq!(first.diagnostics.born_cell_count, 102);
-        // Plates of the reference world now clear the minimum continental
-        // area a rift needs, where none did before the retune: two draws pass
-        // over the run, one splitting its plate and one leaving it in a
-        // single piece. One pair merges, and migration empties another four
-        // of the thirty-three plates the run started with. Compaction removes
-        // every id left owning nothing.
-        assert_eq!(first.diagnostics.rift_count, 1);
+        assert_eq!(first.diagnostics.owner_change_count, 433);
+        assert_eq!(first.diagnostics.subducted_particle_count, 127);
+        assert_eq!(first.diagnostics.born_particle_count, 23);
+        // Cell areas vary, so a rigid rotation alone leaves a third of the
+        // cells empty at any moment, and the run makes ocean floor in only 23
+        // of the 881 cells that found nothing of their own. The collision
+        // count excludes the doubling that same variance causes, so it is
+        // small beside them.
+        assert_eq!(first.diagnostics.collided_cell_count, 191);
+        assert_eq!(first.diagnostics.maximum_collision_stack, 4);
+        assert_eq!(first.diagnostics.sampled_cell_count, 881);
+        assert_eq!(first.diagnostics.starting_continental_particle_count, 174);
+        assert_eq!(first.diagnostics.final_continental_particle_count, 174);
+        // Plates of the reference world clear the minimum continental area a
+        // rift needs: three draws pass over the run, two splitting their
+        // plate and one leaving it in a single piece. Four pairs merge, and
+        // transport empties others of the thirty-three plates the run started
+        // with. Compaction removes every id left owning nothing.
+        assert_eq!(first.diagnostics.rift_count, 2);
         assert_eq!(first.diagnostics.failed_rift_count, 1);
-        assert_eq!(first.diagnostics.suture_count, 1);
-        assert_eq!(first.partition.plate_count, 29);
-        // Convergence is a float reduction, so machines differ in the last bits.
-        assert!((first.diagnostics.maximum_convergence - 1.875_788).abs() < 1.0e-3);
-        assert_eq!(ownership_fingerprint(&first), 9_936_074_511_533_659_768);
-        assert_eq!(birth_fingerprint(&first), 11_715_277_558_234_678_678);
+        assert_eq!(first.diagnostics.suture_count, 4);
+        assert_eq!(first.partition.plate_count, 25);
+        assert_eq!(ownership_fingerprint(&first), 2_496_247_802_890_013_671);
+        assert_eq!(birth_fingerprint(&first), 10_835_211_203_217_484_955);
 
         // Float, so it is never pinned; equality above already covers the whole
         // result including this field.
@@ -401,15 +415,13 @@ mod tests {
         );
     }
 
-    /// The reference run with nothing in it that can renumber a plate: no
-    /// lifecycle to split or merge one and no migration to empty one, so an id
-    /// means the same plate either side of the run and a per-plate comparison
-    /// is well defined.
+    /// The reference run with no lifecycle to split or merge a plate, and a
+    /// step short enough that no plate loses its last cell, so an id means the
+    /// same plate either side of the run and a per-plate comparison is well
+    /// defined.
     fn fixed_plate_set_config() -> PlateEvolutionConfig {
         PlateEvolutionConfig {
-            migration: PlateMigrationConfig {
-                minimum_convergence: f32::MAX,
-            },
+            step_duration: REFERENCE_STEP_DURATION * 0.01,
             lifecycle: NO_LIFECYCLE,
             ..reference_evolution_config()
         }
@@ -440,7 +452,7 @@ mod tests {
 
         // Nothing drifts and nothing splits, so every plate that survived the
         // run holds exactly the rotation vector it started with. Compaction
-        // drops the ids migration emptied, so the list is shorter rather than
+        // drops the ids transport emptied, so the list is shorter rather than
         // equal.
         assert_eq!(
             evolution.kinematics.angular_velocities.len(),
@@ -455,13 +467,13 @@ mod tests {
         );
         // Both are re-pinned by the margin taper's `continental_fraction`
         // retune: the initial mask the birth prior reads decides which cells
-        // are oceanic, and migration precedence reads the crust each cell
+        // are oceanic, and a cell's resolution reads the crust each particle
         // carries.
         assert_eq!(
             ownership_fingerprint(&evolution),
-            13_576_351_451_921_853_964
+            12_957_810_193_975_737_552
         );
-        assert_eq!(birth_fingerprint(&evolution), 17_689_040_188_053_531_059);
+        assert_eq!(birth_fingerprint(&evolution), 5_122_638_643_250_736_967);
     }
 
     #[test]
@@ -516,7 +528,7 @@ mod tests {
 
     #[test]
     fn drift_changes_the_regime_of_a_boundary_that_started_convergent() {
-        // Nothing here migrates or advects, so the drifting motion is the only
+        // Nothing here moves material, so the drifting motion is the only
         // thing that can reclassify an edge.
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
         let config = drift_config(24);
@@ -558,7 +570,23 @@ mod tests {
         assert_eq!(evolution.kinematics, fixture.kinematics);
         assert_eq!(evolution.boundaries, fixture.boundaries);
         assert_eq!(evolution.cell_birth, fixture.birth_prior.cell_birth);
-        assert_eq!(evolution.diagnostics, PlateEvolutionDiagnostics::default());
+        assert_eq!(evolution.diagnostics, still_world_diagnostics(&fixture));
+    }
+
+    /// What a run that moved nothing reports: the material it started with,
+    /// and no event of any kind.
+    fn still_world_diagnostics(fixture: &EvolutionFixture) -> PlateEvolutionDiagnostics {
+        let continental = fixture
+            .birth_prior
+            .cell_birth
+            .iter()
+            .filter(|birth| birth.is_none())
+            .count();
+        PlateEvolutionDiagnostics {
+            starting_continental_particle_count: continental,
+            final_continental_particle_count: continental,
+            ..PlateEvolutionDiagnostics::default()
+        }
     }
 
     #[test]
@@ -571,7 +599,7 @@ mod tests {
 
         assert_eq!(evolution.partition, fixture.partition);
         assert_eq!(evolution.cell_birth, fixture.birth_prior.cell_birth);
-        assert_eq!(evolution.diagnostics, PlateEvolutionDiagnostics::default());
+        assert_eq!(evolution.diagnostics, still_world_diagnostics(&fixture));
         assert!(
             evolution
                 .deformation
@@ -583,55 +611,52 @@ mod tests {
     }
 
     #[test]
-    fn a_rifting_plate_grows_oceanic_crust_along_its_trailing_edge() {
-        let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
-        let config = opening_config(4);
+    fn a_parting_boundary_makes_ocean_floor_and_creates_no_continental_material() {
+        let (fixture, config) = forced_rift_fixture();
         let evolution = fixture.evolve(config);
 
-        assert!(fixture.birth_prior.cell_birth.iter().all(Option::is_none));
-        assert!(evolution.diagnostics.born_cell_count > 0);
-        let born: Vec<_> = (0..fixture.mesh.cell_count())
-            .filter(|&cell| evolution.cell_birth[cell].is_some())
-            .collect();
-        assert!(!born.is_empty());
-        for &cell in &born {
-            let birth = evolution.cell_birth[cell].unwrap();
-            assert!(
-                (0..config.step_count as i32).contains(&birth),
-                "cell {cell} was born during the run"
-            );
-            assert_eq!(evolution.cell_crust().class(cell), CrustClass::Oceanic);
-            assert!(
-                fixture.mesh.cell_corners(cell).iter().any(|corner| {
-                    evolution.partition.cell_plates[corner.neighbor]
-                        != evolution.partition.cell_plates[cell]
-                }),
-                "cell {cell} sits on a plate boundary"
-            );
+        // Where the floor appears is `lifecycle`'s statement; what it is made
+        // of is this one's. A one-cell plate inside a larger one cannot stand
+        // in for it: the plate around it wraps the sphere, so its own
+        // material rotates straight into whatever the small plate vacates and
+        // no gap ever opens.
+        assert!(evolution.diagnostics.born_particle_count > 0);
+        assert_eq!(
+            evolution.diagnostics.final_continental_particle_count,
+            evolution.diagnostics.starting_continental_particle_count
+        );
+        for (cell, birth) in evolution.cell_birth.iter().enumerate() {
+            if birth.is_some_and(|birth| birth >= 0) {
+                assert!(
+                    birth.is_some_and(|birth| birth < config.step_count as i32),
+                    "cell {cell} was born during the run"
+                );
+                assert_eq!(evolution.cell_crust().class(cell), CrustClass::Oceanic);
+            }
         }
     }
 
     #[test]
-    fn a_convergent_edge_migrates_at_the_step_its_debt_predicts() {
-        let (fixture, config, steps) = single_edge_convergent_fixture();
+    fn converging_material_crosses_the_boundary_at_the_step_its_speed_predicts() {
+        let (fixture, config, steps) = convergent_fixture();
 
         let waiting = fixture.evolve(PlateEvolutionConfig {
             step_count: steps - 1,
             ..config
         });
-        assert_eq!(waiting.diagnostics.migrated_cell_count, 0);
+        assert_eq!(waiting.diagnostics.owner_change_count, 0);
         assert_eq!(waiting.partition, fixture.partition);
 
         let moved = fixture.evolve(PlateEvolutionConfig {
             step_count: steps,
             ..config
         });
-        assert_eq!(moved.diagnostics.migrated_cell_count, 1);
+        assert_eq!(moved.diagnostics.owner_change_count, 1);
     }
 
     #[test]
-    fn a_migrating_cell_takes_the_advancing_cells_crust() {
-        let (fixture, config, steps) = single_edge_convergent_fixture();
+    fn an_overridden_cell_takes_the_arriving_materials_crust() {
+        let (fixture, config, steps) = convergent_fixture();
         let before = fixture.evolve(PlateEvolutionConfig {
             step_count: steps - 1,
             ..config
@@ -641,35 +666,39 @@ mod tests {
             ..config
         });
 
-        // Nothing travelled a whole cell width in these steps, so migration is
-        // the only thing that can have changed the birth field.
-        assert_eq!(after.diagnostics.born_cell_count, 0);
-        let migrated = (0..fixture.mesh.cell_count())
+        let overridden = (0..fixture.mesh.cell_count())
             .find(|&cell| after.partition.cell_plates[cell] != before.partition.cell_plates[cell])
             .unwrap();
-        let advancing = fixture
-            .mesh
-            .cell_corners(migrated)
-            .iter()
-            .map(|corner| corner.neighbor)
-            .find(|&neighbor| {
-                before.partition.cell_plates[neighbor] == after.partition.cell_plates[migrated]
-            })
-            .unwrap();
-
-        assert_eq!(after.cell_birth[migrated], before.cell_birth[advancing]);
         assert_eq!(
-            after.cell_crust().class(migrated),
-            before.cell_crust().class(advancing),
-            "the overriding plate's material now covers the cell"
+            before.cell_crust().class(overridden),
+            CrustClass::Oceanic,
+            "the cell the continental plate overrides is the oceanic one"
         );
-        assert_ne!(after.cell_birth[migrated], before.cell_birth[migrated]);
+        assert_eq!(
+            after.cell_crust().class(overridden),
+            CrustClass::Continental,
+            "the arriving plate's own material now covers the cell"
+        );
+        assert_eq!(after.cell_birth[overridden], None);
+    }
+
+    #[test]
+    fn a_run_with_real_trenches_subducts_ocean_floor_and_nothing_else() {
+        let fixture = evolution_fixture();
+        let run = fixture.evolve(reference_evolution_config());
+
+        assert!(run.diagnostics.subducted_particle_count > 0);
+        assert_eq!(
+            run.diagnostics.final_continental_particle_count,
+            run.diagnostics.starting_continental_particle_count,
+            "subduction takes ocean floor and nothing else"
+        );
     }
 
     #[test]
     fn cell_crust_follows_birth_and_leaves_the_initial_mask_behind() {
-        let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental; 2]);
-        let evolution = fixture.evolve(opening_config(4));
+        let (fixture, config) = forced_rift_fixture();
+        let evolution = fixture.evolve(config);
 
         assert!(
             (0..fixture.mesh.cell_count())
@@ -686,21 +715,47 @@ mod tests {
     }
 
     #[test]
-    fn steps_run_even_when_no_boundary_qualifies() {
+    fn a_step_too_short_to_leave_a_cell_changes_no_owner() {
         let fixture = evolution_fixture();
         let evolution = fixture.evolve(PlateEvolutionConfig {
             step_count: 4,
-            migration: PlateMigrationConfig {
-                minimum_convergence: f32::MAX,
-            },
-            // Migration is the subject; a rift would move ownership too.
+            // A hundredth of a cell width per step: every particle stays in
+            // the cell it started in, so nothing can change hands.
+            step_duration: REFERENCE_STEP_DURATION * 0.01,
+            // Transport is the subject; a rift would move ownership too.
             lifecycle: NO_LIFECYCLE,
             ..reference_evolution_config()
         });
 
         assert_eq!(evolution.partition, fixture.partition);
-        assert_eq!(evolution.diagnostics.proposal_count, 0);
-        assert_eq!(evolution.diagnostics.migrated_cell_count, 0);
+        assert_eq!(evolution.diagnostics.owner_change_count, 0);
+        assert_eq!(evolution.diagnostics.born_particle_count, 0);
+        assert_eq!(evolution.diagnostics.subducted_particle_count, 0);
+    }
+
+    #[test]
+    fn a_run_conserves_its_continental_material() {
+        let fixture = evolution_fixture();
+        let starting = fixture
+            .birth_prior
+            .cell_birth
+            .iter()
+            .filter(|birth| birth.is_none())
+            .count();
+        assert!(starting > 0);
+
+        for step_count in [1, 2, 5, 13] {
+            let evolution = fixture.evolve(PlateEvolutionConfig {
+                step_count,
+                ..reference_evolution_config()
+            });
+            let diagnostics = evolution.diagnostics;
+            assert_eq!(diagnostics.starting_continental_particle_count, starting);
+            assert_eq!(
+                diagnostics.final_continental_particle_count, starting,
+                "{step_count} steps changed how much continental material exists"
+            );
+        }
     }
 
     #[test]
@@ -719,19 +774,19 @@ mod tests {
                 Err(PlateEvolutionError::InvalidStepDuration)
             );
         }
-        assert_eq!(
-            evolve_plate_ownership(
-                &fixture.mesh,
-                fixture.inputs(),
-                PlateEvolutionConfig {
-                    migration: PlateMigrationConfig {
-                        minimum_convergence: f32::NAN,
-                    },
-                    ..reference_evolution_config()
-                }
-            ),
-            Err(PlateEvolutionError::InvalidMinimumConvergence)
-        );
+        for gap_radius in [f32::NAN, -1.0, MAX_GAP_RADIUS + 0.1] {
+            assert_eq!(
+                evolve_plate_ownership(
+                    &fixture.mesh,
+                    fixture.inputs(),
+                    PlateEvolutionConfig {
+                        transport: MaterialTransportConfig { gap_radius },
+                        ..reference_evolution_config()
+                    }
+                ),
+                Err(PlateEvolutionError::InvalidGapRadius)
+            );
+        }
         for pole_drift in [
             PoleDriftConfig {
                 axis_drift_rate: -1.0,
