@@ -3,9 +3,8 @@ use procgen_sphere_mesh::SphereMesh;
 use std::fmt;
 
 /// Ratio of shear a boundary's convergence must exceed to be read as normal
-/// motion rather than transform motion. The raster pipeline classifies with the
-/// same threshold, so it is exported rather than restated.
-pub const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
+/// motion rather than transform motion.
+const CONVERGENCE_TO_SHEAR_THRESHOLD: f32 = 0.5;
 
 /// Dense per-edge classification. `Interior` is the sentinel for non-boundary
 /// edges so the array remains directly indexable by mesh edge id.

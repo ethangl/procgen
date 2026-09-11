@@ -8,10 +8,10 @@ mod terrain_tiles;
 pub use layers::{DiagnosticLayer, OverlayKind};
 pub use lighting::LightingSettings;
 
+use crate::camera::OrbitCamera;
 use crate::model::GeneratedWorld;
 use bevy::{camera::visibility::RenderLayers, gizmos::config::GizmoLineConfig, prelude::*};
 use layers::GizmoSpec;
-use procgen_viewer_support::OrbitCamera;
 use surfaces::{empty_surface_mesh, maximum_surface_radius};
 use terrain_tiles::TerrainTileMode;
 

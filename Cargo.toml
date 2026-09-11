@@ -8,13 +8,10 @@ rust-version = "1.92"
 
 # The viewer reports per-stage generation timings, and an unoptimized build
 # inflates them by roughly sevenfold, so the generation crates and their
-# dependencies are optimized even in a dev build while the two applications
-# stay at the dev default to keep them debuggable and quick to rebuild.
+# dependencies are optimized even in a dev build while the application stays at
+# the dev default to keep it debuggable and quick to rebuild.
 [profile.dev]
 opt-level = 3
 
 [profile.dev.package.procgen-viewer]
-opt-level = 0
-
-[profile.dev.package.procgen-raster-viewer]
 opt-level = 0

@@ -1,3 +1,4 @@
+use super::palette::id_color;
 use super::{
     SURFACE_RADIUS,
     palette::{
@@ -15,7 +16,6 @@ use bevy::{
 };
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::{CrustClass, ElevationField};
-use procgen_viewer_support::id_color;
 
 pub(super) fn empty_surface_mesh() -> Mesh {
     Mesh::new(

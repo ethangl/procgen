@@ -7,8 +7,8 @@ partition has plate-like outlines, but what happens to them afterwards is
 thin: motions are independent random rotations, boundaries only nibble at
 convergent edges, and every later stage reads the final boundaries as if the
 nine steps had never happened. The changes below keep the rigid-rotation model
-and the simultaneous per-step structure the GPU pilot mirrors, and replace the
-random inputs and the stateless derivations with ones that have a past.
+and the simultaneous per-step structure, and replace the random inputs and the
+stateless derivations with ones that have a past.
 
 The measure of success is visual: convergence and divergence organised into
 belts that span the sphere, mountain ranges whose width follows how long a
@@ -42,8 +42,6 @@ for that one.
   no better than random for some seeds, because a flow cell has to be much
   larger than a plate for the fit's Euler axis to agree between neighbours.
   Coherence is not the limit: 1.0 measures within 0.02 of 0.85 everywhere.
-- `generate_random_plate_kinematics` is the unchanged hashed generator, kept
-  public as the raster pilot's interim source until slice 1's own kernel.
 - `classify_boundaries` derives per-edge normal and shear speeds from the two
   owners' rotations and classifies each edge. It is correct and stays.
 - Evolution carries five things across steps: ownership, a birth step and an
@@ -300,8 +298,7 @@ for that one.
 
 Five changes, in the order they should land. Each is one slice with its own
 prompt, review, and merge. Every one is a per-plate reduction or a per-cell
-gather over the current step, so the fixed-point argument in the compute
-shader pilot keeps holding, and the raster pipeline can mirror each in turn.
+gather over the current step.
 
 ### 1. Coherent kinematics from a flow field
 
@@ -325,9 +322,7 @@ is high but not one. The field frequency, the crust and size factors, and
 coherence are config; the field's seed derives from the kinematics seed.
 
 The signature changes: kinematics now reads the mesh, the partition, and the
-crust classification. The raster pilot keeps calling the random generator
-until its own slice adds the per-plate reduction on the GPU; that is the one
-place two generators coexist, and it is temporary.
+crust classification.
 
 ### 2. Displacement-proportional migration and real seafloor age
 
@@ -382,10 +377,10 @@ opening direction undefined.
 
 ## Determinism
 
-Kinematics is a float result and always was; the raster pilot already
-quantizes angular velocities to a power-of-two grid before upload. Slice 1
-keeps that: the fit uses add, multiply, divide, and square root, and its
-output is quantized once on the host by the existing function. Boundary
+Kinematics is a float result and always was, and angular velocities are
+quantized to a power-of-two grid. Slice 1 keeps that: the fit uses add,
+multiply, divide, and square root, and its output is quantized once on the host
+by the existing function. Boundary
 classes and migration decisions are integers derived from those quantized
 floats through comparisons, so they stay bit-identical run to run and across
 the two development machines. One libm call remains in reach of the mesh
@@ -418,9 +413,6 @@ bit-identical across the two development machines.
   which is what keeps the GPU mirror well-defined.
 - Birth step, not age, is the stored fact; age is derived from the current
   step. Store one fact and derive the rest.
-- The mesh path is canonical. The raster pilot follows each slice with its own
-  kernel, and the raster viewer keeps working on the previous slice until it
-  does.
 
 ## Non-goals
 
@@ -437,7 +429,7 @@ bit-identical across the two development machines.
 
 Flow field, per-plate fit, crust and size factors, coherence blend, config
 and viewer controls, docs. Kinematics signature takes the mesh, partition, and
-crust. Raster pilot untouched.
+crust.
 
 ### Displacement migration and birth steps. Landed.
 

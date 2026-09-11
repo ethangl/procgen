@@ -17,6 +17,7 @@ use super::{
     DiagnosticLayer, ReliefSettings, SURFACE_RADIUS, SurfaceSelection,
     palette::{ELEVATION_STOP_COUNT, elevation_color_stops},
 };
+use crate::camera::OrbitCamera;
 use crate::model::GeneratedWorld;
 use bevy::{
     asset::{RenderAssetUsages, uuid_handle},
@@ -38,7 +39,6 @@ use procgen_terrain::{
     TERRAIN_TILE_SAMPLE_COUNT, TERRAIN_WGSL_SOURCE, TerrainGpuParameters, TerrainHeightConfig,
     TerrainNoiseKeys, pack_control_bake, pack_stamps,
 };
-use procgen_viewer_support::OrbitCamera;
 
 /// Camera distance at or below which adjusted elevation uses GPU terrain tiles.
 const TERRAIN_TILE_ZOOM_THRESHOLD: f32 = 1.75;
