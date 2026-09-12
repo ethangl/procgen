@@ -69,6 +69,31 @@ impl BoundaryDeformation {
     }
 }
 
+impl BoundaryDeformationConfig {
+    /// Decays what a parcel of crust carries, adds one step's increment, and
+    /// clamps. The whole of the accumulation rule is written once here rather
+    /// than at each caller.
+    ///
+    /// Decay comes first, so a fresh source raises the whole of its increment
+    /// and a boundary that holds its regime rises toward
+    /// `increment * erosion_time / step_duration` before the clamp. Both signs
+    /// decay: a trench whose subduction stops fills, and so does a rift whose
+    /// spreading stops, which is what sediment does to both.
+    ///
+    /// The kept fraction is the linear `1 - step_duration / erosion_time`
+    /// rather than `exp(-step_duration / erosion_time)`, because the linear
+    /// form costs a multiply and a divide where the exponential costs libm on
+    /// a path a kernel would have to mirror. The two differ to second order in
+    /// `step_duration / erosion_time`, about one part in a thousand at the
+    /// defaults, so halving the step does not decay to the same bits. An
+    /// infinite `erosion_time` keeps the whole of `carried`, which is the
+    /// world before the sink existed.
+    pub(crate) fn accumulate(&self, carried: f32, increment: f32, step_duration: f32) -> f32 {
+        let kept = carried * (1.0 - step_duration / self.erosion_time);
+        (kept + increment).clamp(-self.maximum_magnitude, self.maximum_magnitude)
+    }
+}
+
 /// Adds one step's boundary deformation into `accumulated` and returns how
 /// many boundary cells carried a source.
 ///
@@ -84,16 +109,8 @@ impl BoundaryDeformation {
 ///
 /// `config` must have passed [`validate_config`]; evolution runs that once
 /// rather than once per step.
-impl BoundaryDeformationConfig {
-    /// Adds one step's increment to what a parcel of crust already carries.
-    /// The clamp is the whole of the accumulation rule, so it is written
-    /// once here rather than at each caller.
-    pub(crate) fn accumulate(&self, carried: f32, increment: f32) -> f32 {
-        (carried + increment).clamp(-self.maximum_magnitude, self.maximum_magnitude)
-    }
-}
-
 pub(crate) fn boundary_deformation_increment(
+
     mesh: &SphereMesh,
     partition: &PlatePartition,
     crust: CellCrust<'_>,
@@ -253,12 +270,18 @@ fn propagate_boundary_effects(
 mod tests {
     use super::*;
     use crate::test_support::{
-        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, empty_boundaries,
+        EvolutionFixture, NO_EROSION, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture,
+        empty_boundaries,
+
         final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
         scaled_deformation, two_plate_boundary_partition, two_plate_fixture,
     };
-    use crate::{BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig};
+    use crate::{
+        BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig,
+        step::EvolvingWorld,
+    };
     use procgen_sphere_mesh::{hop_length, hops};
+
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
@@ -295,10 +318,15 @@ mod tests {
             config,
             scale,
         );
+        // `deform` derives its scale as the step over the full deformation
+        // time, so the step this scale stands for is the one that decays what
+        // the field already carries.
+        let step_duration = scale * config.full_deformation_time;
         for (total, offset) in accumulated.iter_mut().zip(increment) {
-            *total = config.accumulate(*total, offset);
+            *total = config.accumulate(*total, offset, step_duration);
         }
         source_cell_count
+
     }
 
     #[test]
@@ -334,9 +362,13 @@ mod tests {
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
         let config = BoundaryDeformationConfig {
             maximum_magnitude: 0.5,
+            // The increments and the clamp are what this pins, so the running
+            // total is their sum and nothing takes anything away from it.
+            erosion_time: NO_EROSION,
             ..Default::default()
         };
         let whole = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
+
         assert_eq!(whole[edge.cells[0]], config.convergent.offset);
 
         let mut accumulated = vec![0.0; mesh.cell_count()];
@@ -684,6 +716,10 @@ mod tests {
     /// A convergent two-plate run whose boundary never moves: the step is far
     /// too short for any material to leave its own cell, so every step
     /// classifies the same boundaries and raises the same profile.
+    ///
+    /// The sink is off, so what a cell carries is the sum of the increments
+    /// and nothing else. The one test below that is about the sink turns it
+    /// back on.
     fn static_boundary_fixture(
         step_count: usize,
         maximum_magnitude: f32,
@@ -703,8 +739,10 @@ mod tests {
                 full_deformation_time: 0.000_610_351_56,
                 saturation_speed: 0.1,
                 maximum_magnitude,
+                erosion_time: NO_EROSION,
                 ..BoundaryDeformationConfig::default()
             },
+
             // Every step must classify the same boundaries, which drifting
             // motion and a splitting plate are precisely what stop happening.
             pole_drift: NO_POLE_DRIFT,
@@ -741,8 +779,110 @@ mod tests {
         }
     }
 
+    /// Relief with no boundary under it decays by the same factor every step,
+    /// and the assertion is float equality because the expectation is built
+    /// from the same multiply the rule uses.
+    #[test]
+    fn relief_with_no_source_under_it_decays_geometrically() {
+        const CARRIED: f32 = 0.4;
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental; 2]);
+        let config = PlateEvolutionConfig {
+            deformation: BoundaryDeformationConfig {
+                // Three steps of the run below, so a step keeps two thirds of
+                // what it carries and the decay is large enough to read.
+                erosion_time: 0.3,
+                ..BoundaryDeformationConfig::default()
+            },
+            pole_drift: NO_POLE_DRIFT,
+            lifecycle: NO_LIFECYCLE,
+            ..PlateEvolutionConfig::default()
+        }
+        .with_steps(0, 0.1);
+        let kept = 1.0 - config.step_duration / config.deformation.erosion_time;
+
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        for particle in &mut world.particles {
+            particle.deformation = CARRIED;
+        }
+        // No boundary anywhere, so `deform` raises nothing and the decay is
+        // the whole of what a step does to the field.
+        let boundaries = empty_boundaries(&fixture.mesh);
+        let mut expected = CARRIED;
+        for step in 1..=6 {
+            assert_eq!(world.deform(&boundaries), 0);
+            expected *= kept;
+            for particle in &world.particles {
+                assert_eq!(particle.deformation, expected, "particle after {step} steps");
+            }
+        }
+        assert!(expected < 0.05, "six steps must decay most of the relief");
+    }
+
+    /// A negative field is the same rule: a trench whose subduction stopped
+    /// fills at the rate a range wears down.
+    #[test]
+    fn a_negative_field_decays_by_the_same_factor() {
+        let config = BoundaryDeformationConfig {
+            erosion_time: 0.3,
+            ..BoundaryDeformationConfig::default()
+        };
+        assert_eq!(
+            config.accumulate(-0.4, 0.0, 0.1),
+            -config.accumulate(0.4, 0.0, 0.1)
+        );
+    }
+
+    /// With the sink under it, a boundary that keeps its regime stops short of
+    /// the clamp: it rises toward the relief at which the decay of one step
+    /// takes exactly what that step raises.
+    #[test]
+    fn an_active_boundary_settles_where_uplift_and_decay_balance() {
+        // Out of reach, so the clamp cannot be what the run settles at.
+        let (fixture, config) = static_boundary_fixture(1, 10.0);
+        let config = PlateEvolutionConfig {
+            deformation: BoundaryDeformationConfig {
+                erosion_time: 2.0 * config.deformation.full_deformation_time,
+                ..config.deformation
+            },
+            ..config
+        };
+        let cell = fixture.mesh.edges[0].cells[0];
+        let increment = fixture.evolve(config).deformation.cell_deformation[cell];
+        // The decay takes `carried * step / erosion_time` a step and the
+        // boundary raises `increment`, so the two balance where the carried
+        // relief is the increment times the erosion time over the step. That
+        // is `offset * erosion_time / full_deformation_time`, two of the 0.5
+        // collision offset here, and the clamp above is out of its reach.
+        let settled = increment * config.deformation.erosion_time / config.step_duration;
+
+
+        let mut previous = 0.0;
+        let mut previous_rise = f32::INFINITY;
+        for step_count in 1..=8 {
+            let value = fixture
+                .evolve(config.with_steps(step_count, config.step_duration))
+                .deformation
+                .cell_deformation[cell];
+            let rise = value - previous;
+            assert!(value > previous, "step {step_count} must raise the cell");
+            assert!(rise < previous_rise, "step {step_count} must raise less");
+            previous = value;
+            previous_rise = rise;
+        }
+
+        let long = fixture
+            .evolve(config.with_steps(120, config.step_duration))
+            .deformation
+            .cell_deformation[cell];
+        assert!(
+            long < settled && settled - long < increment,
+            "120 steps reached {long}, not within one increment of {settled}"
+        );
+    }
+
     #[test]
     fn deformation_reaches_no_further_than_the_profiles_propagate() {
+
         let depth = 2;
         let (fixture, config) = static_boundary_fixture(4, 1.0);
         let cell_count = fixture.mesh.cell_count();

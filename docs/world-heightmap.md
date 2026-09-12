@@ -112,7 +112,13 @@ Completed foundations:
   configured full deformation time, added to a per-cell field that moves with
   the crust exactly as birth does, and clamped to a configured maximum
   magnitude, so belts widen where a boundary converged for many steps and a
-  suture stays where a boundary used to be. A profile's depth is a model
+  suture stays where a boundary used to be. That field also decays: every step
+  multiplies what a parcel carries by `1 - step_duration / erosion_time`
+  before the step's boundaries add to it, which is denudation at the rate
+  Ahnert measured with isostatic rebound folded in. A belt therefore rises to
+  where uplift and erosion balance while its boundary holds, and wears down
+  once the boundary moves on, so the clamp is a steady state rather than an
+  accumulator overflowing. A profile's depth is a model
   length, converted to hops against the mesh once a step, so a belt spans the
   same distance on a fine mesh as on a coarse one. Continental divergent boundaries
   use a configurable graben profile: strength-scaled central subsidence, a

@@ -105,7 +105,14 @@ pub const NO_LIFECYCLE: PlateLifecycleConfig = PlateLifecycleConfig {
     suture_minimum_shared_length: 0.0,
 };
 
+/// No relief decay, for the fixtures whose assertions are about what the
+/// boundaries add rather than about what survives. An infinite time constant
+/// keeps the whole of what a parcel carries, which is the accumulation rule
+/// as it stood before the sink existed.
+pub const NO_EROSION: f32 = f32::INFINITY;
+
 pub fn mesh(cell_count: usize) -> SphereMesh {
+
     build_sphere_mesh(
         fibonacci_sphere(FibonacciConfig {
             count: cell_count,

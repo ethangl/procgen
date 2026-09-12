@@ -464,7 +464,9 @@ fn deformation_controls(
         &mut config.maximum_magnitude,
         DEFORMATION_MAGNITUDE_RANGE,
     );
+    slider(ui, "Erosion time", &mut config.erosion_time, MODEL_TIME_RANGE);
 }
+
 
 fn continental_rift_controls(ui: &mut egui::Ui, profile: &mut ContinentalRiftProfile) {
     slider(
