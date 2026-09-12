@@ -184,14 +184,18 @@ pub(crate) fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
 /// individual fields before encoding a snapshot.
 ///
 /// A complete world runs the climate phase, whose coupling is a fixed-point
-/// iteration that a mesh below a couple of hundred cells does not reliably
-/// reach: swept over fourteen seeds, 7 of 14 converge at 32 cells, 4 at 64,
-/// and 7 at 128, while every one of them converges at 192 and above and the
-/// 65,536-cell default converges in a single iteration. Which seeds fall on
-/// which side is re-rolled by any change that moves elevation at all, so the
-/// callers here use meshes of 1,024 cells and up — well clear of the floor,
-/// and still distinct from each other where a test needs two worlds to
-/// differ. It is the mesh that has to be honest here, not the seed.
+/// iteration that a coarse mesh does not reliably reach: swept over fourteen
+/// seeds, 7 of 14 converge at 32 cells, 4 at 64, and 7 at 128, while every one
+/// of them converges at 192 and above and the 65,536-cell default converges in
+/// a single iteration. Which seeds fall on which side is re-rolled by any
+/// change that moves the climate, not only by one that moves elevation: the
+/// moisture field feeds the cryosphere and so the albedo the loop iterates on.
+/// Deleting the orographic cap re-rolled it, and 1,024 cells turned out to be
+/// nearer the floor than this comment claimed — swept over ten seeds one of
+/// them fails there, while 1,536, 2,048, and 4,096 take all ten. Callers here
+/// use meshes of 1,024 cells and up, and the one fixture whose seed fell badly
+/// moved up rather than sideways. It is the mesh that has to be honest here,
+/// not the seed.
 pub(crate) struct Fixture {
     pub tectonics: TectonicsWorld,
     pub geology: GeologyWorld,

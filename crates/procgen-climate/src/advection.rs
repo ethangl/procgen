@@ -37,12 +37,28 @@ pub(crate) struct Route {
 /// turns the mesh's angles into distances, `step_seconds` is how long one step
 /// lasts, and `maximum_export_fraction` is the Courant cap on what may leave a
 /// cell in that step.
+/// Largest share of a cell's humidity one step may export.
+///
+/// It is a stability bound and not a tunable: an explicit upwind step that
+/// moves more than a cell's worth of humidity in one step would move it past
+/// the neighbours it is being shared with, and the run would not converge.
+///
+/// It binds almost everywhere. At the viewer's defaults the Courant number the
+/// winds ask for is about seven at the median and sixteen to forty-nine at the
+/// ninetieth percentile, and it does not fall with resolution: the schedule
+/// scales the step with the cell width, so the number of cells a step crosses
+/// is the same on every mesh. That is why moisture reaches the same number of
+/// cells inland on every mesh rather than the same distance, and no step count
+/// this pipeline could afford makes it inert. The fix is a transport that
+/// carries moisture the distance the wind actually moves it; see "Moisture
+/// caps" in `docs/plate-movement.md`.
+pub(crate) const MAXIMUM_TRANSPORT_FRACTION_PER_STEP: f64 = 0.5;
+
 pub(crate) fn build_routes(
     mesh: &SphereMesh,
     winds: &[Vec3],
     planet_radius_meters: f64,
     step_seconds: f64,
-    maximum_export_fraction: f64,
 ) -> Vec<Route> {
     (0..mesh.cell_count())
         .map(|cell| {
@@ -78,7 +94,7 @@ pub(crate) fn build_routes(
             }
             Route {
                 export_fraction: (speed * step_seconds / minimum_distance)
-                    .min(maximum_export_fraction),
+                    .min(MAXIMUM_TRANSPORT_FRACTION_PER_STEP),
                 destinations,
             }
         })
@@ -110,7 +126,6 @@ mod tests {
 
     const RADIUS_METERS: f64 = 6.371e6;
     const STEP_SECONDS: f64 = 3_600.0;
-    const MAXIMUM_EXPORT: f64 = 0.25;
 
     fn mesh(count: usize) -> SphereMesh {
         build_sphere_mesh(
@@ -142,7 +157,7 @@ mod tests {
     }
 
     fn routes(winds: &[Vec3], mesh: &SphereMesh) -> Vec<Route> {
-        build_routes(mesh, winds, RADIUS_METERS, STEP_SECONDS, MAXIMUM_EXPORT)
+        build_routes(mesh, winds, RADIUS_METERS, STEP_SECONDS)
     }
 
     #[test]
@@ -154,7 +169,7 @@ mod tests {
         assert_eq!(routes.len(), mesh.cell_count());
         for (cell, route) in routes.iter().enumerate() {
             assert!(
-                (0.0..=MAXIMUM_EXPORT).contains(&route.export_fraction),
+                (0.0..=MAXIMUM_TRANSPORT_FRACTION_PER_STEP).contains(&route.export_fraction),
                 "cell {cell} exports {}",
                 route.export_fraction
             );
@@ -239,7 +254,7 @@ mod tests {
         assert!(
             moving(&gale)
                 .iter()
-                .all(|&fraction| fraction == MAXIMUM_EXPORT)
+                .all(|&fraction| fraction == MAXIMUM_TRANSPORT_FRACTION_PER_STEP)
         );
     }
 }

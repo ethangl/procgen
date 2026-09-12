@@ -15,7 +15,6 @@ pub const REFERENCE_TEMPERATURE_KELVIN_RANGE: RangeInclusive<f64> = 0.0..=10_000
 pub const MOISTURE_RATE_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 pub const TEMPERATURE_SENSITIVITY_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 pub const OROGRAPHIC_COEFFICIENT_RANGE: RangeInclusive<f64> = 0.0..=1.0;
-pub const TRANSPORT_FRACTION_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct MoistureTransportInputs<'a> {
@@ -89,8 +88,6 @@ pub enum MoistureTransportError {
     EvaporationRate,
     RainfallRate,
     OrographicCoefficient,
-    OrographicFraction,
-    TransportFraction,
     NumericalRange,
 }
 
@@ -119,12 +116,6 @@ impl fmt::Display for MoistureTransportError {
             Error::RainfallRate => formatter.write_str("rainfall rate is invalid"),
             Error::OrographicCoefficient => {
                 formatter.write_str("orographic coefficient is invalid")
-            }
-            Error::OrographicFraction => {
-                formatter.write_str("maximum orographic fraction must be in [0, 1]")
-            }
-            Error::TransportFraction => {
-                formatter.write_str("maximum transport fraction must be in [0, 1]")
             }
             Error::NumericalRange => {
                 formatter.write_str("moisture transport is outside the finite f32 output range")
@@ -219,11 +210,10 @@ impl CellModel {
                 0.0
             };
             orographic_fraction.push(
-                (1.0 - (-config.orographic_coefficient_per_meter
+                1.0 - (-config.orographic_coefficient_per_meter
                     * ascent_meters_per_second
                     * schedule.step_seconds)
-                    .exp())
-                .min(config.maximum_orographic_fraction_per_step),
+                    .exp(),
             );
         }
         let maximum_orographic_fraction = orographic_fraction.iter().copied().fold(0.0, f64::max);
@@ -371,7 +361,6 @@ pub fn derive_moisture_transport(
         inputs.cell_wind_meters_per_second,
         inputs.planet.radius_meters,
         schedule.step_seconds,
-        config.maximum_transport_fraction_per_step,
     );
 
     let rainfall_fraction = 1.0 - (-config.rainfall_rate_per_second * schedule.step_seconds).exp();
@@ -472,16 +461,6 @@ fn validate(
         &OROGRAPHIC_COEFFICIENT_RANGE,
         MoistureTransportError::OrographicCoefficient,
     )?;
-    validate_range(
-        config.maximum_orographic_fraction_per_step,
-        &TRANSPORT_FRACTION_RANGE,
-        MoistureTransportError::OrographicFraction,
-    )?;
-    validate_range(
-        config.maximum_transport_fraction_per_step,
-        &TRANSPORT_FRACTION_RANGE,
-        MoistureTransportError::TransportFraction,
-    )?;
     Ok(config.schedule(mesh.cell_count()))
 }
 
@@ -515,6 +494,35 @@ mod tests {
             simulated_days: earthlike.simulated_days * steps / default_steps,
             ..earthlike
         }
+    }
+
+    /// A ridge across the northern mid-latitudes, with ocean to the south of
+    /// it, so a northward wind climbs it.
+    fn barrier_elevation(mesh: &SphereMesh) -> Vec<f32> {
+        mesh.cell_centers
+            .iter()
+            .map(|point| {
+                if point.z < -0.25 {
+                    0.2
+                } else if point.z < 0.15 {
+                    0.58
+                } else if point.z < 0.35 {
+                    0.9
+                } else {
+                    0.58
+                }
+            })
+            .collect()
+    }
+
+    fn northward_wind(mesh: &SphereMesh, speed: f32) -> Vec<Vec3> {
+        mesh.cell_centers
+            .iter()
+            .map(|&point| {
+                let normal = point.normalized();
+                (Vec3::new(0.0, 0.0, 1.0) - normal * normal.z).normalized() * speed
+            })
+            .collect()
     }
 
     fn mesh(count: usize) -> SphereMesh {
@@ -673,20 +681,6 @@ mod tests {
                 },
                 MoistureTransportError::OrographicCoefficient,
             ),
-            (
-                MoistureTransportConfig {
-                    maximum_orographic_fraction_per_step: f64::NAN,
-                    ..MoistureTransportConfig::EARTHLIKE
-                },
-                MoistureTransportError::OrographicFraction,
-            ),
-            (
-                MoistureTransportConfig {
-                    maximum_transport_fraction_per_step: f64::NAN,
-                    ..MoistureTransportConfig::EARTHLIKE
-                },
-                MoistureTransportError::TransportFraction,
-            ),
         ];
         for (config, expected) in cases {
             assert_eq!(
@@ -842,34 +836,60 @@ mod tests {
         }
     }
 
+    /// The orographic loss is a law per metre of ascent, so halving the step
+    /// roughly halves the fraction one step removes. A bound per step made it
+    /// a fixed fraction a step instead, which is what
+    /// `maximum_orographic_fraction_per_step` did: at a barrier where every
+    /// step climbs, the cap bound every step and the loss stopped depending on
+    /// how long a step was.
+    #[test]
+    fn the_orographic_loss_follows_the_step_it_is_integrated_over() {
+        let mesh = mesh(2_048);
+        let temperature = vec![295.0; mesh.cell_count()];
+        let elevation = barrier_elevation(&mesh);
+        let wind = northward_wind(&mesh, 35.0);
+        let config = earthlike_step_on(2_048);
+        let schedule = config.schedule(mesh.cell_count());
+
+        let full = run(&mesh, &temperature, &elevation, &wind, config);
+        // The same weather over twice as many steps, so each step is half as
+        // long and climbs half as far.
+        let halved = run(
+            &mesh,
+            &temperature,
+            &elevation,
+            &wind,
+            MoistureTransportConfig {
+                simulated_days: config.simulated_days / 2.0,
+                ..config
+            },
+        );
+        assert_eq!(
+            halved.diagnostics.schedule.step_seconds,
+            schedule.step_seconds / 2.0
+        );
+
+        let (long, short) = (
+            full.diagnostics.maximum_orographic_fraction_per_step,
+            halved.diagnostics.maximum_orographic_fraction_per_step,
+        );
+        // Past the old cap, which nothing restores: the barrier is steep and
+        // the step is long.
+        assert!(long > 0.35, "the steepest cell removes only {long}");
+        // `1 - exp(-x)` against `1 - exp(-x/2)`, so the shorter step removes
+        // more than half of what the long one does and less than all of it.
+        assert!(
+            short > long / 2.0 && short < long,
+            "{short} is not the half-step share of {long}"
+        );
+    }
+
     #[test]
     fn terrain_barrier_adds_bounded_windward_precipitation() {
         let mesh = mesh(2_048);
         let temperature = vec![295.0; mesh.cell_count()];
-        let elevation = mesh
-            .cell_centers
-            .iter()
-            .map(|point| {
-                if point.z < -0.25 {
-                    0.2
-                } else if point.z < 0.15 {
-                    0.58
-                } else if point.z < 0.35 {
-                    0.9
-                } else {
-                    0.58
-                }
-            })
-            .collect::<Vec<_>>();
-        let wind = mesh
-            .cell_centers
-            .iter()
-            .map(|&point| {
-                let normal = point.normalized();
-                let northward = (Vec3::new(0.0, 0.0, 1.0) - normal * normal.z).normalized();
-                northward * 35.0
-            })
-            .collect::<Vec<_>>();
+        let elevation = barrier_elevation(&mesh);
+        let wind = northward_wind(&mesh, 35.0);
         let result = run(
             &mesh,
             &temperature,
@@ -912,9 +932,8 @@ mod tests {
         assert!(barrier_orographic_mean > 0.0);
         assert!(barrier_precipitation_mean > baseline_precipitation_mean);
         assert!(result.diagnostics.orographic_cell_count > 0);
-        assert!(
-            result.diagnostics.maximum_orographic_fraction_per_step
-                <= earthlike_step_on(2_048).maximum_orographic_fraction_per_step
-        );
+        // Nothing bounds the orographic fraction above but the law itself,
+        // which is `1 - exp(-k * ascent)` and cannot reach one.
+        assert!((0.0..1.0).contains(&result.diagnostics.maximum_orographic_fraction_per_step));
     }
 }

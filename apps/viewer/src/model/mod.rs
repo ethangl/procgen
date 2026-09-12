@@ -599,7 +599,10 @@ mod tests {
     #[test]
     fn generating_every_phase_replaces_the_cached_snapshot() {
         let (cache_dir, cache) = test_cache("regenerate");
-        let previous = Fixture::generate(test_settings(1024, 60));
+        // 2,048 rather than 1,024: this fixture's seed is one of the few that
+        // the coupling's fixed-point iteration does not reach at 1,024 cells,
+        // and the mesh is what has to be honest here. See `Fixture`.
+        let previous = Fixture::generate(test_settings(2048, 60));
         cache.store(previous.complete()).unwrap();
         let mut app = app_with(cache.clone(), GenerationSettings::default());
         let requested = test_settings(1536, 7);
