@@ -31,12 +31,6 @@ pub(crate) struct Route {
     pub(crate) destinations: Vec<(usize, f64)>,
 }
 
-/// Builds one route per cell from the wind blowing over it.
-///
-/// `winds` are per-cell velocities in metres per second, `planet_radius_meters`
-/// turns the mesh's angles into distances, `step_seconds` is how long one step
-/// lasts, and `maximum_export_fraction` is the Courant cap on what may leave a
-/// cell in that step.
 /// Largest share of a cell's humidity one step may export.
 ///
 /// It is a stability bound and not a tunable: an explicit upwind step that
@@ -54,6 +48,11 @@ pub(crate) struct Route {
 /// caps" in `docs/plate-movement.md`.
 pub(crate) const MAXIMUM_TRANSPORT_FRACTION_PER_STEP: f64 = 0.5;
 
+/// Builds one route per cell from the wind blowing over it.
+///
+/// `winds` are per-cell velocities in metres per second,
+/// `planet_radius_meters` turns the mesh's angles into distances, and
+/// `step_seconds` is how long one step lasts.
 pub(crate) fn build_routes(
     mesh: &SphereMesh,
     winds: &[Vec3],
