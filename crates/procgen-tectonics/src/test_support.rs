@@ -4,6 +4,8 @@ use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
 use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh, default_hop_length, hop_length};
 
 use crate::field::DEFAULT_STEP_DURATION;
+use crate::step::EvolvingWorld;
+use crate::transport::{Particle, TransportCounts};
 use crate::{
     BaseElevation, BaseElevationConfig, BoundaryClass, BoundaryClassification,
     BoundaryDeformationConfig, BoundaryEffect, CellCrust, ContinentalRiftProfile, CrustBirthPrior,
@@ -733,5 +735,82 @@ fn fixture_over(
         kinematics,
         boundaries,
         birth_prior,
+    }
+}
+
+/// A world that moves nothing, so that a fixture about one substep sees that
+/// substep and nothing else.
+pub fn still_config() -> PlateEvolutionConfig {
+    PlateEvolutionConfig {
+        step_duration: 0.0,
+        pole_drift: NO_POLE_DRIFT,
+        lifecycle: NO_LIFECYCLE,
+        ..PlateEvolutionConfig::default()
+    }
+}
+
+/// What one crossing left behind: where it landed, what the transport
+/// counted, and how thick the column in the landing cell then was.
+pub struct Arrival {
+    pub landing: usize,
+    pub counts: TransportCounts,
+    pub landing_thickness: u32,
+}
+
+/// One step over the two-plate fixture with an extra oceanic particle of
+/// the small plate placed `hops` cells inside the large plate, which is
+/// what arriving across a boundary looks like, and the whole of the
+/// boundary between the two plates classified as `class`.
+///
+/// Every boundary edge takes the class, not just the one the particle
+/// crossed: the small plate is one cell, so its whole perimeter is within
+/// the reach the trench rule searches, and leaving the rest of it
+/// convergent would test nothing about the class under test.
+/// `arrival` is what the particle that crosses is made of: ocean floor
+/// meets the trench rule, and continent meets the accretion rule.
+pub fn one_arrival(class: BoundaryClass, hops: usize, arrival: CrustClass) -> Arrival {
+    let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+    let arriving = fixture.mesh.edges[0].cells[1];
+    let touches_arriving = |cell: usize| {
+        cell == arriving
+            || fixture
+                .mesh
+                .cell_corners(arriving)
+                .iter()
+                .any(|corner| corner.neighbor == cell)
+    };
+    let mut landing = fixture.mesh.edges[0].cells[0];
+    for _ in 1..hops {
+        landing = fixture
+            .mesh
+            .cell_corners(landing)
+            .iter()
+            .map(|corner| corner.neighbor)
+            .find(|&neighbor| !touches_arriving(neighbor))
+            .expect("the large plate reaches further than one cell from the small one");
+    }
+    let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), still_config());
+    world.particles.push(Particle {
+        position: fixture.mesh.cell_centers[landing] * fixture.mesh.radius.recip(),
+        plate: fixture.partition.cell_plates[arriving],
+        birth: match arrival {
+            CrustClass::Continental => None,
+            CrustClass::Oceanic => Some(0.0),
+        },
+        deformation: 0.0,
+        thickness: 1,
+        cell: landing,
+        triangle: fixture.mesh.cell_corners(landing)[0].vertex,
+    });
+
+    let mut boundaries = fixture.boundaries.clone();
+    for corner in fixture.mesh.cell_corners(arriving) {
+        boundaries.edge_classes[corner.edge] = class;
+    }
+    let counts = world.transport(&boundaries, 1.0);
+    Arrival {
+        landing,
+        counts,
+        landing_thickness: world.cell_thickness[landing],
     }
 }

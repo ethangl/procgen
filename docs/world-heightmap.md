@@ -115,7 +115,12 @@ Completed foundations:
   arrives under another continent at a trench merges into it rather than
   stacking under it, so a collision makes one column of doubled crust and base
   elevation floats it as a plateau. Continental material stays exactly
-  conserved, as a sum of thickness rather than as a count of parcels.
+  conserved, as a sum of thickness rather than as a count of parcels. That
+  thickness also flows: each step, a column asks its thickest same-plate
+  continental neighbour for a parcel when that neighbour stands two or more
+  above it, and a column grants at most two such requests, which provably
+  settles into a plateau with a one-parcel rim rather than a spike.
+
   The step's profile is scaled by the model time it spends against a
 
   configured full deformation time, added to a per-cell field that moves with

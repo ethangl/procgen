@@ -13,12 +13,16 @@
 mod base_elevation;
 mod boundaries;
 mod boundary_profiles;
+mod boundary_sources;
+
 mod cracks;
 mod crust;
 mod deformation;
 mod elevation;
 mod evolution;
 mod evolution_config;
+mod evolution_diagnostics;
+
 mod evolution_error;
 mod field;
 mod interior_relief;
@@ -31,6 +35,7 @@ mod seafloor_age;
 mod speed;
 mod stage;
 mod step;
+mod thickness;
 mod transport;
 
 #[cfg(test)]
@@ -56,10 +61,10 @@ pub use elevation::{
     CoarseElevation, CoarseElevationConfig, CoarseElevationError, ElevationField,
     compose_coarse_elevation, is_land, land_elevation_meters,
 };
-pub use evolution::{
-    PlateEvolution, PlateEvolutionDiagnostics, PlateEvolutionInputs, evolve_plate_ownership,
-};
+pub use evolution::{PlateEvolution, PlateEvolutionInputs, evolve_plate_ownership};
 pub use evolution_config::PlateEvolutionConfig;
+pub use evolution_diagnostics::PlateEvolutionDiagnostics;
+
 pub use evolution_error::PlateEvolutionError;
 pub use field::{DEFAULT_STEP_DURATION, FieldSummary};
 pub use lifecycle::PlateLifecycleConfig;

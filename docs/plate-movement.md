@@ -122,9 +122,12 @@ for that one.
   default steps; infinity turns the sink off, the same convention
   `suture_time` uses. See "Relief decay".
 - A parcel also carries its thickness, the original parcels it holds. A
-  continent arriving under another continent at a trench merges into it, and
+  continent arriving under another continent at a trench merges into it,
+  thickness then flows from a column to its thinner same-plate neighbours
+  until no pair differs by more than one parcel, and
   `BaseElevationConfig::thickness_uplift` floats the column that results. See
   "Crustal thickness".
+
 - The deformation config moved into `PlateEvolutionConfig`, beside
   `PlateMigrationConfig`, because it is now a substage of a step rather than a
   stage of its own.
@@ -1830,6 +1833,16 @@ that creates a plate, leaving suturing and compaction behind; and `reach.rs`
 takes the one ring count and the two bounds derived from it, which evolution
 and the viewer both read.
 
+"Crustal thickness" splits four more the same way. `thickness.rs` takes every
+rule that changes what a column holds — accretion, the compaction merge, and
+the lateral flow — and stands beside `rifting.rs` as the second module that
+carries material through an event rather than across the mesh.
+`boundary_sources.rs` takes the table of which profile each boundary class
+raises, leaving `deformation.rs` the propagation and the carried field, and
+`evolution_diagnostics.rs` takes the totals a run keeps, beside
+`evolution_config.rs` and `evolution_error.rs`.
+
+
 ## Run length
 
 Every default so far has been a short run — nine steps, then fifteen — and
@@ -2421,27 +2434,154 @@ Thickness over the thickened cells of the viewer's defaults:
   240, because the convergent profile painted the rim as hard as the middle.
   After, it stands 0.14 to 0.26 above at most lengths.
 
-### What it did not fix, and the number that shows it
+### The finding that needed a second rule
 
-- **Thickness runs away in place.** The deepest column goes 13, 52, 70, 115 as
-  the run lengthens — linear in run length, with no bound. The median
-  thickened cell holds 3 parcels, which is the right shape, but the ninety-
-  ninth percentile reaches 48 and 258 cells stand more than ten parcels deep
-  at 240 steps. A column that deep is nine kilometres of surface relief before
-  the clamp catches it. The cause is that an arriving parcel merges into the
-  one cell it lands in and nothing spreads thickness sideways, where a real
-  orogen widens as it thickens.
-- **`thickness_uplift` cannot be tuned around it.** Swept at sixty steps, the
-  largest plateau stands 0.032 high at an uplift of 0.05, 0.055 at 0.1, and
-  0.063 at 0.3, while the cells clamped at 1.0 climb 98, 211, 394. Raising the
-  knob buys almost no plateau height and buys saturated cells linearly, because
-  the plateau's own cells are thin and the deep columns are isolated.
-- **Thickened cells are scattered rather than orogenic.** 1,469 cells are
-  thickened at sixty steps but the largest connected run of them is 34. The
-  model makes thick cells, not a Tibet.
-- **The continental raster falls faster than before**, 19,391 to 13,941 over
-  240 steps against 19,588 to 17,573. Merging removes parcels, so fewer remain
-  to fill cells, and more cells end up reading a neighbour or making floor.
+Accretion alone left thickness where it landed. The deepest column went 13,
+52, 70, 115 parcels at 15, 60, 120 and 240 steps — linear in run length, with
+no bound — while the largest connected run of thickened cells held at 19, 34,
+41, 50. The model made thick cells, not a Tibet, and no value of
+`thickness_uplift` turned that into a plateau: swept at sixty steps, the
+largest plateau stood 0.032 high at an uplift of 0.05 and 0.063 at 0.3, while
+the cells clamped at 1.0 climbed 98, 211, 394. Raising the knob bought no
+height and bought saturated cells linearly, because the plateau's own cells
+were thin and the deep columns were isolated.
+
+Real thick crust flows. Tibet is flat because its lower crust spreads under
+its own weight, and a plateau's extent is set by that spreading as much as by
+the underthrust that fed it. Thickness had the source; it needed the spreading.
+
+### The flow rule, and why this one
+
+One pass over the cells between picking the step's winners and projecting
+them, reading the thicknesses the winners hold before the pass and writing
+after it, so the update is simultaneous like every other substep.
+
+Every cell whose winner is continental asks its thickest same-plate
+continental neighbour for one parcel, if that neighbour stands at least two
+parcels above it; equally thick neighbours lose the tie to the lower cell id.
+A column that receives more requests than two serves the two lowest cell ids
+and refuses the rest. Continental only, same plate only, and only the columns
+cells actually read — so a plateau cannot spread into ocean, cannot cross a
+plate boundary until a suture has made the two plates one, and cannot reach a
+covered parcel.
+
+The gap of two and the cap of two are what make the pass converge, and the
+argument is short enough to state. Let `Q` be the sum of squared thickness
+over continental parcels. Every cell asks at most one neighbour, so a column
+receives at most one parcel and gives at most two, and every transfer runs
+from a column at `t` to one at `s <= t - 2`. Writing `T` for the transfers a
+pass makes,
+
+```text
+dQ = sum (s - g + r)^2 - s^2
+   = 2 sum_transfers (s_receiver - s_giver) + sum (r - g)^2
+  <= -4T + (T + 2T)  =  -T
+```
+
+so a pass that moves anything strictly lowers `Q`. `Q` is a non-negative
+integer, so the passes reach a fixed point, and at that point no cell has a
+same-plate continental neighbour two or more parcels thicker than itself: the
+crust is a plateau with a one-parcel rim. The cap is what keeps the middle
+term small — a column granting `k` requests moves `Q` by at most `k(k - 3)`,
+which is negative at one and two grants, zero at three, and positive from
+four, so an uncapped column emptying into thin neighbours could grow `Q`
+instead. A gap of one would let two columns differing by one swap the same
+parcel for ever, because a pass that reads before it writes has no order to
+break that tie with. Neither number is a knob; both are the proof.
+
+The rate that follows is two parcels a step out of a column, so a 115-parcel
+column takes about sixty steps to spread and a three-parcel stack takes one.
+At one step per 1.5 Myr that is the right order for lower crustal flow.
+
+### Measured with the flow
+
+65,536 cells at `DEFAULT_STEP_DURATION` and `thickness_uplift` 0.1, release on
+an M1 Max. "Deepest" is the deepest column in parcels; "plateau" is the
+largest connected run of thickened cells and how far its surface stands above
+the continent around it.
+
+Viewer defaults:
+
+| steps | accreted | transfers | thickened | deepest | cont. cells | land | elev. clamp | plateau cells | plateau height |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | 1,638 | 1,355 | 1,913 | 7 | 19,391 | 15,913 | 2 | 104 | 0.094 |
+| 60 | 3,469 | 5,280 | 3,362 | 28 | 17,499 | 15,201 | 116 | 417 | 0.121 |
+| 120 | 4,742 | 9,327 | 4,131 | 16 | 16,296 | 14,853 | 409 | 594 | 0.098 |
+| 240 | 6,951 | 17,865 | 5,353 | 56 | 13,941 | 12,827 | 291 | 889 | 0.122 |
+
+Reference world:
+
+| steps | accreted | transfers | thickened | deepest | cont. cells | land | elev. clamp | plateau cells | plateau height |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | 707 | 574 | 714 | 13 | 19,537 | 16,403 | 0 | 111 | 0.118 |
+| 60 | 1,219 | 1,753 | 1,224 | 14 | 18,936 | 15,995 | 81 | 202 | 0.105 |
+| 120 | 2,176 | 3,669 | 2,004 | 48 | 18,215 | 15,599 | 66 | 226 | 0.079 |
+| 240 | 4,127 | 8,720 | 3,699 | 25 | 16,622 | 14,671 | 152 | 371 | 0.083 |
+
+Thickness over the thickened cells of the viewer's defaults, against the same
+distribution before the flow:
+
+| steps | thickened | p50 | p90 | p99 | max | p90 before | p99 before | max before |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | 1,913 | 2 | 2 | 5 | 7 | 5 | 9 | 13 |
+| 60 | 3,362 | 2 | 3 | 5 | 28 | 9 | 22 | 52 |
+| 120 | 4,131 | 2 | 3 | 6 | 16 | 10 | 30 | 70 |
+| 240 | 5,353 | 2 | 4 | 7 | 56 | 13 | 48 | 115 |
+
+### What the flow settled
+
+- **The plateau grows with the run.** The largest connected thickened region
+  goes 104, 417, 594, 889 cells where it held at 19, 34, 41, 50, and the
+  thickened cells with it, 1,913 to 5,353 against 1,108 to 1,809. A collision
+  now spreads across a region rather than into a cell.
+- **The distribution flattened.** The ninetieth percentile of thickness is 2
+  to 4 parcels where it was 5 to 13, and the ninety-ninth is 5 to 7 where it
+  was 9 to 48. The typical thickened cell holds two parcels, which is the
+  doubled crust the physics describes.
+- **The deepest column stopped growing with run length.** It goes 7, 28, 16,
+  56 at the defaults and 13, 14, 48, 25 at the reference world: it wanders
+  rather than climbing, where before it rose 13, 52, 70, 115 monotonically.
+
+### What the flow did not settle
+
+- **The deepest column is not in single digits.** The rule drains two parcels
+  a step from any one column, and an actively fed collision accretes faster
+  than that, so the handful of columns sitting under a closing boundary
+  outrun the drain while the run lasts. What changed is that they no longer
+  grow without bound and no longer set the shape of the field: 56 parcels at
+  240 steps against a ninety-ninth percentile of 7.
+- **The plateau is lower than the slice asked for.** It stands 0.079 to 0.122
+  above the continent around it, against the 0.15 to 0.3 a real plateau
+  wants. The cause is the flattening: `thickness_uplift` is per parcel and the
+  typical thickened cell now holds two rather than the three that set the
+  default, so the typical plateau cell stands one term up instead of two.
+- **The clamp share still rises with the term on.** Swept at the defaults:
+
+  | steps | uplift | land | elev. clamp | plateau height |
+  | --- | --- | --- | --- | --- |
+  | 60 | 0 | 14,783 | 3 | 0.042 |
+  | 60 | 0.1 | 15,201 | 116 | 0.121 |
+  | 60 | 0.15 | 15,283 | 329 | 0.152 |
+  | 60 | 0.2 | 15,328 | 561 | 0.180 |
+  | 240 | 0 | 12,318 | 22 | 0.005 |
+  | 240 | 0.1 | 12,827 | 291 | 0.122 |
+  | 240 | 0.15 | 12,919 | 833 | 0.175 |
+  | 240 | 0.2 | 12,954 | 1,321 | 0.213 |
+
+  An uplift of 0.15 reaches the bottom of the band and roughly triples the
+  clamped cells; 0.1 keeps them near a hundred and falls short of it. The flow
+  narrowed the gap — 116 clamped cells at sixty steps against 211 before it —
+  but did not close it. `thickness_uplift` stays at 0.1 and the choice is
+  recorded here rather than made silently.
+
+### Continental area is now a sediment-budget number
+
+Continental cells fall 19,391 to 13,941 over 240 steps at the defaults, and
+the flow does not change that: it moves thickness between cells without
+changing which cells are continental. Area times thickness is what a run
+conserves, so as crust thickens its area must fall, and nothing yet thins it
+back. That is the sediment budget's to answer, and until it lands the falling
+continental raster is the arithmetic working rather than a defect.
 
 ### The defaults these measurements chose
 
@@ -2471,6 +2611,13 @@ its floor in other places. `owner_change_count` on the reference fixture falls
 149 to 147, `sampled_cell_count` rises 696 to 716, and the ownership, birth,
 age, and base-elevation fingerprints all move once.
 
+The flow moved one more: `thickened_cell_count` on the reference fixture rises
+27 to 34, which is a column reaching its neighbours and is the whole point of
+the pass. `thickness_transfer_count` is new and pinned at 7. Nothing else
+moved, because the flow changes what a column holds and never which parcel
+won a cell.
+
+
 The viewer's complete-world fixtures moved mesh rather than pins. A complete
 world runs the climate phase, whose coupling is a fixed-point iteration that a
 mesh below a couple of hundred cells does not reliably reach: swept over
@@ -2483,12 +2630,16 @@ and up.
 
 ### Not this slice
 
-No thickness decay or isostatic rebound: thickened crust stays thick, which is
-half of why the tail runs away. No crustal thinning at rifts. No same-plate
-shortening — one plate's own parcels crowding behind a blocked front still
-stack and are still uncounted. No change to the geology isostasy stage, whose
-convergent support bonus now overlaps this term.
+No thickness decay or isostatic rebound: thickened crust stays thick, so
+nothing removes a plateau once its collision ends. No crustal thinning at
+rifts. No same-plate shortening — one plate's own parcels crowding behind a
+blocked front still stack and are still uncounted. No change to the geology
+isostasy stage, whose convergent support bonus now overlaps this term. The
+flow rate is not configurable: two parcels a step is the cap the convergence
+argument needs, and moving it means redoing that argument at a wider gap.
 
-The next slice is the one that bounds the tail. Sediment moving off a thick
-column, or thickness spreading into its neighbours, or both: either turns the
-runaway columns into the wide orogen the measurements say is missing.
+The next slice is the sediment budget. It answers the three things left open
+here: the continental area that falls because area times thickness is
+conserved, the plateau that never wears down once its boundary moves on, and
+the handful of actively fed columns that still outrun a two-parcel drain.
+
