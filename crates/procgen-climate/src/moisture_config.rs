@@ -48,21 +48,14 @@ pub struct MoistureTransportConfig {
     pub ocean_evaporation_rate_per_second: f64,
     /// Background conversion of airborne moisture to rainfall.
     pub rainfall_rate_per_second: f64,
-    /// Conversion rate per meter of positive terrain ascent.
+    /// Conversion rate per meter of positive terrain ascent. The fraction a
+    /// step removes is `1 - exp(-coefficient * ascent)` over the metres of
+    /// ascent that step climbs, so it is a law per metre and a shorter step
+    /// removes proportionally less. Nothing bounds it above: the expression
+    /// cannot reach one, and a bound per step would make the loss a fixed
+    /// fraction a step whatever the step's length, which is what the deleted
+    /// `maximum_orographic_fraction_per_step` did.
     pub orographic_coefficient_per_meter: f64,
-    /// Hard bound on the fraction removed orographically in one step.
-    ///
-    /// It is a fraction per step rather than per second, and so is
-    /// `maximum_transport_fraction_per_step`. The two are the open leads for
-    /// why moisture reaches the same number of cells inland on every mesh
-    /// instead of the same distance; see "Resolution independence" in
-    /// `docs/plate-movement.md`. Neither is shown to be the cause and the fix
-    /// is a climate slice.
-    pub maximum_orographic_fraction_per_step: f64,
-    /// CFL-style bound on the humidity exported from a cell in one step. It is
-    /// per step, with the same open question as
-    /// `maximum_orographic_fraction_per_step`.
-    pub maximum_transport_fraction_per_step: f64,
 }
 
 impl MoistureTransportConfig {
@@ -99,8 +92,6 @@ impl MoistureTransportConfig {
         ocean_evaporation_rate_per_second: 1.5e-6,
         rainfall_rate_per_second: 8.0e-7,
         orographic_coefficient_per_meter: 2.0e-4,
-        maximum_orographic_fraction_per_step: 0.35,
-        maximum_transport_fraction_per_step: 0.5,
     };
 }
 

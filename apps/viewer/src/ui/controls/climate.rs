@@ -11,7 +11,7 @@ use procgen_climate::{
     MOISTURE_SIMULATED_DAYS_RANGE, MoistureTransportConfig, ORBITAL_PERIOD_DAYS_RANGE,
     OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE, RadiativeEquilibriumConfig,
     SeasonalThermalConfig, SolarForcingConfig, TEMPERATURE_SENSITIVITY_RANGE,
-    TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE, TRANSPORT_FRACTION_RANGE,
+    TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE,
 };
 use procgen_planet::{
     ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE, MAXIMUM_LAND_ELEVATION_METERS_RANGE,
@@ -205,18 +205,6 @@ fn moisture_transport_controls(ui: &mut egui::Ui, config: &mut MoistureTransport
         &mut config.orographic_coefficient_per_meter,
         OROGRAPHIC_COEFFICIENT_RANGE,
         1.0e-5,
-    );
-    slider(
-        ui,
-        "Maximum orographic fraction",
-        &mut config.maximum_orographic_fraction_per_step,
-        TRANSPORT_FRACTION_RANGE,
-    );
-    slider(
-        ui,
-        "Maximum transport fraction",
-        &mut config.maximum_transport_fraction_per_step,
-        TRANSPORT_FRACTION_RANGE,
     );
 }
 

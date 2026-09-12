@@ -2166,6 +2166,12 @@ Not independent, and why:
   cause here. Stating the run as days fixed how long the weather runs, not how
   far it reaches, and the fix is a climate slice. This measurement is what
   sizes it: the number to move is three cells, and it should be a distance.
+  *Diagnosed in "Moisture caps": it is the transport cap, which binds on
+  ninety-nine percent of cells at every resolution, and no step count this
+  pipeline can afford makes it inert. The orographic cap was a per-metre law
+  bounded per step and is deleted; the transport cap is a stability bound and
+  is now a constant. The range still tracks cells, and the fix is a
+  semi-Lagrangian transport.*
 - Arc peaks: 1691, 2259, 1140, against a seed spread of under five percent
   within a resolution, so this is the mesh. Two causes. At 16,384 every arc
   cell is a peak — the peak count equals the arc cell count exactly — because
@@ -3080,3 +3086,111 @@ them. No change to the arc belt's width, which is the other half of why arc
 peaks move with resolution. No connectivity rule for basins: making a component
 count mesh independent is a design, and the area fraction is what a reader
 should compare in the meantime.
+
+## Moisture caps
+
+"Resolution independence" left one quantity that does not scale: moisture
+reaches the same number of cells inland on every mesh rather than the same
+distance. It named two leads, both fractions per step where everything else in
+the config is per second or per metre. This slice settles which of them it is.
+The answer is the transport cap, and it cannot be fixed by tuning.
+
+### The orographic cap was wrong, and was not the cause
+
+`maximum_orographic_fraction_per_step` bounded a fraction that is already
+`1 - exp(-coefficient * ascent)`, where the ascent is the metres a step climbs.
+That expression cannot reach one, so the cap never prevented a value that was
+not physical. What it did was turn a law per metre into a law per step: at a
+coast where every step climbs, the cap bound every step and the loss stopped
+depending on how long a step was. It is deleted, and nothing replaces it.
+
+It did bind, on the steepest windward ground, and it bound harder on coarser
+meshes because their steps are longer — 7 to 10 percent of land cells at 16,384
+cells, 4 to 5 at 65,536, and 2 to 3 at 262,144. Deleting it therefore moves the
+world. It does not move the range:
+
+| cells | moisture steps | range before | range after | hop |
+| --- | --- | --- | --- | --- |
+| 16,384 | 60 | 390 - 441 km | 349 - 382 km | 176 km |
+| 65,536 | 120 | 230 - 241 km | 184 - 198 km | 88 km |
+| 262,144 | 240 | 113 - 115 km | 93 - 97 km | 44 km |
+
+Sampling seeds 7, 11, and 23. Range is the distance inland at which mean
+precipitation on land falls to a tenth of its value one hop from the coast,
+interpolated between the two hops it falls across. Before the deletion it was
+about 2.5 hops at every resolution; after, about 2.1 hops at every resolution.
+Still cells, not kilometres.
+
+### The transport cap is the cause, and no step count reaches it
+
+`maximum_transport_fraction_per_step` bounds the share of a cell's humidity one
+step may export, at 0.5. The share the winds actually ask for is the Courant
+number, `speed * step_seconds / cell width`:
+
+| cells | steps | Courant p50 | Courant p90 | cells above 0.5 |
+| --- | --- | --- | --- | --- |
+| 16,384 | 60 | 7.9 | 42 - 49 | 99.3% |
+| 65,536 | 120 | 6.9 | 36 - 38 | 99.0% |
+| 262,144 | 240 | 6.2 | 16 | 98.8 - 99.0% |
+
+The cap binds on ninety-nine percent of cells at every resolution. Moisture
+therefore leaves each cell at a fixed half per step whatever the wind is doing,
+so it advances a fixed number of cells per step and reaches a fixed number of
+cells inland. That is the whole of the symptom.
+
+It does not fall with resolution, and it cannot: the schedule already scales
+the step with the cell width, so `step_seconds` and the cell width both halve
+together and their ratio is the same on every mesh. A finer mesh buys nothing
+here.
+
+Making the cap inert by shortening the step means a Courant number below 0.5,
+which is fourteen times today's step count at the median and thirty-two to
+ninety-eight times at the ninetieth percentile. The moisture solver is one pass
+per step over every cell, so the cost is linear in the step count: the coupled
+climate stage takes 1.0 s at 16,384 cells, 1.0 s at 65,536, and 4.7 s at
+262,144, and fourteen times that is 15 s, 15 s, and 66 s. Ninety-eight times it
+is minutes. That is far past the ten times this slice was willing to spend, so
+the step count is not changed.
+
+What the cap becomes instead is a constant. It is a stability bound on an
+explicit upwind step, not a number anyone should tune: below it the step is
+stable and above it moisture is moved past the neighbours it is being shared
+with. `MAXIMUM_TRANSPORT_FRACTION_PER_STEP` is `pub(crate)` in `advection.rs`
+beside the routes it bounds, and the config field and its viewer slider are
+gone.
+
+The real fix is a transport that carries moisture the distance the wind moves
+it in a step rather than a share of one cell — a semi-Lagrangian step, which
+traces back from each cell to where its air came from and interpolates there.
+That has no Courant limit, so it does not care how long a step is. It is a
+climate slice, and this section is what sizes it: the number to move is about
+two cells, and it should be a distance.
+
+### Pins and fixtures
+
+No fingerprint moved. The only pinned hash in the climate crate is the
+cryosphere's, and it runs on synthetic precipitation rather than on the
+moisture stage, so nothing downstream of this change was pinned. Both branches
+needed a test instead:
+`the_orographic_loss_follows_the_step_it_is_integrated_over` pins that the
+fraction one step removes passes the old cap and scales with the step, and the
+advection tests already pin that a gale exports exactly
+`MAXIMUM_TRANSPORT_FRACTION_PER_STEP`.
+
+One fixture moved. The climate coupling is a fixed-point iteration that a
+coarse mesh does not reliably reach, and which seeds fall badly is re-rolled by
+any change that moves the climate — moisture feeds the cryosphere and so the
+albedo the loop iterates on. Swept over ten seeds after this change, 1,024
+cells lose one of them and 1,536, 2,048, and 4,096 take all ten, so the one
+viewer fixture whose seed fell badly moved from 1,024 cells to 2,048. Its
+comment said 1,024 was "well clear of the floor"; it is nearer than that, and
+now says so. The 65,536-cell default still converges in a single iteration.
+
+### Not this slice
+
+No semi-Lagrangian transport, which is the real fix and is its own slice. No
+change to the step schedule: making the cap inert costs fourteen to ninety-
+eight times the steps, and the measurement above is the argument for not
+spending it. No change to `orographic_coefficient_per_meter` or any other
+moisture rate; deleting a cap is not a retune, and what the coefficient should
+be once the transport carries a real distance is a question for that slice.

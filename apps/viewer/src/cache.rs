@@ -411,7 +411,7 @@ struct_codec! {
     SeasonalThermalConfig { land_heat_capacity, ocean_heat_capacity, orbital_period_days }
     AtmosphericCirculationConfig { surface_drag_per_second, terrain_steering, maximum_wind_speed_meters_per_second }
     MoistureSchedule { step_count, step_seconds }
-    MoistureTransportConfig { simulated_days, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
+    MoistureTransportConfig { simulated_days, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter }
     CryosphereConfig { maximum_iterations, closure_tolerance, snowfall_temperature_kelvin, melt_temperature_kelvin, full_snow_cover_kg_per_m2, seasonal_snow_capacity_kg_per_m2, snow_melt_kg_per_m2_per_kelvin_day, land_ice_melt_kg_per_m2_per_kelvin_day, sea_ice_growth_fraction_per_kelvin_day, sea_ice_melt_fraction_per_kelvin_day }
     ClimateCouplingConfig { maximum_iterations, under_relaxation, albedo_tolerance, temperature_tolerance_kelvin, precipitation_tolerance_kg_per_m2_per_day, cover_fraction_tolerance, albedo, radiative_equilibrium, seasonal_thermal, atmospheric_circulation, moisture_transport, cryosphere }
     TectonicsSettings { fibonacci, plates, crust, kinematics, birth_prior, evolution, base_elevation, elevation }
