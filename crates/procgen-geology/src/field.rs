@@ -1,3 +1,5 @@
+use procgen_core::{RandomStream, Vec3};
+use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::StageInputError;
 use std::fmt;
 
@@ -180,6 +182,51 @@ impl<T: Copy + Ord> MaxWinsField<T> {
         (self.values, self.winners)
     }
 }
+
+/// A hashed surface position inside `cell`, for the `peak`-th peak the cell
+/// carries.
+///
+/// A cell can hold more than one peak of a field whose density asks for more
+/// than one, and two peaks at the same point are one peak, so each takes its
+/// own block of three draws. Peak zero takes draws zero to two, which is the
+/// block a one-peak-per-cell rule took.
+///
+/// The point is a convex blend of the cell center and two adjacent corners,
+/// so it is inside the cell by construction rather than by a test.
+/// `maximum_offset` is how far toward the corner pair it may reach.
+pub(crate) fn position_in_cell(
+    mesh: &SphereMesh,
+    cell: usize,
+    stream: RandomStream,
+    peak: usize,
+    maximum_offset: f32,
+) -> Vec3 {
+    let corners = mesh.cell_corners(cell);
+    let base = DRAWS_PER_POSITION * peak as u64;
+    let item = cell as u64;
+    let corner_index = stream.sample_u64(item, base) as usize % corners.len();
+    let mut first_weight = stream.unit_f32(item, base + 1);
+    let mut second_weight = stream.unit_f32(item, base + 2);
+    if first_weight + second_weight > 1.0 {
+        first_weight = 1.0 - first_weight;
+        second_weight = 1.0 - second_weight;
+    }
+    first_weight *= maximum_offset;
+    second_weight *= maximum_offset;
+    mesh.interpolate_cell_triangle(
+        cell,
+        corner_index,
+        [
+            1.0 - first_weight - second_weight,
+            first_weight,
+            second_weight,
+        ],
+    )
+}
+
+/// Draws one position takes: the corner pair it sits against and the two
+/// weights that place it between them.
+const DRAWS_PER_POSITION: u64 = 3;
 
 #[cfg(test)]
 mod tests {

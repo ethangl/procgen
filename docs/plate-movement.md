@@ -2173,11 +2173,18 @@ Not independent, and why:
   mesh has cells to put them in, and a per-cell field saturates. And the arc
   belt itself covers 0.103 of the sphere at 16,384 against 0.068 at 65,536,
   because the belt is a whole number of cell rings around a boundary network
-  that is itself a different length.
-- Basin count falls by about half per fourfold cell count. The area threshold
-  is a fixed area, but what it measures is a connected component, and a finer
-  mesh resolves low-lying land into more and smaller pieces. Connectivity is
-  not something an area threshold can make resolution independent.
+  that is itself a different length. *The first cause is resolved; see "Peaks
+  by area, basins by area", where a cell carries every peak its area asks for
+  and the 16,384-cell arc count doubles to the density's own answer. The belt
+  width is untouched.*
+- Basin count falls with cell count. The area threshold is a fixed area, but
+  what it measures is a connected component, and a finer mesh resolves
+  low-lying land into more and smaller pieces. Connectivity is not something an
+  area threshold can make resolution independent. *Measured over six seeds in
+  "Peaks by area, basins by area": the count falls 47 to 35 to 33 rather than
+  halving, and the "about half per fourfold" reading here was one seed. The
+  basins' area fraction of continental land does hold, within the seed spread,
+  and is now a diagnostic the viewer shows beside the count.*
 - Land fraction drifts from 0.297 to 0.261. The seed spread at 16,384 is 0.029
   and the gap to 65,536 is 0.02, so part of this is the world; the tight
   clustering at 65,536 says part of it is not.
@@ -2916,3 +2923,160 @@ motion — a plate that has travelled is meant to have travelled. No change to
 `speed_drift_limit`, `axis_drift_rate`, or `speed_drift_rate`: with the walks
 settled, those three now mean what they were set to mean, and retuning them is
 a separate question from giving them a scale.
+
+## Peaks by area, basins by area
+
+"Resolution independence" left two peak-and-basin items open. This slice
+answers both, and they turn out to be different kinds of problem: one is a
+rule that could not express what it was asked for, and the other is a
+measurement of the wrong quantity.
+
+### A cell could hold only one peak
+
+Both peak fields drew once per cell. The oceanic field drew a Bernoulli trial
+whose probability was the cell's share of the density, and the arc field took
+the strongest cells of an arc until it had as many as the area asked for. Each
+rule can place at most one peak in a cell, so on a mesh whose cells are larger
+than a peak's share of area the count stopped following the density and
+saturated at the cell count.
+
+Both now place a cell's whole share. The oceanic field takes `floor(lambda)`
+peaks and one more when a single hashed draw falls under the fraction left
+over, where `lambda` is the cell's density times its own area over the default
+cell's. Below one peak a cell that is the same single draw the old rule made,
+so every cell that was not saturating is unchanged to the bit. The arc field
+gives every cell of an arc the whole number of peaks it can carry and the
+remainder to the strongest cells, which keeps the count exact in the density
+rather than merely expected: nothing about an arc is drawn except where inside
+a cell a volcano sits.
+
+Each peak of a cell takes its own block of three draws for its position, so
+two peaks of one cell are two peaks. Peak zero takes the block the
+one-peak-per-cell rule took.
+
+### Arc peaks needed a position before they could be counted
+
+An arc peak was a cell id. Both consumers — the terrain stamp and the viewer's
+marker — placed it at the cell center, so two peaks in a cell would have been
+two stamps at one point, which is one stamp. `VolcanicArcSegment::peaks` is
+therefore a `VolcanicArcPeak` carrying the cell and a hashed position inside
+it, the way an `OceanicPeak` already did.
+
+That gives the arc stage the first thing it draws, so it gains a `seed` and a
+`maximum_position_offset` beside the oceanic field's, and
+`VOLCANIC_ARC_PEAK_POSITION` is a new stream. `position_in_cell` moved from
+`oceanic_peaks.rs` to the crate's `field.rs`, where both stages read it.
+
+The terrain stamps no longer read the mesh at all: every stamp source now
+carries its own position, so `compose_stamps` lost the parameter.
+
+### Measured
+
+Both worlds are the viewer's defaults at three cell counts, over sampling
+seeds 7, 9, and 11. "Wanted" is what the density asks for; "capped" is how
+many cells, or segments, could not hold it.
+
+Oceanic peaks:
+
+| cells | seed | wanted | before | after | capped cells |
+| --- | --- | --- | --- | --- | --- |
+| 16,384 | 7 | 744 | 626 | 720 | 178 |
+| 16,384 | 9 | 684 | 574 | 682 | 177 |
+| 16,384 | 11 | 750 | 666 | 760 | 182 |
+| 65,536 | 7 | 1,219 | 1,192 | 1,192 | 7 |
+| 65,536 | 9 | 1,031 | 1,032 | 1,035 | 5 |
+| 65,536 | 11 | 1,004 | 965 | 965 | 2 |
+| 262,144 | 7 | 1,729 | 1,794 | 1,794 | 0 |
+| 262,144 | 9 | 1,651 | 1,641 | 1,641 | 0 |
+| 262,144 | 11 | 1,761 | 1,766 | 1,766 | 0 |
+
+Volcanic arc peaks:
+
+| cells | seed | wanted | before | after | capped segments | arc cells |
+| --- | --- | --- | --- | --- | --- | --- |
+| 16,384 | 7 | 3,318 | 1,628 | 3,318 | 353 | 1,628 |
+| 16,384 | 9 | 2,806 | 1,376 | 2,806 | 314 | 1,376 |
+| 16,384 | 11 | 3,312 | 1,651 | 3,312 | 358 | 1,651 |
+| 65,536 | 7 | 2,233 | 2,233 | 2,233 | 0 | 4,400 |
+| 65,536 | 9 | 1,897 | 1,897 | 1,897 | 0 | 3,744 |
+| 65,536 | 11 | 1,960 | 1,960 | 1,960 | 0 | 3,846 |
+| 262,144 | 7 | 1,199 | 1,199 | 1,199 | 0 | 8,428 |
+| 262,144 | 9 | 1,206 | 1,206 | 1,206 | 0 | 8,496 |
+| 262,144 | 11 | 1,200 | 1,200 | 1,200 | 0 | 8,189 |
+
+At 16,384 the arc count doubles and now equals the density's own answer, where
+before every arc cell was a peak and no cell could be more. The oceanic count
+rises about fifteen percent there. At 65,536 and 262,144 the arc count does not
+move at all, because no segment was capped: a cell of the default mesh is
+already smaller than the spacing the default density asks for. The oceanic
+count at 65,536 moves by 0 to 3 peaks over the three seeds — seven cells of
+that world hold a `lambda` above one, and only barely, so what they were
+losing was a fraction of one peak each.
+
+Two things the tables show that this slice does not fix. The arc belt's own
+area still falls with resolution, 6,512 default-cell-areas at 16,384 to 4,400
+to 2,107, because the belt is a whole number of cell rings around a boundary
+network that is itself a different length; that is the second of the two causes
+"Resolution independence" named, and it is untouched here. And the oceanic
+count still rises with resolution once saturation is gone, 720 to 1,192 to
+1,794, because the fields the density is drawn from — hotspot intensity and the
+young-floor age window — are themselves resolution dependent. The placement
+rule is now exact in whatever density it is handed; what it is handed is a
+separate question.
+
+### The basin count was the wrong number to read
+
+The count was said to halve per fourfold cell count. Over six sampling seeds it
+does not: it falls from the coarsest mesh and then settles. What does hold is
+the area.
+
+| cells | basin count, mean of six seeds | range | basin area fraction, mean | standard deviation |
+| --- | --- | --- | --- | --- |
+| 16,384 | 47.2 | 35 - 59 | 0.097 | 0.018 |
+| 65,536 | 35.2 | 31 - 38 | 0.093 | 0.039 |
+| 262,144 | 32.7 | 21 - 37 | 0.078 | 0.028 |
+
+A sixteenfold change in cell count moves the mean area fraction by 0.019,
+against a seed spread of 0.018 to 0.039 within one resolution. The largest gap
+is about one and a half standard errors of the difference, so the area agrees
+within the seed spread and the count does not.
+
+The earlier "about half per fourfold" reading was one seed. Seed 7 alone gives
+59, 36, and 21, which does halve; seed 9 gives 35, 32, and 34, and seed 23
+gives 49, 38, and 37. The count is a reading of the raster, and how strongly it
+depends on the mesh depends on the world.
+
+So `SedimentaryBasinDiagnostics` gains `basin_area_fraction`, the retained
+basins' area over the continental land they lie in, and the viewer shows it
+beside the count. The count stays, documented as what it is. No connectivity
+rule changed: nothing here makes a component count mesh independent, because
+nothing can.
+
+### Pins
+
+None moved, and that is worth stating because two were expected to.
+
+Every peak fixture in the workspace states its density per cell of its own
+mesh, which is what makes a coarse test mesh able to express the defaults at
+all. That puts `lambda` at or below one everywhere they reach, so the new rule
+takes the same single draw the old one did and returns the same peaks in the
+same order. The arc fingerprint hashes peak cells, and no arc fixture saturates
+either. The change is real and measured above; no existing pin was positioned
+to see it.
+
+Both branches therefore needed their own tests.
+`a_cell_carries_every_peak_its_area_asks_for` runs the crate's own densities on
+a 256-cell mesh, where a cell covers 256 default cells, and pins that each
+cell's count is its whole share or one more, that the total is past the old
+one-per-cell cap, and that peaks sharing a cell sit at different points.
+`a_coarse_arc_carries_every_volcano_its_area_asks_for` does the same
+end to end for arcs, and `peak_counts_by_cell` is pinned directly over every
+wanted count from 1 to 40.
+
+### Not this slice
+
+No change to what the densities are, only to a rule that could not express
+them. No change to the arc belt's width, which is the other half of why arc
+peaks move with resolution. No connectivity rule for basins: making a component
+count mesh independent is a design, and the area fraction is what a reader
+should compare in the meantime.

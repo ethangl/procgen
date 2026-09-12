@@ -7,8 +7,20 @@
 //!
 //! [`volcanic_arcs`]: crate::volcanic_arcs
 
+use crate::field::position_in_cell;
+use procgen_core::{RandomStream, Vec3};
 use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::{CellCrust, CrustClass, PlatePartition};
+
+/// One volcano of an arc. A cell carries as many as its own area asks for,
+/// so each holds the position that separates it from the others in its cell
+/// rather than being named by its cell alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolcanicArcPeak {
+    pub cell: usize,
+    /// Seeded surface position guaranteed to remain inside `cell`.
+    pub position: Vec3,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolcanicArcCell {
@@ -38,8 +50,9 @@ pub struct VolcanicArcSegment {
     pub boundary_cells: Vec<usize>,
     /// Inland cells in ascending order.
     pub arc_cells: Vec<VolcanicArcCell>,
-    /// Peak candidate cells in ascending order.
-    pub peaks: Vec<usize>,
+    /// Peak candidates in ascending cell order. A cell appears once per peak
+    /// it carries.
+    pub peaks: Vec<VolcanicArcPeak>,
     /// Actual inland depth used, which may be shallower than the requested bound.
     pub inland_depth: usize,
 }
@@ -48,6 +61,18 @@ pub struct VolcanicArcSegment {
 pub(crate) struct InlandClaim {
     pub(crate) strength: f32,
     pub(crate) source_edge: usize,
+}
+
+/// How an arc's volcanoes are placed: how many the arc's area asks for, and
+/// where inside a cell each one sits.
+///
+/// The three travel together because none of them means anything without the
+/// others, and a segment reads all three or none.
+#[derive(Clone, Copy)]
+pub(crate) struct PeakPlacement {
+    pub(crate) density: f32,
+    pub(crate) positions: RandomStream,
+    pub(crate) maximum_offset: f32,
 }
 
 pub(crate) struct BoundaryGroup {
@@ -69,7 +94,7 @@ pub(crate) fn derive_segment(
     plates: &PlatePartition,
     crust: CellCrust<'_>,
     boundary_claims: &[Option<InlandClaim>],
-    peak_density: f32,
+    placement: PeakPlacement,
     inland_offset: usize,
     group: BoundaryGroup,
 ) -> Option<VolcanicArcSegment> {
@@ -81,7 +106,7 @@ pub(crate) fn derive_segment(
         .iter()
         .map(|arc_cell| mesh.unit_cell_area(arc_cell.cell))
         .sum::<f32>();
-    let peaks = select_peak_candidates(&arc_cells, arc_area, peak_density);
+    let peaks = select_peak_candidates(mesh, &arc_cells, arc_area, placement);
     Some(VolcanicArcSegment {
         overriding_plate: group.overriding_plate,
         kind: group.kind,
@@ -167,32 +192,70 @@ fn walk_inland(
     })
 }
 
-/// The strongest cells of an arc, one per unit of area the density asks for.
+/// The strongest cells of an arc, one peak per unit of area the density asks
+/// for.
 ///
 /// A retained segment always keeps at least one peak, the same guarantee the
 /// count-based rule gave: a segment long enough to survive the minimum-length
 /// filter is an arc, and an arc has a volcano on it. Only that floor is
 /// discrete; everything above it follows the arc's real area, so an arc of the
 /// same width and length carries the same volcanoes on any mesh.
+///
+/// An arc whose cells are larger than the spacing the density asks for wants
+/// more peaks than it has cells. Every cell then carries the whole number of
+/// them it can, and the strongest carry the remainder: taking the strongest
+/// cells alone capped the count at the arc's cell count and lost the density
+/// on any mesh coarse enough, which at 16,384 cells was half the volcanoes
+/// the default asks for. The count is exact rather than expected, because
+/// nothing here is drawn — only where inside a cell a peak sits is.
 fn select_peak_candidates(
+    mesh: &SphereMesh,
     arc_cells: &[VolcanicArcCell],
     arc_area: f32,
-    peak_density: f32,
-) -> Vec<usize> {
-    let peak_count = ((arc_area * peak_density).round() as usize).max(1);
-    let mut peak_cells: Vec<_> = arc_cells.iter().collect();
-    peak_cells.sort_unstable_by(|left, right| {
+    placement: PeakPlacement,
+) -> Vec<VolcanicArcPeak> {
+    let wanted = ((arc_area * placement.density).round() as usize).max(1);
+    peak_counts_by_cell(arc_cells, wanted)
+        .into_iter()
+        .flat_map(|(cell, count)| (0..count).map(move |peak| (cell, peak)))
+        .map(|(cell, peak)| VolcanicArcPeak {
+            cell,
+            position: position_in_cell(
+                mesh,
+                cell,
+                placement.positions,
+                peak,
+                placement.maximum_offset,
+            ),
+        })
+        .collect()
+}
+
+/// How many peaks each cell of an arc carries, in ascending cell order.
+///
+/// Whole peaks go to every cell and the strongest carry the remainder, so the
+/// total is exactly `wanted` however few cells the arc has. Below one peak a
+/// cell this is the strongest `wanted` cells and nothing else, which is the
+/// rule as it stood; above it, taking the strongest cells alone capped the
+/// count at the arc's cell count and lost the density.
+fn peak_counts_by_cell(arc_cells: &[VolcanicArcCell], wanted: usize) -> Vec<(usize, usize)> {
+    let mut ranked: Vec<_> = arc_cells.iter().collect();
+    ranked.sort_unstable_by(|left, right| {
         right
             .strength
             .total_cmp(&left.strength)
             .then_with(|| left.cell.cmp(&right.cell))
     });
-    peak_cells.truncate(peak_count);
-    peak_cells.sort_unstable_by_key(|arc_cell| arc_cell.cell);
-    peak_cells
-        .into_iter()
-        .map(|arc_cell| arc_cell.cell)
-        .collect()
+    let each = wanted / ranked.len();
+    let remainder = wanted % ranked.len();
+    let mut counts: Vec<_> = ranked
+        .iter()
+        .enumerate()
+        .map(|(rank, arc_cell)| (arc_cell.cell, each + usize::from(rank < remainder)))
+        .filter(|&(_, count)| count > 0)
+        .collect();
+    counts.sort_unstable_by_key(|&(cell, _)| cell);
+    counts
 }
 
 pub(crate) fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> bool {
@@ -203,7 +266,6 @@ pub(crate) fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use procgen_sphere_mesh::default_cell_area;
 
     fn arc_cells() -> Vec<VolcanicArcCell> {
         [(7, 0.2), (2, 0.9), (5, 0.5), (1, 0.5)]
@@ -217,29 +279,46 @@ mod tests {
     #[test]
     fn peaks_are_the_strongest_cells_of_the_arc_in_cell_order() {
         let cells = arc_cells();
-        let four_cells = 4.0 * default_cell_area();
-        let per_two_cells = 1.0 / (2.0 * default_cell_area());
 
         // Two of the four: cell 2 at 0.9, then the lower of the pair at 0.5.
+        assert_eq!(peak_counts_by_cell(&cells, 2), vec![(1, 1), (2, 1)]);
         assert_eq!(
-            select_peak_candidates(&cells, four_cells, per_two_cells),
-            vec![1, 2]
-        );
-        assert_eq!(
-            select_peak_candidates(&cells, four_cells, per_two_cells * 2.0),
-            vec![1, 2, 5, 7]
+            peak_counts_by_cell(&cells, 4),
+            vec![(1, 1), (2, 1), (5, 1), (7, 1)]
         );
     }
 
     /// A segment long enough to be kept is an arc, and an arc has a volcano on
-    /// it, so the count rounds to nearest but never to nothing.
+    /// it, so the count never falls to nothing.
     #[test]
     fn a_segment_keeps_its_strongest_cell_however_little_area_it_covers() {
+        assert_eq!(peak_counts_by_cell(&arc_cells(), 1), vec![(2, 1)]);
+    }
+
+    /// An arc that wants more peaks than it has cells gives every cell the
+    /// whole number it can and the remainder to the strongest. The rule that
+    /// took the strongest cells alone stopped at four here however many the
+    /// density asked for.
+    #[test]
+    fn an_arc_that_wants_more_peaks_than_cells_gives_every_cell_its_share() {
         let cells = arc_cells();
-        let density = 1.0 / (2.0 * default_cell_area());
+        // Two each, and the remaining three to the three strongest: cell 2 at
+        // 0.9, then cells 1 and 5 at 0.5 with the lower id first.
         assert_eq!(
-            select_peak_candidates(&cells, 0.5 * default_cell_area(), density),
-            vec![2]
+            peak_counts_by_cell(&cells, 11),
+            vec![(1, 3), (2, 3), (5, 3), (7, 2)]
         );
+        for wanted in 1..40 {
+            let counts = peak_counts_by_cell(&cells, wanted);
+            assert_eq!(
+                counts.iter().map(|&(_, count)| count).sum::<usize>(),
+                wanted,
+                "{wanted} peaks were not all placed"
+            );
+            assert!(
+                counts.windows(2).all(|pair| pair[0].0 < pair[1].0),
+                "{wanted} peaks came back out of cell order"
+            );
+        }
     }
 }

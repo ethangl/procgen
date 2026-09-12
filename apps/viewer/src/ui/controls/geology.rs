@@ -168,10 +168,17 @@ fn volcanic_arc_controls(
     );
     slider(
         ui,
+        "Position offset",
+        &mut config.maximum_position_offset,
+        0.0..=1.0,
+    );
+    slider(
+        ui,
         "Strength saturation",
         &mut config.strength_saturation,
         0.01..=kinematics.maximum_convergence(WORLD_RADIUS).max(0.01),
     );
+    drag_value(ui, "Peak seed", &mut config.seed, u64::MIN..=u64::MAX, 1.0);
 }
 
 fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
