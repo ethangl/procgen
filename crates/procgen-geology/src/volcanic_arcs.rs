@@ -1,10 +1,11 @@
 use crate::{
     arc_segments::{
-        ArcKind, BoundaryGroup, InlandClaim, VolcanicArcSegment, arc_kind, claim_precedes,
-        derive_segment,
+        ArcKind, BoundaryGroup, InlandClaim, PeakPlacement, VolcanicArcSegment, arc_kind,
+        claim_precedes, derive_segment,
     },
     field::{GeologyInputError, MaxWinsField},
 };
+use procgen_core::{RandomStream, random_streams::VOLCANIC_ARC_PEAK_POSITION};
 use procgen_sphere_mesh::{
     SphereMesh, connected_components, default_cell_area, default_hop_length, hops,
 };
@@ -33,6 +34,13 @@ pub struct VolcanicArcFieldConfig {
     pub peak_density: f32,
     /// Convergence at which diagnostic strength reaches one.
     pub strength_saturation: f32,
+    /// Largest convex offset from a cell center toward a pair of corners, the
+    /// same bound [`crate::OceanicPeakFieldConfig`] places its peaks with.
+    pub maximum_position_offset: f32,
+    /// Seed for where inside its cell each peak sits. It is the only thing
+    /// this stage draws: which cells carry peaks, and how many, follow from
+    /// the boundaries and the arc's area.
+    pub seed: u64,
 }
 
 impl Default for VolcanicArcFieldConfig {
@@ -42,6 +50,8 @@ impl Default for VolcanicArcFieldConfig {
             inland_offset: 2.0 * default_hop_length(),
             peak_density: 1.0 / (2.0 * default_cell_area()),
             strength_saturation: 1.0,
+            maximum_position_offset: 0.8,
+            seed: 0,
         }
     }
 }
@@ -95,7 +105,10 @@ impl VolcanicArcField {
                         .arc_cells
                         .iter()
                         .any(|arc| arc.cell >= mesh.cell_count())
-                    || segment.peaks.iter().any(|&cell| cell >= mesh.cell_count())
+                    || segment
+                        .peaks
+                        .iter()
+                        .any(|peak| peak.cell >= mesh.cell_count())
             })
         {
             return Err(GeologyInputError::VolcanicArcs);
@@ -177,6 +190,11 @@ pub fn derive_volcanic_arc_field(
     groups.retain(|group| group.boundary_edges.len() >= minimum_boundary_edges);
     let discarded_short_segment_count = original_group_count - groups.len();
 
+    let placement = PeakPlacement {
+        density: config.peak_density,
+        positions: RandomStream::new(config.seed, VOLCANIC_ARC_PEAK_POSITION),
+        maximum_offset: config.maximum_position_offset,
+    };
     let mut discarded_landlocked_segment_count = 0;
     let mut segments: Vec<_> = groups
         .into_iter()
@@ -186,7 +204,7 @@ pub fn derive_volcanic_arc_field(
                 plates,
                 crust,
                 &boundary.claims,
-                config.peak_density,
+                placement,
                 inland_offset,
                 group,
             );
@@ -440,7 +458,13 @@ mod tests {
                     .windows(2)
                     .all(|pair| pair[0].cell < pair[1].cell)
             );
-            assert!(segment.peaks.windows(2).all(|pair| pair[0] < pair[1]));
+            // Ascending, and a cell repeated once per peak it carries.
+            assert!(
+                segment
+                    .peaks
+                    .windows(2)
+                    .all(|pair| pair[0].cell <= pair[1].cell)
+            );
             assert!(
                 (1..=hops(mesh.cell_count(), config.inland_offset)).contains(&segment.inland_depth)
             );
@@ -661,10 +685,79 @@ mod tests {
                     .iter()
                     .map(|arc_cell| arc_cell.cell as u64),
             )
-            .chain(segment.peaks.iter().map(|&peak| peak as u64))
+            .chain(segment.peaks.iter().map(|peak| peak.cell as u64))
         });
 
         assert_eq!(fingerprint(values), 14_285_577_073_894_833_531);
+    }
+
+    /// An arc whose cells are wider than the spacing the density asks for
+    /// carries several volcanoes in a cell, each at its own position. Taking
+    /// the strongest cells alone could place only one, so the count stopped
+    /// at the arc's cell count: at the viewer's 16,384-cell mesh that was
+    /// half the volcanoes the default density asks for.
+    #[test]
+    fn a_coarse_arc_carries_every_volcano_its_area_asks_for() {
+        let world = fixture(1_024);
+        let boundaries = world.boundaries();
+        let PlateFixture {
+            mesh,
+            plates,
+            cell_birth,
+            ..
+        } = world;
+        // Four peaks per cell of this mesh, which no cell could hold before.
+        let config = VolcanicArcFieldConfig {
+            minimum_boundary_length: hop_length(1_024, 1.0),
+            inland_offset: hop_length(1_024, 3.0),
+            peak_density: 4.0 / mean_cell_area(1_024),
+            strength_saturation: 2.0,
+            ..VolcanicArcFieldConfig::default()
+        };
+        let field =
+            derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
+                .unwrap();
+
+        let arc_cell_count: usize = field
+            .segments
+            .iter()
+            .map(|segment| segment.arc_cells.len())
+            .sum();
+        assert!(arc_cell_count > 0);
+        assert!(
+            field.diagnostics.peak_count > arc_cell_count,
+            "{} peaks over {arc_cell_count} arc cells is not past the old cap",
+            field.diagnostics.peak_count
+        );
+
+        for segment in &field.segments {
+            // The count is exact in the density, not expected: nothing here
+            // is drawn except where inside a cell a peak sits.
+            let area: f32 = segment
+                .arc_cells
+                .iter()
+                .map(|arc_cell| mesh.unit_cell_area(arc_cell.cell))
+                .sum();
+            let wanted = ((area * config.peak_density).round() as usize).max(1);
+            assert_eq!(segment.peaks.len(), wanted);
+
+            // Two volcanoes of one cell are two volcanoes.
+            for peaks in segment
+                .peaks
+                .chunk_by(|left, right| left.cell == right.cell)
+            {
+                assert!(peaks.len() > 1, "the fixture must crowd a cell");
+                for (index, peak) in peaks.iter().enumerate() {
+                    assert!(
+                        peaks[index + 1..]
+                            .iter()
+                            .all(|other| (other.position - peak.position).length() > 1.0e-6),
+                        "cell {} stacked two volcanoes at one point",
+                        peak.cell
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -682,6 +775,7 @@ mod tests {
             inland_offset: hop_length(1_024, 3.0),
             peak_density: 1.0 / (2.0 * mean_cell_area(1_024)),
             strength_saturation: 2.0,
+            ..VolcanicArcFieldConfig::default()
         };
         let field =
             derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)

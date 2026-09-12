@@ -23,7 +23,7 @@ pub use field::{
     ElevationEffectDiagnostics, GeologyInputError, GeologyStageError, SignedEffectDiagnostics,
 };
 
-pub use arc_segments::{ArcKind, VolcanicArcCell, VolcanicArcSegment};
+pub use arc_segments::{ArcKind, VolcanicArcCell, VolcanicArcPeak, VolcanicArcSegment};
 pub use basins::{
     SedimentaryBasin, SedimentaryBasinDiagnostics, SedimentaryBasinField,
     SedimentaryBasinFieldConfig, SedimentaryBasinFieldError, derive_sedimentary_basin_field,

@@ -51,8 +51,8 @@ pub(super) fn volcanic_arc_markers(
     let field = &geology.volcanic_arcs;
     let marker_size = cell_marker_size(mesh);
     let marker_color = Vec3::new(1.0, 0.95, 0.28);
-    for &peak_cell in field.segments.iter().flat_map(|segment| &segment.peaks) {
-        let position = to_bevy(mesh.cell_centers[peak_cell].normalized()) * SURFACE_RADIUS;
+    for peak in field.segments.iter().flat_map(|segment| &segment.peaks) {
+        let position = to_bevy(peak.position.normalized()) * SURFACE_RADIUS;
         add_cross_marker(
             &mut asset,
             position,

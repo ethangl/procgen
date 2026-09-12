@@ -230,14 +230,16 @@ pub fn compose_terrain_controls(
 
     let controls = TerrainControls {
         cells,
-        stamps: compose_stamps(mesh, inputs, config),
+        stamps: compose_stamps(inputs, config),
     };
     debug_assert!(controls.validate(mesh).is_ok());
     Ok(controls)
 }
 
+/// Every stamp the controls carry, each at the position its own source gives
+/// it. No stamp falls back to a cell center: a cell can hold more than one of
+/// them, and two stamps at one point are one stamp.
 fn compose_stamps(
-    mesh: &SphereMesh,
     inputs: TerrainControlInputs<'_>,
     config: TerrainControlConfig,
 ) -> Vec<TerrainStampInput> {
@@ -261,14 +263,17 @@ fn compose_stamps(
             .volcanic_arcs
             .segments
             .iter()
-            .flat_map(|segment| segment.peaks.iter().copied())
+            .flat_map(|segment| segment.peaks.iter())
             .enumerate()
-            .map(|(source_index, cell)| TerrainStampInput {
-                cell,
+            .map(|(source_index, peak)| TerrainStampInput {
+                cell: peak.cell,
                 kind: TerrainStampKind::VolcanicArc,
                 source_index,
-                position: mesh.cell_centers[cell].normalized(),
-                strength: (inputs.volcanic_arcs.cell_strengths[cell]
+                // The peak's own position, not its cell's center: a cell
+                // carries as many volcanoes as its area asks for, and two
+                // stamps at one point are one stamp.
+                position: peak.position.normalized(),
+                strength: (inputs.volcanic_arcs.cell_strengths[peak.cell]
                     * config.volcanic_arc_stamp_scale)
                     .clamp(0.0, 1.0),
             }),
@@ -319,7 +324,7 @@ mod tests {
     use procgen_geology::{
         ArcKind, CratonDiagnostics, Hotspot, HotspotDiagnostics, IsostaticAdjustmentDiagnostics,
         OceanicPeak, OceanicPeakDiagnostics, SedimentaryBasin, SedimentaryBasinDiagnostics,
-        VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcSegment,
+        VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcPeak, VolcanicArcSegment,
     };
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::{build_sphere_mesh, mean_cell_area};
@@ -598,7 +603,10 @@ mod tests {
                 cell,
                 strength: 0.6,
             }],
-            peaks: vec![cell],
+            peaks: vec![VolcanicArcPeak {
+                cell,
+                position: fixture.mesh.cell_centers[cell],
+            }],
             inland_depth: 0,
         });
         fixture.arcs.cell_strengths[cell] = 0.6;
