@@ -1,5 +1,7 @@
 mod cache;
 mod camera;
+#[cfg(test)]
+mod measure;
 mod model;
 mod render;
 #[cfg(test)]

@@ -205,6 +205,13 @@ pub fn evolve_plate_ownership(
     {
         return Err(PlateEvolutionError::StepOutrunsReach);
     }
+    // Beside the step bound, because it is the same kind of rule: a step that
+    // is not shorter than the sink's time constant would keep none of the
+    // relief it carries, or invert it, rather than decaying it.
+    if config.step_duration >= config.deformation.erosion_time {
+        return Err(PlateEvolutionError::StepOutrunsErosion);
+    }
+
 
     let mut world = EvolvingWorld::new(mesh, inputs, config);
     // The motion the kinematics stage fitted is scaled by crust alone: that
@@ -266,7 +273,9 @@ mod tests {
     use super::*;
     use crate::step::half_axis_turn;
     use crate::test_support::{
-        EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint, convergent_fixture,
+        EvolutionFixture, NO_EROSION, NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint,
+        convergent_fixture,
+
         drift_config, empty_boundaries, evolution_fixture, fingerprint, forced_rift_fixture,
         opposed_kinematics, reference_evolution_config, two_plate_boundary_partition,
         two_plate_fixture,
@@ -339,8 +348,35 @@ mod tests {
         );
     }
 
+    /// The sink reaches the deformation field and nothing else. Ownership, the
+    /// material, the plate set, and every count a run keeps read the crust and
+    /// the motion rather than the relief on them, so turning the sink off
+    /// leaves a run exactly as it was before the sink existed, and that is why
+    /// every pin above is the pin it was.
+    #[test]
+    fn turning_the_sink_off_changes_the_deformation_field_alone() {
+        let fixture = evolution_fixture();
+        let config = reference_evolution_config();
+        let eroded = fixture.evolve(config);
+        let kept = fixture.evolve(PlateEvolutionConfig {
+            deformation: BoundaryDeformationConfig {
+                erosion_time: NO_EROSION,
+                ..config.deformation
+            },
+            ..config
+        });
+
+        assert_ne!(kept.deformation, eroded.deformation);
+        // Compared as whole results rather than field by field, so a field
+        // added later is covered without being named here.
+        let mut elsewhere = kept;
+        elsewhere.deformation = eroded.deformation.clone();
+        assert_eq!(elsewhere, eroded);
+    }
+
     /// The reference run with no lifecycle to split or merge a plate, and a
     /// step short enough that no plate loses its last cell, so an id means the
+
     /// same plate either side of the run and a per-plate comparison is well
     /// defined.
     fn fixed_plate_set_config() -> PlateEvolutionConfig {
@@ -839,6 +875,46 @@ mod tests {
                 BoundaryDeformationError::InvalidConfig
             ))
         );
+        for erosion_time in [0.0, -1.0, f32::NAN] {
+            assert_eq!(
+                evolve_plate_ownership(
+                    &fixture.mesh,
+                    fixture.inputs(),
+                    PlateEvolutionConfig {
+                        deformation: BoundaryDeformationConfig {
+                            erosion_time,
+                            ..BoundaryDeformationConfig::default()
+                        },
+                        ..reference_evolution_config()
+                    }
+                ),
+                Err(PlateEvolutionError::Deformation(
+                    BoundaryDeformationError::InvalidErosionTime
+                )),
+                "{erosion_time}"
+            );
+        }
+        // The step and the sink are each valid alone; what is rejected is a
+        // step that is not shorter than the time constant, which would keep
+        // none of the relief it carries or invert it.
+        for erosion_time in [REFERENCE_STEP_DURATION, REFERENCE_STEP_DURATION * 0.5] {
+            assert_eq!(
+                evolve_plate_ownership(
+                    &fixture.mesh,
+                    fixture.inputs(),
+                    PlateEvolutionConfig {
+                        deformation: BoundaryDeformationConfig {
+                            erosion_time,
+                            ..reference_evolution_config().deformation
+                        },
+                        ..reference_evolution_config()
+                    }
+                ),
+                Err(PlateEvolutionError::StepOutrunsErosion),
+                "{erosion_time}"
+            );
+        }
+
 
         let short_prior = CrustBirthPrior {
             cell_birth: fixture.birth_prior.cell_birth[1..].to_vec(),

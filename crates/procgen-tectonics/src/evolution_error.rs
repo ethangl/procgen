@@ -6,6 +6,10 @@
 //! can be wrong, so the variants sit here rather than among the run's own
 //! moving parts, and the upstream errors arrive through `From` rather than as
 //! copied strings.
+//!
+//! Two variants are about how the step sits against a time the run reads
+//! rather than about either value on its own: a step may outrun neither what
+//! transport can see nor the sink that takes relief away.
 
 use crate::{
     BoundaryClassificationError, BoundaryDeformationError, MAX_GAP_RADIUS, PlateKinematicsError,
@@ -17,6 +21,7 @@ use std::fmt;
 pub enum PlateEvolutionError {
     InvalidStepDuration,
     StepOutrunsReach,
+    StepOutrunsErosion,
     InvalidGapRadius,
     InvalidPoleDriftRate,
     InvalidSpeedDriftLimit,
@@ -40,6 +45,10 @@ impl fmt::Display for PlateEvolutionError {
                 formatter,
                 "step duration must not carry a plate further than the \
                  {TRANSPORT_REACH_HOPS} cells transport looks"
+            ),
+            Self::StepOutrunsErosion => formatter.write_str(
+                "step duration must be shorter than the erosion time, so that a step \
+                 keeps some fraction of the relief it carries",
             ),
             Self::InvalidGapRadius => {
                 write!(formatter, "gap radius must lie in [0, {MAX_GAP_RADIUS}]")

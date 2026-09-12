@@ -219,9 +219,13 @@ impl<'a> EvolvingWorld<'a> {
             self.config.step_duration / config.full_deformation_time,
         );
         for particle in &mut self.particles {
-            particle.deformation =
-                config.accumulate(particle.deformation, increment[particle.cell]);
+            particle.deformation = config.accumulate(
+                particle.deformation,
+                increment[particle.cell],
+                self.config.step_duration,
+            );
         }
+
         source_cell_count
     }
 

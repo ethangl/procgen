@@ -39,9 +39,17 @@ fn density_per_cell(cell_count: usize, per_default_cell: f32) -> f32 {
     per_default_cell * cell_count as f32 / DEFAULT_CELL_COUNT as f32
 }
 
+/// Model time per step on a mesh of `cell_count` cells: cell width goes as the
+/// reciprocal square root of cell count, so a step on these much coarser test
+/// meshes has to be that much longer to move a plate the same one cell.
+fn scaled_step_duration(cell_count: usize) -> f32 {
+    DEFAULT_STEP_DURATION * (DEFAULT_CELL_COUNT as f32 / cell_count as f32).sqrt()
+}
+
 fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
     let scale = hop_length(cell_count, 1.0) / hop_length(DEFAULT_CELL_COUNT, 1.0);
     let default = BoundaryDeformationConfig::default();
+
     let deepen = |effect: BoundaryEffect| BoundaryEffect {
         depth: effect.depth * scale,
         ..effect
@@ -56,9 +64,15 @@ fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
             decay_depth: default.rift.decay_depth * scale,
             ..default.rift
         },
+        // The sink's time constant is thirty default steps, and a step here is
+        // much longer, so it is stated as the thirty steps it means. Taking the
+        // default itself would put it under one step of these coarse meshes,
+        // which a run may not do.
+        erosion_time: 30.0 * scaled_step_duration(cell_count),
         ..default
     }
 }
+
 
 pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSettings {
     TectonicsSettings {
@@ -85,14 +99,8 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
             },
             ..Default::default()
         }
-        // Four steps, each scaled to the 65,536-cell mesh: cell width goes as
-        // the reciprocal square root of cell count, so a step on these much
-        // coarser test meshes has to be that much longer to move a plate the
-        // same one cell.
-        .with_steps(
-            4,
-            DEFAULT_STEP_DURATION * (DEFAULT_CELL_COUNT as f32 / cell_count as f32).sqrt(),
-        ),
+        .with_steps(4, scaled_step_duration(cell_count)),
+
         birth_prior: CrustBirthPriorConfig {
             ridge_less_age: 8.0 * hop_length(cell_count, 1.0),
         },

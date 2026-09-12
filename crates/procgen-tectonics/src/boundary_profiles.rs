@@ -17,8 +17,12 @@ use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundaryEffect {
-    /// Signed deformation at the boundary cell.
+    /// Signed deformation a saturated boundary cell raises over one
+    /// [`BoundaryDeformationConfig::full_deformation_time`]. It is a rate
+    /// rather than a height: what a belt reaches is set against the sink in
+    /// [`BoundaryDeformationConfig::erosion_time`].
     pub offset: f32,
+
     /// Model length on the unit sphere the effect propagates within the
     /// current owning plate. One default hop is about 88 km at Earth radius.
     pub depth: f32,
@@ -99,35 +103,57 @@ pub struct BoundaryDeformationConfig {
     ///
     /// An arc is narrow — a volcanic front 100 to 200 km behind the trench —
     /// so the default depth is two default hops, about 180 km, rather than the
-    /// six a collision belt spreads over. The offset matches `convergent` so that a floor at 0.08
-    /// to 0.30 reaches the 0.5 datum once the boundary has held for the whole
-    /// of [`Self::full_deformation_time`] and the volcanic uplift lands on
-    /// top. That is what makes an arc an island chain rather than a submarine
-    /// ridge, and it is the number to retune if arcs stay drowned.
+    /// six a collision belt spreads over. The offset matches `convergent`, and
+    /// at that rate an arc that keeps converging carries a floor at 0.08 to
+    /// 0.30 past the 0.5 datum with the volcanic uplift on top. That is what
+    /// makes an arc an island chain rather than a submarine ridge, and it is
+    /// the number to retune if arcs stay drowned.
+
     pub island_arc: BoundaryEffect,
     /// Motion magnitude at which a boundary effect reaches its full offset.
     pub saturation_speed: f32,
-    /// Model time over which a saturated boundary raises its full profile
-    /// offset. Each step adds the profile scaled by the step's duration over
-    /// this time, so the default of nine default steps
-    /// (`9 * DEFAULT_STEP_DURATION`) is the time a boundary needs to hold one
-    /// regime to reach the magnitudes the removed final-boundary stage
-    /// produced. The viewer's run is longer than that, so a boundary that
-    /// converges throughout raises more and [`Self::maximum_magnitude`]
-    /// catches the few cells that saturate.
+    /// Model time over which a saturated boundary raises one full profile
+    /// offset. An offset is therefore a rate: a saturated boundary adds
+    /// `offset * step_duration / full_deformation_time` of relief a step, and
+    /// the default of nine default steps (`9 * DEFAULT_STEP_DURATION`) is the
+    /// time a boundary needs to hold one regime to raise the whole of its
+    /// offset once.
+    ///
+    /// It is not what a belt reaches. [`Self::erosion_time`] takes relief away
+    /// in proportion to how much a parcel carries, so a boundary that holds
+    /// its regime rises toward
+    /// `offset * erosion_time / full_deformation_time`, about 3.3 offsets at
+    /// the defaults, and [`Self::maximum_magnitude`] catches it there.
     pub full_deformation_time: f32,
-    /// Magnitude the accumulated field is clamped to. The default is the
-    /// largest offset the default profiles can raise — the collision centre at
-    /// 0.5, against 0.4 for the convergent, transform, and island arc centres
-    /// and 0.2 for the trench and the rift centre — so it bites only where a
-    /// boundary held one regime for longer than
-    /// [`Self::full_deformation_time`]: 866 of the 65,536 cells at the
-    /// viewer's default sixty-step run, and none at all over fifteen. The
-    /// share grows without bound with run length, because uplift is added
-    /// every step and nothing takes it away; see "Run length" in
-    /// `docs/plate-movement.md`.
+    /// Magnitude the carried field is clamped to. The default is the largest
+    /// offset the default profiles can raise — the collision centre at 0.5,
+    /// against 0.4 for the convergent, transform, and island arc centres and
+    /// 0.2 for the trench and the rift centre — and with erosion under it the
+    /// clamp is the steady state of an active belt rather than an accumulator
+    /// overflowing: uplift and decay would otherwise balance at about 1.33,
+    /// which is above it, so a boundary that keeps converging reaches the
+    /// clamp and holds there while a belt whose boundary moves on decays away
+    /// from it. See "Relief decay" in `docs/plate-movement.md`.
     pub maximum_magnitude: f32,
+    /// Model time constant of the relief sink. Every step, what a parcel of
+    /// crust carries is multiplied by `1 - step_duration / erosion_time`
+    /// before that step's boundaries add to it, so relief with no boundary
+    /// under it decays toward zero and relief under a boundary rises to where
+    /// uplift and decay balance.
+    ///
+    /// It is denudation at the scale of a whole orogen, which Ahnert's
+    /// relation makes proportional to mean relief, with the isostatic rebound
+    /// of the crust under the stripped rock folded in: rock leaves about six
+    /// times faster than surface elevation falls, so the e-folding of the
+    /// surface is 40 to 50 Myr rather than Ahnert's 7. The default of thirty
+    /// default steps is 0.42 model time, about 45 Myr at the reading in
+    /// `docs/plate-movement.md`, which is what leaves the Appalachians low but
+    /// standing after 300 Myr.
+    ///
+    /// Infinity disables the sink, which is the world before it existed.
+    pub erosion_time: f32,
 }
+
 
 impl Default for BoundaryDeformationConfig {
     fn default() -> Self {
@@ -160,7 +186,9 @@ impl Default for BoundaryDeformationConfig {
             saturation_speed: 2.0,
             full_deformation_time: 9.0 * DEFAULT_STEP_DURATION,
             maximum_magnitude: 0.5,
+            erosion_time: 30.0 * DEFAULT_STEP_DURATION,
         }
+
     }
 }
 
@@ -168,7 +196,9 @@ impl Default for BoundaryDeformationConfig {
 pub enum BoundaryDeformationError {
     InvalidConfig,
     InvalidRiftProfile,
+    InvalidErosionTime,
 }
+
 
 impl fmt::Display for BoundaryDeformationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -181,7 +211,10 @@ impl fmt::Display for BoundaryDeformationError {
                 "rift profile must satisfy center < 0 and center < flank, and decay depth >= {}",
                 ContinentalRiftProfile::minimum_decay_depth()
             ),
+            Self::InvalidErosionTime => formatter
+                .write_str("erosion time must be positive; infinity disables relief decay"),
         }
+
     }
 }
 
@@ -193,6 +226,13 @@ pub(crate) fn validate_config(
     if !config.rift.is_valid() {
         return Err(BoundaryDeformationError::InvalidRiftProfile);
     }
+    // Infinity is the one value here that is not finite and is still valid: it
+    // is how a caller turns the sink off, exactly as an infinite `suture_time`
+    // turns suturing off.
+    if config.erosion_time.is_nan() || config.erosion_time <= 0.0 {
+        return Err(BoundaryDeformationError::InvalidErosionTime);
+    }
+
     let effects = [
         config.convergent,
         config.transform,
@@ -205,6 +245,7 @@ pub(crate) fn validate_config(
         config.full_deformation_time,
         config.maximum_magnitude,
     ];
+
     if effects
         .iter()
         .any(|effect| !effect.offset.is_finite() || !effect.depth.is_finite() || effect.depth < 0.0)
