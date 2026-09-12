@@ -86,20 +86,21 @@ pub struct BaseElevationConfig {
     /// a doubled crust stands one whole term above the continent around it.
     ///
     /// It is Airy isostasy, which floats a doubled 35 km crust about 6 km
-    /// higher — about 0.3 at the vertical scale the profile retune works in.
-    /// The continental base already stands 3 km up on that scale, and a
-    /// plateau is 3 to 5 km above the continent beside it rather than above
-    /// the sea, so a plateau is worth 0.15 to 0.25 of this field's units.
+    /// higher. What the default is set against is where the plateau's surface
+    /// ends up, not how far it stands above its neighbours: the continental
+    /// base is already 0.65, which is 3 km on the land mapping this codebase
+    /// quotes elevations through, so a term that raised a plateau 3 to 5 km
+    /// *above that* would put its surface at 6 to 8 km. Tibet is 5 km above
+    /// the sea, which is 0.75.
     ///
-    /// The default is a third of that, because the term is per parcel and a
-    /// thickened cell rarely holds only two: over the viewer's defaults the
-    /// median thickened cell holds three parcels and the ninetieth percentile
-    /// nine, so 0.1 a parcel puts the typical collision 0.2 above the
-    /// continent around it, which is the plateau the paragraph above
-    /// describes. At the 0.2 a doubled crust alone would ask for, that
-    /// typical cell reaches the clamp at 1.0 instead. See "Crustal thickness"
-    /// in `docs/plate-movement.md` for the distribution and for the tail this
-    /// slice does not bound.
+    /// At 0.1 a parcel, with lateral flow leaving a median thickened cell two
+    /// parcels deep, the largest plateau of the viewer's defaults has its
+    /// surface at 0.767 to 0.799 — 5.3 to 6.0 km — at every run length from
+    /// 15 steps to 240. That is the target. At 0.15 the same plateau reaches
+    /// 0.817 to 0.840, which is 6.3 to 6.8 km and higher than anything on
+    /// Earth, and roughly triples the cells pinned at the 1.0 clamp. See
+    /// "Crustal thickness" in `docs/plate-movement.md` for the sweep.
+
     ///
     /// Zero disables it and restores the world before crustal thickness,
     /// where a plateau was whatever the convergent profile painted.

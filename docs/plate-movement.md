@@ -2498,7 +2498,10 @@ At one step per 1.5 Myr that is the right order for lower crustal flow.
 65,536 cells at `DEFAULT_STEP_DURATION` and `thickness_uplift` 0.1, release on
 an M1 Max. "Deepest" is the deepest column in parcels; "plateau" is the
 largest connected run of thickened cells and how far its surface stands above
-the continent around it.
+the continent around it. That last column is a difference, not the thing the
+term is judged on — see "The plateau criterion was wrong" for where the
+surface actually sits.
+
 
 Viewer defaults:
 
@@ -2530,6 +2533,7 @@ distribution before the flow:
 
 ### What the flow settled
 
+
 - **The plateau grows with the run.** The largest connected thickened region
   goes 104, 417, 594, 889 cells where it held at 19, 34, 41, 50, and the
   thickened cells with it, 1,913 to 5,353 against 1,108 to 1,809. A collision
@@ -2550,29 +2554,69 @@ distribution before the flow:
   outrun the drain while the run lasts. What changed is that they no longer
   grow without bound and no longer set the shape of the field: 56 parcels at
   240 steps against a ninety-ninth percentile of 7.
-- **The plateau is lower than the slice asked for.** It stands 0.079 to 0.122
-  above the continent around it, against the 0.15 to 0.3 a real plateau
-  wants. The cause is the flattening: `thickness_uplift` is per parcel and the
-  typical thickened cell now holds two rather than the three that set the
-  default, so the typical plateau cell stands one term up instead of two.
-- **The clamp share still rises with the term on.** Swept at the defaults:
+- **The clamp share still rises with the term on**, 3 cells to 116 at sixty
+  steps and 22 to 291 at 240. The flow narrowed the gap — 116 against the 211
+  the same uplift left before it — but did not close it. What is left is not
+  the term being too large; see "The plateau criterion was wrong" below.
 
-  | steps | uplift | land | elev. clamp | plateau height |
-  | --- | --- | --- | --- | --- |
-  | 60 | 0 | 14,783 | 3 | 0.042 |
-  | 60 | 0.1 | 15,201 | 116 | 0.121 |
-  | 60 | 0.15 | 15,283 | 329 | 0.152 |
-  | 60 | 0.2 | 15,328 | 561 | 0.180 |
-  | 240 | 0 | 12,318 | 22 | 0.005 |
-  | 240 | 0.1 | 12,827 | 291 | 0.122 |
-  | 240 | 0.15 | 12,919 | 833 | 0.175 |
-  | 240 | 0.2 | 12,954 | 1,321 | 0.213 |
+### The plateau criterion was wrong, not the result
 
-  An uplift of 0.15 reaches the bottom of the band and roughly triples the
-  clamped cells; 0.1 keeps them near a hundred and falls short of it. The flow
-  narrowed the gap — 116 clamped cells at sixty steps against 211 before it —
-  but did not close it. `thickness_uplift` stays at 0.1 and the choice is
-  recorded here rather than made silently.
+This slice was specified against a plateau standing 0.15 to 0.3 above the
+continent around it, and the flow leaves 0.079 to 0.122. The criterion was the
+thing at fault.
+
+A plateau on Earth is 3 to 5 km above the continent beside it, and that is
+where the relative target came from. But this model's continent is not at sea
+level: `continental_base` is 0.65, and under the land mapping every vertical
+number here is quoted through — 10 km of land across the half of the unit
+range above the 0.5 datum — 0.65 is already 3 km. Asking for 0.15 to 0.3 *on
+top of that* asks for a surface at 6 to 8 km. Tibet is 5 km. The relative
+target counted the stretched base twice.
+
+Stated as an absolute elevation instead, the criterion is a plateau surface
+near 0.75, which is 5 km. Measured at the viewer's defaults, with the rim the
+plateau stands on for comparison:
+
+| steps | uplift | plateau cells | rim | surface | surface km | elev. clamp |
+| --- | --- | --- | --- | --- | --- | --- |
+| 15 | 0.1 | 104 | 0.672 | 0.767 | 5.3 | 2 |
+| 60 | 0.1 | 417 | 0.679 | 0.799 | 6.0 | 116 |
+| 120 | 0.1 | 594 | 0.682 | 0.780 | 5.6 | 409 |
+| 240 | 0.1 | 889 | 0.646 | 0.769 | 5.4 | 291 |
+| 15 | 0.15 | 104 | 0.681 | 0.817 | 6.4 | 4 |
+| 60 | 0.15 | 417 | 0.688 | 0.840 | 6.8 | 329 |
+| 120 | 0.15 | 594 | 0.691 | 0.830 | 6.6 | 712 |
+| 240 | 0.15 | 889 | 0.655 | 0.830 | 6.6 | 833 |
+
+At 0.1 the plateau's surface sits between 0.767 and 0.799 — 5.3 to 6.0 km — at
+every run length from 15 steps to 240, which is Tibet. The criterion is met.
+
+### `thickness_uplift` stays at 0.1
+
+The sweep above is the reason not to go higher. Raising the term to 0.15 buys
+about three hundredths of plateau — a surface at 6.3 to 6.8 km, higher than
+anything on Earth — and roughly triples the cells pinned at the 1.0 clamp,
+which is 10 km: 116 to 329 at sixty steps, 291 to 833 at 240. The whole
+sweep, with what it does to land:
+
+| steps | uplift | land | elev. clamp | height above the rim |
+| --- | --- | --- | --- | --- |
+| 60 | 0 | 14,783 | 3 | 0.042 |
+| 60 | 0.1 | 15,201 | 116 | 0.121 |
+| 60 | 0.15 | 15,283 | 329 | 0.152 |
+| 60 | 0.2 | 15,328 | 561 | 0.180 |
+| 240 | 0 | 12,318 | 22 | 0.005 |
+| 240 | 0.1 | 12,827 | 291 | 0.122 |
+| 240 | 0.15 | 12,919 | 833 | 0.175 |
+| 240 | 0.2 | 12,954 | 1,321 | 0.213 |
+
+The cells still clamped at 0.1 are not an argument for a smaller term either.
+They are where the convergent fold-front profile and the thickness stack on
+the same cell: the front paints its offset onto the suture, thickness floats
+the crust under it, and the two add. The physical fix is not this knob but the
+fold-front profile applying less where thickness already carries the load,
+which is the deformation side of the same double-count the `convergent`
+retune started on. It belongs with the sediment budget rather than here.
 
 ### Continental area is now a sediment-budget number
 
@@ -2583,16 +2627,10 @@ conserves, so as crust thickens its area must fall, and nothing yet thins it
 back. That is the sediment budget's to answer, and until it lands the falling
 continental raster is the arithmetic working rather than a defect.
 
-### The defaults these measurements chose
-
-`thickness_uplift` is **0.1**, not the 0.2 that Airy isostasy on a doubled
-crust alone would ask for. The term is per parcel and the median thickened
-cell holds three, so 0.1 puts the typical collision 0.2 above the continent
-around it, which is the 3-to-5 km plateau the physics describes. At 0.2 that
-same typical cell reaches the clamp at 1.0, and the clamped count roughly
-doubles at every run length.
+### The convergent retune
 
 `convergent` goes from offset 0.4 over six hops to **0.2 over three**. With the
+
 plateau made of material, the profile is the fold-and-thrust front at the
 suture rather than the plateau behind it, and leaving it as it was would count
 the same crust twice. The retune lowers the deformation mean by about a fifth,
