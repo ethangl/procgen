@@ -221,9 +221,10 @@ for that one.
   undefined, so a rift is only well posed on a plate an arc can cross rather
   than circle.
 - Suturing: each step counts, for every adjacent continental pair, the shared
-  edges that are convergent with continental crust on both sides. A pair at or
-  above `suture_minimum_shared_edges` grows its collision time by the step; a
-  pair below it starts over, the same convention the closing debt uses for an
+  edges that are convergent with continental crust on both sides. A pair whose
+  front is at least `suture_minimum_shared_length`, converted to an edge count
+  against the mesh, grows its collision time by the step; a pair below it
+  starts over, the same convention the closing debt uses for an
   edge that stopped converging. At `suture_time` the plate with more area
   absorbs the other: every cell takes the absorber's id, the absorber's
   rotation vector becomes the area-weighted mean of the two, and the absorbed
@@ -245,7 +246,8 @@ for that one.
 - Defaults: `rift_rate` 4.5 per unit time, `rift_minimum_area_fraction` 0.04
   at the time and 0.012 since the profile retune below,
   `rift_curvature` 8.0 (the partition's own), `rift_opening_speed` 0.33,
-  `suture_time` eight default steps, and `suture_minimum_shared_edges` 20.
+  `suture_time` eight default steps, and `suture_minimum_shared_length` twenty
+  default hops.
   They were calibrated by running the viewer's defaults over nine, fifteen,
   and thirty steps and sweeping the two knobs that matter. The area fraction
   is one of them: the largest continental plate covered 0.044 of the sphere
@@ -341,15 +343,25 @@ for that one.
   own area over the mean. That is the one fingerprint this work moved: over the
   reference fixture's 201 candidates it loses four peaks and gains five.
 - Measured on the default world, the three rules that now read real cell area
-  change what it holds, because a real mesh's cells vary around the mean and no
-  area test can reproduce a cell count on one. Arc peaks go from 2390 to 2259
-  over 635 segments, 217 of which change by one: the count rule rounded every
-  segment up, and a density rounds to nearest. Basins go from 41 to 37 of 231
-  components, the four that disagree being three-cell components of less than
-  three mean cells' area. Oceanic peaks go from 1345 to 1326 of 8717
-  candidates. No test fixture sits near any of those thresholds, so the pins
-  that stand are not evidence that the default world is unchanged; these
-  numbers are.
+  change what it holds. That is the point of the change rather than a cost of
+  it: a mesh's cells vary around the mean, so no area test can reproduce a cell
+  count on one, and the area is the quantity that means the same thing on every
+  mesh.
+  - Arc peaks go from 2390 to 2259 over 635 segments, 217 of which change by
+    one. `div_ceil` was the integer arithmetic that happened to be there and it
+    rounded every segment up; once the quantity is peaks per unit area, the
+    unbiased estimator is the only one under which the number means the same
+    thing at any resolution. `ceil` measures 2530 and puts that per-segment
+    bias back, and a default of one peak per 1.9 cells would bury it in a
+    constant nobody could explain later. The floor at one peak keeps the only
+    part of the old behaviour a reader would notice. If arcs look sparse, that
+    is a measured retune of `peak_density` and not this change.
+  - Basins go from 41 to 37 of 231 components. The four dropped are three-cell
+    components covering less than three mean cells of area, which is what the
+    threshold now says.
+  - Oceanic peaks go from 1345 to 1326 of 8717 candidates.
+  - No test fixture sits near any of those thresholds, so the pins that stand
+    are not evidence that the default world is unchanged; these numbers are.
 - Carried risk: the viewer's small-mesh fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
   moves which seeds those are. Five changed here, two in slice 3, three in
