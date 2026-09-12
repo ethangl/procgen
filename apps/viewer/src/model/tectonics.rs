@@ -51,7 +51,16 @@ impl Default for TectonicsSettings {
             birth_prior: CrustBirthPriorConfig::default(),
             evolution: PlateEvolutionConfig {
                 seed: 7,
-                step_count: 15,
+                // The shortest run at which the age distribution, the plate
+                // count, and land have all reached the steady state they hold
+                // out to 240 steps. At `DEFAULT_STEP_DURATION` it is about
+                // 90 Myr, the time an ocean takes to open. Longer is not a
+                // longer version of the same world: deformation has no sink,
+                // so the share of cells pinned at `maximum_magnitude` grows
+                // without bound, and 60 steps is where it still touches about
+                // one cell in eighty. See "Run length" in
+                // `docs/plate-movement.md`.
+                step_count: 60,
                 ..Default::default()
             },
             base_elevation: BaseElevationConfig::default(),

@@ -76,12 +76,12 @@ impl Default for PlateLifecycleConfig {
         Self {
             // `3.0 * 0.014` is a chance of one in twenty-four a step per
             // eligible plate: with the four plates the minimum area below
-            // makes eligible, the viewer's defaults break one up over fifteen
-            // steps and two over thirty. It is swept against that minimum
-            // rather than alone, because the two together decide the count:
-            // at 4.5 the same four plates give three rifts over fifteen steps
-            // and at 2.25 they give none, the draws being hashed and so lumpy
-            // rather than smooth. A half that a rift leaves is usually too
+            // makes eligible, a fifteen-step run at the viewer's settings
+            // breaks one up and a thirty-step run two. It is swept against
+            // that minimum rather than alone, because the two together decide
+            // the count: at 4.5 the same four plates give three rifts over
+            // those fifteen steps and at 2.25 they give none, the draws being
+            // hashed and so lumpy rather than smooth. A half that a rift leaves is usually too
             // small to be eligible again, which is what stops the count
             // running away.
             rift_rate: 3.0,
@@ -99,13 +99,13 @@ impl Default for PlateLifecycleConfig {
             // little enough that they stay part of the flow field's pattern.
             rift_opening_speed: 0.33,
             // Eight default steps. Together with the edge count below, the
-            // viewer's defaults suture once over a nine- or fifteen-step run
+            // viewer's settings suture once over a nine- or fifteen-step run
             // and three times over thirty.
             suture_time: 8.0 * crate::field::DEFAULT_STEP_DURATION,
             // About a fifth of a default-mesh plate's perimeter, which is a
             // collision front rather than two plates meeting at a corner. It
-            // is the knob that matters: at eight shared edges the viewer's
-            // defaults suture six times over fifteen steps, at sixteen three
+            // is the knob that matters: at eight shared edges a fifteen-step
+            // run at the viewer's settings sutures six times, at sixteen three
             // times, and at twenty once.
             suture_minimum_shared_edges: 20,
         }

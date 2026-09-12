@@ -82,20 +82,25 @@ pub struct PoleDriftConfig {
 impl Default for PoleDriftConfig {
     fn default() -> Self {
         Self {
-            // A default fifteen-step run at `DEFAULT_STEP_DURATION` turns an
-            // axis by `1.8 * sqrt(0.014) = 0.213` radians per step, and
-            // `0.213 * sqrt(15)` is 0.83 radians: about forty-seven degrees of
-            // expected total wander, enough for boundaries to change regime
-            // several times and little enough that they do not flicker.
+            // A run at `DEFAULT_STEP_DURATION` turns an axis by
+            // `1.8 * sqrt(0.014) = 0.213` radians per step, so the expected
+            // total wander of `0.213 * sqrt(n)` is 0.83 radians over fifteen
+            // steps and 1.65 over the viewer's default sixty: about
+            // forty-seven and ninety-five degrees. The per-step angle is what
+            // decides flicker, and it is small enough that a boundary changes
+            // regime several times over a run rather than every step.
             axis_drift_rate: 1.8,
             // `0.9 * sqrt(0.014)` is 0.106, so a step changes a plate's drift
             // factor by at most about a tenth.
             speed_drift_rate: 0.9,
-            // A step's expected change is `0.106 / sqrt(3)`, so a default
-            // fifteen-step walk is expected to stray about a quarter. At a
-            // half the band bounds the tail of that walk without shaping the
-            // bulk of it: five of the 111 plates at the viewer's defaults
-            // reach the edge over fifteen steps, and a long run stays inside.
+            // A step's expected change is `0.106 / sqrt(3)`, so the
+            // unclamped walk is expected to stray `0.061 * sqrt(n)`: about a
+            // quarter over the fifteen steps this was set against, where five
+            // of the 111 plates at the viewer's defaults reached the edge, and
+            // about a half over the sixty the viewer now runs. The band
+            // therefore bounds the tail of a short run and shapes the bulk of
+            // a long one, which is one of the things "Run length" in
+            // `docs/plate-movement.md` records.
             speed_drift_limit: 0.5,
         }
     }

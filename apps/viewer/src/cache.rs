@@ -422,7 +422,7 @@ struct_codec! {
     CrustClassificationDiagnostics { continental_fraction, component_count }
     PlateKinematics { angular_velocities, base_speeds }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
-    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, collided_cell_count, maximum_collision_stack, sampled_cell_count, starting_continental_particle_count, final_continental_particle_count, rift_count, failed_rift_count, suture_count }
+    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, collided_cell_count, maximum_collision_stack, sampled_cell_count, starting_continental_particle_count, final_continental_particle_count, covered_continental_particle_count, foreign_continental_particle_count, rift_count, failed_rift_count, suture_count }
     FieldSummary { minimum, maximum, mean }
     CrustBirthPriorDiagnostics { hops, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
     SeafloorAgeDiagnostics { summary, oceanic_cell_count }
