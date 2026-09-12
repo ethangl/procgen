@@ -13,6 +13,7 @@ pub enum StageInputError {
     Elevation,
     BaseElevation,
     Deformation,
+    CellThickness,
     SeafloorAge,
 }
 
@@ -44,6 +45,10 @@ impl fmt::Display for StageInputError {
             Self::Deformation => {
                 formatter.write_str("deformation values must match the mesh cell count")
             }
+            Self::CellThickness => {
+                formatter.write_str("crustal thickness values must match the mesh cell count")
+            }
+
             Self::SeafloorAge => {
                 formatter.write_str("seafloor-age values must match the mesh cell count")
             }

@@ -390,7 +390,8 @@ struct_codec! {
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_length }
     PlateEvolutionConfig { seed, run_duration, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
-    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation }
+    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation, thickness_uplift }
+
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
     BoundaryDeformationConfig { convergent, rift, transform, collision, trench, island_arc, saturation_speed, full_deformation_time, maximum_magnitude, erosion_time }
@@ -424,12 +425,15 @@ struct_codec! {
     CrustClassificationDiagnostics { continental_fraction, component_count }
     PlateKinematics { angular_velocities, base_speeds }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
-    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, collided_cell_count, maximum_collision_stack, sampled_cell_count, starting_continental_particle_count, final_continental_particle_count, covered_continental_particle_count, foreign_continental_particle_count, rift_count, failed_rift_count, suture_count }
+    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, accreted_particle_count, thickness_transfer_count, collided_cell_count
+, maximum_collision_stack, sampled_cell_count, starting_continental_thickness, final_continental_thickness, maximum_thickness, thickened_cell_count, covered_continental_particle_count, foreign_continental_particle_count, rift_count, failed_rift_count, suture_count }
+
     FieldSummary { minimum, maximum, mean }
     CrustBirthPriorDiagnostics { age, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
     SeafloorAgeDiagnostics { summary, oceanic_cell_count }
     SeafloorAge { cell_ages, diagnostics }
-    BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, margin_depth, oceanic_cell_count, continental_cell_count, margin_cell_count }
+    BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, margin_depth, oceanic_cell_count, continental_cell_count, margin_cell_count, thickness_uplift, thickened_cell_count }
+
     BaseElevation { cell_elevations, diagnostics }
     BoundaryDeformationDiagnostics { summary, source_cell_count, uplifted_cell_count, subsided_cell_count }
     BoundaryDeformation { cell_deformation, diagnostics }
@@ -538,7 +542,9 @@ impl CacheCodec for TectonicsWorld {
         self.kinematics.encode(encoder);
         self.boundaries.encode(encoder);
         self.cell_birth.encode(encoder);
+        self.cell_thickness.encode(encoder);
         self.birth_prior.encode(encoder);
+
         self.evolution.encode(encoder);
         self.seafloor_age.encode(encoder);
         self.base_elevation.encode(encoder);
@@ -555,6 +561,8 @@ impl CacheCodec for TectonicsWorld {
             kinematics: CacheCodec::decode(decoder)?,
             boundaries: CacheCodec::decode(decoder)?,
             cell_birth: CacheCodec::decode(decoder)?,
+            cell_thickness: CacheCodec::decode(decoder)?,
+
             birth_prior: CacheCodec::decode(decoder)?,
             evolution: CacheCodec::decode(decoder)?,
             seafloor_age: CacheCodec::decode(decoder)?,
@@ -633,7 +641,7 @@ mod tests {
 
     #[test]
     fn snapshot_round_trip_restores_settings_and_domain_data_without_timings() {
-        let fixture = Fixture::new(32, 11);
+        let fixture = Fixture::new(1024, 11);
         let bytes = encode_snapshot(fixture.complete());
         let loaded = decode_snapshot(&bytes).unwrap();
         let complete = loaded.complete().unwrap();
@@ -674,7 +682,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_dimensions_are_rejected() {
-        let fixture = Fixture::new(32, 31);
+        let fixture = Fixture::new(1024, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes);
         bytes[offset..offset + size_of::<u32>()].copy_from_slice(&3_u32.to_le_bytes());
@@ -684,7 +692,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_data_is_rejected() {
-        let fixture = Fixture::new(32, 31);
+        let fixture = Fixture::new(1024, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         bytes[offset..offset + size_of::<f32>()].copy_from_slice(&f32::NAN.to_le_bytes());
@@ -695,7 +703,7 @@ mod tests {
     #[test]
     fn loaded_snapshot_reuses_cached_bake_data() {
         let (cache_dir, cache) = test_cache("reuse-bake");
-        let fixture = Fixture::new(32, 31);
+        let fixture = Fixture::new(1024, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         let cached_value = 123.25_f32;
@@ -713,7 +721,7 @@ mod tests {
 
     #[test]
     fn build_identity_mismatch_invalidates_snapshot() {
-        let fixture = Fixture::new(32, 12);
+        let fixture = Fixture::new(1024, 12);
 
         let mut wrong_build = encode_snapshot(fixture.complete());
         let identity_start = MAGIC.len() + size_of::<u64>();
@@ -723,7 +731,7 @@ mod tests {
 
     #[test]
     fn truncated_snapshot_is_nonfatal_corruption() {
-        let fixture = Fixture::new(32, 31);
+        let fixture = Fixture::new(1024, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         bytes.truncate(bytes.len() / 2);
 
@@ -732,24 +740,24 @@ mod tests {
 
     #[test]
     fn invalid_topology_sparse_indices_and_field_lengths_are_rejected() {
-        let mut fixture = Fixture::new(32, 3);
+        let mut fixture = Fixture::new(1024, 3);
         let cell_count = fixture.tectonics.voronoi.cell_count();
         fixture.tectonics.voronoi.edges[0].cells[0] = cell_count;
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut fixture = Fixture::new(32, 26);
+        let mut fixture = Fixture::new(1024, 26);
         fixture.geology.hotspots.hotspots[0].source_cell = fixture.tectonics.voronoi.cell_count();
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut fixture = Fixture::new(32, 25);
+        let mut fixture = Fixture::new(1024, 25);
         fixture.geology.hotspots.hotspots[0].plate = fixture.tectonics.plates.plate_count;
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut fixture = Fixture::new(32, 1);
+        let mut fixture = Fixture::new(1024, 1);
         fixture.climate.cryosphere.cell_snow_cover_fraction.pop();
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut fixture = Fixture::new(32, 18);
+        let mut fixture = Fixture::new(1024, 18);
         fixture.climate.cell_albedo.pop();
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
     }
@@ -757,8 +765,8 @@ mod tests {
     #[test]
     fn successful_store_atomically_replaces_previous_snapshot() {
         let (cache_dir, cache) = test_cache("replace");
-        let first = Fixture::new(32, 29);
-        let second = Fixture::new(48, 27);
+        let first = Fixture::new(1024, 29);
+        let second = Fixture::new(1280, 27);
         cache.store(first.complete()).unwrap();
         cache.store(second.complete()).unwrap();
 
@@ -767,7 +775,7 @@ mod tests {
             loaded.complete().unwrap().settings(),
             second.complete().settings()
         );
-        assert_eq!(loaded.tectonics().unwrap().voronoi.cell_count(), 48);
+        assert_eq!(loaded.tectonics().unwrap().voronoi.cell_count(), 1_280);
         let parent_entries: Vec<_> = fs::read_dir(cache.path.parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -780,7 +788,7 @@ mod tests {
     #[test]
     fn failed_atomic_write_preserves_previous_snapshot() {
         let (cache_dir, cache) = test_cache("failed-replace");
-        let fixture = Fixture::new(32, 23);
+        let fixture = Fixture::new(1024, 23);
         cache.store(fixture.complete()).unwrap();
         let original = fs::read(&cache.path).unwrap();
 

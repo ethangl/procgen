@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn an_empty_cache_leaves_the_viewer_without_a_world() {
         let (cache_dir, cache) = test_cache("empty-start");
-        let app = app_with(cache, test_settings(32, 20));
+        let app = app_with(cache, test_settings(1024, 20));
 
         let world = app.world().resource::<GeneratedWorld>();
         assert!(Phase::ALL.iter().all(|&phase| !world.holds(phase)));
@@ -439,7 +439,7 @@ mod tests {
         fs::create_dir_all(&cache_dir).unwrap();
         fs::write(cache_dir.join("world.bin"), b"not a snapshot").unwrap();
 
-        let app = app_with(cache, test_settings(32, 4));
+        let app = app_with(cache, test_settings(1024, 4));
 
         assert!(matches!(
             app.world().resource::<GenerationStatus>(),
@@ -452,11 +452,11 @@ mod tests {
     #[test]
     fn startup_loads_cached_world_and_restores_its_settings() {
         let (cache_dir, cache) = test_cache("startup-load");
-        let cached_settings = test_settings(32, 20);
+        let cached_settings = test_settings(1024, 20);
         let fixture = Fixture::generate(cached_settings);
         cache.store(fixture.complete()).unwrap();
 
-        let app = app_with(cache, test_settings(48, 2));
+        let app = app_with(cache, test_settings(1280, 2));
 
         assert_eq!(
             *app.world().resource::<GenerationSettings>(),
@@ -464,7 +464,7 @@ mod tests {
         );
         let world = app.world().resource::<GeneratedWorld>();
         assert_eq!(world.complete().unwrap().settings(), cached_settings);
-        assert_eq!(world.tectonics().unwrap().voronoi.cell_count(), 32);
+        assert_eq!(world.tectonics().unwrap().voronoi.cell_count(), 1_024);
         assert!(world.tectonics().unwrap().timings.stages().is_empty());
         assert!(matches!(
             app.world().resource::<GenerationStatus>(),
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn generating_one_phase_reuses_the_upstream_results_in_memory() {
         let (cache_dir, cache) = test_cache("phase-reuse");
-        let mut app = app_with(cache, test_settings(32, 5));
+        let mut app = app_with(cache, test_settings(1024, 5));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
         // A later tectonics edit must not reach a geology-only run.
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn regenerating_tectonics_reuses_the_mesh_of_an_unchanged_sampling_config() {
         let (cache_dir, cache) = test_cache("mesh-reuse");
-        let mut app = app_with(cache, test_settings(128, 25));
+        let mut app = app_with(cache, test_settings(1792, 25));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
         assert!(ran_delaunay(&app), "the first run has no mesh to reuse");
 
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn regenerating_tectonics_rebuilds_the_mesh_of_a_changed_sampling_config() {
         let (cache_dir, cache) = test_cache("mesh-rebuild");
-        let mut app = app_with(cache, test_settings(128, 28));
+        let mut app = app_with(cache, test_settings(1792, 28));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
         // The whole tectonics profile rather than the cell count alone: the
@@ -525,13 +525,13 @@ mod tests {
         // coarser mesh's step would carry material further than transport can
         // see.
         let mut edited = *app.world().resource::<GenerationSettings>();
-        edited.tectonics = test_settings(192, 58).tectonics;
+        edited.tectonics = test_settings(2048, 58).tectonics;
         app.world_mut().insert_resource(edited);
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
         let tectonics = tectonics_of(&app);
         assert!(ran_delaunay(&app));
-        assert_eq!(tectonics.voronoi.cell_count(), 192);
+        assert_eq!(tectonics.voronoi.cell_count(), 2_048);
         tectonics.validate().unwrap();
 
         assert!(!cache_dir.exists(), "a partial world leaves no snapshot");
@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn generating_a_phase_generates_the_upstream_phases_it_is_missing() {
         let (cache_dir, cache) = test_cache("phase-upstream");
-        let mut app = app_with(cache, test_settings(32, 52));
+        let mut app = app_with(cache, test_settings(1024, 52));
 
         generate(&mut app, GenerateRequest::Phase(Phase::Climate));
 
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn regenerating_a_phase_drops_the_downstream_results() {
         let (cache_dir, cache) = test_cache("phase-drop");
-        let mut app = app_with(cache, test_settings(32, 56));
+        let mut app = app_with(cache, test_settings(1024, 56));
         generate(&mut app, GenerateRequest::AllPhases);
         assert!(
             Phase::ALL
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn only_a_complete_world_reaches_the_cache() {
         let (cache_dir, cache) = test_cache("complete-only");
-        let mut app = app_with(cache.clone(), test_settings(32, 54));
+        let mut app = app_with(cache.clone(), test_settings(1024, 54));
 
         generate(&mut app, GenerateRequest::Phase(Phase::Geology));
         let load_error = cache.load().err().expect("a partial world is not cached");
@@ -599,17 +599,17 @@ mod tests {
     #[test]
     fn generating_every_phase_replaces_the_cached_snapshot() {
         let (cache_dir, cache) = test_cache("regenerate");
-        let previous = Fixture::generate(test_settings(32, 60));
+        let previous = Fixture::generate(test_settings(1024, 60));
         cache.store(previous.complete()).unwrap();
         let mut app = app_with(cache.clone(), GenerationSettings::default());
-        let requested = test_settings(64, 7);
+        let requested = test_settings(1536, 7);
         app.world_mut().insert_resource(requested);
 
         generate(&mut app, GenerateRequest::AllPhases);
 
         let world = app.world().resource::<GeneratedWorld>();
         assert_eq!(world.complete().unwrap().settings(), requested);
-        assert_eq!(world.tectonics().unwrap().voronoi.cell_count(), 64);
+        assert_eq!(world.tectonics().unwrap().voronoi.cell_count(), 1_536);
         assert!(matches!(
             app.world().resource::<GenerationStatus>(),
             GenerationStatus::Generated { phases, .. } if phases == Phase::ALL

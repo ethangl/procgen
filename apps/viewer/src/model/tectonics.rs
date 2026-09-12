@@ -88,6 +88,10 @@ pub struct TectonicsWorld {
     /// Model time at which each cell's crust was created; the only per-cell
     /// answer to what crust a cell carries.
     pub cell_birth: Vec<Option<f32>>,
+    /// Original parcels of crust the column under each cell holds, zero on
+    /// ocean floor. More than one is crust a collision doubled.
+    pub cell_thickness: Vec<u32>,
+
     pub birth_prior: CrustBirthPriorDiagnostics,
     pub evolution: PlateEvolutionDiagnostics,
     pub seafloor_age: SeafloorAge,
@@ -162,12 +166,14 @@ impl TectonicsWorld {
             kinematics,
             boundaries,
             cell_birth,
+            cell_thickness,
             // Seafloor age has already read it, and it is the run's own copy
             // of two settings this phase still carries.
             elapsed_time: _,
             deformation,
             diagnostics: evolution,
         } = evolution_result;
+
         let CrustBirthPrior {
             diagnostics: birth_prior,
             ..
@@ -179,6 +185,7 @@ impl TectonicsWorld {
                 CellCrust {
                     cell_birth: &cell_birth,
                 },
+                &cell_thickness,
                 // The field the plates were fitted to, rebuilt from the same
                 // config the fit read, so its dynamic topography and their
                 // motion describe one flow.
@@ -197,7 +204,9 @@ impl TectonicsWorld {
             kinematics,
             boundaries,
             cell_birth,
+            cell_thickness,
             birth_prior,
+
             evolution,
             seafloor_age,
             base_elevation,

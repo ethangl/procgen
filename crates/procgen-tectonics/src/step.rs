@@ -16,12 +16,12 @@
 //! relative motion at a boundary that has not moved, and the accumulated
 //! fields would record a scaled copy of the final state.
 //!
-//! The two per-cell fields a run produces — the model time at which a parcel
-//! of crust was created, and the deformation the boundaries have raised on it
-//! — belong to the particles in [`crate::transport`] rather than to the
-//! cells. A cell's answer is whichever particle won it, so the fields move
-//! with the material by construction instead of by a rule that copies them
-//! between cells.
+//! The three per-cell fields a run produces — the model time at which a
+//! parcel of crust was created, the deformation the boundaries have raised on
+//! it, and the original parcels the column holds — belong to the particles in
+//! [`crate::transport`] rather than to the cells. A cell's answer is whichever
+//! particle won it, so the fields move with the material by construction
+//! instead of by a rule that copies them between cells.
 
 use crate::{
     BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
@@ -153,6 +153,18 @@ pub(crate) struct EvolvingWorld<'a> {
     /// and lifecycle read the crust they imply.
     pub(crate) cell_birth: Vec<Option<f32>>,
     pub(crate) cell_deformation: Vec<f32>,
+    /// Original parcels the winning column holds, zero where the winner is
+    /// ocean floor. It is the third field a cell reads off its material.
+    pub(crate) cell_thickness: Vec<u32>,
+    /// The parcel each cell reads, as an index into `particles`.
+    ///
+    /// The three columns above are projections of it, and it is kept so that
+    /// a merge after the last transport — which is what compaction's
+    /// accretion is — can put the thickness it made into the cells that read
+    /// the column it made it in. Every pass that reorders the particles
+    /// remaps it in the same breath.
+    pub(crate) cell_winner: Vec<usize>,
+
     /// Model time each adjacent continental pair has spent in collision,
     /// keyed by the pair in ascending id order. A pair that stops colliding
     /// drops out and starts over.
@@ -183,6 +195,20 @@ impl<'a> EvolvingWorld<'a> {
             ),
             cell_birth: inputs.birth_prior.cell_birth.clone(),
             cell_deformation: vec![0.0; mesh.cell_count()],
+            // Every cell starts on its own single parcel, and reads zero
+            // where that parcel is ocean floor. Taken from the birth prior
+            // rather than set to ones, so a run of no steps at all answers
+            // the same as the first projection would.
+            cell_thickness: inputs
+                .birth_prior
+                .cell_birth
+                .iter()
+                .map(|birth| u32::from(birth.is_none()))
+                .collect(),
+            // One particle per cell, at the cell's own centre, so each cell
+            // starts reading its own.
+            cell_winner: (0..mesh.cell_count()).collect(),
+
             collisions: BTreeMap::new(),
         }
     }

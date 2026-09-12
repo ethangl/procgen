@@ -68,7 +68,13 @@ const DEFORMATION_DEPTH_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 // A single profile offset is bounded to one, and tectonic elevation clamps to
 // the unit range, so a clamp above one could never bite.
 const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
+// Per parcel of crust past the first. Zero is the world before crustal
+// thickness; the top is what a doubled crust alone would ask for under Airy
+// isostasy, which a typical three-parcel column drives into the elevation
+// clamp. See "Crustal thickness" in `docs/plate-movement.md`.
+const THICKNESS_UPLIFT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.3;
 const SMOOTHING_RADIUS_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
+
 // The datum must stay strictly inside the unit range the field is clamped to.
 // The bottom leaves only the deep floor at 0.08 under water and the top drowns
 // the continental base at 0.65, so the range spans an almost fully exposed
@@ -432,6 +438,12 @@ fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) 
         &mut config.margin_edge_elevation,
         MARGIN_EDGE_RANGE,
     );
+    slider(
+        ui,
+        "Thickness uplift",
+        &mut config.thickness_uplift,
+        THICKNESS_UPLIFT_RANGE,
+    );
 }
 
 fn deformation_controls(
@@ -464,9 +476,13 @@ fn deformation_controls(
         &mut config.maximum_magnitude,
         DEFORMATION_MAGNITUDE_RANGE,
     );
-    slider(ui, "Erosion time", &mut config.erosion_time, MODEL_TIME_RANGE);
+    slider(
+        ui,
+        "Erosion time",
+        &mut config.erosion_time,
+        MODEL_TIME_RANGE,
+    );
 }
-
 
 fn continental_rift_controls(ui: &mut egui::Ui, profile: &mut ContinentalRiftProfile) {
     slider(

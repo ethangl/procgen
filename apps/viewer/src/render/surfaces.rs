@@ -2,8 +2,8 @@ use super::palette::id_color;
 use super::{
     SURFACE_RADIUS,
     palette::{
-        HOTSPOT_COLOR_STOPS, INSOLATION_COLOR_STOPS, SEAFLOOR_AGE_COLOR_STOPS, opaque_color,
-        piecewise_lerp,
+        CRUSTAL_THICKNESS_COLOR_STOPS, HOTSPOT_COLOR_STOPS, INSOLATION_COLOR_STOPS,
+        SEAFLOOR_AGE_COLOR_STOPS, opaque_color, piecewise_lerp,
     },
     to_bevy,
 };
@@ -39,6 +39,30 @@ pub(super) fn crust_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
         .map(|cell| match crust.class(cell) {
             CrustClass::Oceanic => Color::srgb(0.12, 0.48, 0.95),
             CrustClass::Continental => Color::srgb(0.92, 0.62, 0.2),
+        })
+        .collect()
+}
+
+/// Crustal thickness in parcels, scaled to the deepest column the run left.
+///
+/// The scale is that maximum rather than a fixed one, because thickness has
+/// no bound: the deepest column of a 240-step run is an order of magnitude
+/// deeper than a 15-step one, and a fixed ramp would show the short run as
+/// flat. What the layer says is therefore where the crust is thick relative
+/// to this world, not how many kilometres it stands.
+pub(super) fn crustal_thickness_colors(tectonics: &TectonicsWorld) -> Vec<Color> {
+    // One parcel is undeformed continent and the bottom of the ramp, so the
+    // span is the parcels above that first one.
+    let deepest = tectonics.evolution.maximum_thickness.max(2) - 1;
+    tectonics
+        .cell_thickness
+        .iter()
+        .map(|&thickness| match thickness {
+            0 => Color::srgb(0.10, 0.14, 0.22),
+            thickness => opaque_color(piecewise_lerp(
+                (thickness - 1) as f32 / deepest as f32,
+                CRUSTAL_THICKNESS_COLOR_STOPS,
+            )),
         })
         .collect()
 }

@@ -138,6 +138,16 @@ pub(super) const SEAFLOOR_AGE_COLOR_STOPS: &[(f32, Vec3)] = &[
     (0.5, Vec3::new(0.08, 0.4, 0.8)),
     (1.0, Vec3::new(0.015, 0.05, 0.2)),
 ];
+/// Crustal thickness, from the one parcel undeformed continent stands on to
+/// the deepest column the run made. Ocean floor is drawn as the seafloor-age
+/// layer's continental grey rather than as the bottom of this ramp, because
+/// zero parcels is not a thin continent.
+pub(super) const CRUSTAL_THICKNESS_COLOR_STOPS: &[(f32, Vec3)] = &[
+    (0.0, Vec3::new(0.30, 0.28, 0.24)),
+    (0.25, Vec3::new(0.65, 0.55, 0.30)),
+    (0.6, Vec3::new(0.90, 0.45, 0.20)),
+    (1.0, Vec3::new(1.0, 0.95, 0.92)),
+];
 pub(super) const INSOLATION_COLOR_STOPS: &[(f32, Vec3)] = &[
     (0.0, Vec3::new(0.015, 0.02, 0.08)),
     (0.2, Vec3::new(0.08, 0.18, 0.5)),

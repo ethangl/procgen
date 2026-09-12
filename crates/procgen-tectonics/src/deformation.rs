@@ -12,14 +12,12 @@
 //! boundary used to be, and a boundary that changed regime leaves both marks.
 
 use crate::{
-    BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CellCrust, CrustClass,
-    FieldSummary, PlatePartition,
-    boundary_profiles::{PropagationProfile, PropagationProfiles},
-    field::summarize_field,
-    stage::StageInputError,
+    BoundaryClassification, BoundaryDeformationConfig, CellCrust, FieldSummary, PlatePartition,
+    boundary_profiles::PropagationProfile, boundary_sources::collect_boundary_sources,
+    field::summarize_field, stage::StageInputError,
 };
 use procgen_sphere_mesh::SphereMesh;
-use std::{cmp::Ordering, collections::VecDeque};
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BoundaryDeformationDiagnostics {
@@ -110,7 +108,6 @@ impl BoundaryDeformationConfig {
 /// `config` must have passed [`validate_config`]; evolution runs that once
 /// rather than once per step.
 pub(crate) fn boundary_deformation_increment(
-
     mesh: &SphereMesh,
     partition: &PlatePartition,
     crust: CellCrust<'_>,
@@ -124,105 +121,6 @@ pub(crate) fn boundary_deformation_increment(
         *offset *= scale;
     }
     (increment, sources.iter().flatten().count())
-}
-
-fn collect_boundary_sources(
-    mesh: &SphereMesh,
-    crust: CellCrust<'_>,
-    boundaries: &BoundaryClassification,
-    config: &BoundaryDeformationConfig,
-) -> Vec<Option<PropagationProfile>> {
-    // Every configured depth is a model length; this is where the mesh turns
-    // them into the hop counts the propagation counts down.
-    let profiles = config.profiles(mesh.cell_count());
-    let mut sources = vec![None; mesh.cell_count()];
-    for (edge_index, edge) in mesh.edges.iter().enumerate() {
-        let class = boundaries.edge_classes[edge_index];
-        let Some(scale) = source_scale(boundaries, edge_index, config) else {
-            continue;
-        };
-
-        for side in 0..2 {
-            let source_cell = edge.cells[side];
-            let Some(source) = boundary_source(
-                &profiles,
-                class,
-                crust.class(source_cell),
-                crust.order(source_cell, edge.cells[1 - side]),
-            ) else {
-                continue;
-            };
-            let source = source.scaled(scale);
-            retain_stronger_source(&mut sources[source_cell], source);
-        }
-    }
-    sources
-}
-
-/// Signed fraction of its profile the edge's motion raises, or `None` where
-/// the edge is not a boundary.
-///
-/// A convergent or divergent edge scales by its own strength, which is a
-/// magnitude. A transform edge scales by its *signed residual convergence*
-/// instead: lateral slip alone makes no relief, so what is left of the normal
-/// component after classification decides both how much a transform raises and
-/// which way. A negative scale turns the profile upside down, which is the
-/// pull-apart basin a transtensional bend opens.
-fn source_scale(
-    boundaries: &BoundaryClassification,
-    edge: usize,
-    config: &BoundaryDeformationConfig,
-) -> Option<f32> {
-    let speed = match boundaries.edge_classes[edge] {
-        BoundaryClass::Transform => boundaries.convergence(edge),
-        _ => boundaries.strength(edge)?,
-    };
-    Some((speed / config.saturation_speed).clamp(-1.0, 1.0))
-}
-
-/// The profile one side of one boundary edge raises, from its own crust class
-/// and from [`crate::material_order`] over the two sides' crust.
-///
-/// A convergent edge is read by its polarity, which is the one rule
-/// [`crate::material_order`] states: the side that covers the other is the
-/// overriding plate and the side it covers is the slab going down. Continental
-/// over oceanic is the Andean pair, the collision belt against a trench.
-/// Oceanic over oceanic is the Marianas pair, a narrow island arc against a
-/// trench. `Equal` has no polarity — two continents, or two floors of one age
-/// — and both sides take the symmetric `convergent` belt.
-///
-/// Divergent and transform edges do not read the order: a rift is a property
-/// of the crust on the side, and a transform's relief is its residual normal
-/// component whatever lies across it.
-fn boundary_source(
-    profiles: &PropagationProfiles,
-    class: BoundaryClass,
-    own: CrustClass,
-    order: Ordering,
-) -> Option<PropagationProfile> {
-    match (class, own, order) {
-        (BoundaryClass::Convergent, _, Ordering::Equal) => Some(profiles.convergent),
-        (BoundaryClass::Convergent, _, Ordering::Less) => Some(profiles.trench),
-        (BoundaryClass::Convergent, CrustClass::Continental, Ordering::Greater) => {
-            Some(profiles.collision)
-        }
-        (BoundaryClass::Convergent, CrustClass::Oceanic, Ordering::Greater) => {
-            Some(profiles.island_arc)
-        }
-        (BoundaryClass::Divergent, CrustClass::Oceanic, _) => None,
-        (BoundaryClass::Divergent, CrustClass::Continental, _) => Some(profiles.rift),
-        (BoundaryClass::Transform, _, _) => Some(profiles.transform),
-        (BoundaryClass::Interior, _, _) => unreachable!("interior edges are skipped"),
-    }
-}
-
-fn retain_stronger_source(slot: &mut Option<PropagationProfile>, candidate: PropagationProfile) {
-    let candidate_offset = candidate.offset_at(0);
-    if candidate_offset != 0.0
-        && slot.is_none_or(|current| candidate_offset.abs() > current.offset_at(0).abs())
-    {
-        *slot = Some(candidate);
-    }
 }
 
 fn propagate_boundary_effects(
@@ -271,17 +169,15 @@ mod tests {
     use super::*;
     use crate::test_support::{
         EvolutionFixture, NO_EROSION, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture,
-        empty_boundaries,
-
-        final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
-        scaled_deformation, two_plate_boundary_partition, two_plate_fixture,
+        empty_boundaries, final_state_fixture, mesh as test_mesh, plate_cell_birth,
+        two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::{
-        BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig,
+        BoundaryClass, BoundaryEffect, ContinentalRiftProfile, CrustClass, PlateEvolutionConfig,
         step::EvolvingWorld,
     };
-    use procgen_sphere_mesh::{hop_length, hops};
 
+    use procgen_sphere_mesh::hop_length;
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
@@ -326,7 +222,6 @@ mod tests {
             *total = config.accumulate(*total, offset, step_duration);
         }
         source_cell_count
-
     }
 
     #[test]
@@ -360,8 +255,16 @@ mod tests {
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
+        // A clamp the quarter-profile steps below reach on the fifth of them,
+        // so the loop sees both the increments and the bound. It is stated
+        // against the profile rather than as a number, so that retuning the
+        // profile cannot quietly stop this reaching the clamp at all.
+        const SCALE: f32 = 0.25;
+        const STEPS_TO_CLAMP: f32 = 5.0;
         let config = BoundaryDeformationConfig {
-            maximum_magnitude: 0.5,
+            maximum_magnitude: BoundaryDeformationConfig::default().convergent.offset
+                * SCALE
+                * STEPS_TO_CLAMP,
             // The increments and the clamp are what this pins, so the running
             // total is their sum and nothing takes anything away from it.
             erosion_time: NO_EROSION,
@@ -371,193 +274,31 @@ mod tests {
 
         assert_eq!(whole[edge.cells[0]], config.convergent.offset);
 
+        let increment = config.convergent.offset * SCALE;
         let mut accumulated = vec![0.0; mesh.cell_count()];
-        for expected in [0.1, 0.2, 0.3, 0.4, 0.5, 0.5] {
+        for step in 1..=6 {
+            let expected = (step as f32 * increment).min(config.maximum_magnitude);
+
             let source_cell_count = accumulate(
                 &mesh,
                 &partition,
                 &cell_birth,
                 &boundaries,
                 &config,
-                0.25,
+                SCALE,
                 &mut accumulated,
             );
             assert_eq!(source_cell_count, 2);
-            assert!((accumulated[edge.cells[0]] - expected).abs() < 1.0e-6);
+            assert!(
+                (accumulated[edge.cells[0]] - expected).abs() < 1.0e-6,
+                "step {step}: {} against {expected}",
+                accumulated[edge.cells[0]]
+            );
         }
         assert!(
             accumulated
                 .iter()
                 .all(|value| value.abs() <= config.maximum_magnitude)
-        );
-    }
-
-    #[test]
-    fn mixed_convergence_uses_per_cell_crust_for_uplift_and_trench() {
-        let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let mut cell_birth =
-            plate_cell_birth(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
-        let mut boundaries = empty_boundaries(&mesh);
-        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
-        boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
-        let config = BoundaryDeformationConfig {
-            collision: BoundaryEffect {
-                depth: 0.0,
-                ..BoundaryDeformationConfig::default().collision
-            },
-            trench: BoundaryEffect {
-                depth: 0.0,
-                ..BoundaryDeformationConfig::default().trench
-            },
-            ..Default::default()
-        };
-
-        let original = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        assert!(original[edge.cells[0]] > 0.0);
-        assert!(original[edge.cells[1]] < 0.0);
-
-        cell_birth.swap(edge.cells[0], edge.cells[1]);
-        let changed = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        assert!(changed[edge.cells[0]] < 0.0);
-        assert!(changed[edge.cells[1]] > 0.0);
-    }
-
-    /// Ocean-ocean convergence is the Marianas pair: the younger floor
-    /// overrides, so it carries the arc and the older floor carries the
-    /// trench. Plate 0 is every cell but one, so the arc has room to
-    /// propagate its whole depth inside it.
-    #[test]
-    fn ocean_ocean_convergence_arcs_the_younger_side_and_trenches_the_older() {
-        let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let cell_birth = plate_cell_birth_times(&partition, &[Some(0.5), Some(0.1)]);
-        let mut boundaries = empty_boundaries(&mesh);
-        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
-        boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
-        let config = scaled_deformation(mesh.cell_count());
-
-        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        assert_eq!(deformation[edge.cells[0]], config.island_arc.offset);
-        assert_eq!(deformation[edge.cells[1]], config.trench.offset);
-
-        let mut within = vec![false; mesh.cell_count()];
-        within[edge.cells[0]] = true;
-        for _ in 0..hops(mesh.cell_count(), config.island_arc.depth) {
-            within = (0..mesh.cell_count())
-                .map(|cell| {
-                    within[cell]
-                        || mesh
-                            .cell_corners(cell)
-                            .iter()
-                            .any(|corner| within[corner.neighbor])
-                })
-                .collect();
-        }
-        assert!(
-            deformation
-                .iter()
-                .enumerate()
-                .all(|(cell, &value)| within[cell] || value == 0.0),
-            "the arc reached further than its own depth"
-        );
-        assert!(
-            deformation
-                .iter()
-                .enumerate()
-                .any(|(cell, &value)| cell != edge.cells[0]
-                    && partition.cell_plates[cell] == 0
-                    && value > 0.0),
-            "the arc is a belt behind the boundary, not one cell"
-        );
-    }
-
-    /// Two floors of one age have no polarity, so neither side is the
-    /// overriding plate and both take the symmetric belt.
-    #[test]
-    fn ocean_ocean_convergence_of_one_age_stays_symmetric() {
-        let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let cell_birth = plate_cell_birth_times(&partition, &[Some(0.5); 2]);
-        let mut boundaries = empty_boundaries(&mesh);
-        boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
-        boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
-        let config = BoundaryDeformationConfig::default();
-
-        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        for cell in edge.cells {
-            assert_eq!(deformation[cell], config.convergent.offset);
-        }
-    }
-
-    #[test]
-    fn continental_rift_scales_with_its_normal_strength() {
-        let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
-        let config = BoundaryDeformationConfig {
-            rift: ContinentalRiftProfile {
-                center_offset: -0.4,
-                flank_offset: 0.1,
-                decay_depth: hop_length(mesh.cell_count(), 3.0),
-            },
-            saturation_speed: 4.0,
-            ..Default::default()
-        };
-        let mut boundaries = empty_boundaries(&mesh);
-        boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
-        boundaries.edge_normal_speeds[edge_index] = [-0.5, -0.5];
-        // Shear a transform would read, which a divergent edge must not.
-        boundaries.edge_shear[edge_index] = 3.0;
-        let divergent = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        for cell in edge.cells {
-            assert_eq!(divergent[cell], config.rift.center_offset / 4.0);
-        }
-        let expected_flank = config.rift.flank_offset * 0.5 / config.saturation_speed;
-        assert!(
-            divergent
-                .iter()
-                .enumerate()
-                .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == expected_flank)
-        );
-    }
-
-    #[test]
-    fn transform_relief_follows_the_sign_of_its_residual_convergence() {
-        let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let cell_birth = plate_cell_birth(&partition, &[CrustClass::Continental; 2]);
-        let config = BoundaryDeformationConfig {
-            transform: BoundaryEffect {
-                offset: 0.4,
-                depth: hop_length(mesh.cell_count(), 1.0),
-            },
-            saturation_speed: 4.0,
-            ..Default::default()
-        };
-        let mut boundaries = empty_boundaries(&mesh);
-        boundaries.edge_classes[edge_index] = BoundaryClass::Transform;
-        boundaries.edge_shear[edge_index] = 3.0;
-
-        // Lateral slip alone, however fast, makes no relief.
-        let slipping = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        assert!(slipping.iter().all(|&value| value == 0.0));
-
-        // A restraining bend raises, a releasing bend subsides, and both take
-        // the same fraction of the profile as their residual is of saturation.
-        boundaries.edge_normal_speeds[edge_index] = [0.5, 0.5];
-        let restraining = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        boundaries.edge_normal_speeds[edge_index] = [-0.5, -0.5];
-        let releasing = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        for cell in edge.cells {
-            assert_eq!(restraining[cell], config.transform.offset / 4.0);
-        }
-        // A pull-apart basin is the same shape upside down, flank included.
-        assert!(
-            releasing
-                .iter()
-                .zip(&restraining)
-                .all(|(released, raised)| *released == -raised)
         );
     }
 
@@ -588,57 +329,6 @@ mod tests {
             assert_eq!(source_cell_count, 0);
         }
         assert!(accumulated.iter().all(|&value| value == 0.0));
-    }
-
-    #[test]
-    fn divergent_deformation_uses_per_cell_crust_and_leaves_oceanic_ridges_to_bathymetry() {
-        let (mesh, edge_index, partition) = two_plate_boundary_partition();
-        let edge = mesh.edges[edge_index];
-        let mut cell_birth =
-            plate_cell_birth(&partition, &[CrustClass::Continental, CrustClass::Oceanic]);
-        let mut boundaries = empty_boundaries(&mesh);
-        boundaries.edge_classes[edge_index] = BoundaryClass::Divergent;
-        boundaries.edge_normal_speeds[edge_index] = [-1.0, -1.0];
-        let config = BoundaryDeformationConfig {
-            rift: ContinentalRiftProfile {
-                center_offset: -0.4,
-                flank_offset: -0.1,
-                decay_depth: hop_length(mesh.cell_count(), 3.0),
-            },
-            saturation_speed: 2.0,
-            ..Default::default()
-        };
-        let crust = CellCrust {
-            cell_birth: &cell_birth,
-        };
-        let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        for cell in edge.cells {
-            let expected = match crust.class(cell) {
-                CrustClass::Continental => -0.4,
-                CrustClass::Oceanic => 0.0,
-            };
-            assert_eq!(deformation[cell], expected);
-        }
-
-        let rift_flanks = deformation
-            .iter()
-            .enumerate()
-            .filter(|(cell, value)| {
-                partition.cell_plates[*cell] == 0 && **value == config.rift.flank_offset
-            })
-            .count();
-        assert_eq!(rift_flanks, 4);
-        assert!(
-            deformation
-                .iter()
-                .enumerate()
-                .all(|(cell, &value)| partition.cell_plates[cell] == 0 || value == 0.0)
-        );
-
-        cell_birth.swap(edge.cells[0], edge.cells[1]);
-        let changed = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
-        assert_eq!(changed[edge.cells[0]], 0.0);
-        assert_eq!(changed[edge.cells[1]], -0.4);
     }
 
     #[test]
@@ -673,44 +363,6 @@ mod tests {
                 .enumerate()
                 .any(|(cell, &value)| partition.cell_plates[cell] == 0 && value == 0.2)
         );
-    }
-
-    #[test]
-    fn maximum_magnitude_wins_and_equal_ties_keep_the_first_source() {
-        let mut source = None;
-        let first = PropagationProfile::linear(-0.4, 1);
-        retain_stronger_source(&mut source, first);
-        retain_stronger_source(&mut source, PropagationProfile::linear(0.4, 7));
-        assert_eq!(source, Some(first));
-
-        let stronger = PropagationProfile::linear(0.5, 2);
-        retain_stronger_source(&mut source, stronger);
-        assert_eq!(source, Some(stronger));
-
-        let mesh = test_mesh(32);
-        let mut source_cells = mesh.edges[0].cells;
-        source_cells.sort();
-        let overlap = mesh
-            .cell_corners(source_cells[0])
-            .iter()
-            .map(|corner| corner.neighbor)
-            .find(|&cell| {
-                cell != source_cells[1]
-                    && mesh
-                        .cell_corners(source_cells[1])
-                        .iter()
-                        .any(|corner| corner.neighbor == cell)
-            })
-            .unwrap();
-        let partition = PlatePartition {
-            cell_plates: vec![0; mesh.cell_count()],
-            plate_count: 1,
-        };
-        let mut sources = vec![None; mesh.cell_count()];
-        sources[source_cells[0]] = Some(PropagationProfile::linear(-0.4, 1));
-        sources[source_cells[1]] = Some(PropagationProfile::linear(0.4, 1));
-        let propagated = propagate_boundary_effects(&mesh, &partition, &sources);
-        assert_eq!(propagated[overlap], -0.2);
     }
 
     /// A convergent two-plate run whose boundary never moves: the step is far
@@ -812,7 +464,10 @@ mod tests {
             assert_eq!(world.deform(&boundaries), 0);
             expected *= kept;
             for particle in &world.particles {
-                assert_eq!(particle.deformation, expected, "particle after {step} steps");
+                assert_eq!(
+                    particle.deformation, expected,
+                    "particle after {step} steps"
+                );
             }
         }
         assert!(expected < 0.05, "six steps must decay most of the relief");
@@ -855,7 +510,6 @@ mod tests {
         // collision offset here, and the clamp above is out of its reach.
         let settled = increment * config.deformation.erosion_time / config.step_duration;
 
-
         let mut previous = 0.0;
         let mut previous_rise = f32::INFINITY;
         for step_count in 1..=8 {
@@ -882,7 +536,6 @@ mod tests {
 
     #[test]
     fn deformation_reaches_no_further_than_the_profiles_propagate() {
-
         let depth = 2;
         let (fixture, config) = static_boundary_fixture(4, 1.0);
         let cell_count = fixture.mesh.cell_count();
@@ -984,5 +637,36 @@ mod tests {
                 .any(|&value| value != 0.0),
             "the suture the vanished boundary left must survive it"
         );
+    }
+
+    /// Two sources whose profiles meet: the overlap takes the stronger by
+    /// magnitude, which is the same rule a single cell resolves its own edges
+    /// with.
+    #[test]
+    fn overlapping_profiles_resolve_by_magnitude() {
+        let mesh = test_mesh(32);
+        let mut source_cells = mesh.edges[0].cells;
+        source_cells.sort();
+        let overlap = mesh
+            .cell_corners(source_cells[0])
+            .iter()
+            .map(|corner| corner.neighbor)
+            .find(|&cell| {
+                cell != source_cells[1]
+                    && mesh
+                        .cell_corners(source_cells[1])
+                        .iter()
+                        .any(|corner| corner.neighbor == cell)
+            })
+            .unwrap();
+        let partition = PlatePartition {
+            cell_plates: vec![0; mesh.cell_count()],
+            plate_count: 1,
+        };
+        let mut sources = vec![None; mesh.cell_count()];
+        sources[source_cells[0]] = Some(PropagationProfile::linear(-0.4, 1));
+        sources[source_cells[1]] = Some(PropagationProfile::linear(0.4, 1));
+        let propagated = propagate_boundary_effects(&mesh, &partition, &sources);
+        assert_eq!(propagated[overlap], -0.2);
     }
 }

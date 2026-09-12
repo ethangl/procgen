@@ -11,12 +11,18 @@
 //! cell, and a single plate under a pure rotation with no boundaries at all
 //! lost five percent of a continental cap over forty steps.
 //!
-//! So the material is points rather than cells. Each particle carries the two
+//! So the material is points rather than cells. Each particle carries the
 //! fields a cell used to carry, rotates rigidly with its plate, and the cells
 //! sample whatever lands in them. Conservation is then structural: the only
 //! place a particle is created is a cell no particle reached, and the only
-//! place one is destroyed is a trench. Continental material is never created
-//! and never destroyed at all.
+//! place one is destroyed is a trench.
+//!
+//! Continental material is never created and never destroyed at all, but it
+//! is not a count of particles: a continent that arrives under another at a
+//! trench merges into it, and the column that results holds both. What a run
+//! conserves is therefore the sum of what the columns hold, which is an
+//! integer and exact.
+
 //!
 //! What the cells still decide is ownership, because a cell holding several
 //! particles has to answer with one of them. That resolution is where
@@ -38,8 +44,9 @@ use std::{cmp::Ordering, iter};
 /// One parcel of crust.
 ///
 /// A particle is the thing that moves. Its plate says which rotation carries
-/// it, and the two fields it holds are exactly the two a cell used to carry,
-/// so a cell's answer is one particle's answer rather than an average.
+/// it, and the fields it holds are exactly the ones a cell carries, so a
+/// cell's answer is one particle's answer rather than an average.
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Particle {
     /// Unit direction on the sphere. `locate_delaunay` takes a unit
@@ -52,6 +59,13 @@ pub(crate) struct Particle {
     /// continental crust, exactly as in the field a cell carries.
     pub(crate) birth: Option<f32>,
     pub(crate) deformation: f32,
+    /// Original parcels this one holds. Every parcel starts at one and gains
+    /// the whole of a parcel it accretes, so a continental column's thickness
+    /// is a count of the crust in it rather than a height. It is what a
+    /// collision makes instead of a stack nothing reads, and base elevation
+    /// floats it. Oceanic parcels carry one and nothing reads it: ocean floor
+    /// subducts rather than piling up.
+    pub(crate) thickness: u32,
     /// The Voronoi cell holding `position`, and the Delaunay triangle the
     /// last location walk ended in. Both follow from `position`; locating is
     /// a walk, and everything after the move asks for the cell, so the walk's
@@ -74,6 +88,9 @@ pub(crate) struct TransportCounts {
     pub(crate) owner_change_count: usize,
     pub(crate) subducted_particle_count: usize,
     pub(crate) born_particle_count: usize,
+    pub(crate) accreted_particle_count: usize,
+    pub(crate) thickness_transfer_count: usize,
+
     pub(crate) collided_cell_count: usize,
     pub(crate) maximum_collision_stack: usize,
     pub(crate) sampled_cell_count: usize,
@@ -137,6 +154,11 @@ struct Resolution {
     occupancy: Occupancy,
     winners: Vec<Option<usize>>,
     removed: Vec<bool>,
+    /// Thickness each accretion hands its winner, as (winner, thickness).
+    /// Applied after every cell has been decided, so that the pass that
+    /// decides can read the particles while the pass that merges writes them,
+    /// and so that no cell sees a thickness another cell's collision raised.
+    accreted: Vec<(usize, u32)>,
     counts: TransportCounts,
 }
 
@@ -165,6 +187,7 @@ pub(crate) fn initial_particles(
             plate: cell_plates[cell],
             birth: cell_birth[cell],
             deformation: 0.0,
+            thickness: 1,
             cell,
             triangle: incident_triangle(mesh, cell),
         })
@@ -251,10 +274,18 @@ impl EvolvingWorld<'_> {
             occupancy: Occupancy::new(self.mesh.cell_count(), &self.particles),
             winners: vec![None; self.mesh.cell_count()],
             removed: vec![false; self.particles.len()],
+            accreted: Vec::new(),
             counts: TransportCounts::default(),
         };
         self.pick_winners(boundaries, &mut resolution);
+        self.merge_accreted(&resolution.accreted);
+        // Before the empty cells are filled, so that every column the flow
+        // reads stands in the cell that reads it: a cell that samples a
+        // neighbour's parcel would otherwise let one column give or take
+        // twice in one pass.
+        resolution.counts.thickness_transfer_count = self.flow_thickness(&resolution.winners);
         self.fill_empty_cells(birth_time, &mut resolution);
+
         self.project_to_cells(&mut resolution);
         self.drop_removed(&resolution.removed);
         resolution.counts
@@ -264,9 +295,11 @@ impl EvolvingWorld<'_> {
     /// a trench takes.
     ///
     /// A surviving loser of the winner's own plate is lattice noise that
-    /// spreads back out next step. One of another plate is a collision, and
-    /// the column of them is what a later slice will read as crustal
-    /// thickness, so that is what the counts record.
+    /// spreads back out next step. One of another plate is a collision: its
+    /// continent merges into the column above it and its floor subducts if a
+    /// trench is in reach, and what is left over — a parcel that crossed a
+    /// transform or a ridge by lattice jitter — is what the collision counts
+    /// record.
     fn pick_winners(&self, boundaries: &BoundaryClassification, resolution: &mut Resolution) {
         let mut ring = Vec::new();
         for cell in 0..self.mesh.cell_count() {
@@ -304,6 +337,19 @@ impl EvolvingWorld<'_> {
                 ) {
                     resolution.removed[loser] = true;
                     resolution.counts.subducted_particle_count += 1;
+                } else if self.accretes(
+                    cell,
+                    &ring,
+                    boundaries,
+                    &resolution.previous_owners,
+                    loser,
+                    winner,
+                ) {
+                    resolution.removed[loser] = true;
+                    resolution
+                        .accreted
+                        .push((winner, self.particles[loser].thickness));
+                    resolution.counts.accreted_particle_count += 1;
                 } else if self.particles[loser].plate != self.particles[winner].plate {
                     foreign += 1;
                 }
@@ -349,7 +395,9 @@ impl EvolvingWorld<'_> {
                         plate: incumbent,
                         birth: Some(birth_time),
                         deformation: 0.0,
+                        thickness: 1,
                         cell,
+
                         triangle: incident_triangle(self.mesh, cell),
                     });
                     resolution.removed.push(false);
@@ -361,8 +409,13 @@ impl EvolvingWorld<'_> {
         }
     }
 
-    /// Writes the three columns a run returns from the particle each cell
-    /// took: its owner, and the two fields it reads off the material.
+    /// Writes the four columns a run returns from the particle each cell
+    /// took: its owner, and the three fields it reads off the material.
+    ///
+    /// Thickness is zero on a cell whose winner is ocean floor rather than
+    /// the one parcel that floor holds, so the field reads as the extra crust
+    /// a continent stands on and nothing downstream has to ask the crust
+    /// class first.
     fn project_to_cells(&mut self, resolution: &mut Resolution) {
         for cell in 0..self.mesh.cell_count() {
             let winner = resolution.winners[cell].expect("every cell holds or samples a particle");
@@ -372,12 +425,26 @@ impl EvolvingWorld<'_> {
             self.partition.cell_plates[cell] = particle.plate;
             self.cell_birth[cell] = particle.birth;
             self.cell_deformation[cell] = particle.deformation;
+            self.cell_thickness[cell] = cell_thickness(particle);
+            self.cell_winner[cell] = winner;
         }
     }
 
-    /// Drops the particles the trenches took. It happens last because every
-    /// pass before it indexes the particle list as it stood.
+    /// Drops the particles the trenches took and the parcels that accreted.
+    /// It happens last because every pass before it indexes the particle list
+    /// as it stood.
     fn drop_removed(&mut self, removed: &[bool]) {
+        // Where each surviving particle lands in the shortened list, so that
+        // the cells keep pointing at the parcels they read. A removed parcel
+        // is never a winner, so no cell's index goes stale.
+        let mut moved_to = vec![usize::MAX; self.particles.len()];
+        let mut survivors = 0;
+        for (index, gone) in removed.iter().enumerate() {
+            if !gone {
+                moved_to[index] = survivors;
+                survivors += 1;
+            }
+        }
         self.particles = self
             .particles
             .drain(..)
@@ -385,6 +452,13 @@ impl EvolvingWorld<'_> {
             .filter(|(index, _)| !removed[*index])
             .map(|(_, particle)| particle)
             .collect();
+        for winner in self.cell_winner.iter_mut() {
+            *winner = moved_to[*winner];
+            debug_assert!(
+                *winner != usize::MAX,
+                "a cell read a parcel that was removed"
+            );
+        }
     }
 
     /// Orders two particles in one cell, greatest first.
@@ -422,16 +496,10 @@ impl EvolvingWorld<'_> {
     ///
     /// Ocean floor of another plate, landing inside a plate that is converging
     /// on it: that is the slab going under, and the material is gone.
-    /// Everything else stacks. Two parcels of one plate are lattice noise that
-    /// spreads back out next step, continental material is never destroyed, and
-    /// a parcel that crossed a transform or a ridge is not being subducted.
-    ///
-    /// The trench is looked for over `ring`, the same [`TRANSPORT_REACH_HOPS`]
-    /// rings an empty cell samples through, rather than over the landing cell's
-    /// own edges alone: a step carries material up to that far, so a particle
-    /// that crossed a trench often lands a cell short of it. Searching one hop
-    /// while a step travelled two left that particle stacked in the overriding
-    /// plate for the rest of the run.
+    /// Continental material is never destroyed here; [`Self::accretes`] is
+    /// what a continental arrival meets instead. Two parcels of one plate are
+    /// lattice noise that spreads back out next step, and a parcel that
+    /// crossed a transform or a ridge is not being subducted.
     fn subducts(
         &self,
         cell: usize,
@@ -445,10 +513,31 @@ impl EvolvingWorld<'_> {
         if loser.is_continental() || loser.plate == self.particles[winner].plate {
             return false;
         }
+        self.converges_on(cell, ring, boundaries, owners, loser.plate)
+    }
+
+    /// Whether a plate converging on `plate` holds an edge within reach of
+    /// this cell: the one test both the trench rule and the accretion rule
+    /// make, so neither can drift away from the other.
+    ///
+    /// The edge is looked for over `ring`, the same [`TRANSPORT_REACH_HOPS`]
+    /// rings an empty cell samples through, rather than over the landing
+    /// cell's own edges alone: a step carries material up to that far, so a
+    /// particle that crossed a boundary often lands a cell short of it.
+    /// Searching one hop while a step travelled two left that particle
+    /// stacked in the overriding plate for the rest of the run.
+    pub(crate) fn converges_on(
+        &self,
+        cell: usize,
+        ring: &[usize],
+        boundaries: &BoundaryClassification,
+        owners: &[usize],
+        plate: usize,
+    ) -> bool {
         iter::once(cell).chain(ring.iter().copied()).any(|near| {
             self.mesh.cell_corners(near).iter().any(|corner| {
                 boundaries.edge_classes[corner.edge] == BoundaryClass::Convergent
-                    && owners[corner.neighbor] == loser.plate
+                    && owners[corner.neighbor] == plate
             })
         })
     }
@@ -542,59 +631,37 @@ impl EvolvingWorld<'_> {
         }
     }
 
-    /// Remaps every particle's plate through `compacted`, and drops the
-    /// material of a plate the map has no id for.
+    /// Remaps every particle's plate through `compacted`, accreting the
+    /// continent of a plate the map has no id for and dropping its floor.
     ///
-    /// Only compaction can drop material this way, and only because it runs
-    /// once after the last step: a plate that owns no cell holds particles
-    /// stacked under other plates' cells, and nothing moves them again.
-    pub(crate) fn remap_particle_plates(&mut self, compacted: &[usize]) {
-        self.particles
-            .retain(|particle| compacted[particle.plate] != usize::MAX);
+    /// A plate that owns no cell holds particles stacked under other plates'
+    /// cells, and nothing moves them again. Its ocean floor is dropped, as it
+    /// always was. Its continent is material, so it merges into the column
+    /// that covers it exactly as a collision would, and the thickness a run
+    /// conserves stays conserved through its own output rather than only up
+    /// to compaction.
+    ///
+    /// Returns how many parcels accreted here, which a run adds to the
+    /// collisions its steps made.
+    pub(crate) fn remap_particle_plates(&mut self, compacted: &[usize]) -> usize {
+        let dying = |particle: &Particle| compacted[particle.plate] == usize::MAX;
+        let accreted = self.accrete_orphans(&dying);
+        let removed: Vec<bool> = self.particles.iter().map(dying).collect();
+        self.drop_removed(&removed);
         for particle in &mut self.particles {
             particle.plate = compacted[particle.plate];
         }
+        accreted
     }
+}
 
-    pub(crate) fn continental_particle_count(&self) -> usize {
-        self.particles
-            .iter()
-            .filter(|particle| particle.is_continental())
-            .count()
-    }
-
-    /// Continental particles no cell reads, because another parcel of
-    /// continent shares the cell with them.
-    ///
-    /// Continental material outranks every parcel of ocean floor, so a cell
-    /// holding any of it reads continental and the cells holding some are
-    /// exactly the continental cells the material itself accounts for. What is
-    /// left over is covered, and nothing spreads it back out: it is the gap
-    /// between the material a run conserves and the raster it can show.
-    pub(crate) fn covered_continental_particle_count(&self) -> usize {
-        let mut occupied = vec![false; self.mesh.cell_count()];
-        let mut continental = 0;
-        for particle in &self.particles {
-            if particle.is_continental() {
-                continental += 1;
-                occupied[particle.cell] = true;
-            }
-        }
-        continental - occupied.iter().filter(|held| **held).count()
-    }
-
-    /// Continental particles lying in a cell their own plate does not own,
-    /// which is the part of
-    /// [`Self::covered_continental_particle_count`] that a collision stacked
-    /// rather than that one plate's own material crowded together.
-    pub(crate) fn foreign_continental_particle_count(&self) -> usize {
-        self.particles
-            .iter()
-            .filter(|particle| {
-                particle.is_continental()
-                    && self.partition.cell_plates[particle.cell] != particle.plate
-            })
-            .count()
+/// What a cell standing on `particle` reads as its crustal thickness: the
+/// parcels the column holds, or zero where the column is ocean floor.
+pub(crate) fn cell_thickness(particle: Particle) -> u32 {
+    if particle.is_continental() {
+        particle.thickness
+    } else {
+        0
     }
 }
 
@@ -614,8 +681,9 @@ mod tests {
     use super::*;
     use crate::test_support::{
         NO_LIFECYCLE, NO_POLE_DRIFT, fingerprint, forced_rift_fixture, mesh as test_mesh,
-        two_plate_fixture,
+        one_arrival, two_plate_fixture,
     };
+
     use crate::{
         CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationDiagnostics,
         MaterialTransportConfig, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
@@ -636,66 +704,20 @@ mod tests {
         }
     }
 
-    /// One step over the two-plate fixture with an extra oceanic particle of
-    /// the small plate placed `hops` cells inside the large plate, which is
-    /// what arriving across a boundary looks like, and the whole of the
-    /// boundary between the two plates classified as `class`.
-    ///
-    /// Every boundary edge takes the class, not just the one the particle
-    /// crossed: the small plate is one cell, so its whole perimeter is within
-    /// the reach the trench rule searches, and leaving the rest of it
-    /// convergent would test nothing about the class under test.
-    fn one_arrival(class: BoundaryClass, hops: usize) -> (usize, TransportCounts) {
-        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
-        let arriving = fixture.mesh.edges[0].cells[1];
-        let touches_arriving = |cell: usize| {
-            cell == arriving
-                || fixture
-                    .mesh
-                    .cell_corners(arriving)
-                    .iter()
-                    .any(|corner| corner.neighbor == cell)
-        };
-        let mut landing = fixture.mesh.edges[0].cells[0];
-        for _ in 1..hops {
-            landing = fixture
-                .mesh
-                .cell_corners(landing)
-                .iter()
-                .map(|corner| corner.neighbor)
-                .find(|&neighbor| !touches_arriving(neighbor))
-                .expect("the large plate reaches further than one cell from the small one");
-        }
-        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), still_config());
-        world.particles.push(Particle {
-            position: cell_direction(&fixture.mesh, landing),
-            plate: fixture.partition.cell_plates[arriving],
-            birth: Some(0.0),
-            deformation: 0.0,
-            cell: landing,
-            triangle: incident_triangle(&fixture.mesh, landing),
-        });
-
-        let mut boundaries = fixture.boundaries.clone();
-        for corner in fixture.mesh.cell_corners(arriving) {
-            boundaries.edge_classes[corner.edge] = class;
-        }
-        let counts = world.transport(&boundaries, 1.0);
-        (landing, counts)
-    }
-
     #[test]
     fn a_trench_takes_the_floor_that_arrives_under_it() {
         // Two hops as well as one: a step moves the fastest plate about a
         // cell and can move it two, so material that crossed a trench often
         // lands a cell short of the trench it crossed.
         for hops in 1..=TRANSPORT_REACH_HOPS {
-            let (landing, counts) = one_arrival(BoundaryClass::Convergent, hops);
+            let arrival = one_arrival(BoundaryClass::Convergent, hops, CrustClass::Oceanic);
 
-            assert_eq!(counts.subducted_particle_count, 1, "{hops} hops in");
+            assert_eq!(arrival.counts.subducted_particle_count, 1, "{hops} hops in");
+            assert_eq!(arrival.counts.accreted_particle_count, 0, "{hops} hops in");
             assert_eq!(
-                counts.collided_cell_count, 0,
-                "cell {landing} kept only the material that won it"
+                arrival.counts.collided_cell_count, 0,
+                "cell {} kept only the material that won it",
+                arrival.landing
             );
         }
     }
@@ -704,7 +726,9 @@ mod tests {
     fn material_that_crossed_a_transform_is_not_being_subducted() {
         for class in [BoundaryClass::Transform, BoundaryClass::Divergent] {
             for hops in 1..=TRANSPORT_REACH_HOPS {
-                let (landing, counts) = one_arrival(class, hops);
+                let arrival = one_arrival(class, hops, CrustClass::Oceanic);
+                let counts = arrival.counts;
+                let landing = arrival.landing;
 
                 assert_eq!(counts.subducted_particle_count, 0, "{class:?}, {hops} hops");
                 assert_eq!(
@@ -883,10 +907,16 @@ mod tests {
 
         assert_eq!(evolution.diagnostics.born_particle_count, 0);
         assert_eq!(evolution.diagnostics.subducted_particle_count, 0);
+        assert_eq!(evolution.diagnostics.accreted_particle_count, 0);
         assert_eq!(
-            evolution.diagnostics.final_continental_particle_count,
-            evolution.diagnostics.starting_continental_particle_count
+            evolution.diagnostics.final_continental_thickness,
+            evolution.diagnostics.starting_continental_thickness
         );
+        assert_eq!(
+            evolution.diagnostics.maximum_thickness, 1,
+            "a pure rotation collides with nothing, so nothing may thicken"
+        );
+
         // The cap is a raster of that material and the count wanders with the
         // cell areas the cap happens to cover, so the mask is pinned and the
         // count is not.
