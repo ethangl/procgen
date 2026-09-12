@@ -78,20 +78,21 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
         crust: CrustClassificationConfig::new(seed),
         kinematics: PlateKinematicsConfig::new(seed),
         evolution: PlateEvolutionConfig {
-            step_count: 4,
-            // The default duration is scaled to the 65,536-cell mesh. Cell
-            // width goes as the reciprocal square root of cell count, so a
-            // step on these much coarser test meshes has to be that much
-            // longer to move a plate the same one cell.
-            step_duration: DEFAULT_STEP_DURATION
-                * (DEFAULT_CELL_COUNT as f32 / cell_count as f32).sqrt(),
             deformation: scaled_deformation(cell_count),
             lifecycle: PlateLifecycleConfig {
                 suture_minimum_shared_length: hop_length(cell_count, 20.0),
                 ..PlateLifecycleConfig::default()
             },
             ..Default::default()
-        },
+        }
+        // Four steps, each scaled to the 65,536-cell mesh: cell width goes as
+        // the reciprocal square root of cell count, so a step on these much
+        // coarser test meshes has to be that much longer to move a plate the
+        // same one cell.
+        .with_steps(
+            4,
+            DEFAULT_STEP_DURATION * (DEFAULT_CELL_COUNT as f32 / cell_count as f32).sqrt(),
+        ),
         birth_prior: CrustBirthPriorConfig {
             ridge_less_age: 8.0 * hop_length(cell_count, 1.0),
         },

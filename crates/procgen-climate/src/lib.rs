@@ -28,6 +28,7 @@ mod coupling;
 mod cryosphere;
 mod field;
 mod moisture;
+mod moisture_config;
 mod orbit;
 mod radiative_equilibrium;
 mod seasonal_thermal;
@@ -53,11 +54,13 @@ pub use cryosphere::{
 };
 pub use field::{AreaWeightedSummary, ClimateOutputError, Surface};
 pub use moisture::{
-    MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MOISTURE_STEP_COUNT_RANGE,
-    MOISTURE_STEP_SECONDS_RANGE, MoistureTransport, MoistureTransportConfig,
-    MoistureTransportDiagnostics, MoistureTransportError, MoistureTransportInputs,
-    OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE,
-    TEMPERATURE_SENSITIVITY_RANGE, TRANSPORT_FRACTION_RANGE, derive_moisture_transport,
+    MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE, MoistureTransport, MoistureTransportDiagnostics,
+    MoistureTransportError, MoistureTransportInputs, OROGRAPHIC_COEFFICIENT_RANGE,
+    REFERENCE_TEMPERATURE_KELVIN_RANGE, TEMPERATURE_SENSITIVITY_RANGE, TRANSPORT_FRACTION_RANGE,
+    derive_moisture_transport,
+};
+pub use moisture_config::{
+    MOISTURE_SIMULATED_DAYS_RANGE, MoistureSchedule, MoistureTransportConfig,
 };
 pub use radiative_equilibrium::{
     RadiativeEquilibriumConfig, RadiativeEquilibriumDiagnostics, RadiativeEquilibriumError,

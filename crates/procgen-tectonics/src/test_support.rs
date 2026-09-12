@@ -57,6 +57,11 @@ pub fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
     }
 }
 
+/// Steps the reference run takes. It is a count rather than a duration here
+/// because the fixtures pin what a given number of steps does; the config
+/// states the run as that many steps of [`REFERENCE_STEP_DURATION`].
+pub const REFERENCE_STEP_COUNT: usize = 5;
+
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
 /// is 0.157 against the default mesh's 0.0138, so a step here has to be about
 /// eleven times longer to move a plate the same one cell.
@@ -142,7 +147,6 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
     let default = PlateEvolutionConfig::default();
     let time_scale = DEFAULT_STEP_DURATION / REFERENCE_STEP_DURATION;
     PlateEvolutionConfig {
-        step_duration: REFERENCE_STEP_DURATION,
         pole_drift: PoleDriftConfig {
             // Drift rates are per unit root time, so the ratio that gives the
             // reference run the per-step wander the viewer's defaults produce
@@ -154,7 +158,7 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
         deformation: BoundaryDeformationConfig {
             // The whole reference run, so a boundary that converged throughout
             // reaches its full profile offset, as the viewer's defaults do.
-            full_deformation_time: default.step_count as f32 * REFERENCE_STEP_DURATION,
+            full_deformation_time: REFERENCE_STEP_COUNT as f32 * REFERENCE_STEP_DURATION,
             ..scaled_deformation(REFERENCE_CELL_COUNT)
         },
         lifecycle: PlateLifecycleConfig {
@@ -176,6 +180,7 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
         },
         ..default
     }
+    .with_steps(REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION)
 }
 
 /// Everything evolution reads, built once over the reference partition.
@@ -398,11 +403,10 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
 /// a step this long turn an axis about fifteen degrees.
 pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
     PlateEvolutionConfig {
-        step_count,
-        step_duration: 0.02,
         lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
     }
+    .with_steps(step_count, 0.02)
 }
 
 /// A two-plate world converging head on, and the step at which the
@@ -414,21 +418,17 @@ pub fn drift_config(step_count: usize) -> PlateEvolutionConfig {
 pub fn convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
     let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
     let config = PlateEvolutionConfig {
-        step_count: 0,
-        step_duration: 0.1,
         // The schedule below is the whole point of the fixture, and drift or
         // a split plate would change the speed it is computed from.
         pole_drift: NO_POLE_DRIFT,
         lifecycle: NO_LIFECYCLE,
         ..PlateEvolutionConfig::default()
-    };
+    }
+    .with_steps(0, 0.1);
     let steps = (1..)
         .find(|&steps| {
             fixture
-                .evolve(PlateEvolutionConfig {
-                    step_count: steps,
-                    ..config
-                })
+                .evolve(config.with_steps(steps, config.step_duration))
                 .diagnostics
                 .owner_change_count
                 > 0
@@ -566,11 +566,6 @@ fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
         plate_count: 2,
     };
     let config = PlateEvolutionConfig {
-        // The halves part at the speed the slab rule gives them, which for a
-        // continent with no trench is a quarter of its base: slower than the
-        // opening term alone, so the gap takes eight steps rather than six.
-        step_count: 8,
-        step_duration: 0.25,
         pole_drift: NO_POLE_DRIFT,
         lifecycle: PlateLifecycleConfig {
             // A chance of two against a draw in [0, 1): certain.
@@ -584,7 +579,11 @@ fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
             ..PlateLifecycleConfig::default()
         },
         ..PlateEvolutionConfig::default()
-    };
+    }
+    // The halves part at the speed the slab rule gives them, which for a
+    // continent with no trench is a quarter of its base: slower than the
+    // opening term alone, so the gap takes eight steps rather than six.
+    .with_steps(8, 0.25);
     (mesh, partition, config)
 }
 
@@ -610,8 +609,6 @@ const CONTINENT_EDGE: f32 = -0.2;
 pub fn failed_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
     let (mesh, _, partition) = two_plate_boundary_partition();
     let config = PlateEvolutionConfig {
-        step_count: 1,
-        step_duration: 0.1,
         pole_drift: NO_POLE_DRIFT,
         lifecycle: PlateLifecycleConfig {
             rift_rate: 20.0,
@@ -621,7 +618,8 @@ pub fn failed_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
             ..PlateLifecycleConfig::default()
         },
         ..PlateEvolutionConfig::default()
-    };
+    }
+    .with_steps(1, 0.1);
     let crust = plate_crust(&partition, &[CrustClass::Oceanic, CrustClass::Continental]);
     (fixture_over(mesh, partition, crust, at_rest(2)), config)
 }
@@ -637,8 +635,6 @@ pub fn closed_arc_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
         plate_count: 1,
     };
     let config = PlateEvolutionConfig {
-        step_count: 1,
-        step_duration: 0.1,
         pole_drift: NO_POLE_DRIFT,
         lifecycle: PlateLifecycleConfig {
             rift_rate: 20.0,
@@ -648,7 +644,8 @@ pub fn closed_arc_rift_fixture() -> (EvolutionFixture, PlateEvolutionConfig) {
             ..PlateLifecycleConfig::default()
         },
         ..PlateEvolutionConfig::default()
-    };
+    }
+    .with_steps(1, 0.1);
     let crust = plate_crust(&partition, &[CrustClass::Continental]);
     (fixture_over(mesh, partition, crust, at_rest(1)), config)
 }
@@ -664,8 +661,6 @@ pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize
     let steps = 3;
     let step_duration = 0.02;
     let config = PlateEvolutionConfig {
-        step_count: steps,
-        step_duration,
         pole_drift: NO_POLE_DRIFT,
         lifecycle: PlateLifecycleConfig {
             rift_rate: 0.0,
@@ -678,7 +673,8 @@ pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize
             ..PlateLifecycleConfig::default()
         },
         ..PlateEvolutionConfig::default()
-    };
+    }
+    .with_steps(steps, step_duration);
     (fixture, config, steps)
 }
 

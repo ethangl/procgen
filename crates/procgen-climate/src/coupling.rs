@@ -476,10 +476,10 @@ mod tests {
             temperature_tolerance_kelvin: 0.05,
             precipitation_tolerance_kg_per_m2_per_day: 2.0e-4,
             cover_fraction_tolerance: 2.0e-4,
-            moisture_transport: MoistureTransportConfig {
-                step_count: 12,
-                ..MoistureTransportConfig::EARTHLIKE
-            },
+            // The fixture mesh derives a handful of transport steps rather
+            // than the default mesh's 120, so the run is cheap without asking
+            // for a shorter one.
+            moisture_transport: MoistureTransportConfig::EARTHLIKE,
             cryosphere: CryosphereConfig {
                 maximum_iterations: 128,
                 closure_tolerance: 1.0e-5,

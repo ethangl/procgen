@@ -34,9 +34,8 @@ pub enum PlateEvolutionError {
 impl fmt::Display for PlateEvolutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidStepDuration => {
-                formatter.write_str("step duration must be finite and non-negative")
-            }
+            Self::InvalidStepDuration => formatter
+                .write_str("run duration and step duration must be finite and non-negative"),
             Self::StepOutrunsReach => write!(
                 formatter,
                 "step duration must not carry a plate further than the \

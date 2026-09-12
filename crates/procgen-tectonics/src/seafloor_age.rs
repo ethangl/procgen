@@ -278,8 +278,8 @@ pub fn derive_seafloor_age(
 mod tests {
     use super::*;
     use crate::test_support::{
-        NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint, empty_boundaries, evolution_fixture,
-        final_state_fixture, plate_crust, reference_base_elevation_config,
+        NO_LIFECYCLE, NO_POLE_DRIFT, REFERENCE_STEP_DURATION, birth_fingerprint, empty_boundaries,
+        evolution_fixture, final_state_fixture, plate_crust, reference_base_elevation_config,
         reference_evolution_config, reference_flow_field, reference_partition,
         scaled_birth_prior_config, still_world_fixture,
     };
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(first, derive_seafloor_age(&mesh, &evolution).unwrap());
         assert_eq!(
             evolution.elapsed_time,
-            config.step_count as f32 * config.step_duration
+            config.step_count() as f32 * config.step_duration
         );
         assert_eq!(first.cell_ages.len(), mesh.cell_count());
         for (cell, age) in first.cell_ages.iter().enumerate() {
@@ -627,16 +627,19 @@ mod tests {
     fn slicing_a_still_run_twice_as_finely_changes_nothing() {
         let fixture = still_world_fixture();
         let coarse = PlateEvolutionConfig {
-            step_count: 6,
             pole_drift: NO_POLE_DRIFT,
             lifecycle: NO_LIFECYCLE,
             ..reference_evolution_config()
-        };
+        }
+        .with_steps(6, REFERENCE_STEP_DURATION);
+        // The same run, sliced twice as finely. Only the step is shortened:
+        // the count is the run over the step, so it doubles by itself, which
+        // is the whole of what deriving it buys.
         let fine = PlateEvolutionConfig {
-            step_count: 2 * coarse.step_count,
             step_duration: coarse.step_duration / 2.0,
             ..coarse
         };
+        assert_eq!(fine.step_count(), 2 * coarse.step_count());
 
         let coarse_run = fixture.evolve(coarse);
         let fine_run = fixture.evolve(fine);
@@ -670,10 +673,7 @@ mod tests {
     #[test]
     fn the_prior_does_not_depend_on_the_step_duration() {
         let fixture = evolution_fixture();
-        let config = PlateEvolutionConfig {
-            step_count: 0,
-            ..reference_evolution_config()
-        };
+        let config = reference_evolution_config().with_steps(0, REFERENCE_STEP_DURATION);
         let halved = PlateEvolutionConfig {
             step_duration: config.step_duration / 2.0,
             ..config

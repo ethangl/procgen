@@ -321,17 +321,11 @@ mod tests {
     #[test]
     fn a_forced_suture_merges_at_the_step_its_collision_time_predicts() {
         let (fixture, config, steps) = forced_suture_fixture();
-        let waiting = fixture.evolve(PlateEvolutionConfig {
-            step_count: steps - 1,
-            ..config
-        });
+        let waiting = fixture.evolve(config.with_steps(steps - 1, config.step_duration));
         assert_eq!(waiting.diagnostics.suture_count, 0);
         assert_eq!(waiting.partition.plate_count, 2);
 
-        let merged = fixture.evolve(PlateEvolutionConfig {
-            step_count: steps,
-            ..config
-        });
+        let merged = fixture.evolve(config.with_steps(steps, config.step_duration));
         assert_eq!(merged.diagnostics.suture_count, 1);
         // Compaction leaves one plate owning every cell, with one motion to
         // its name.

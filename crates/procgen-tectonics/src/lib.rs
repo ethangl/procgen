@@ -18,6 +18,7 @@ mod crust;
 mod deformation;
 mod elevation;
 mod evolution;
+mod evolution_config;
 mod evolution_error;
 mod field;
 mod interior_relief;
@@ -56,9 +57,9 @@ pub use elevation::{
     compose_coarse_elevation, is_land, land_elevation_meters,
 };
 pub use evolution::{
-    PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionInputs,
-    evolve_plate_ownership,
+    PlateEvolution, PlateEvolutionDiagnostics, PlateEvolutionInputs, evolve_plate_ownership,
 };
+pub use evolution_config::PlateEvolutionConfig;
 pub use evolution_error::PlateEvolutionError;
 pub use field::{DEFAULT_STEP_DURATION, FieldSummary};
 pub use lifecycle::PlateLifecycleConfig;
