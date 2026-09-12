@@ -622,6 +622,7 @@ mod tests {
         PlateKinematicsConfig, PlatePartition, classify_boundaries, derive_crust_birth_prior,
         evolve_plate_ownership,
     };
+    use procgen_sphere_mesh::mean_cell_width;
 
     /// A run over the two-plate fixture that moves no material at all, so a
     /// test can place a particle by hand and see what one resolution does to
@@ -873,7 +874,7 @@ mod tests {
                 step_count: 40,
                 // One cell width per step at the unit speed above, so the cap
                 // crosses forty cells over the run.
-                step_duration: crate::mean_cell_width(mesh.radius, mesh.cell_count()),
+                step_duration: mean_cell_width(mesh.radius, mesh.cell_count()),
                 pole_drift: NO_POLE_DRIFT,
                 lifecycle: NO_LIFECYCLE,
                 ..PlateEvolutionConfig::default()

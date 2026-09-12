@@ -185,6 +185,14 @@ reviews. Treat them as the default bar for new work.
   before upload.
 - Avoid 64-bit integers and `f64` in any kernel or any path a kernel mirrors.
   Narrow seeds once on the host through one named public function.
+- A config field is model time, model length or angle on the unit sphere,
+  normalized elevation or speed, a fraction, a density per unit area, or an
+  absolute count of world features — never hops, cells, edges, or steps.
+  `TRANSPORT_REACH_HOPS` and `MaterialTransportConfig::gap_radius` are the two
+  exceptions, because they describe the raster rather than the world. A length
+  default is written as a multiple of
+  `procgen_sphere_mesh::default_hop_length`, and the stage converts it once
+  through `hops`.
 - Pin integer fingerprints exactly, and never pin float bits: libm and codegen
   differ across machines, so a hash over `to_bits()` pins the toolchain rather
   than the algorithm. To pin a float field, hash the integer facts in it — cell

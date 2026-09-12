@@ -15,10 +15,9 @@
 use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
     PlateEvolution, PlateKinematicsConfig, PlateKinematicsError, PlatePartition,
-    field::mean_cell_width, motion::validate_config as validate_motion_config,
-    stage::StageInputError,
+    motion::validate_config as validate_motion_config, stage::StageInputError,
 };
-use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
+use procgen_sphere_mesh::{SphereMesh, mean_cell_width, multi_source_distances};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,10 +25,12 @@ pub struct CrustBirthPriorConfig {
     /// Hop age before step zero given to every cell on an oceanic plate with
     /// no divergent boundary of its own.
     ///
-    /// It stays a hop count because that is what it is: the walk it stands in
-    /// for measures hops, and the prior turns hops into model time once, for
-    /// this age and for every other, by the time the fastest plate takes to
-    /// cross one cell.
+    /// It is still a hop count, and it is the one field left that should not
+    /// be. The hop distances around it are geometry, but this is the age a
+    /// floor is born with, which is a fact about the world: a finer mesh
+    /// shortens the hop duration and so makes that floor younger. It becomes
+    /// model time in the next slice, as eight default hops over the unit
+    /// speed.
     pub ridge_less_age: usize,
 }
 

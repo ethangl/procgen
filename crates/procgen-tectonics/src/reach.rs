@@ -21,6 +21,13 @@ use crate::PlateEvolutionConfig;
 /// without subducting, gaps open that no search can fill, and deformation is
 /// raised at boundary positions the plates left partway through the step.
 /// [`maximum_step_duration`] is that last one as a time.
+///
+/// It is one of the two quantities in the pipeline that stay in hops on
+/// purpose, [`MaterialTransportConfig::gap_radius`] being the other. Every
+/// other reach is a model length, converted per mesh, because it describes a
+/// feature of the world; these two describe the raster instead. Making this a
+/// distance would mean searching more rings on a finer mesh for the same
+/// world, which is the cost this bound exists to hold down.
 pub const TRANSPORT_REACH_HOPS: usize = 2;
 
 /// Largest [`MaterialTransportConfig::gap_radius`] the search can honour, in
@@ -76,6 +83,12 @@ pub struct MaterialTransportConfig {
     /// Bounded above by [`MAX_GAP_RADIUS`], which is how far the search
     /// itself reaches.
     ///
+    /// It is in cell widths rather than model units on purpose, and is with
+    /// [`TRANSPORT_REACH_HOPS`] one of the two exceptions to that rule. The
+    /// gap it measures is an artifact of the raster — cells the rigid rotation
+    /// left empty because cell areas vary — so it has to scale with the cells
+    /// that make it, not with the world.
+    ///
     /// Cell areas vary, so a rigid rotation alone leaves a third of the cells
     /// empty and a quarter doubled at any moment; those empty cells have
     /// material just outside them and must not make floor. Measured on the
@@ -100,9 +113,8 @@ mod tests {
     use crate::test_support::{
         NO_LIFECYCLE, NO_POLE_DRIFT, evolution_fixture, reference_evolution_config,
     };
-    use crate::{
-        PlateEvolutionError, PlateKinematicsConfig, evolve_plate_ownership, mean_cell_width,
-    };
+    use crate::{PlateEvolutionError, PlateKinematicsConfig, evolve_plate_ownership};
+    use procgen_sphere_mesh::mean_cell_width;
 
     #[test]
     fn a_step_that_outruns_the_transport_reach_is_rejected() {

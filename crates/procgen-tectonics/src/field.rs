@@ -1,12 +1,10 @@
-use std::f32::consts::PI;
-
 /// Model time per step at the viewer's default mesh: the unit sphere's cell
 /// width `sqrt(4 pi / 65_536)` is 0.0138, and a plate at the default maximum
 /// angular speed of 1.0 covers unit distance per unit time, so one cell width
 /// takes that long. Rounded to a round number, because nothing downstream
-/// resolves the difference. Evolution advances by it and deformation measures
-/// its accumulation against it, so it lives beside the cell width both are
-/// scaled against.
+/// resolves the difference. That width is
+/// [`procgen_sphere_mesh::default_hop_length`], which every model length in
+/// this crate's defaults is written as a multiple of.
 ///
 /// It is a time, so every rate and every age a run reads is measured against
 /// it and none of them changes meaning when it does. What it buys at this
@@ -15,18 +13,6 @@ use std::f32::consts::PI;
 /// [`crate::maximum_step_duration`] returns 0.0151, so this leaves eight
 /// percent of spare reach for drift and a rift to take.
 pub const DEFAULT_STEP_DURATION: f32 = 0.014;
-
-/// The one representative cell width of a sphere of `radius` covered by
-/// `cell_count` cells: the side of a square with the mean cell area. Evolution
-/// measures every displacement against it, so a finer mesh moves more cells
-/// for the same motion.
-///
-/// A sphere's area is known before its cells are, so this answers for a mesh
-/// that does not exist yet: that is what lets the viewer bound a step duration
-/// against a cell count the user has only typed.
-pub fn mean_cell_width(radius: f32, cell_count: usize) -> f32 {
-    (4.0 * PI * radius * radius / cell_count as f32).sqrt()
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FieldSummary {

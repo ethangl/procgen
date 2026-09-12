@@ -300,6 +300,23 @@ for that one.
   the same adoption confined to one plate. Neither generalisation changed the
   walk's output: the partition fingerprints pinned before this slice pass
   unchanged, which is the test that says so.
+- Every reach a stage walks is a model length on the unit sphere, converted to
+  hops once at the top of the stage through `procgen_sphere_mesh::hops`, so a
+  belt is as wide in kilometres on a fine mesh as on a coarse one. Renamed with
+  their unit: `BaseElevationConfig::margin_width_hops` to `margin_width`,
+  `CoarseElevationConfig::smoothing_passes` to `smoothing_radius`,
+  `VolcanicArcFieldConfig::inland_offset_cells` to `inland_offset`,
+  `HotspotFieldConfig::maximum_trail_cells` to `maximum_trail_length`, and its
+  `province_radius_hops` and `province_rim_hops` to `province_radius` and
+  `province_rim`. `BoundaryEffect::depth`,
+  `ContinentalRiftProfile::decay_depth`, `CratonFieldConfig`'s two distances,
+  and `IsostaticAdjustmentConfig::maximum_boundary_distance` keep their names
+  and change type. Every default is written as a multiple of
+  `default_hop_length`, the width of one cell of the 65,536-cell default mesh,
+  so each converts back to the integer it replaced exactly and no pin on that
+  mesh moves; a unit test per stage asserts that. `TRANSPORT_REACH_HOPS`,
+  `gap_radius`, and `ridge_less_age` stay in hops, because they describe the
+  raster rather than the world.
 - Carried risk: the viewer's small-mesh fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
   moves which seeds those are. Five changed here, two in slice 3, three in
@@ -616,10 +633,11 @@ A hotspot is a candidate when its source cell's crust is continental, read from
 the evolution's `CellCrust`, which the hotspot stage now takes. Each candidate
 rolls one hashed draw from a new `HOTSPOT_PROVINCE` stream on the hotspot seed
 against `province_fraction`. A province is every cell within
-`province_radius_hops` mesh hops of the source, walking only through cells that
+`province_radius` of the source, walking only through cells that
 are continental and on the source's plate, so it stops at a coast and at a
-plate boundary. Weight is one within `province_radius_hops - province_rim_hops`
-hops and falls linearly toward zero at the radius: a flat top with a sloped
+plate boundary. The radius is a model length, converted to hops against the
+mesh once; weight is one within `province_radius - province_rim` and falls
+linearly toward zero at the radius: a flat top with a sloped
 rim, which is the shape of a flood basalt pile at this scale. The radius is
 where that fall reaches zero, so the ring at it is outside the province and
 every cell of one carries a positive weight. Weights are rationals
@@ -631,9 +649,9 @@ adds `plateau_uplift` times that weight in the same pass as hotspot uplift,
 before craton flattening, so a craton partly flattens an old province — which
 is acceptable, since a real one erodes too.
 
-Defaults are `province_fraction` 0.4, `province_radius_hops` 5, and
-`province_rim_hops` 2. Five hops is about 440 km at Earth scale, so a plateau
-spans roughly 900 km. `plateau_uplift` is 0.06, comparable to the Deccan's
+Defaults are `province_fraction` 0.4, `province_radius` five default hops, and
+`province_rim` two. Five hops is about 440 km at Earth scale, so a plateau
+spans roughly 900 km, whatever the mesh. `plateau_uplift` is 0.06, comparable to the Deccan's
 height above the Indian shield in normalised units.
 
 The fraction is 0.4 rather than the third a "few plumes in a few tens of

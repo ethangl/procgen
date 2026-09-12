@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn geology_runs_on_a_tectonics_result_alone() {
         let tectonics = tectonics_world(tectonics_settings(128, 11));
-        let geology = GeologyWorld::generate(&tectonics, geology_settings(11)).unwrap();
+        let geology = GeologyWorld::generate(&tectonics, geology_settings(128, 11)).unwrap();
 
         geology.validate(&tectonics).unwrap();
         assert_eq!(

@@ -60,7 +60,7 @@ pub use evolution::{
     evolve_plate_ownership,
 };
 pub use evolution_error::PlateEvolutionError;
-pub use field::{DEFAULT_STEP_DURATION, FieldSummary, mean_cell_width};
+pub use field::{DEFAULT_STEP_DURATION, FieldSummary};
 pub use lifecycle::PlateLifecycleConfig;
 pub use motion::{
     FlowField, PlateKinematics, PlateKinematicsConfig, PlateKinematicsError,

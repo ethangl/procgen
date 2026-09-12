@@ -12,6 +12,7 @@ mod field;
 mod hotspots;
 mod isostasy;
 mod oceanic_peaks;
+mod provinces;
 mod volcanic_arcs;
 
 #[cfg(test)]

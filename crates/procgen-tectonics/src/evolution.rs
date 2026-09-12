@@ -28,14 +28,14 @@ use crate::{
     PlateLifecycleConfig, PlatePartition, PoleDriftConfig, StageInputError,
     boundary_profiles::validate_config,
     classify_boundaries,
-    field::{DEFAULT_STEP_DURATION, mean_cell_width},
+    field::DEFAULT_STEP_DURATION,
     lifecycle::{self, LifecycleEvents},
     maximum_step_duration,
     motion::validate_config as validate_motion_config,
     step::EvolvingWorld,
     transport::TransportCounts,
 };
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, mean_cell_width};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlateEvolutionConfig {

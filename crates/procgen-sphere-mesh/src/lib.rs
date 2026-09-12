@@ -7,6 +7,7 @@ mod hull;
 mod initial;
 mod location;
 mod mesh;
+mod resolution;
 
 pub use hull::SphericalDelaunay;
 pub use location::DelaunayLocation;
@@ -14,6 +15,7 @@ pub use mesh::{
     CellCorner, SphereMesh, VoronoiEdge, connected_components, edge_cell_distances,
     multi_source_distances,
 };
+pub use resolution::{DEFAULT_CELL_COUNT, default_hop_length, hop_length, hops, mean_cell_width};
 
 use procgen_core::Vec3;
 use std::fmt;

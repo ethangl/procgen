@@ -390,14 +390,14 @@ struct_codec! {
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_edges }
     PlateEvolutionConfig { seed, step_count, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
-    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width_hops, margin_edge_elevation }
+    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation }
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
     BoundaryDeformationConfig { convergent, rift, transform, collision, trench, island_arc, saturation_speed, full_deformation_time, maximum_magnitude }
-    CoarseElevationConfig { smoothing_passes, smoothing_weight, sea_level }
-    HotspotFieldConfig { hotspot_count, maximum_trail_cells, province_fraction, province_radius_hops, province_rim_hops, seed }
+    CoarseElevationConfig { smoothing_radius, smoothing_weight, sea_level }
+    HotspotFieldConfig { hotspot_count, maximum_trail_length, province_fraction, province_radius, province_rim, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }
-    VolcanicArcFieldConfig { minimum_boundary_edges, inland_offset_cells, peak_density_divisor, strength_saturation }
+    VolcanicArcFieldConfig { minimum_boundary_edges, inland_offset, peak_density_divisor, strength_saturation }
     CratonFieldConfig { minimum_boundary_distance, ramp_width }
     SedimentaryBasinFieldConfig { maximum_elevation, minimum_cell_count, maximum_ocean_perimeter_fraction }
     GeologicalElevationConfig { hotspot_uplift, plateau_uplift, volcanic_arc_uplift, craton_flattening, basin_flattening }

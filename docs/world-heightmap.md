@@ -111,7 +111,9 @@ Completed foundations:
   configured full deformation time, added to a per-cell field that moves with
   the crust exactly as birth does, and clamped to a configured maximum
   magnitude, so belts widen where a boundary converged for many steps and a
-  suture stays where a boundary used to be. Continental divergent boundaries
+  suture stays where a boundary used to be. A profile's depth is a model
+  length, converted to hops against the mesh once a step, so a belt spans the
+  same distance on a fine mesh as on a coarse one. Continental divergent boundaries
   use a configurable graben profile: strength-scaled central subsidence, a
   step out to flanks that stand above the plateau behind them, then bounded
   decay to zero, which is the shoulder every real rift valley carries. A
@@ -127,10 +129,11 @@ Completed foundations:
   time elapsed since each cell's birth, not a count of evolution steps. Base elevation keeps continental cells at their
   configured base and maps oceanic age through a configurable square-root
   ridge-to-deep cooling curve. The continental base is tapered down to a
-  configured shelf edge over the outermost few continental cells, measured as
-  hop distance from the nearest oceanic cell of the final crust and bounded by
-  nothing, so a continent ends in a margin that the datum floods and drains
-  one hop at a time rather than in a cliff. Onto that curve it adds two
+  configured shelf edge over a configured margin width, a model length the
+  stage converts to hops against the mesh, measured from the nearest oceanic
+  cell of the final crust and bounded by nothing, so a continent ends in a
+  margin that the datum floods and drains one hop at a time rather than in a
+  cliff. Onto that curve it adds two
   low-frequency
   interior-relief fields, both bounded well below the continental base's margin
   over the default sea level: dynamic topography, the negated divergence of the

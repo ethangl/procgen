@@ -27,12 +27,11 @@ use crate::{
     BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
     PlateKinematicsConfig, PlatePartition,
     deformation::boundary_deformation_increment,
-    field::mean_cell_width,
     plate_speed, subducting_fractions,
     transport::{Particle, initial_particles},
 };
 use procgen_core::{RandomStream, Vec3, random_streams::PLATE_POLE_DRIFT};
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, mean_cell_width};
 use std::collections::BTreeMap;
 
 /// Draws one plate takes from the drift stream in one step: three for the

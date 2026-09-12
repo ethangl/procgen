@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn climate_runs_on_the_upstream_phases_alone() {
         let tectonics = tectonics_world(tectonics_settings(128, 13));
-        let geology = GeologyWorld::generate(&tectonics, geology_settings(13)).unwrap();
+        let geology = GeologyWorld::generate(&tectonics, geology_settings(128, 13)).unwrap();
         let climate =
             ClimateWorld::generate(&tectonics, &geology, ClimateSettings::default()).unwrap();
 
