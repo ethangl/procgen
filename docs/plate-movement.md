@@ -2105,12 +2105,18 @@ Independent, within what an irregular mesh allows:
 
 Not independent, and why:
 
-- Moisture range halves with the cell width, 529 to 265 to 132 km. The CFL
-  clamp rather than the wind is what sets it: `maximum_transport_fraction_per_step`
-  binds over most of the world, so moisture crosses a fixed number of *cells*
-  per step whatever the wind does. Stating the run as days fixed how long the
-  weather runs, not how far it reaches. That is the next slice and this table
-  is what sizes it.
+- Moisture range halves with the cell width, 529 to 265 to 132 km. Those are
+  exactly three cells at every resolution, reached after 60, 120, and 240
+  steps. The step count is not the limit: if the distance a step carries
+  moisture were what stopped it, twice the steps would carry it twice as many
+  cells and the kilometres would hold. Something removes a fixed fraction per
+  step rather than per second, so twice the steps removes twice as much over
+  the same thirty days. The two leads are the config's two per-step caps,
+  `maximum_orographic_fraction_per_step` at 0.35 and
+  `maximum_transport_fraction_per_step` at 0.5; neither is shown to be the
+  cause here. Stating the run as days fixed how long the weather runs, not how
+  far it reaches, and the fix is a climate slice. This measurement is what
+  sizes it: the number to move is three cells, and it should be a distance.
 - Arc peaks: 1691, 2259, 1140, against a seed spread of under five percent
   within a resolution, so this is the mesh. Two causes. At 16,384 every arc
   cell is a peak — the peak count equals the arc cell count exactly — because

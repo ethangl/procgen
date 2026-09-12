@@ -1,124 +1,21 @@
 use crate::{
     AreaWeightedSummary, ClimateOutputError, SECONDS_PER_DAY,
     advection::{Route, advect, build_routes},
+    moisture_config::{MOISTURE_SIMULATED_DAYS_RANGE, MoistureSchedule, MoistureTransportConfig},
     validate_range,
 };
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
-use procgen_sphere_mesh::{SphereMesh, default_hop_length, mean_cell_width};
+use procgen_sphere_mesh::SphereMesh;
 use procgen_tectonics::{ElevationField, land_elevation_meters};
 use std::{fmt, ops::RangeInclusive};
 
-pub const MOISTURE_STEP_COUNT_RANGE: RangeInclusive<usize> = 1..=4_096;
-/// A second to a month. It bounds a step the mesh derives rather than one a
-/// caller types, and the coarsest mesh the viewer offers takes the whole run
-/// in one step, so the top is the longest run rather than the week it was when
-/// the step itself was configured.
-pub const MOISTURE_STEP_SECONDS_RANGE: RangeInclusive<f64> = 1.0..=2_592_000.0;
-/// From one step of the default mesh to a decade.
-pub const MOISTURE_SIMULATED_DAYS_RANGE: RangeInclusive<f64> = 0.25..=3_650.0;
-
-/// Steps the default mesh takes. Transport is advective, so a step may not
-/// carry moisture further than a cell: a mesh with cells half as wide needs
-/// steps half as long, and twice as many of them to cover the same weather.
-/// The count therefore goes as the reciprocal of the cell width, and this is
-/// what it was measured at on the default mesh.
-const DEFAULT_MESH_STEP_COUNT: f64 = 120.0;
 pub const MOISTURE_CAPACITY_RANGE: RangeInclusive<f64> = 0.0..=10_000.0;
 pub const REFERENCE_TEMPERATURE_KELVIN_RANGE: RangeInclusive<f64> = 0.0..=10_000.0;
 pub const MOISTURE_RATE_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 pub const TEMPERATURE_SENSITIVITY_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 pub const OROGRAPHIC_COEFFICIENT_RANGE: RangeInclusive<f64> = 0.0..=1.0;
 pub const TRANSPORT_FRACTION_RANGE: RangeInclusive<f64> = 0.0..=1.0;
-
-/// How long a mesh's transport runs for, and in how many pieces.
-///
-/// The pieces are the mesh's business and the length is the config's, so a
-/// finer mesh resolves the same weather rather than less of it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MoistureSchedule {
-    pub step_count: usize,
-    pub step_seconds: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MoistureTransportConfig {
-    /// Days of weather the transport simulates. The step count follows from
-    /// the mesh and the seconds a step stands for follow from both, so this
-    /// is the whole of what a caller states about the run's length.
-    pub simulated_days: f64,
-    /// Column water capacity at the reference temperature, in kg/m2.
-    pub reference_capacity_kg_per_m2: f64,
-    pub reference_temperature_kelvin: f64,
-    /// Exponential capacity response per kelvin.
-    pub capacity_temperature_sensitivity_per_kelvin: f64,
-    pub minimum_capacity_kg_per_m2: f64,
-    pub maximum_capacity_kg_per_m2: f64,
-    /// Ocean relaxation rate toward local moisture capacity.
-    pub ocean_evaporation_rate_per_second: f64,
-    /// Background conversion of airborne moisture to rainfall.
-    pub rainfall_rate_per_second: f64,
-    /// Conversion rate per meter of positive terrain ascent.
-    pub orographic_coefficient_per_meter: f64,
-    /// Hard bound on the fraction removed orographically in one step.
-    pub maximum_orographic_fraction_per_step: f64,
-    /// CFL-style bound on the humidity exported from a cell in one step.
-    ///
-    /// It, and not the wind, is what sets how far moisture reaches inland at
-    /// the defaults: the clamp binds over most of the world, so a stronger
-    /// wind moves the same water. That is a separate problem from how a run
-    /// is sliced and this slice does not address it.
-    pub maximum_transport_fraction_per_step: f64,
-}
-
-/// The longest run a mesh of `cell_count` cells can simulate, in days: the
-/// steps it derives, each standing for the longest the solver will take.
-///
-/// A coarse mesh derives few steps, so a month shared over them puts more in
-/// each than the explicit solver's per-step fractions mean anything for. The
-/// viewer bounds its slider by this the way it bounds a step duration by
-/// [`procgen_tectonics::maximum_step_duration`].
-pub fn maximum_simulated_days(cell_count: usize) -> f64 {
-    let steps = MoistureTransportConfig::EARTHLIKE
-        .schedule(cell_count)
-        .step_count as f64;
-    steps * MOISTURE_STEP_SECONDS_RANGE.end() / SECONDS_PER_DAY
-}
-
-impl MoistureTransportConfig {
-    /// The schedule a mesh of `cell_count` cells runs this config on.
-    ///
-    /// The step count scales with the reciprocal of the cell width, because a
-    /// step may not carry moisture past a cell; the seconds a step stands for
-    /// are then the simulated days shared out over them. On the default mesh
-    /// that is the 120 steps of six hours this was measured at.
-    pub fn schedule(&self, cell_count: usize) -> MoistureSchedule {
-        let width_ratio =
-            f64::from(default_hop_length()) / f64::from(mean_cell_width(1.0, cell_count));
-        let step_count = (DEFAULT_MESH_STEP_COUNT * width_ratio).round().max(1.0);
-        MoistureSchedule {
-            step_count: step_count as usize,
-            step_seconds: self.simulated_days * SECONDS_PER_DAY / step_count,
-        }
-    }
-}
-
-impl MoistureTransportConfig {
-    /// Convenient Earth-like choices. The solver contains no planet-specific values.
-    pub const EARTHLIKE: Self = Self {
-        simulated_days: 30.0,
-        reference_capacity_kg_per_m2: 25.0,
-        reference_temperature_kelvin: 288.0,
-        capacity_temperature_sensitivity_per_kelvin: 0.07,
-        minimum_capacity_kg_per_m2: 0.2,
-        maximum_capacity_kg_per_m2: 100.0,
-        ocean_evaporation_rate_per_second: 1.5e-6,
-        rainfall_rate_per_second: 8.0e-7,
-        orographic_coefficient_per_meter: 2.0e-4,
-        maximum_orographic_fraction_per_step: 0.35,
-        maximum_transport_fraction_per_step: 0.5,
-    };
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct MoistureTransportInputs<'a> {
@@ -186,8 +83,6 @@ pub enum MoistureTransportError {
     Elevation,
     Wind,
     SimulatedDays,
-    StepCount,
-    StepSeconds,
     Capacity,
     ReferenceTemperature,
     TemperatureSensitivity,
@@ -213,12 +108,6 @@ impl fmt::Display for MoistureTransportError {
             Error::SimulatedDays => {
                 formatter.write_str("simulated days is outside its supported range")
             }
-            Error::StepCount => formatter.write_str(
-                "the step count this mesh derives is outside the solver's supported range",
-            ),
-            Error::StepSeconds => formatter.write_str(
-                "the step duration this mesh derives is outside the solver's supported range",
-            ),
             Error::Capacity => formatter.write_str("moisture capacity parameters are invalid"),
             Error::ReferenceTemperature => {
                 formatter.write_str("reference temperature is outside its supported range")
@@ -544,20 +433,6 @@ fn validate(
         &MOISTURE_SIMULATED_DAYS_RANGE,
         MoistureTransportError::SimulatedDays,
     )?;
-    // The schedule is derived, so these two bound the mesh rather than the
-    // config: a mesh fine enough to ask for more steps than the solver will
-    // take is rejected rather than run at a coarser schedule than it needs.
-    let schedule = config.schedule(mesh.cell_count());
-    validate_range(
-        schedule.step_count,
-        &MOISTURE_STEP_COUNT_RANGE,
-        MoistureTransportError::StepCount,
-    )?;
-    validate_range(
-        schedule.step_seconds,
-        &MOISTURE_STEP_SECONDS_RANGE,
-        MoistureTransportError::StepSeconds,
-    )?;
     for capacity in [
         config.reference_capacity_kg_per_m2,
         config.minimum_capacity_kg_per_m2,
@@ -607,7 +482,7 @@ fn validate(
         &TRANSPORT_FRACTION_RANGE,
         MoistureTransportError::TransportFraction,
     )?;
-    Ok(schedule)
+    Ok(config.schedule(mesh.cell_count()))
 }
 
 #[cfg(test)]
@@ -749,15 +624,6 @@ mod tests {
                 MoistureTransportError::SimulatedDays,
             ),
             (
-                // A decade over the three steps this mesh derives is years
-                // in each one, which the solver will not take.
-                MoistureTransportConfig {
-                    simulated_days: *MOISTURE_SIMULATED_DAYS_RANGE.end(),
-                    ..MoistureTransportConfig::EARTHLIKE
-                },
-                MoistureTransportError::StepSeconds,
-            ),
-            (
                 MoistureTransportConfig {
                     reference_capacity_kg_per_m2: -1.0,
                     ..MoistureTransportConfig::EARTHLIKE
@@ -828,29 +694,6 @@ mod tests {
                 expected
             );
         }
-    }
-
-    /// The run is the days and the mesh decides the slicing, so a finer mesh
-    /// resolves the same weather rather than less of it.
-    #[test]
-    fn the_schedule_is_the_days_over_the_steps_the_mesh_needs() {
-        let config = MoistureTransportConfig::EARTHLIKE;
-        assert_eq!(
-            config.schedule(DEFAULT_CELL_COUNT),
-            MoistureSchedule {
-                step_count: 120,
-                step_seconds: 21_600.0,
-            }
-        );
-        // Four times the cells halves the cell width, so the same month takes
-        // twice the steps and each stands for half as long.
-        assert_eq!(
-            config.schedule(4 * DEFAULT_CELL_COUNT),
-            MoistureSchedule {
-                step_count: 240,
-                step_seconds: 10_800.0,
-            }
-        );
     }
 
     #[test]
