@@ -228,21 +228,6 @@ pub(crate) fn position_in_cell(
 /// weights that place it between them.
 const DRAWS_PER_POSITION: u64 = 3;
 
-/// How many peaks a cell carries when a field asks for `density` of them per
-/// cell of the default mesh.
-///
-/// The count is exact in the density at any resolution. A cell whose share of
-/// the density is more than one peak takes every whole peak it asks for, and
-/// the fraction left over is the chance of one more: a rule that drew once per
-/// cell could never place the second, so on a mesh whose cells are larger than
-/// a peak's share of area the count saturated at one peak per cell rather than
-/// following the density. Where the share is below one this is the single draw
-/// that rule made.
-pub(crate) fn peak_count_in_cell(expected: f32, stream: RandomStream, cell: usize) -> usize {
-    let whole = expected.floor();
-    whole as usize + usize::from(stream.unit_f32(cell as u64, 0) < expected - whole)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

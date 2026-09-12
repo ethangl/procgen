@@ -1,6 +1,6 @@
 use crate::{
     HotspotField,
-    field::{GeologyInputError, MaxWinsField, peak_count_in_cell, position_in_cell},
+    field::{GeologyInputError, MaxWinsField, position_in_cell},
 };
 use procgen_core::{
     RandomStream, Vec3,
@@ -292,6 +292,21 @@ fn validate_inputs(
     hotspots.validate(mesh)?;
     seafloor_age.validate(mesh)?;
     Ok(())
+}
+
+/// How many peaks a cell carries when a field asks for `density` of them per
+/// cell of the default mesh.
+///
+/// The count is exact in the density at any resolution. A cell whose share of
+/// the density is more than one peak takes every whole peak it asks for, and
+/// the fraction left over is the chance of one more: a rule that drew once per
+/// cell could never place the second, so on a mesh whose cells are larger than
+/// a peak's share of area the count saturated at one peak per cell rather than
+/// following the density. Where the share is below one this is the single draw
+/// that rule made.
+fn peak_count_in_cell(expected: f32, stream: RandomStream, cell: usize) -> usize {
+    let whole = expected.floor();
+    whole as usize + usize::from(stream.unit_f32(cell as u64, 0) < expected - whole)
 }
 
 #[cfg(test)]
