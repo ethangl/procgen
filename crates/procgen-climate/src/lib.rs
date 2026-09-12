@@ -22,6 +22,7 @@ pub(crate) fn validate_range<T: PartialOrd, E>(
     }
 }
 
+mod advection;
 mod circulation;
 mod coupling;
 mod cryosphere;
