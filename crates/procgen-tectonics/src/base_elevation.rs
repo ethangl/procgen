@@ -530,11 +530,11 @@ mod tests {
         assert_eq!(first.diagnostics.margin_depth, FieldSummary::default());
         // Switching every added term off and the taper's width to zero leaves
         // the age curve alone, which is what this pin holds. It moves
-        // whenever the reference run's crust or its ages do: last with
-        // crustal thickness, which merges an arriving continent into the one
-        // above it, so a parcel that used to survive to win a cell in a later
-        // step is no longer there to win it and the run makes its floor
-        // elsewhere.
+        // whenever the reference run's crust or its ages do: last with the
+        // mean-reverting pole drift, which holds each plate near the speed
+        // the slab rule gives it rather than letting the walk carry it away,
+        // so the run opens its ridges in other places and the ages this curve
+        // reads are the ages of other cells.
 
         //
         // The curve is add, multiply, divide, and square root over a model
@@ -543,7 +543,7 @@ mod tests {
         // two oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
             quantized_fingerprint(first.cell_elevations.iter().copied()),
-            76_683_858_554_990_641
+            5_994_749_423_191_342_248
         );
     }
 

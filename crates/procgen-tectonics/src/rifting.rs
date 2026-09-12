@@ -208,12 +208,17 @@ impl EvolvingWorld<'_> {
             .angular_velocities
             .push(rotations[1 - keeps]);
         // A half is the parent's own crust on the parent's own base speed,
-        // carrying the drift the parent had walked to. The opening sets its
-        // direction and the respeed that ends this step sets its length, so
-        // what the two halves keep of the opening is the way they part.
+        // carrying the drift the parent had walked to and reverting toward
+        // the axis the parent started from. The opening sets its direction
+        // and the respeed that ends this step sets its length, so what the
+        // two halves keep of the opening is the way they part; the shared
+        // starting axis is then what the drift of both halves is pulled back
+        // toward, which keeps a rifted pair part of the same flow field
+        // rather than letting each half wander on its own.
         let base = self.kinematics.base_speeds[plate];
         self.kinematics.base_speeds.push(base);
         self.drift_factors.push(self.drift_factors[plate]);
+        self.starting_axes.push(self.starting_axes[plate]);
         true
     }
 }

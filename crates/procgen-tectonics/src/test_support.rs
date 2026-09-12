@@ -93,6 +93,10 @@ pub const NO_POLE_DRIFT: PoleDriftConfig = PoleDriftConfig {
     axis_drift_rate: 0.0,
     speed_drift_rate: 0.0,
     speed_drift_limit: 0.0,
+    // Nothing walks, so there is nothing to pull back; an infinite time says
+    // so rather than leaving a pull that a rift or a suture would be the only
+    // thing to move an axis for.
+    reversion_time: f32::INFINITY,
 };
 
 /// No rifting and no suturing, for the fixtures whose assertions are about a
@@ -161,6 +165,11 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
             // is the root of the ratio of the two steps.
             axis_drift_rate: default.pole_drift.axis_drift_rate * time_scale.sqrt(),
             speed_drift_rate: default.pole_drift.speed_drift_rate * time_scale.sqrt(),
+            // The reversion time is a time, not a rate per unit root time, so
+            // the ratio that gives the reference run the same per-step pull
+            // is the ratio of the two steps itself. It stays the same number
+            // of steps long, which is the quantity the default states.
+            reversion_time: default.pole_drift.reversion_time / time_scale,
             ..default.pole_drift
         },
         deformation: BoundaryDeformationConfig {

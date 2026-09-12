@@ -16,7 +16,7 @@ use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
     DEFAULT_STEP_DURATION, PlateEvolutionConfig, PlateKinematicsConfig, PlateLifecycleConfig,
-    PlatePartitionConfig,
+    PlatePartitionConfig, PoleDriftConfig,
 };
 use std::{
     env,
@@ -92,6 +92,17 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
         kinematics: PlateKinematicsConfig::new(seed),
         evolution: PlateEvolutionConfig {
             deformation: scaled_deformation(cell_count),
+            pole_drift: PoleDriftConfig {
+                // The reversion is eleven default steps, and a step here is
+                // much longer, so it is carried over as the same eleven steps
+                // for the same reason the erosion time above is. The default
+                // itself would be shorter than one step of these coarse
+                // meshes, which a run may not do.
+                reversion_time: PoleDriftConfig::default().reversion_time
+                    * scaled_step_duration(cell_count)
+                    / DEFAULT_STEP_DURATION,
+                ..PoleDriftConfig::default()
+            },
             lifecycle: PlateLifecycleConfig {
                 suture_minimum_shared_length: hop_length(cell_count, 20.0),
                 ..PlateLifecycleConfig::default()

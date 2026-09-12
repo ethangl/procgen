@@ -23,6 +23,7 @@
 //! particle won it, so the fields move with the material by construction
 //! instead of by a rule that copies them between cells.
 
+use crate::field::DEFAULT_STEP_DURATION;
 use crate::{
     BoundaryClassification, CellCrust, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
     PlateKinematicsConfig, PlatePartition,
@@ -41,7 +42,7 @@ use std::collections::BTreeMap;
 const DRIFT_DRAWS_PER_STEP: u64 = 4;
 
 /// How far a plate's rotation vector moves per unit of root model time, and
-/// how far from the motion it started with it may end up.
+/// how strongly it is pulled back toward the motion it started with.
 ///
 /// Both rates are per unit root time rather than per step or per unit time,
 /// because both drifts are random walks and a random walk's spread grows with
@@ -49,6 +50,17 @@ const DRIFT_DRAWS_PER_STEP: u64 = 4;
 /// therefore the one that leaves a run's total wander where it is when the
 /// run is sliced more finely: a rate against the step itself would halve the
 /// variance every time the step halved. Zero means no drift.
+///
+/// A random walk on its own has no scale of its own, so its spread is
+/// whatever the run length makes it: the same rates that wander a quarter
+/// over fifteen steps wander a half over sixty and almost a whole band over
+/// 240. That is what [`PoleDriftConfig::reversion_time`] answers. Each walk
+/// is pulled back toward where it began at a rate set by one time constant,
+/// which gives both of them a spread that stops growing, and leaves the
+/// speed band a bound on the tail rather than the thing that shapes the
+/// distribution. Real plates do the same: speeds and directions respond to a
+/// mantle that changes slowly, so they wander around it rather than away
+/// from it.
 ///
 /// The defaults are modest on purpose. Drift is what makes a boundary change
 /// regime during a run, which is the whole point of carrying accumulated
@@ -75,32 +87,77 @@ pub struct PoleDriftConfig {
     /// where a band around the rule's own answer keeps drift the perturbation
     /// of it that it is meant to be. At one the band reaches zero; a plate can
     /// slow to a stop but never reverse.
+    ///
+    /// It bounds the tail and nothing more. What holds the spread of the
+    /// factor where it is at every run length is
+    /// [`PoleDriftConfig::reversion_time`]; the band catches the few plates
+    /// whose walk strays furthest, so raising it changes the distribution
+    /// hardly at all.
     pub speed_drift_limit: f32,
+    /// Model time over which each walk is pulled back to where it started:
+    /// one step moves the speed factor and the axis a fraction
+    /// `step_duration / reversion_time` of the way back to the value the run
+    /// began with. It is one time constant for both walks, because both
+    /// answer the same question -- how long a plate remembers the flow field
+    /// it was fitted to -- and two constants would be two names for it.
+    ///
+    /// What it buys is a spread that stops growing. Each walk becomes an
+    /// Ornstein-Uhlenbeck walk, whose spread settles at `rate *
+    /// sqrt(reversion_time / 2)` however long the run is, where the
+    /// unreverted walk's spread grew as the root of the run. Infinity turns
+    /// the reversion off and gives back the unreverted walk exactly.
+    ///
+    /// It must be longer than a step. A reversion of a whole step or more
+    /// would cross the starting value rather than approach it, which is not a
+    /// coarser version of the same pull, so evolution rejects it.
+    pub reversion_time: f32,
 }
 
 impl Default for PoleDriftConfig {
     fn default() -> Self {
         Self {
             // A run at `DEFAULT_STEP_DURATION` turns an axis by
-            // `1.8 * sqrt(0.014) = 0.213` radians per step, so the expected
-            // total wander of `0.213 * sqrt(n)` is 0.83 radians over fifteen
-            // steps and 1.65 over the viewer's default sixty: about
-            // forty-seven and ninety-five degrees. The per-step angle is what
-            // decides flicker, and it is small enough that a boundary changes
-            // regime several times over a run rather than every step.
+            // `1.8 * sqrt(0.014) = 0.213` radians per step. The per-step
+            // angle is what decides flicker, and it is small enough that a
+            // boundary changes regime several times over a run rather than
+            // every step: about two thirds of the boundary edges of the
+            // viewer's default world hold more than one regime over sixty
+            // steps. Where the wander it accumulates stops is
+            // `reversion_time`'s answer, not this rate's; unreverted, this
+            // rate carried an axis 1.47 radians from its start over those
+            // sixty steps and 1.80 over 240, which is a plate that has lost
+            // the flow field it was fitted to.
             axis_drift_rate: 1.8,
             // `0.9 * sqrt(0.014)` is 0.106, so a step changes a plate's drift
             // factor by at most about a tenth.
             speed_drift_rate: 0.9,
-            // A step's expected change is `0.106 / sqrt(3)`, so the
-            // unclamped walk is expected to stray `0.061 * sqrt(n)`: about a
-            // quarter over the fifteen steps this was set against, where five
-            // of the 111 plates at the viewer's defaults reached the edge, and
-            // about a half over the sixty the viewer now runs. The band
-            // therefore bounds the tail of a short run and shapes the bulk of
-            // a long one, which is one of the things "Run length" in
-            // `docs/plate-movement.md` records.
+            // A step's expected change is `0.106 / sqrt(3)`, so the walk
+            // would stray `0.061 * sqrt(n)` if nothing pulled it back: about
+            // a quarter over the fifteen steps this was set against, and
+            // about a half over the sixty the viewer now runs. The reversion
+            // is what pulls it back, and holds the spread at 0.12 whatever
+            // the run length, so the band is the tail bound it was set to be
+            // rather than the thing that shapes the distribution. No plate of
+            // either measured world ends a run against it; unreverted, one to
+            // four did.
             speed_drift_limit: 0.5,
+            // Eleven steps at `DEFAULT_STEP_DURATION`. It is written as a
+            // multiple of the step because a step is what it has to be longer
+            // than, and because how many steps a plate remembers over is the
+            // quantity that carries the meaning; the model time follows.
+            //
+            // At this value the speed factor settles at a spread of `0.9 *
+            // sqrt(0.154 / 2) / sqrt(3)`, which is 0.14, the `sqrt(3)` being
+            // the spread of the uniform draw the walk steps by; measured at
+            // the viewer's defaults it is 0.12 over sixty steps and 0.13 over
+            // 240. The band at 0.5 therefore sits close to four deviations
+            // out and bounds the tail at every run length, where before it
+            // shaped the bulk of a long run. The axis settles at `1.8 *
+            // sqrt(0.154 / 2)`, which is 0.50 radians, and measures 0.48 and
+            // 0.44 over the same two runs: about thirty degrees, a plate
+            // wandering around the flow field's answer rather than away from
+            // it. "Run length" in `docs/plate-movement.md` has both tables.
+            reversion_time: 11.0 * DEFAULT_STEP_DURATION,
         }
     }
 }
@@ -137,6 +194,20 @@ pub(crate) struct EvolvingWorld<'a> {
     /// band it is clamped to is one either side, which is the band around the
     /// rule's own answer it replaces.
     pub(crate) drift_factors: Vec<f32>,
+    /// The unit axis each plate's rotation vector had when the run began,
+    /// which is what its axis drift is pulled back toward. It is the fit's
+    /// own blended answer, so reverting to it is reverting to the flow field
+    /// the plate was fitted to.
+    ///
+    /// It is carried here rather than on [`PlateKinematics`] because on the
+    /// motion a run is handed it is that motion's own direction and nothing
+    /// more; it becomes a separate fact only once a run has drifted away from
+    /// it. It changes with the plate set exactly as `drift_factors` does: a
+    /// rift's new half inherits the parent's, a suture takes the pair's
+    /// area-weighted mean, and compaction carries it with the id. A plate
+    /// fitted at rest has no direction to remember and holds
+    /// [`Vec3::ZERO`], which reverts toward nothing.
+    pub(crate) starting_axes: Vec<Vec3>,
     /// The one distance a gap radius is measured against.
     pub(crate) cell_width: f32,
     /// Read between steps to reclassify, and taken when the run ends. The
@@ -185,6 +256,12 @@ impl<'a> EvolvingWorld<'a> {
             config,
             kinematics_config: inputs.kinematics_config,
             drift_factors: vec![1.0; inputs.partition.plate_count],
+            starting_axes: inputs
+                .kinematics
+                .angular_velocities
+                .iter()
+                .map(|rotation| rotation.normalized())
+                .collect(),
             kinematics: inputs.kinematics.clone(),
             cell_width: mean_cell_width(mesh.radius, mesh.cell_count()),
             partition: inputs.partition.clone(),
@@ -256,12 +333,29 @@ impl<'a> EvolvingWorld<'a> {
     }
 
     /// Steps every plate's rotation vector once: a turn of the axis through a
-    /// fixed angle toward a fresh hashed perpendicular direction, and a
-    /// hashed change of the plate's drift factor bounded to a band around one.
+    /// fixed angle toward a fresh hashed perpendicular direction and a hashed
+    /// change of the plate's drift factor, and then a pull of both back
+    /// toward the motion the run began with.
     ///
-    /// The factor is what the walk carries; the respeed that ends the step
-    /// multiplies the slab rule's answer by it. The rotation vector's own
-    /// length is left where the turn put it, because the respeed sets it.
+    /// The factor is what the speed walk carries; the respeed that ends the
+    /// step multiplies the slab rule's answer by it. The rotation vector's
+    /// own length is left where the turn and the pull put it, because the
+    /// respeed sets it.
+    ///
+    /// The pull is one fraction `step_duration / reversion_time` of the way
+    /// back, applied after the walk has moved, which makes each of the two an
+    /// Ornstein-Uhlenbeck walk around its starting value. Without it both
+    /// walks spread as the root of the run, and at the sixty steps the viewer
+    /// runs the axes had left the flow field they were fitted to far enough
+    /// behind that neighbouring plates no longer agreed about it -- which is
+    /// the one thing fitting them to a shared field was for.
+    ///
+    /// The axis is pulled by blending the whole rotation vector toward the
+    /// starting axis at the vector's own speed. That reaches the same
+    /// direction a blend of the two unit axes reaches and needs no square
+    /// root to do it: the two vectors blended are the same length, so the
+    /// direction of the blend is the blend of the directions. What the blend
+    /// does to the length the respeed undoes.
     ///
     /// The turn is the half-angle tangent form, so it costs only add,
     /// multiply, and divide. Half the intended angle stands in for its
@@ -271,9 +365,13 @@ impl<'a> EvolvingWorld<'a> {
     /// would put libm back on the path the boundary classes come off.
     pub(crate) fn drift(&mut self, step: i32) {
         let config = self.config.pole_drift;
-        // Returning rather than multiplying by one leaves a run with no drift
-        // bit-identical to one from before this substep existed.
-        if config.axis_drift_rate == 0.0 && config.speed_drift_rate == 0.0 {
+        // A reversion time of infinity gives exactly zero, which is what
+        // turns the pull off.
+        let reversion = self.config.step_duration / config.reversion_time;
+        // Returning rather than adding zero and multiplying by one leaves a
+        // run with nothing to drift and nothing to revert bit-identical to
+        // one from before this substep existed.
+        if config.axis_drift_rate == 0.0 && config.speed_drift_rate == 0.0 && reversion == 0.0 {
             return;
         }
         let half_tangent = half_axis_turn(config, self.config.step_duration);
@@ -283,12 +381,12 @@ impl<'a> EvolvingWorld<'a> {
             let speed = rotation.length();
             let item = plate as u64;
             let sample = step as u64 * DRIFT_DRAWS_PER_STEP;
-            self.drift_factors[plate] = (self.drift_factors[plate]
-                * (1.0 + stream.signed_f32(item, sample + 3) * speed_span))
-                .clamp(
-                    1.0 - config.speed_drift_limit,
-                    1.0 + config.speed_drift_limit,
-                );
+            let walked = self.drift_factors[plate]
+                * (1.0 + stream.signed_f32(item, sample + 3) * speed_span);
+            self.drift_factors[plate] = (walked + (1.0 - walked) * reversion).clamp(
+                1.0 - config.speed_drift_limit,
+                1.0 + config.speed_drift_limit,
+            );
             if speed == 0.0 {
                 // A plate fitted at rest has no axis to turn. Its factor still
                 // walks, so that a rift giving one of its halves a direction
@@ -304,7 +402,8 @@ impl<'a> EvolvingWorld<'a> {
             // Perpendicular to the axis and of the rotation vector's own
             // length, which is what makes the turn preserve that length.
             let perpendicular = (hashed - axis * hashed.dot(axis)).normalized() * speed;
-            *rotation = rotation.rotated_toward(perpendicular, half_tangent);
+            let turned = rotation.rotated_toward(perpendicular, half_tangent);
+            *rotation = turned + (self.starting_axes[plate] * speed - turned) * reversion;
         }
     }
 
@@ -359,10 +458,13 @@ mod tests {
     fn one_drift_turns_every_axis_through_the_configured_angle_and_keeps_its_speed() {
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
         // Speed held still, so the turn is the only thing that can change a
-        // rotation vector and its length is the invariant to check.
+        // rotation vector and its length is the invariant to check. The
+        // reversion is off for the same reason: it is the one other thing
+        // that moves an axis, and it moves the length with it.
         let config = PlateEvolutionConfig {
             pole_drift: PoleDriftConfig {
                 speed_drift_rate: 0.0,
+                reversion_time: f32::INFINITY,
                 ..PoleDriftConfig::default()
             },
             ..drift_config(1)
@@ -415,6 +517,100 @@ mod tests {
         }
         // The walk has to reach the band for the bound above to mean anything.
         assert!(reached > limit / 2.0, "the walk barely moved: {reached}");
+    }
+
+    /// With nothing hashed left in it, the speed walk is the plain decay the
+    /// reversion states, and the test is that it decays by exactly that and
+    /// step by step rather than by a rate applied once over the run.
+    #[test]
+    fn reversion_alone_decays_a_displaced_speed_factor_geometrically() {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        let config = PlateEvolutionConfig {
+            pole_drift: PoleDriftConfig {
+                speed_drift_rate: 0.0,
+                ..PoleDriftConfig::default()
+            },
+            ..drift_config(1)
+        };
+        let kept = 1.0 - config.step_duration / config.pole_drift.reversion_time;
+        assert!(kept > 0.0 && kept < 1.0, "the pull must be a fraction");
+
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        world.drift_factors.fill(1.5);
+        let mut expected = 0.5;
+        for step in 0..12 {
+            world.drift(step);
+            expected *= kept;
+            for (plate, &factor) in world.drift_factors.iter().enumerate() {
+                assert!(
+                    (factor - (1.0 + expected)).abs() < 1.0e-6,
+                    "plate {plate} reached {factor} rather than {} at step {step}",
+                    1.0 + expected
+                );
+            }
+        }
+    }
+
+    /// The axis half of the same rule. With no turn to fight it the pull is
+    /// monotone: every step brings an axis nearer the one it started from and
+    /// none of them carries it past.
+    #[test]
+    fn reversion_alone_carries_a_displaced_axis_back_without_overshooting() {
+        let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        let config = PlateEvolutionConfig {
+            pole_drift: PoleDriftConfig {
+                axis_drift_rate: 0.0,
+                speed_drift_rate: 0.0,
+                ..PoleDriftConfig::default()
+            },
+            ..drift_config(1)
+        };
+        let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
+        // Displaced by turning each axis a long way off its start, which is
+        // the state a run of unreverted drift would have walked itself into.
+        for rotation in world.kinematics.angular_velocities.iter_mut() {
+            let speed = rotation.length();
+            let axis = *rotation * speed.recip();
+            let sideways = Vec3::new(axis.z, axis.x, axis.y);
+            let perpendicular = (sideways - axis * sideways.dot(axis)).normalized() * speed;
+            *rotation = rotation.rotated_toward(perpendicular, 0.5);
+        }
+
+        let start = world.starting_axes.clone();
+        let alignment = |world: &EvolvingWorld<'_>| -> Vec<f32> {
+            world
+                .kinematics
+                .angular_velocities
+                .iter()
+                .zip(&start)
+                .map(|(rotation, &axis)| rotation.normalized().dot(axis))
+                .collect()
+        };
+        let mut previous = alignment(&world);
+        assert!(
+            previous.iter().all(|&aligned| aligned < 0.95),
+            "the axes must start well off their own: {previous:?}"
+        );
+
+        for step in 0..40 {
+            world.drift(step);
+            let current = alignment(&world);
+            for (plate, (&now, &before)) in current.iter().zip(&previous).enumerate() {
+                assert!(
+                    now > before,
+                    "plate {plate} did not close on its start at step {step}: {before} to {now}"
+                );
+                assert!(
+                    now <= 1.0 + 1.0e-6,
+                    "plate {plate} overshot its start at step {step}: {now}"
+                );
+            }
+            previous = current;
+        }
+        assert!(
+            previous.iter().all(|&aligned| aligned > 0.999),
+            "the pull left the axes short of their own: {previous:?}"
+        );
     }
 
     #[test]

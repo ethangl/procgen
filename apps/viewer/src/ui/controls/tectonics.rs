@@ -332,6 +332,15 @@ fn pole_drift_controls(ui: &mut egui::Ui, config: &mut PoleDriftConfig) {
         &mut config.speed_drift_limit,
         0.0..=1.0,
     );
+    // A model time like the erosion time beside it, and bounded the same way:
+    // at the bottom of the range a default step does not fit inside it and
+    // evolution says so.
+    slider(
+        ui,
+        "Drift reversion time",
+        &mut config.reversion_time,
+        MODEL_TIME_RANGE,
+    );
 }
 
 fn lifecycle_controls(

@@ -122,6 +122,11 @@ pub(crate) fn validate(config: &PlateEvolutionConfig) -> Result<(), PlateEvoluti
     if !drift.speed_drift_limit.is_finite() || !(0.0..=1.0).contains(&drift.speed_drift_limit) {
         return Err(PlateEvolutionError::InvalidSpeedDriftLimit);
     }
+    // Infinity is the value that turns the reversion off, so it passes here
+    // and the rule that the step must be shorter reads as satisfied by it.
+    if drift.reversion_time.is_nan() || drift.reversion_time <= 0.0 {
+        return Err(PlateEvolutionError::InvalidReversionTime);
+    }
     boundary_profiles::validate_config(config.deformation)?;
     lifecycle::validate_config(config.lifecycle)?;
     Ok(())
