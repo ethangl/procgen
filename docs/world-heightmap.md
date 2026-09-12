@@ -125,7 +125,8 @@ Completed foundations:
   scaled by the time a plate at the configured maximum speed takes to cross a
   cell and negated into birth times that predate step zero; propagation
   stays within initial plate ownership and ridge-less oceanic plates receive a
-  deterministic configured fallback age in hops. Seafloor age is then the model
+  deterministic configured fallback age, which is a model time like every other
+  age rather than a hop count. Seafloor age is then the model
   time elapsed since each cell's birth, not a count of evolution steps. Base elevation keeps continental cells at their
   configured base and maps oceanic age through a configurable square-root
   ridge-to-deep cooling curve. The continental base is tapered down to a

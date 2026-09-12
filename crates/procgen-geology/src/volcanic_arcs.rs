@@ -1,5 +1,7 @@
 use crate::field::{GeologyInputError, MaxWinsField};
-use procgen_sphere_mesh::{SphereMesh, connected_components, default_hop_length, hops};
+use procgen_sphere_mesh::{
+    SphereMesh, connected_components, default_cell_area, default_hop_length, hops,
+};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CellCrust, CrustClass, PlatePartition, StageInputError,
 };
@@ -7,16 +9,22 @@ use std::{cmp::Ordering, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolcanicArcFieldConfig {
-    /// Minimum qualifying boundary edges required to retain a segment.
-    pub minimum_boundary_edges: usize,
+    /// Minimum length of qualifying boundary required to retain a segment, as
+    /// a model length on the unit sphere. A boundary's edges are its length in
+    /// hops, to within the mesh's irregularity, so the stage converts this to
+    /// an edge count once against the mesh. The default of three default hops
+    /// is about 265 km at Earth radius.
+    pub minimum_boundary_length: f32,
     /// Desired distance from the boundary on the overriding plate, as a model
     /// length on the unit sphere. The default of two default hops is about
     /// 180 km at Earth radius, which is where a volcanic front sits behind a
     /// trench.
     pub inland_offset: f32,
-    /// Selects approximately one peak candidate per this many inland cells,
-    /// retaining the strongest candidates first.
-    pub peak_density_divisor: usize,
+    /// Peak candidates per unit area of arc on the unit sphere, retaining the
+    /// strongest candidates first. The default is one peak per two cells of
+    /// the default mesh, which is a volcano every 120 km or so of arc at Earth
+    /// radius.
+    pub peak_density: f32,
     /// Convergence at which diagnostic strength reaches one.
     pub strength_saturation: f32,
 }
@@ -24,9 +32,9 @@ pub struct VolcanicArcFieldConfig {
 impl Default for VolcanicArcFieldConfig {
     fn default() -> Self {
         Self {
-            minimum_boundary_edges: 3,
+            minimum_boundary_length: 3.0 * default_hop_length(),
             inland_offset: 2.0 * default_hop_length(),
-            peak_density_divisor: 2,
+            peak_density: 1.0 / (2.0 * default_cell_area()),
             strength_saturation: 1.0,
         }
     }
@@ -129,7 +137,7 @@ pub enum VolcanicArcFieldError {
     Input(StageInputError),
     EmptyMinimumSegment,
     ZeroInlandOffset,
-    ZeroPeakDensityDivisor,
+    InvalidPeakDensity,
     InvalidStrengthSaturation,
 }
 
@@ -138,13 +146,13 @@ impl fmt::Display for VolcanicArcFieldError {
         match self {
             Self::Input(error) => error.fmt(formatter),
             Self::EmptyMinimumSegment => {
-                formatter.write_str("minimum boundary edges must be at least one")
+                formatter.write_str("minimum boundary length must be a finite positive length")
             }
             Self::ZeroInlandOffset => {
                 formatter.write_str("inland offset must be a finite positive length")
             }
-            Self::ZeroPeakDensityDivisor => {
-                formatter.write_str("peak density divisor must be at least one")
+            Self::InvalidPeakDensity => {
+                formatter.write_str("peak density must be a finite positive density per unit area")
             }
             Self::InvalidStrengthSaturation => {
                 formatter.write_str("strength saturation must be finite and greater than zero")
@@ -206,7 +214,8 @@ pub fn derive_volcanic_arc_field(
     let boundary_cell_count = boundary.claims.iter().flatten().count();
     let mut groups = group_boundaries(mesh, plates, crust, &boundary);
     let original_group_count = groups.len();
-    groups.retain(|group| group.boundary_edges.len() >= config.minimum_boundary_edges);
+    let minimum_boundary_edges = hops(mesh.cell_count(), config.minimum_boundary_length);
+    groups.retain(|group| group.boundary_edges.len() >= minimum_boundary_edges);
     let discarded_short_segment_count = original_group_count - groups.len();
 
     let mut discarded_landlocked_segment_count = 0;
@@ -278,14 +287,14 @@ fn validate_inputs(
     boundaries: &BoundaryClassification,
     config: VolcanicArcFieldConfig,
 ) -> Result<(), VolcanicArcFieldError> {
-    if config.minimum_boundary_edges == 0 {
+    if !config.minimum_boundary_length.is_finite() || config.minimum_boundary_length <= 0.0 {
         return Err(VolcanicArcFieldError::EmptyMinimumSegment);
     }
     if !config.inland_offset.is_finite() || config.inland_offset <= 0.0 {
         return Err(VolcanicArcFieldError::ZeroInlandOffset);
     }
-    if config.peak_density_divisor == 0 {
-        return Err(VolcanicArcFieldError::ZeroPeakDensityDivisor);
+    if !config.peak_density.is_finite() || config.peak_density <= 0.0 {
+        return Err(VolcanicArcFieldError::InvalidPeakDensity);
     }
     if !config.strength_saturation.is_finite() || config.strength_saturation <= 0.0 {
         return Err(VolcanicArcFieldError::InvalidStrengthSaturation);
@@ -396,7 +405,13 @@ fn derive_segment(
 ) -> Option<VolcanicArcSegment> {
     let (arc_cells, inland_depth) =
         walk_inland(mesh, plates, crust, boundary_claims, &group, inland_offset)?;
-    let peaks = select_peak_candidates(&arc_cells, config.peak_density_divisor);
+    // A peak count is a density over the arc's real area, so an arc of the
+    // same width and length carries the same volcanoes on any mesh.
+    let arc_area = arc_cells
+        .iter()
+        .map(|arc_cell| mesh.unit_cell_area(arc_cell.cell))
+        .sum::<f32>();
+    let peaks = select_peak_candidates(&arc_cells, arc_area, config.peak_density);
     Some(VolcanicArcSegment {
         overriding_plate: group.overriding_plate,
         kind: group.kind,
@@ -482,8 +497,19 @@ fn walk_inland(
     })
 }
 
-fn select_peak_candidates(arc_cells: &[VolcanicArcCell], density_divisor: usize) -> Vec<usize> {
-    let peak_count = arc_cells.len().div_ceil(density_divisor);
+/// The strongest cells of an arc, one per unit of area the density asks for.
+///
+/// A retained segment always keeps at least one peak, the same guarantee the
+/// count-based rule gave: a segment long enough to survive the minimum-length
+/// filter is an arc, and an arc has a volcano on it. Only that floor is
+/// discrete; everything above it follows the arc's real area, so an arc of the
+/// same width and length carries the same volcanoes on any mesh.
+fn select_peak_candidates(
+    arc_cells: &[VolcanicArcCell],
+    arc_area: f32,
+    peak_density: f32,
+) -> Vec<usize> {
+    let peak_count = ((arc_area * peak_density).round() as usize).max(1);
     let mut peak_cells: Vec<_> = arc_cells.iter().collect();
     peak_cells.sort_unstable_by(|left, right| {
         right
@@ -509,7 +535,7 @@ mod tests {
     use super::*;
     use crate::test_support::{PlateFixture, crust, hemisphere_fixture, plate_birth};
     use procgen_core::fingerprint;
-    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length, mean_cell_area};
     use std::collections::BTreeSet;
 
     /// The arc fixtures split into more plates than the hotspot ones, so that
@@ -518,12 +544,15 @@ mod tests {
         PlateFixture::new(cell_count, 8)
     }
 
-    /// The default config with its inland offset carried to a mesh of
-    /// `cell_count` cells, so the walk reaches the two cells the default means
-    /// rather than the one a mesh this coarse would round it to.
+    /// The default config with its lengths and its peak density carried to a
+    /// mesh of `cell_count` cells, so the walk reaches the two cells and the
+    /// filter the three edges that the defaults mean, rather than the one a
+    /// mesh this coarse would round each to.
     fn reference_config(cell_count: usize) -> VolcanicArcFieldConfig {
         VolcanicArcFieldConfig {
+            minimum_boundary_length: hop_length(cell_count, 3.0),
             inland_offset: hop_length(cell_count, 2.0),
+            peak_density: 1.0 / (2.0 * mean_cell_area(cell_count)),
             ..VolcanicArcFieldConfig::default()
         }
     }
@@ -635,7 +664,7 @@ mod tests {
         // Every segment kept, so the roles below are the grouping's own answer
         // rather than what survived the length filter.
         let config = VolcanicArcFieldConfig {
-            minimum_boundary_edges: 1,
+            minimum_boundary_length: hop_length(mesh.cell_count(), 1.0),
             ..reference_config(mesh.cell_count())
         };
         let cell_birth: Vec<_> = mesh
@@ -832,9 +861,9 @@ mod tests {
             ..
         } = world;
         let config = VolcanicArcFieldConfig {
-            minimum_boundary_edges: 1,
+            minimum_boundary_length: hop_length(1_024, 1.0),
             inland_offset: hop_length(1_024, 3.0),
-            peak_density_divisor: 2,
+            peak_density: 1.0 / (2.0 * mean_cell_area(1_024)),
             strength_saturation: 2.0,
         };
         let field =
@@ -850,12 +879,12 @@ mod tests {
                     .total_cmp(&left.strength)
                     .then_with(|| left.cell.cmp(&right.cell))
             });
-            expected.truncate(
-                segment
-                    .arc_cells
-                    .len()
-                    .div_ceil(config.peak_density_divisor),
-            );
+            let arc_area = segment
+                .arc_cells
+                .iter()
+                .map(|arc_cell| mesh.unit_cell_area(arc_cell.cell))
+                .sum::<f32>();
+            expected.truncate(((arc_area * config.peak_density).round() as usize).max(1));
             let mut expected: Vec<_> = expected.into_iter().map(|arc_cell| arc_cell.cell).collect();
             expected.sort_unstable();
             assert_eq!(segment.peaks, expected);
@@ -899,7 +928,8 @@ mod tests {
             crust(&cell_birth),
             &boundaries,
             VolcanicArcFieldConfig {
-                minimum_boundary_edges: usize::MAX,
+                // Longer than any boundary a sphere can carry.
+                minimum_boundary_length: 1.0e3,
                 ..Default::default()
             },
         )
@@ -925,7 +955,7 @@ mod tests {
         for (config, error) in [
             (
                 VolcanicArcFieldConfig {
-                    minimum_boundary_edges: 0,
+                    minimum_boundary_length: 0.0,
                     ..Default::default()
                 },
                 VolcanicArcFieldError::EmptyMinimumSegment,
@@ -939,10 +969,10 @@ mod tests {
             ),
             (
                 VolcanicArcFieldConfig {
-                    peak_density_divisor: 0,
+                    peak_density: 0.0,
                     ..Default::default()
                 },
-                VolcanicArcFieldError::ZeroPeakDensityDivisor,
+                VolcanicArcFieldError::InvalidPeakDensity,
             ),
             (
                 VolcanicArcFieldConfig {

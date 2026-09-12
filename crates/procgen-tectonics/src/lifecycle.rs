@@ -13,9 +13,10 @@
 //! compaction.
 //!
 //! **Suturing.** Each step counts, for every adjacent pair of plates, the
-//! shared edges that are convergent with continental crust on both sides. A pair at or above `suture_minimum_shared_edges` grows its collision
-//! time by the step; a pair below it starts over, so a pair that stopped
-//! colliding begins its next collision from nothing. At `suture_time` the
+//! shared edges that are convergent with continental crust on both sides. A
+//! pair whose shared front is at least `suture_minimum_shared_length` grows
+//! its collision time by the step; a pair below it starts over, so a pair that
+//! stopped colliding begins its next collision from nothing. At `suture_time` the
 //! plate with more area absorbs the other, taking the area-weighted mean of
 //! the two rotation vectors, of their base speeds, and of their drift
 //! factors, and the absorbed id is left owning nothing.
@@ -35,6 +36,7 @@ use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, PlateEvolutionError, step::EvolvingWorld,
     transport::MaterialScope,
 };
+use procgen_sphere_mesh::{default_hop_length, hops};
 use std::collections::BTreeMap;
 
 /// How often a large continental plate breaks up, how large it has to be, and
@@ -65,10 +67,12 @@ pub struct PlateLifecycleConfig {
     /// Model time a continental pair must stay in collision before it merges.
     /// Infinity never merges anything.
     pub suture_time: f32,
-    /// Shared convergent continental edges a pair needs before its collision
-    /// time grows at all. It is a count rather than a length so that the test
-    /// stays an integer on any mesh.
-    pub suture_minimum_shared_edges: usize,
+    /// Length of shared convergent continental front a pair needs before its
+    /// collision time grows at all, as a model length on the unit sphere. A
+    /// boundary's edges are its length in hops, to within the mesh's
+    /// irregularity, so the stage converts this to an edge count once against
+    /// the mesh and the test itself stays an integer.
+    pub suture_minimum_shared_length: f32,
 }
 
 impl Default for PlateLifecycleConfig {
@@ -104,10 +108,10 @@ impl Default for PlateLifecycleConfig {
             suture_time: 8.0 * crate::field::DEFAULT_STEP_DURATION,
             // About a fifth of a default-mesh plate's perimeter, which is a
             // collision front rather than two plates meeting at a corner. It
-            // is the knob that matters: at eight shared edges a fifteen-step
+            // is the knob that matters: at eight default hops a fifteen-step
             // run at the viewer's settings sutures six times, at sixteen three
             // times, and at twenty once.
-            suture_minimum_shared_edges: 20,
+            suture_minimum_shared_length: 20.0 * default_hop_length(),
         }
     }
 }
@@ -167,6 +171,10 @@ impl EvolvingWorld<'_> {
             return 0;
         }
 
+        // The one conversion: the configured front is a model length, and the
+        // tally below counts edges.
+        let minimum_shared_edges =
+            hops(self.mesh.cell_count(), config.suture_minimum_shared_length);
         let cell_crust = self.cell_crust();
         let mut shared: BTreeMap<(usize, usize), usize> = BTreeMap::new();
         for (edge_index, edge) in self.mesh.edges.iter().enumerate() {
@@ -194,7 +202,7 @@ impl EvolvingWorld<'_> {
         // colliding this step starts its next collision from nothing.
         self.collisions = shared
             .iter()
-            .filter(|&(_, &count)| count >= config.suture_minimum_shared_edges)
+            .filter(|&(_, &count)| count >= minimum_shared_edges)
             .map(|(&pair, _)| {
                 let carried = self.collisions.get(&pair).copied().unwrap_or(0.0);
                 (pair, carried + self.config.step_duration)

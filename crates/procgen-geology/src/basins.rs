@@ -1,5 +1,5 @@
 use crate::field::GeologyInputError;
-use procgen_sphere_mesh::{SphereMesh, connected_components};
+use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, SphereMesh, UNIT_SPHERE_AREA, connected_components};
 use procgen_tectonics::{CellCrust, CrustClass, ElevationField, StageInputError};
 use std::fmt;
 
@@ -8,7 +8,10 @@ pub struct SedimentaryBasinFieldConfig {
     /// Candidate continental land must lie strictly below this normalized
     /// elevation, which cannot sit below the elevation field's own sea level.
     pub maximum_elevation: f32,
-    pub minimum_cell_count: usize,
+    /// Area a component must cover before it can be a basin, as a fraction of
+    /// the sphere. The default is what three cells of the default mesh cover,
+    /// which is the smallest thing worth calling a basin rather than a dip.
+    pub minimum_area_fraction: f32,
     /// Maximum fraction of external component-neighbor incidences that may face ocean.
     pub maximum_ocean_perimeter_fraction: f32,
 }
@@ -17,7 +20,7 @@ impl Default for SedimentaryBasinFieldConfig {
     fn default() -> Self {
         Self {
             maximum_elevation: 0.61,
-            minimum_cell_count: 3,
+            minimum_area_fraction: 3.0 / DEFAULT_CELL_COUNT as f32,
             maximum_ocean_perimeter_fraction: 0.5,
         }
     }
@@ -28,6 +31,10 @@ pub struct SedimentaryBasin {
     /// Lowest-indexed cell in the connected component.
     pub root_cell: usize,
     pub cell_count: usize,
+    /// Area the component covers on the unit sphere, which is what the
+    /// minimum-size test reads. A cell count would make a basin on a fine mesh
+    /// pass a test the same ground fails on a coarse one.
+    pub area: f32,
     pub ocean_perimeter_fraction: f32,
     pub minimum_elevation: f32,
 }
@@ -70,7 +77,7 @@ impl SedimentaryBasinField {
 pub enum SedimentaryBasinFieldError {
     Input(StageInputError),
     InvalidMaximumElevation,
-    EmptyMinimumBasin,
+    InvalidMinimumArea,
     InvalidOceanPerimeterFraction,
 }
 
@@ -80,9 +87,9 @@ impl fmt::Display for SedimentaryBasinFieldError {
             Self::Input(error) => error.fmt(formatter),
             Self::InvalidMaximumElevation => formatter
                 .write_str("basin maximum elevation must be finite and between sea level and 1"),
-            Self::EmptyMinimumBasin => {
-                formatter.write_str("minimum basin cell count must be at least one")
-            }
+            Self::InvalidMinimumArea => formatter.write_str(
+                "minimum basin area must be a fraction of the sphere between zero and one",
+            ),
             Self::InvalidOceanPerimeterFraction => formatter
                 .write_str("maximum ocean perimeter fraction must be finite and between 0 and 1"),
         }
@@ -132,9 +139,10 @@ pub fn derive_sedimentary_basin_field(
     let mut rejected_small_component_count = 0;
     let mut rejected_ocean_exposed_component_count = 0;
 
+    let minimum_area = config.minimum_area_fraction * UNIT_SPHERE_AREA;
     for component in components {
         let basin = summarize_component(mesh, &candidates, elevation, &component);
-        match reject_reason(&basin, config) {
+        match reject_reason(&basin, minimum_area, config) {
             Some(Rejection::TooSmall) => rejected_small_component_count += 1,
             Some(Rejection::OceanExposed) => rejected_ocean_exposed_component_count += 1,
             None => {
@@ -173,9 +181,10 @@ enum Rejection {
 
 fn reject_reason(
     basin: &SedimentaryBasin,
+    minimum_area: f32,
     config: SedimentaryBasinFieldConfig,
 ) -> Option<Rejection> {
-    if basin.cell_count < config.minimum_cell_count {
+    if basin.area < minimum_area {
         Some(Rejection::TooSmall)
     } else if basin.ocean_perimeter_fraction > config.maximum_ocean_perimeter_fraction {
         Some(Rejection::OceanExposed)
@@ -193,7 +202,9 @@ fn summarize_component(
     let mut perimeter_count = 0;
     let mut ocean_perimeter_count = 0;
     let mut minimum_elevation = f32::INFINITY;
+    let mut area = 0.0;
     for &cell in cells {
+        area += mesh.unit_cell_area(cell);
         minimum_elevation = minimum_elevation.min(elevation.cell_elevations[cell]);
         for corner in mesh.cell_corners(cell) {
             let neighbor = corner.neighbor;
@@ -212,6 +223,7 @@ fn summarize_component(
     SedimentaryBasin {
         root_cell: cells[0],
         cell_count: cells.len(),
+        area,
         ocean_perimeter_fraction,
         minimum_elevation,
     }
@@ -229,8 +241,13 @@ fn validate_inputs(
     {
         return Err(SedimentaryBasinFieldError::InvalidMaximumElevation);
     }
-    if config.minimum_cell_count == 0 {
-        return Err(SedimentaryBasinFieldError::EmptyMinimumBasin);
+    // Zero is a legal minimum and means every component qualifies, the way a
+    // zero width switches off a taper.
+    if !config.minimum_area_fraction.is_finite()
+        || config.minimum_area_fraction < 0.0
+        || config.minimum_area_fraction > 1.0
+    {
+        return Err(SedimentaryBasinFieldError::InvalidMinimumArea);
     }
     if !config.maximum_ocean_perimeter_fraction.is_finite()
         || !(0.0..=1.0).contains(&config.maximum_ocean_perimeter_fraction)
@@ -302,7 +319,12 @@ mod tests {
         }
         let original_values = values.clone();
         let elevation = elevation(&values);
-        let config = SedimentaryBasinFieldConfig::default();
+        let config = SedimentaryBasinFieldConfig {
+            // The three cells the default means, on a mesh this much coarser
+            // than the one it was set against.
+            minimum_area_fraction: 3.0 / 256.0,
+            ..SedimentaryBasinFieldConfig::default()
+        };
         let first = derive_sedimentary_basin_field(&mesh, crust, elevation, config).unwrap();
 
         assert_eq!(
@@ -340,7 +362,8 @@ mod tests {
             enclosed[cell] = 0.55;
         }
         let config = SedimentaryBasinFieldConfig {
-            minimum_cell_count: 5,
+            // Five cells of this mesh, against a component of four.
+            minimum_area_fraction: 5.0 / 64.0,
             ..Default::default()
         };
         let small =
@@ -358,7 +381,7 @@ mod tests {
             crust,
             elevation(&exposed),
             SedimentaryBasinFieldConfig {
-                minimum_cell_count: 1,
+                minimum_area_fraction: 0.0,
                 maximum_ocean_perimeter_fraction: 0.5,
                 ..Default::default()
             },
@@ -396,7 +419,7 @@ mod tests {
             crust,
             elevation(&values),
             SedimentaryBasinFieldConfig {
-                minimum_cell_count: 1,
+                minimum_area_fraction: 0.0,
                 ..Default::default()
             },
         )
@@ -420,7 +443,7 @@ mod tests {
         let (mesh, mut cell_birth) = fixture(32);
         let cell = 0;
         let config = SedimentaryBasinFieldConfig {
-            minimum_cell_count: 1,
+            minimum_area_fraction: 0.0,
             maximum_ocean_perimeter_fraction: 1.0,
             ..Default::default()
         };
@@ -484,10 +507,10 @@ mod tests {
             ),
             (
                 SedimentaryBasinFieldConfig {
-                    minimum_cell_count: 0,
+                    minimum_area_fraction: -1.0,
                     ..Default::default()
                 },
-                SedimentaryBasinFieldError::EmptyMinimumBasin,
+                SedimentaryBasinFieldError::InvalidMinimumArea,
             ),
             (
                 SedimentaryBasinFieldConfig {
@@ -533,30 +556,27 @@ mod tests {
         let basin = SedimentaryBasin {
             root_cell: 0,
             cell_count: 1,
+            area: 1.0,
             ocean_perimeter_fraction: 1.0,
             minimum_elevation: 0.55,
         };
         let config = SedimentaryBasinFieldConfig {
-            minimum_cell_count: 2,
             maximum_ocean_perimeter_fraction: 0.5,
             ..Default::default()
         };
-        assert_eq!(reject_reason(&basin, config), Some(Rejection::TooSmall));
         assert_eq!(
-            reject_reason(
-                &basin,
-                SedimentaryBasinFieldConfig {
-                    minimum_cell_count: 1,
-                    ..config
-                }
-            ),
+            reject_reason(&basin, 2.0, config),
+            Some(Rejection::TooSmall)
+        );
+        assert_eq!(
+            reject_reason(&basin, 1.0, config),
             Some(Rejection::OceanExposed)
         );
         assert_eq!(
             reject_reason(
                 &basin,
+                1.0,
                 SedimentaryBasinFieldConfig {
-                    minimum_cell_count: 1,
                     maximum_ocean_perimeter_fraction: 1.0,
                     ..config
                 }

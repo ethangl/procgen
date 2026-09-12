@@ -187,6 +187,7 @@ mod tests {
         test_support::{empty_basins, empty_cratons, empty_hotspots, empty_volcanic_arcs, mesh},
     };
     use procgen_core::quantized_fingerprint;
+    use procgen_sphere_mesh::mean_cell_area;
     use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
@@ -273,6 +274,7 @@ mod tests {
         fixture.basins.basins = vec![SedimentaryBasin {
             root_cell: 3,
             cell_count: 5,
+            area: 5.0 * mean_cell_area(8),
             ocean_perimeter_fraction: 0.0,
             minimum_elevation: 0.6,
         }];
@@ -369,6 +371,7 @@ mod tests {
         fixture.basins.basins = vec![SedimentaryBasin {
             root_cell: 0,
             cell_count: 2,
+            area: 2.0 * mean_cell_area(4),
             ocean_perimeter_fraction: 0.0,
             minimum_elevation: 0.4,
         }];

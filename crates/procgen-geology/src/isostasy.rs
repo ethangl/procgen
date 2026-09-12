@@ -196,7 +196,7 @@ mod tests {
         test_support::{empty_basins, empty_cratons, mesh},
     };
     use procgen_core::quantized_fingerprint;
-    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length, mean_cell_area};
     use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
@@ -383,6 +383,7 @@ mod tests {
         fixture.basins.basins.push(SedimentaryBasin {
             root_cell: 1,
             cell_count: 1,
+            area: mean_cell_area(8),
             ocean_perimeter_fraction: 0.0,
             minimum_elevation: 0.42,
         });

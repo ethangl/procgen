@@ -17,33 +17,39 @@ use crate::{
     PlateEvolution, PlateKinematicsConfig, PlateKinematicsError, PlatePartition,
     motion::validate_config as validate_motion_config, stage::StageInputError,
 };
-use procgen_sphere_mesh::{SphereMesh, mean_cell_width, multi_source_distances};
+use procgen_sphere_mesh::{
+    SphereMesh, default_hop_length, mean_cell_width, multi_source_distances,
+};
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrustBirthPriorConfig {
-    /// Hop age before step zero given to every cell on an oceanic plate with
-    /// no divergent boundary of its own.
+    /// Age before step zero given to every cell on an oceanic plate with no
+    /// divergent boundary of its own.
     ///
-    /// It is still a hop count, and it is the one field left that should not
-    /// be. The hop distances around it are geometry, but this is the age a
-    /// floor is born with, which is a fact about the world: a finer mesh
-    /// shortens the hop duration and so makes that floor younger. It becomes
-    /// model time in the next slice, as eight default hops over the unit
-    /// speed.
-    pub ridge_less_age: usize,
+    /// It is a model time, like every other age the pipeline carries. The hop
+    /// distances the walk measures are geometry and scale with the mesh, but
+    /// this is the age a floor is born with, which is a fact about the world:
+    /// as a hop count it made that floor younger on a finer mesh. The default
+    /// is what eight hops of the default mesh stand for at the unit speed,
+    /// which is what it was.
+    pub ridge_less_age: f32,
 }
 
 impl Default for CrustBirthPriorConfig {
     fn default() -> Self {
-        Self { ridge_less_age: 8 }
+        Self {
+            ridge_less_age: 8.0 * default_hop_length(),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CrustBirthPriorDiagnostics {
-    /// Summary of the hop ages the prior turned into birth times.
-    pub hops: FieldSummary,
+    /// Summary of the ages the prior turned into birth times, in model time.
+    /// The walk measures hops and the fallback is a time, so this is stated in
+    /// the unit both end up in.
+    pub age: FieldSummary,
     pub oceanic_cell_count: usize,
     pub ridge_cell_count: usize,
     pub ridge_plate_count: usize,
@@ -166,32 +172,35 @@ pub fn derive_crust_birth_prior(
             ridge_cells.push(cell);
         }
     }
-    let mut cell_hops = multi_source_distances(mesh, &ridge_cells, |cell, neighbor| {
+    let cell_hops = multi_source_distances(mesh, &ridge_cells, |cell, neighbor| {
         partition.cell_plates[cell] == partition.cell_plates[neighbor] && oceanic(neighbor)
     });
     let ridge_cell_count = cell_hops.iter().filter(|&&hops| hops == Some(0)).count();
 
+    // The walk's hops become a time here, at the one relation the prior
+    // states; the fallback is already one.
+    let hop = hop_duration(mesh, kinematics);
     let mut oceanic_plates = vec![false; partition.plate_count];
     let mut fallback_cell_count = 0;
-    for (cell, hops) in cell_hops.iter_mut().enumerate() {
+    let mut cell_ages = vec![None; mesh.cell_count()];
+    for (cell, hops) in cell_hops.iter().enumerate() {
         if !oceanic(cell) {
             continue;
         }
         oceanic_plates[partition.cell_plates[cell]] = true;
-        if hops.is_none() {
-            *hops = Some(config.ridge_less_age);
-            fallback_cell_count += 1;
-        }
+        cell_ages[cell] = Some(match hops {
+            Some(hops) => *hops as f32 * hop,
+            None => {
+                fallback_cell_count += 1;
+                config.ridge_less_age
+            }
+        });
     }
-    let oceanic_hops: Vec<_> = cell_hops
-        .iter()
-        .flatten()
-        .map(|&hops| hops as f32)
-        .collect();
+    let oceanic_ages: Vec<_> = cell_ages.iter().flatten().copied().collect();
     let ridge_plate_count = ridge_plates.iter().filter(|&&has_ridge| has_ridge).count();
     let diagnostics = CrustBirthPriorDiagnostics {
-        hops: FieldSummary::from_values(&oceanic_hops),
-        oceanic_cell_count: oceanic_hops.len(),
+        age: FieldSummary::from_values(&oceanic_ages),
+        oceanic_cell_count: oceanic_ages.len(),
         ridge_cell_count,
         ridge_plate_count,
         ridge_less_plate_count: oceanic_plates.iter().filter(|&&oceanic| oceanic).count()
@@ -199,12 +208,8 @@ pub fn derive_crust_birth_prior(
         fallback_cell_count,
     };
 
-    let hop = hop_duration(mesh, kinematics);
     Ok(CrustBirthPrior {
-        cell_birth: cell_hops
-            .iter()
-            .map(|hops| hops.map(|hops| -(hops as f32) * hop))
-            .collect(),
+        cell_birth: cell_ages.iter().map(|age| age.map(|age| -age)).collect(),
         diagnostics,
     })
 }
@@ -275,7 +280,8 @@ mod tests {
     use crate::test_support::{
         NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint, empty_boundaries, evolution_fixture,
         final_state_fixture, plate_crust, reference_base_elevation_config,
-        reference_evolution_config, reference_flow_field, reference_partition, still_world_fixture,
+        reference_evolution_config, reference_flow_field, reference_partition,
+        scaled_birth_prior_config, still_world_fixture,
     };
     use crate::{PlateEvolutionConfig, derive_base_elevation};
 
@@ -297,7 +303,7 @@ mod tests {
     fn the_prior_is_deterministic_and_has_stable_aggregates() {
         let (mesh, partition) = reference_partition();
         let fixture = evolution_fixture();
-        let config = CrustBirthPriorConfig::default();
+        let config = scaled_birth_prior_config(mesh.cell_count());
         let first = derive_crust_birth_prior(
             &mesh,
             &partition,
@@ -324,13 +330,18 @@ mod tests {
         // The prior reads the fixture's boundaries, which the crust factor
         // alone now scales the motion behind: every plate keeps a ridge of its
         // own where one used to have none.
+        // The world the prior describes is unchanged: the walk still reaches
+        // nine hops and averages 1.7781065 of them over the same 338 cells.
+        // What moved is the unit. The summary is in model time now, because
+        // the fallback age is a time and no longer a hop count, so every value
+        // is what it was times this mesh's hop duration.
         assert_eq!(
             first.diagnostics,
             CrustBirthPriorDiagnostics {
-                hops: FieldSummary {
+                age: FieldSummary {
                     minimum: 0.0,
-                    maximum: 9.0,
-                    mean: 1.778_106_5,
+                    maximum: 9.0 * unit_hop(&mesh),
+                    mean: 0.278_565_76,
                 },
                 oceanic_cell_count: 338,
                 ridge_cell_count: 102,
@@ -368,14 +379,16 @@ mod tests {
             &crust,
             unit_speed_motion(),
             &empty_boundaries(&mesh),
-            CrustBirthPriorConfig { ridge_less_age: 13 },
+            CrustBirthPriorConfig {
+                ridge_less_age: 13.0 * unit_hop(&mesh),
+            },
         )
         .unwrap();
 
         for (cell, &plate) in partition.cell_plates.iter().enumerate() {
             assert_eq!(
                 prior.cell_birth[cell],
-                (plate != 0).then_some(-13.0 * unit_hop(&mesh)),
+                (plate != 0).then_some(-(13.0 * unit_hop(&mesh))),
                 "cell {cell} on plate {plate}"
             );
         }
@@ -436,7 +449,9 @@ mod tests {
             &crust,
             unit_speed_motion(),
             &boundaries,
-            CrustBirthPriorConfig { ridge_less_age: 23 },
+            CrustBirthPriorConfig {
+                ridge_less_age: 23.0 * unit_hop(&mesh),
+            },
         )
         .unwrap();
 
@@ -452,7 +467,7 @@ mod tests {
         assert_eq!(prior.cell_birth[same_plate_neighbor], Some(-hop));
         for (cell, &plate) in partition.cell_plates.iter().enumerate() {
             if !ridge_plates.contains(&plate) {
-                assert_eq!(prior.cell_birth[cell], Some(-23.0 * hop));
+                assert_eq!(prior.cell_birth[cell], Some(-(23.0 * hop)));
             }
         }
         assert_eq!(prior.diagnostics.ridge_plate_count, 2);

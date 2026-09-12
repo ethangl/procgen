@@ -2,7 +2,7 @@ use super::super::{drag_value, hop_range, length_slider, section, slider};
 use crate::model::{TectonicsSettings, WORLD_RADIUS};
 use bevy_egui::egui;
 use procgen_sphere::FibonacciConfig;
-use procgen_sphere_mesh::mean_cell_width;
+use procgen_sphere_mesh::{default_hop_length, mean_cell_width};
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
@@ -60,10 +60,8 @@ const MODEL_TIME_RANGE: std::ops::RangeInclusive<f32> =
     DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * *EVOLUTION_STEP_RANGE.end() as f32;
 // Zero merges any pair of touching continents; the top is a collision front
 // spanning a good fraction of a default-mesh plate's perimeter.
-const SUTURE_SHARED_EDGE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
-// A hop count, not a time: the prior walks the mesh and turns hops into model
-// time itself.
-const RIDGE_LESS_HOP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
+const SUTURE_SHARED_HOPS: std::ops::RangeInclusive<f32> = 0.0..=64.0;
+
 // Lengths, in hops of the default mesh: the units the old hop counts were
 // chosen in.
 const DEFORMATION_DEPTH_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
@@ -351,22 +349,23 @@ fn lifecycle_controls(
         0.0..=kinematics.maximum_angular_speed,
     );
     slider(ui, "Suture time", &mut config.suture_time, MODEL_TIME_RANGE);
-    drag_value(
+    length_slider(
         ui,
-        "Suture edges",
-        &mut config.suture_minimum_shared_edges,
-        SUTURE_SHARED_EDGE_RANGE,
-        1.0,
+        "Suture front",
+        &mut config.suture_minimum_shared_length,
+        hop_range(SUTURE_SHARED_HOPS),
     );
 }
 
 fn birth_prior_controls(ui: &mut egui::Ui, config: &mut CrustBirthPriorConfig) {
-    drag_value(
+    slider(
         ui,
-        "Ridge-less hops",
+        "Ridge-less age",
         &mut config.ridge_less_age,
-        RIDGE_LESS_HOP_RANGE,
-        1.0,
+        // Model time, like every other age. One hop of the default mesh at the
+        // unit speed is what a hop of the prior's walk stands for, so the
+        // range is the hop counts this held before it was a time.
+        0.0..=256.0 * default_hop_length(),
     );
 }
 

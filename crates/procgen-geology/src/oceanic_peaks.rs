@@ -6,7 +6,7 @@ use procgen_core::{
     RandomStream, Vec3,
     random_streams::{OCEANIC_PEAK_POSITION, OCEANIC_PEAK_PRESENCE},
 };
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, default_cell_area};
 use procgen_tectonics::{DEFAULT_STEP_DURATION, FieldSummary, SeafloorAge, StageInputError};
 use std::fmt;
 
@@ -20,9 +20,12 @@ pub struct OceanicPeakFieldConfig {
     /// It is a time, so the window it opens is the same stretch of a floor's
     /// life whatever step an evolution ran at.
     pub maximum_young_age: f32,
-    /// Maximum per-cell seamount candidate density.
+    /// Maximum seamount candidate density, per cell of the default mesh. A
+    /// cell of another size carries the same peaks per unit area, so it draws
+    /// in proportion to its own area.
     pub seamount_density_scale: f32,
-    /// Maximum per-cell abyssal-hill candidate density.
+    /// Maximum abyssal-hill candidate density, per cell of the default mesh,
+    /// read the same way as `seamount_density_scale`.
     pub abyssal_hill_density_scale: f32,
     /// Largest convex offset from the cell center toward a pair of corners.
     pub maximum_position_offset: f32,
@@ -201,7 +204,13 @@ pub fn derive_oceanic_peak_field(
         .filter_map(|cell| {
             let kind = cell_kinds[cell]?;
             let strength = cell_densities[cell];
-            (presence.unit_f32(cell as u64, 0) < strength).then(|| OceanicPeak {
+            // A density is per unit area, so a cell holds a peak in proportion
+            // to the area it covers: on a mesh twice as fine each cell draws
+            // half as often and the floor carries the same seamounts. The
+            // densities are stated against one cell of the default mesh, so a
+            // cell of that size draws exactly its own density.
+            let chance = strength * mesh.unit_cell_area(cell) / default_cell_area();
+            (presence.unit_f32(cell as u64, 0) < chance).then(|| OceanicPeak {
                 cell,
                 kind,
                 position: position_in_cell(mesh, cell, positions, config.maximum_position_offset),
@@ -306,14 +315,35 @@ fn position_in_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::density_per_cell;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
     use procgen_sphere_mesh::build_sphere_mesh;
 
+    /// The fixture mesh's cell count. Its cells are 256 times wider than the
+    /// default mesh's, so the densities below are stated against them.
+    const CELL_COUNT: usize = 256;
+
+    /// The default densities at this fixture's resolution: a cell here draws
+    /// as often as a cell of the default mesh does at the crate's defaults.
+    /// Stated per cell, because a mesh this coarse cannot express the peaks
+    /// per unit area the defaults ask for.
+    fn reference_config(seed: u64) -> OceanicPeakFieldConfig {
+        let default = OceanicPeakFieldConfig::new(seed);
+        OceanicPeakFieldConfig {
+            seamount_density_scale: density_per_cell(CELL_COUNT, default.seamount_density_scale),
+            abyssal_hill_density_scale: density_per_cell(
+                CELL_COUNT,
+                default.abyssal_hill_density_scale,
+            ),
+            ..default
+        }
+    }
+
     fn mesh() -> SphereMesh {
         build_sphere_mesh(
             fibonacci_sphere(FibonacciConfig {
-                count: 256,
+                count: CELL_COUNT,
                 jitter: 0.5,
                 seed: 7,
             })
@@ -352,7 +382,7 @@ mod tests {
     fn field_is_deterministic_seeded_sparse_and_position_bounded() {
         let mesh = mesh();
         let (hotspots, ages) = inputs(&mesh);
-        let config = OceanicPeakFieldConfig::new(19);
+        let config = reference_config(19);
         let first = derive_oceanic_peak_field(&mesh, &hotspots, &ages, config).unwrap();
 
         assert_eq!(
@@ -392,8 +422,7 @@ mod tests {
         let mesh = mesh();
         let (hotspots, ages) = inputs(&mesh);
         let field =
-            derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(19))
-                .unwrap();
+            derive_oceanic_peak_field(&mesh, &hotspots, &ages, reference_config(19)).unwrap();
         let values = field.peaks.iter().flat_map(|peak| {
             [
                 peak.cell as u64,
@@ -404,10 +433,13 @@ mod tests {
             ]
         });
 
-        // Moved once with the young-age window becoming model time: the
-        // fixture's synthetic ages changed unit with it, and the hill ramp
-        // became the continuous form of the integer one it replaced.
-        assert_eq!(fingerprint(values), 3_235_462_980_219_206_461);
+        // Moved a second time when the presence draw became a density per
+        // unit area. A cell of exactly the mean area draws what it drew; every
+        // other cell shifts by its own area over the mean, which over this
+        // fixture's 201 candidates loses four peaks and gains five. That is
+        // the whole of the change, and it is what makes a floor carry the same
+        // seamounts per square kilometre on any mesh.
+        assert_eq!(fingerprint(values), 11_561_668_630_552_071_035);
     }
 
     #[test]
@@ -429,7 +461,7 @@ mod tests {
             maximum_young_age: 1.0,
             seamount_density_scale: 0.75,
             abyssal_hill_density_scale: 0.75,
-            ..OceanicPeakFieldConfig::new(7)
+            ..reference_config(7)
         };
         let field = derive_oceanic_peak_field(&mesh, &hotspots, &ages, config).unwrap();
 
@@ -464,7 +496,7 @@ mod tests {
             seamount_density_scale: 1.0,
             abyssal_hill_density_scale: 1.0,
             maximum_seamount_height: 0.5,
-            ..OceanicPeakFieldConfig::new(1)
+            ..reference_config(1)
         };
         let field = derive_oceanic_peak_field(&mesh, &hotspots, &ages, config).unwrap();
 
@@ -481,8 +513,7 @@ mod tests {
         hotspots.cell_intensities.fill(0.0);
         ages.cell_ages.fill(None);
         let empty =
-            derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(7))
-                .unwrap();
+            derive_oceanic_peak_field(&mesh, &hotspots, &ages, reference_config(7)).unwrap();
         assert!(empty.peaks.is_empty());
         assert!(empty.cell_kinds.iter().all(Option::is_none));
         assert_eq!(empty.diagnostics, OceanicPeakDiagnostics::default());
@@ -494,21 +525,21 @@ mod tests {
                 &ages,
                 OceanicPeakFieldConfig {
                     maximum_young_age: 0.0,
-                    ..OceanicPeakFieldConfig::new(7)
+                    ..reference_config(7)
                 }
             ),
             Err(OceanicPeakFieldError::EmptyYoungAgeRange)
         );
         hotspots.cell_intensities.pop();
         assert_eq!(
-            derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(7)),
+            derive_oceanic_peak_field(&mesh, &hotspots, &ages, reference_config(7)),
             Err(OceanicPeakFieldError::Geology(GeologyInputError::Hotspots))
         );
 
         let (hotspots, mut ages) = inputs(&mesh);
         ages.cell_ages.pop();
         assert_eq!(
-            derive_oceanic_peak_field(&mesh, &hotspots, &ages, OceanicPeakFieldConfig::new(7)),
+            derive_oceanic_peak_field(&mesh, &hotspots, &ages, reference_config(7)),
             Err(OceanicPeakFieldError::Input(StageInputError::SeafloorAge))
         );
     }

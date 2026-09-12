@@ -1,4 +1,7 @@
-use super::super::{drag_value, hop_range, length_slider, section, slider};
+use super::super::{
+    area_slider, cell_range, density_slider, drag_value, hop_range, length_slider, per_cell_range,
+    section, slider,
+};
 use crate::model::{GeologySettings, WORLD_RADIUS};
 use bevy_egui::egui;
 use procgen_geology::{
@@ -18,11 +21,13 @@ const HOTSPOT_PROVINCE_RADIUS_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 // any run the tectonics phase allows leaves ocean floor young for.
 const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<f32> =
     DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * 64.0;
-const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+const ARC_SEGMENT_HOPS: std::ops::RangeInclusive<f32> = 1.0..=64.0;
 const ARC_INLAND_OFFSET_HOPS: std::ops::RangeInclusive<f32> = 1.0..=32.0;
-const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
+// One arc peak per this many cells of the default mesh.
+const ARC_PEAK_CELLS: std::ops::RangeInclusive<f32> = 1.0..=32.0;
 const BOUNDARY_DISTANCE_HOPS: std::ops::RangeInclusive<f32> = 0.0..=64.0;
-const BASIN_CELL_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=256;
+// A basin's minimum size, in cells of the default mesh.
+const BASIN_CELLS: std::ops::RangeInclusive<f32> = 0.0..=256.0;
 
 /// Plate kinematics come from the tectonics phase, which bounds the strengths
 /// arc segments can reach, and so does the sea-level datum a basin's maximum
@@ -143,12 +148,11 @@ fn volcanic_arc_controls(
     config: &mut VolcanicArcFieldConfig,
     kinematics: PlateKinematicsConfig,
 ) {
-    drag_value(
+    length_slider(
         ui,
-        "Minimum boundary edges",
-        &mut config.minimum_boundary_edges,
-        ARC_SEGMENT_EDGE_RANGE,
-        1.0,
+        "Minimum boundary length",
+        &mut config.minimum_boundary_length,
+        hop_range(ARC_SEGMENT_HOPS),
     );
     length_slider(
         ui,
@@ -156,12 +160,11 @@ fn volcanic_arc_controls(
         &mut config.inland_offset,
         hop_range(ARC_INLAND_OFFSET_HOPS),
     );
-    drag_value(
+    density_slider(
         ui,
-        "Peak density divisor",
-        &mut config.peak_density_divisor,
-        ARC_PEAK_DENSITY_DIVISOR_RANGE,
-        1.0,
+        "Peak density",
+        &mut config.peak_density,
+        per_cell_range(ARC_PEAK_CELLS),
     );
     slider(
         ui,
@@ -193,12 +196,11 @@ fn basin_controls(ui: &mut egui::Ui, config: &mut SedimentaryBasinFieldConfig, s
         &mut config.maximum_elevation,
         sea_level..=1.0,
     );
-    drag_value(
+    area_slider(
         ui,
-        "Minimum cells",
-        &mut config.minimum_cell_count,
-        BASIN_CELL_COUNT_RANGE,
-        1.0,
+        "Minimum area",
+        &mut config.minimum_area_fraction,
+        cell_range(BASIN_CELLS),
     );
     slider(
         ui,

@@ -322,7 +322,7 @@ mod tests {
         VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcSegment,
     };
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::build_sphere_mesh;
+    use procgen_sphere_mesh::{build_sphere_mesh, mean_cell_area};
     use procgen_tectonics::{SeafloorAgeDiagnostics, StageInputError};
 
     struct Fixture {
@@ -500,6 +500,7 @@ mod tests {
         basin.basins.basins.push(SedimentaryBasin {
             root_cell: 0,
             cell_count: 1,
+            area: mean_cell_area(16),
             ocean_perimeter_fraction: 0.0,
             minimum_elevation: 0.5,
         });
