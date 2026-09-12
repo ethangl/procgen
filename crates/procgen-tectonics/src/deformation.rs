@@ -110,7 +110,6 @@ impl BoundaryDeformationConfig {
 /// `config` must have passed [`validate_config`]; evolution runs that once
 /// rather than once per step.
 pub(crate) fn boundary_deformation_increment(
-
     mesh: &SphereMesh,
     partition: &PlatePartition,
     crust: CellCrust<'_>,
@@ -271,17 +270,15 @@ mod tests {
     use super::*;
     use crate::test_support::{
         EvolutionFixture, NO_EROSION, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture,
-        empty_boundaries,
-
-        final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
-        scaled_deformation, two_plate_boundary_partition, two_plate_fixture,
+        empty_boundaries, final_state_fixture, mesh as test_mesh, plate_cell_birth,
+        plate_cell_birth_times, scaled_deformation, two_plate_boundary_partition,
+        two_plate_fixture,
     };
     use crate::{
         BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig,
         step::EvolvingWorld,
     };
     use procgen_sphere_mesh::{hop_length, hops};
-
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
@@ -326,7 +323,6 @@ mod tests {
             *total = config.accumulate(*total, offset, step_duration);
         }
         source_cell_count
-
     }
 
     #[test]
@@ -360,8 +356,16 @@ mod tests {
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
+        // A clamp the quarter-profile steps below reach on the fifth of them,
+        // so the loop sees both the increments and the bound. It is stated
+        // against the profile rather than as a number, so that retuning the
+        // profile cannot quietly stop this reaching the clamp at all.
+        const SCALE: f32 = 0.25;
+        const STEPS_TO_CLAMP: f32 = 5.0;
         let config = BoundaryDeformationConfig {
-            maximum_magnitude: 0.5,
+            maximum_magnitude: BoundaryDeformationConfig::default().convergent.offset
+                * SCALE
+                * STEPS_TO_CLAMP,
             // The increments and the clamp are what this pins, so the running
             // total is their sum and nothing takes anything away from it.
             erosion_time: NO_EROSION,
@@ -371,19 +375,26 @@ mod tests {
 
         assert_eq!(whole[edge.cells[0]], config.convergent.offset);
 
+        let increment = config.convergent.offset * SCALE;
         let mut accumulated = vec![0.0; mesh.cell_count()];
-        for expected in [0.1, 0.2, 0.3, 0.4, 0.5, 0.5] {
+        for step in 1..=6 {
+            let expected = (step as f32 * increment).min(config.maximum_magnitude);
+
             let source_cell_count = accumulate(
                 &mesh,
                 &partition,
                 &cell_birth,
                 &boundaries,
                 &config,
-                0.25,
+                SCALE,
                 &mut accumulated,
             );
             assert_eq!(source_cell_count, 2);
-            assert!((accumulated[edge.cells[0]] - expected).abs() < 1.0e-6);
+            assert!(
+                (accumulated[edge.cells[0]] - expected).abs() < 1.0e-6,
+                "step {step}: {} against {expected}",
+                accumulated[edge.cells[0]]
+            );
         }
         assert!(
             accumulated
@@ -812,7 +823,10 @@ mod tests {
             assert_eq!(world.deform(&boundaries), 0);
             expected *= kept;
             for particle in &world.particles {
-                assert_eq!(particle.deformation, expected, "particle after {step} steps");
+                assert_eq!(
+                    particle.deformation, expected,
+                    "particle after {step} steps"
+                );
             }
         }
         assert!(expected < 0.05, "six steps must decay most of the relief");
@@ -855,7 +869,6 @@ mod tests {
         // collision offset here, and the clamp above is out of its reach.
         let settled = increment * config.deformation.erosion_time / config.step_duration;
 
-
         let mut previous = 0.0;
         let mut previous_rise = f32::INFINITY;
         for step_count in 1..=8 {
@@ -882,7 +895,6 @@ mod tests {
 
     #[test]
     fn deformation_reaches_no_further_than_the_profiles_propagate() {
-
         let depth = 2;
         let (fixture, config) = static_boundary_fixture(4, 1.0);
         let cell_count = fixture.mesh.cell_count();

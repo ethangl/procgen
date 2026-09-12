@@ -19,7 +19,12 @@ them.
 
 Every measurement in this document down to "Run length" was taken at a viewer
 default of 15 evolution steps; that section moves the default to 60, and every
-measurement from it on names its own step count in the table caption.
+measurement from it on names its own step count in the table caption. Every
+measurement down to "Relief decay" was also taken without a sink under
+deformation, and every one down to "Crustal thickness" with a collision
+stacking crust rather than merging it; each of those sections supersedes the
+magnitudes before it.
+
 
 All five slices — coherent kinematics, displacement-proportional migration,
 accumulated deformation, drifting Euler poles, and plate lifecycle — have
@@ -110,9 +115,20 @@ for that one.
   16,872 to 16,808 and tectonic elevation's maximum from 0.900 to 0.934. No
   integer fingerprint downstream moved; the geology pins read synthetic
   elevation fields rather than an evolved one.
+- That carried field decays. Every step multiplies what a parcel holds by
+  `1 - step_duration / erosion_time` before the step's boundaries add to it,
+  so relief with no boundary under it falls toward zero and relief under one
+  rises to where uplift and decay balance. `erosion_time` defaults to thirty
+  default steps; infinity turns the sink off, the same convention
+  `suture_time` uses. See "Relief decay".
+- A parcel also carries its thickness, the original parcels it holds. A
+  continent arriving under another continent at a trench merges into it, and
+  `BaseElevationConfig::thickness_uplift` floats the column that results. See
+  "Crustal thickness".
 - The deformation config moved into `PlateEvolutionConfig`, beside
   `PlateMigrationConfig`, because it is now a substage of a step rather than a
-  stage of its own. `PlateEvolution` returns the accumulated
+  stage of its own.
+ `PlateEvolution` returns the accumulated
   `BoundaryDeformation`, whose diagnostics sum source-cell events across steps
   and summarize the final field.
 - What a step does moved out of `evolution.rs` into `step.rs`, which owns the
@@ -982,7 +998,9 @@ for a whole run. The reference world, at twice the run length, reaches it on
 
 ### Not changed, and why
 
-- `convergent` 0.4 / depth 6, `collision` 0.5 / 5, `trench` −0.2 / 1. The
+- `convergent` 0.4 / depth 6 *(0.2 / 3 since "Crustal thickness")*,
+  `collision` 0.5 / 5, `trench` −0.2 / 1. The
+
   Andean asymmetry is right and the trench is one cell as it should be. Depth
   6 puts every collision belt at about 1,000 km total width, Tibet scale,
   where 4 would be nearer the Andes and Alps; left as the visual choice the
@@ -990,7 +1008,11 @@ for a whole run. The reference world, at twice the run length, reaches it on
   see "Island arcs".
 - `saturation_speed` 2.0, `full_deformation_time` nine default steps,
   `maximum_magnitude` 0.5. Time-unit questions, left for the time-consistency
-  item.
+  item. Two have moved since: with relief decay under it, 0.5 is the steady
+  state of a belt that keeps converging rather than a bound an accumulator
+  eventually hits, and "Crustal thickness" halves `convergent` to 0.2 over
+  three hops because the plateau it used to paint is now made of material.
+
 - Hop-based geology radii: cratons 3 + 3, isostasy 5, arc inland 2, hotspot
   trail 8, province radius 5, basin minimum 3, margin width 3. All were tuned
   at 125 km cells and now cover seventy percent of that distance, but each
@@ -1167,7 +1189,10 @@ restating it.
   the volcanic arcs the same answer.
 - Continental collision stacks particles rather than destroying them. The
   depth of the stack is a thickness signal for a later slice; nothing reads it
-  yet.
+  yet. *Superseded by "Crustal thickness": the arriving continent now merges
+  into the one above it and the column carries the count, so nothing stacks
+  and base elevation reads the thickness.*
+
 - A rift opens an ocean by moving the halves apart, not by turning the wall
   into floor.
 
@@ -1953,14 +1978,15 @@ nothing was re-pinned for this. The viewer's step slider already reached 256.
 
 In priority order, each with the number that shows it.
 
-1. **Deformation needs a sink.** The clamp share grows without bound, because
-   uplift is added every step and nothing removes it: 0 cells at 30 steps, 866
-   at 60, 4,260 at 120, and 9,971 at 240, climbing about 50 a step with no
-   turnover. Every belt that holds its regime long enough becomes a flat-topped
-   plateau at `maximum_magnitude`, and the later history of a long run is
-   written as a saturated field rather than as a record. Erosion is the planned
-   answer and this is its motivation. Until it lands, 60 steps is as far as a
-   default should run.
+1. **Deformation needs a sink.** *Resolved; see "Relief decay".* The clamp
+   share grew without bound, because uplift was added every step and nothing
+   removed it: 0 cells at 30 steps, 866 at 60, 4,260 at 120, and 9,971 at 240,
+   climbing about 50 a step with no turnover. Every belt that held its regime
+   long enough became a flat-topped plateau at `maximum_magnitude`, and the
+   later history of a long run was written as a saturated field rather than as
+   a record. Relief decay is the sink: the same runs now hold 19, 33, and 59
+   cells at the clamp, with no trend after step 50.
+
 2. **Ocean floor gets too old.** The median settles, but the old tail does not.
    The defaults' p90 goes 0.32, 0.53, 0.92, 1.68, 1.23 — 34 to 180 Myr — so by
    120 steps the oldest tenth of the floor is as old as the oldest floor on
@@ -1981,7 +2007,13 @@ In priority order, each with the number that shows it.
    6,603 after ten — which makes it a property of rotating a point set across
    an irregular Voronoi lattice rather than of run length. What run length adds
    is the slow creep of about five particles a step on top. The thickness slice
-   that reads the collision stack is where both belong.
+   that reads the collision stack is where both belong. *Partly resolved by
+   "Crustal thickness": the foreign count falls to zero and the covered count
+   falls with run length instead of rising, 5,626 at 15 steps to 4,100 at 240
+   where it used to reach 7,995. The continental raster falls faster rather
+   than slower, because merging leaves fewer parcels to fill cells with, so
+   the crowding this item is really about is still open.*
+
 4. **The drift band shapes a long run rather than bounding it.**
    `speed_drift_limit` of 0.5 was set against a fifteen-step walk whose
    unclamped excursion is expected to be about a quarter. The expectation goes
@@ -2134,3 +2166,329 @@ Not independent, and why:
   clustering at 65,536 says part of it is not.
 - Province count is two, two, and zero, which is a hashed draw over twenty
   hotspots. Small-number noise rather than a trend.
+
+## Relief decay
+
+"Run length" found one quantity that does not settle: cells pinned at
+`maximum_magnitude` climbed about fifty a step forever, because uplift was
+added every step and nothing removed it. This slice gives deformation the sink
+it never had. Every step, what a parcel of crust carries is multiplied by
+`1 - step_duration / erosion_time` before that step's boundaries add to it.
+
+### Why decay, and where the time constant comes from
+
+At 88 km cells the erosion that matters is not hillslope diffusion or river
+incision — both live far below one cell — but the denudation of a whole
+orogen. Ahnert's 1970 relation makes that rate proportional to mean relief,
+and proportional loss is exponential decay. Relief with no uplift under it
+falls as `exp(-t / tau)`; relief under a boundary rises to where uplift and
+denudation balance and stays there. That is the shape of every real orogen:
+Tibet and the Andes stand at their steady state while convergence lasts, the
+Appalachians and the Urals have decayed for 300 Myr and are low but not gone.
+
+Ahnert's coefficient gives an e-folding near 7 Myr for surface relief eroding
+freely, but crust under a mountain rebounds isostatically as the top is
+stripped, so surface elevation falls about six times more slowly than rock
+leaves. An effective e-folding of 40 to 50 Myr is what leaves the Appalachians
+standing. At one default step per 1.5 Myr that is about thirty steps, so
+`erosion_time` defaults to `30 * DEFAULT_STEP_DURATION`, 0.42 model time.
+
+Checked against the source it sits under: a saturated convergent boundary adds
+`0.4 * 0.014 / 0.126 = 0.044` a step, and the decay takes `D / 30` a step.
+They balance at `D = 1.33`, well above the 0.5 clamp, so an active belt still
+reaches the clamp and holds there. That is now what the clamp means — the
+steady state of a belt that keeps converging — rather than an accumulator
+overflowing.
+
+The kept fraction is the linear `1 - dt/tau` rather than `exp(-dt/tau)`, which
+costs a multiply and a divide instead of libm on a path a kernel would mirror.
+The two differ to second order in `dt/tau`, about one part in a thousand at the
+defaults, so a run at half the step does not decay to the same bits. The
+still-world halving test is unaffected: a still world raises no deformation to
+decay.
+
+### Measured
+
+Both worlds are 65,536 cells, at `DEFAULT_STEP_DURATION`. "Defaults" is
+sampling seed 7 and jitter 0.8; "Reference" is sampling seed 9 with subdivided
+faces 0.2. "Sink off" is `erosion_time` infinite, which is the world this
+slice replaced. "Relic" cells carry more than 0.1 of deformation and lie
+further than the convergent profile's own depth from any current convergent
+edge: belts standing where no boundary is. Release on an M1 Max.
+
+| steps | sink | cells at clamp | mean | maximum | land at 0.5 | relic cells | largest relic |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | off | 0 | 0.0301 | 0.310 | 16,732 | 1 | 0.112 |
+| 15 | on | 0 | 0.0241 | 0.245 | 16,525 | 0 | — |
+| 30 | off | 0 | 0.0532 | 0.483 | 16,845 | 595 | 0.262 |
+| 30 | on | 0 | 0.0351 | 0.335 | 16,263 | 131 | 0.157 |
+| 60 | off | 866 | 0.0804 | 0.500 | 17,870 | 3,486 | 0.500 |
+| 60 | on | 19 | 0.0405 | 0.500 | 16,684 | 916 | 0.343 |
+| 120 | off | 4,260 | 0.1093 | 0.500 | 18,139 | 4,270 | 0.500 |
+| 120 | on | 33 | 0.0439 | 0.500 | 16,294 | 174 | 0.268 |
+| 240 | off | 9,971 | 0.1425 | 0.500 | 17,800 | 6,478 | 0.500 |
+| 240 | on | 59 | 0.0511 | 0.500 | 15,948 | 716 | 0.373 |
+
+At the reference world, sampling seed 9 and subdivided faces 0.2:
+
+| steps | sink | cells at clamp | mean | maximum | land at 0.5 | relic cells | largest relic |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | off | 0 | 0.0133 | 0.210 | 16,864 | 47 | 0.116 |
+| 15 | on | 0 | 0.0105 | 0.172 | 16,766 | 0 | — |
+| 30 | off | 0 | 0.0229 | 0.495 | 17,048 | 1,036 | 0.227 |
+| 30 | on | 0 | 0.0144 | 0.352 | 16,772 | 192 | 0.147 |
+| 60 | off | 632 | 0.0381 | 0.500 | 17,345 | 2,022 | 0.500 |
+| 60 | on | 1 | 0.0180 | 0.500 | 16,570 | 143 | 0.199 |
+| 120 | off | 2,116 | 0.0586 | 0.500 | 18,157 | 4,515 | 0.500 |
+| 120 | on | 3 | 0.0212 | 0.500 | 16,957 | 813 | 0.298 |
+| 240 | off | 3,252 | 0.0770 | 0.500 | 17,826 | 8,800 | 0.500 |
+| 240 | on | 1 | 0.0167 | 0.500 | 15,781 | 872 | 0.305 |
+
+Every tenth step of a 240-step run at the defaults, with the sink on:
+
+| steps | cells at clamp | mean | maximum | land at 0.5 | relic cells | largest relic |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0 | 0.0000 | 0.000 | 16,432 | 0 | — |
+| 10 | 0 | 0.0183 | 0.191 | 16,732 | 0 | — |
+| 20 | 0 | 0.0289 | 0.263 | 16,304 | 42 | 0.138 |
+| 30 | 0 | 0.0351 | 0.335 | 16,263 | 131 | 0.157 |
+| 40 | 0 | 0.0392 | 0.430 | 16,408 | 370 | 0.233 |
+| 50 | 1 | 0.0406 | 0.500 | 16,579 | 321 | 0.228 |
+| 60 | 19 | 0.0405 | 0.500 | 16,684 | 916 | 0.343 |
+| 70 | 30 | 0.0410 | 0.500 | 16,405 | 304 | 0.211 |
+| 80 | 25 | 0.0414 | 0.500 | 16,281 | 798 | 0.301 |
+| 90 | 0 | 0.0423 | 0.498 | 16,287 | 510 | 0.223 |
+| 100 | 7 | 0.0423 | 0.500 | 16,167 | 230 | 0.238 |
+| 110 | 45 | 0.0434 | 0.500 | 16,279 | 186 | 0.301 |
+| 120 | 33 | 0.0439 | 0.500 | 16,294 | 174 | 0.268 |
+| 130 | 21 | 0.0433 | 0.500 | 16,363 | 446 | 0.265 |
+| 140 | 28 | 0.0433 | 0.500 | 16,310 | 304 | 0.285 |
+| 150 | 67 | 0.0450 | 0.500 | 16,390 | 221 | 0.187 |
+| 160 | 54 | 0.0472 | 0.500 | 16,189 | 366 | 0.332 |
+| 170 | 26 | 0.0483 | 0.500 | 16,378 | 151 | 0.272 |
+| 180 | 41 | 0.0500 | 0.500 | 16,280 | 182 | 0.287 |
+| 190 | 43 | 0.0510 | 0.500 | 16,504 | 130 | 0.191 |
+| 200 | 30 | 0.0521 | 0.500 | 16,285 | 208 | 0.322 |
+| 210 | 26 | 0.0532 | 0.500 | 16,377 | 374 | 0.292 |
+| 220 | 81 | 0.0527 | 0.500 | 16,150 | 918 | 0.285 |
+| 230 | 58 | 0.0521 | 0.500 | 16,024 | 456 | 0.337 |
+| 240 | 59 | 0.0511 | 0.500 | 15,948 | 716 | 0.373 |
+
+### What settled
+
+- **The clamp share settles by about fifty steps and holds.** The first cell
+  reaches it at step 50 and the count then oscillates between 0 and 81 for the
+  remaining 190 steps with no trend: 19 at 60, 33 at 120, 59 at 240. It was
+  866, 4,260, and 9,971, climbing about fifty a step. This is the finding the
+  slice was for.
+- **Relic belts are fewer and much lower.** At 60 steps they fall from 3,486
+  cells to 916 and the largest from the clamp itself to 0.343; at 240, from
+  6,478 to 716 and 0.500 to 0.373. With the sink off a relic belt was as high
+  as an active one, which is the thing that made a long run unreadable. With
+  it on, no relic reaches the clamp at any length at either world.
+- **The mean still creeps, slowly.** 0.0183 at ten steps, 0.0405 at sixty,
+  0.0511 at 240. A third of the sink-off mean at 240 and far flatter, but not
+  flat: the height of a belt is bounded now, its area is not.
+- **Land falls by about 1,200 cells at sixty steps** — 17,870 to 16,684 — and
+  stops climbing with run length. Lower belts clear the 0.5 datum in fewer
+  cells; this is the visible price of the sink and it is the intended one.
+
+### Pins
+
+None moved. Ownership, crust birth, the plate set, and every count a run keeps
+read the crust and the motion rather than the relief on them, so the whole
+tectonics suite stood unchanged;
+`turning_the_sink_off_changes_the_deformation_field_alone` in `evolution.rs`
+is the assertion that says so, comparing whole results rather than named
+fields. The deformation field itself was never pinned, because a float
+fingerprint pins the toolchain rather than the algorithm.
+
+### Not this slice
+
+No slope-driven transport, no sediment deposition, no isostatic rebound as a
+separate term, and no reading of the collision stack: the time constant folds
+rebound in and the thickness slice unfolds it. No change to the profile
+offsets, `full_deformation_time`, or `maximum_magnitude`. `erosion_time` is
+the one knob here: lower it and belts wear down faster and land falls further;
+raise it and the clamp share starts climbing again, reaching the sink-off
+behaviour at infinity.
+
+## Crustal thickness
+
+A continental parcel that arrives under another continent at a trench stops
+being a stacked ghost and becomes thickness: the two merge into one column
+holding both, and base elevation floats that column as a plateau. Continental
+material is still exactly conserved, as a sum of thickness rather than a count
+of particles.
+
+### What it replaces
+
+Three findings pointed at the same missing rule. Continental parcels that lost
+a cell to another plate's continent survived under it and kept moving with
+their own plate, and nothing ever read them. The collision plateau was paint:
+the `convergent` profile raised the same offset whether a collision had just
+begun or had underthrust for sixty steps. And the deformation mean kept
+creeping after relief decay, because deformation was the only record of
+shortening and it could only spread.
+
+On Earth the Tibetan plateau is where Indian crust has been thrust under Asian
+crust. Its extent is the underthrust distance and its height is Airy isostasy
+on the doubled crust — a root of extra crust floats a surface about a fifth as
+high. Thickness gives the model both, out of material it already conserves.
+
+### The rule
+
+`Particle` gains `thickness`, the number of original parcels it holds. In
+`pick_winners`, a loser that is continental, belongs to another plate, and
+whose cell has a convergent edge to that plate within the reach transport
+already searches is **accreted**: the winner takes its thickness and the loser
+is removed. That is the trench rule's own test, factored out and shared, so
+the two cannot drift apart. The winner is always the incumbent's continent —
+continent outranks floor, and among two continents the cell's own plate keeps
+it — so the arriving continent goes under and the boundary stays where the
+suture will form, which is what India did.
+
+Compaction accretes rather than drops. A plate that owns no cell still holds
+parcels; its floor is dropped as before and its continent merges into the
+column its cell reads, so the thickness a run conserves survives its own
+compaction.
+
+`BaseElevationConfig::thickness_uplift` floats a continental cell by
+`thickness_uplift * (thickness - 1)`, after the margin taper and inside the
+same clamp as every other term.
+
+### Measured
+
+65,536 cells at `DEFAULT_STEP_DURATION`, release on an M1 Max. "Before" is
+`thickness_uplift` zero with the old `convergent` profile, which is the world
+this slice replaces; "thick only" adds the uplift; "thick+retune" also halves
+and narrows `convergent`. Plateau columns describe the largest connected run
+of thickened cells and how far its surface stands above the continent around
+it.
+
+Viewer defaults, sampling seed 7 and jitter 0.8:
+
+| steps | variant | accreted | thickened | max thick | covered | foreign | cont. cells | land | def. mean | elev. clamp | plateau cells | plateau height |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | before | 1,638 | 1,108 | 13 | 5,626 | 1 | 19,391 | 16,124 | 0.0239 | 0 | 19 | 0.030 |
+| 15 | thick only | 1,638 | 1,108 | 13 | 5,626 | 1 | 19,391 | 16,288 | 0.0239 | 17 | 19 | 0.214 |
+| 15 | thick+retune | 1,638 | 1,108 | 13 | 5,626 | 1 | 19,391 | 15,885 | 0.0091 | 5 | 19 | 0.214 |
+| 60 | before | 3,469 | 1,469 | 52 | 5,162 | 0 | 17,499 | 15,145 | 0.0421 | 4 | 34 | −0.051 |
+| 60 | thick only | 3,469 | 1,469 | 52 | 5,162 | 0 | 17,499 | 15,399 | 0.0421 | 260 | 34 | 0.054 |
+| 60 | thick+retune | 3,469 | 1,469 | 52 | 5,162 | 0 | 17,499 | 15,112 | 0.0327 | 211 | 34 | 0.055 |
+| 120 | before | 4,742 | 1,596 | 70 | 4,713 | 0 | 16,296 | 14,631 | 0.0457 | 58 | 41 | −0.037 |
+| 120 | thick+retune | 4,742 | 1,596 | 70 | 4,713 | 0 | 16,296 | 14,770 | 0.0396 | 363 | 41 | 0.141 |
+| 240 | before | 6,951 | 1,809 | 115 | 4,100 | 0 | 13,941 | 12,416 | 0.0430 | 22 | 50 | −0.032 |
+| 240 | thick+retune | 6,951 | 1,809 | 115 | 4,100 | 0 | 13,941 | 12,600 | 0.0371 | 345 | 50 | 0.224 |
+
+Reference world, sampling seed 9 and subdivided faces 0.2:
+
+| steps | variant | accreted | thickened | max thick | covered | foreign | cont. cells | land | def. mean | elev. clamp | plateau cells | plateau height |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | before | 707 | 382 | 13 | 6,257 | 0 | 19,537 | 16,548 | 0.0107 | 0 | 17 | 0.010 |
+| 15 | thick+retune | 707 | 382 | 13 | 6,257 | 0 | 19,537 | 16,386 | 0.0039 | 0 | 17 | 0.184 |
+| 60 | before | 1,219 | 459 | 33 | 6,041 | 0 | 18,936 | 15,971 | 0.0169 | 29 | 22 | 0.022 |
+| 60 | thick+retune | 1,219 | 459 | 33 | 6,041 | 0 | 18,936 | 15,951 | 0.0129 | 74 | 22 | 0.257 |
+| 120 | before | 2,176 | 706 | 81 | 5,739 | 0 | 18,215 | 15,579 | 0.0240 | 0 | 32 | 0.021 |
+| 120 | thick+retune | 2,176 | 706 | 81 | 5,739 | 0 | 18,215 | 15,537 | 0.0194 | 87 | 32 | 0.214 |
+| 240 | before | 4,127 | 1,192 | 81 | 5,013 | 0 | 16,622 | 14,378 | 0.0329 | 74 | 27 | 0.002 |
+| 240 | thick+retune | 4,127 | 1,192 | 81 | 5,013 | 0 | 16,622 | 14,473 | 0.0290 | 164 | 27 | 0.159 |
+
+Thickness over the thickened cells of the viewer's defaults:
+
+| steps | thickened | p50 | p90 | p99 | max | over 5 | over 10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | 1,108 | 3 | 5 | 9 | 13 | 89 | 3 |
+| 60 | 1,469 | 3 | 9 | 22 | 52 | 327 | 104 |
+| 120 | 1,596 | 3 | 10 | 30 | 70 | 432 | 157 |
+| 240 | 1,809 | 4 | 13 | 48 | 115 | 585 | 258 |
+
+### What it fixed
+
+- **Stacked continent is gone.** Foreign continental particles — parcels lying
+  under a cell their own plate does not own — fall to 1 at fifteen steps and 0
+  at every length beyond, at both worlds, from 628 and 61 before. The whole of
+  that stacking was continental, which is why `collided_cell_count` and
+  `maximum_collision_stack` now read zero on the reference fixture: what is
+  left for them to count is a parcel that crossed a transform or a ridge by
+  lattice jitter, and neither world has one.
+- **The covered count falls with run length instead of rising.** 5,626 at
+  fifteen steps to 4,100 at 240, where before it climbed 6,725 to 7,995.
+- **The deformation mean stops creeping** and turns over: 0.0239, 0.0421,
+  0.0457, 0.0430. The retune lowers it further, to 0.0327 at sixty steps.
+- **A collision now has a plateau.** Before, the largest thickened region
+  stood 0.05 *below* the continent around it at sixty steps and 0.03 below at
+  240, because the convergent profile painted the rim as hard as the middle.
+  After, it stands 0.14 to 0.26 above at most lengths.
+
+### What it did not fix, and the number that shows it
+
+- **Thickness runs away in place.** The deepest column goes 13, 52, 70, 115 as
+  the run lengthens — linear in run length, with no bound. The median
+  thickened cell holds 3 parcels, which is the right shape, but the ninety-
+  ninth percentile reaches 48 and 258 cells stand more than ten parcels deep
+  at 240 steps. A column that deep is nine kilometres of surface relief before
+  the clamp catches it. The cause is that an arriving parcel merges into the
+  one cell it lands in and nothing spreads thickness sideways, where a real
+  orogen widens as it thickens.
+- **`thickness_uplift` cannot be tuned around it.** Swept at sixty steps, the
+  largest plateau stands 0.032 high at an uplift of 0.05, 0.055 at 0.1, and
+  0.063 at 0.3, while the cells clamped at 1.0 climb 98, 211, 394. Raising the
+  knob buys almost no plateau height and buys saturated cells linearly, because
+  the plateau's own cells are thin and the deep columns are isolated.
+- **Thickened cells are scattered rather than orogenic.** 1,469 cells are
+  thickened at sixty steps but the largest connected run of them is 34. The
+  model makes thick cells, not a Tibet.
+- **The continental raster falls faster than before**, 19,391 to 13,941 over
+  240 steps against 19,588 to 17,573. Merging removes parcels, so fewer remain
+  to fill cells, and more cells end up reading a neighbour or making floor.
+
+### The defaults these measurements chose
+
+`thickness_uplift` is **0.1**, not the 0.2 that Airy isostasy on a doubled
+crust alone would ask for. The term is per parcel and the median thickened
+cell holds three, so 0.1 puts the typical collision 0.2 above the continent
+around it, which is the 3-to-5 km plateau the physics describes. At 0.2 that
+same typical cell reaches the clamp at 1.0, and the clamped count roughly
+doubles at every run length.
+
+`convergent` goes from offset 0.4 over six hops to **0.2 over three**. With the
+plateau made of material, the profile is the fold-and-thrust front at the
+suture rather than the plateau behind it, and leaving it as it was would count
+the same crust twice. The retune lowers the deformation mean by about a fifth,
+leaves the deformation clamp where it was or slightly below, and does not
+change plateau height, which is what says the plateau is now coming from
+thickness rather than from paint.
+
+### Pins
+
+Ownership and birth both moved, and the reason is worth stating because it is
+not the obvious one. Within a single step accretion only removes a parcel that
+had already lost its cell, so that step's owners and births are untouched.
+Across steps it is not neutral: the parcel is gone from every later step, so a
+cell it would have won in step three is won by something else and the run makes
+its floor in other places. `owner_change_count` on the reference fixture falls
+149 to 147, `sampled_cell_count` rises 696 to 716, and the ownership, birth,
+age, and base-elevation fingerprints all move once.
+
+The viewer's complete-world fixtures moved mesh rather than pins. A complete
+world runs the climate phase, whose coupling is a fixed-point iteration that a
+mesh below a couple of hundred cells does not reliably reach: swept over
+fourteen seeds, 7 of 14 converge at 32 cells, 4 at 64, and 7 at 128, with and
+without the thickness term alike, while every one of them converges at 192 and
+above and the 65,536-cell default converges in a single iteration. Any change
+that moves elevation re-rolls which seeds fall badly, which is what broke nine
+tests here and one in the previous slice. Those fixtures now run at 1,024 cells
+and up.
+
+### Not this slice
+
+No thickness decay or isostatic rebound: thickened crust stays thick, which is
+half of why the tail runs away. No crustal thinning at rifts. No same-plate
+shortening — one plate's own parcels crowding behind a blocked front still
+stack and are still uncounted. No change to the geology isostasy stage, whose
+convergent support bonus now overlaps this term.
+
+The next slice is the one that bounds the tail. Sediment moving off a thick
+column, or thickness spreading into its neighbours, or both: either turns the
+runaway columns into the wide orogen the measurements say is missing.

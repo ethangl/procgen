@@ -270,7 +270,7 @@ impl EvolvingWorld<'_> {
     /// Suturing empties the id it absorbs, and transport can take the last
     /// cell of a plate on its own; both leave a hole this closes, so plate ids
     /// are not stable across a run.
-    pub(crate) fn compact(&mut self) {
+    pub(crate) fn compact(&mut self) -> usize {
         let mut owned = vec![false; self.partition.plate_count];
         for &plate in &self.partition.cell_plates {
             owned[plate] = true;
@@ -281,7 +281,7 @@ impl EvolvingWorld<'_> {
         // A run that emptied no plate has no hole to close, and every id
         // already maps to itself.
         if live.len() == self.partition.plate_count {
-            return;
+            return 0;
         }
 
         let mut compacted = vec![usize::MAX; self.partition.plate_count];
@@ -291,7 +291,8 @@ impl EvolvingWorld<'_> {
         for plate in self.partition.cell_plates.iter_mut() {
             *plate = compacted[*plate];
         }
-        self.remap_particle_plates(&compacted);
+        let accreted = self.remap_particle_plates(&compacted);
+
         self.kinematics.angular_velocities = live
             .iter()
             .map(|&plate| self.kinematics.angular_velocities[plate])
@@ -305,6 +306,7 @@ impl EvolvingWorld<'_> {
             .map(|&plate| self.drift_factors[plate])
             .collect();
         self.partition.plate_count = live.len();
+        accreted
     }
 }
 
@@ -316,7 +318,7 @@ mod tests {
         NO_LIFECYCLE, empty_boundaries, evolution_fixture, forced_suture_fixture,
         reference_evolution_config, two_plate_fixture,
     };
-    use crate::{PlateEvolutionConfig, evolve_plate_ownership};
+    use crate::{PlateEvolutionConfig, evolve_plate_ownership, transport::Particle};
 
     #[test]
     fn a_forced_suture_merges_at_the_step_its_collision_time_predicts() {
@@ -478,6 +480,79 @@ mod tests {
             };
             assert_eq!(world.partition.cell_plates[cell], expected, "cell {cell}");
         }
+    }
+
+    /// The same emptying, read as material rather than as ids.
+    ///
+    /// A plate that owns no cell still holds parcels. One standing under
+    /// another plate's column merges into it, exactly as a collision would;
+    /// one standing alone in its own cell has nothing above it to merge into
+    /// and keeps its parcel under the plate that now owns the cell. Either
+    /// way the thickness a run conserves survives its own compaction, which
+    /// is the whole point of accreting rather than dropping.
+    #[test]
+    fn compaction_accretes_the_continent_of_a_plate_it_empties() {
+        let fixture = evolution_fixture();
+        let mut world = EvolvingWorld::new(
+            &fixture.mesh,
+            fixture.inputs(),
+            reference_evolution_config(),
+        );
+        const ABSORBED: usize = 1;
+        for plate in world.partition.cell_plates.iter_mut() {
+            if *plate == ABSORBED {
+                *plate = 0;
+            }
+        }
+        // A cell the surviving plate owns and has its own continent standing
+        // in, so the parcel pushed into it has a column to merge into.
+        let covered = (0..fixture.mesh.cell_count())
+            .find(|&cell| {
+                world.partition.cell_plates[cell] == 0
+                    && fixture.birth_prior.cell_birth[cell].is_none()
+                    && fixture.partition.cell_plates[cell] == 0
+            })
+            .expect("the surviving plate must own continental crust");
+        world.particles.push(Particle {
+            position: world.mesh.cell_centers[covered] * world.mesh.radius.recip(),
+            plate: ABSORBED,
+            birth: None,
+            deformation: 0.0,
+            thickness: 1,
+            cell: covered,
+            triangle: world.mesh.cell_corners(covered)[0].vertex,
+        });
+        let alone = world
+            .particles
+            .iter()
+            .filter(|particle| particle.is_continental() && particle.plate == ABSORBED)
+            .count()
+            - 1;
+        assert!(alone > 0, "the emptied plate must also hold its own cells");
+        let before = world.continental_thickness();
+
+        let accreted = world.compact();
+
+        assert_eq!(
+            accreted, 1,
+            "only the parcel with a column above it has anywhere to merge"
+        );
+        assert_eq!(
+            world.continental_thickness(),
+            before,
+            "compaction may not create or destroy continental material"
+        );
+        assert_eq!(
+            world.cell_thickness[covered], 2,
+            "the covering column now holds both parcels"
+        );
+        assert!(
+            world
+                .particles
+                .iter()
+                .all(|particle| particle.plate < world.partition.plate_count),
+            "every parcel that survived belongs to a plate that survived"
+        );
     }
 
     #[test]

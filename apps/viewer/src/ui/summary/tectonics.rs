@@ -79,13 +79,27 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         );
         stat(
             ui,
-            "Continental particles",
+            "Accreted parcels",
+            world.evolution.accreted_particle_count,
+        );
+        stat(
+            ui,
+            "Continental thickness",
             format!(
                 "{} to {}",
-                world.evolution.starting_continental_particle_count,
-                world.evolution.final_continental_particle_count
+                world.evolution.starting_continental_thickness,
+                world.evolution.final_continental_thickness
             ),
         );
+        stat(
+            ui,
+            "Thickened cells",
+            format!(
+                "{} (deepest {})",
+                world.evolution.thickened_cell_count, world.evolution.maximum_thickness
+            ),
+        );
+
         stat(
             ui,
             "Covered continental particles",

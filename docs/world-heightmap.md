@@ -93,7 +93,10 @@ Completed foundations:
   keeps its own plate's material over a newcomer's, and younger floor covers
   older; a losing oceanic particle is destroyed only where a trench takes it,
   and a cell nothing reached makes ocean floor. Continental material is
-  therefore neither created nor destroyed by a run. The result
+  therefore neither created nor destroyed by a run, though a collision merges
+  two parcels into one column, so what is conserved is the thickness those
+  columns hold rather than the number of them. The result
+
   retains final ownership, the motion the run ended on, final boundaries, the
   two fields each cell reads off the material — the step its crust was created
   and the deformation raised on it — and aggregate evolution diagnostics,
@@ -108,7 +111,13 @@ Completed foundations:
   takes the overriding material's class. Each step also raises signed per-cell deformation from the
   boundaries current in that step, over the crust and ownership current in it,
   with deterministic overlap resolution and bounded within-plate propagation.
+  A parcel also carries how many original parcels it holds: a continent that
+  arrives under another continent at a trench merges into it rather than
+  stacking under it, so a collision makes one column of doubled crust and base
+  elevation floats it as a plateau. Continental material stays exactly
+  conserved, as a sum of thickness rather than as a count of parcels.
   The step's profile is scaled by the model time it spends against a
+
   configured full deformation time, added to a per-cell field that moves with
   the crust exactly as birth does, and clamped to a configured maximum
   magnitude, so belts widen where a boundary converged for many steps and a

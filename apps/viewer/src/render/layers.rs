@@ -11,8 +11,8 @@ use super::palette::{
     elevation_color_stops, opaque_color, piecewise_lerp,
 };
 use super::surfaces::{
-    basin_colors, cell_surface_mesh, crust_colors, hotspot_colors, insolation_colors, plate_colors,
-    seafloor_age_colors,
+    basin_colors, cell_surface_mesh, crust_colors, crustal_thickness_colors, hotspot_colors,
+    insolation_colors, plate_colors, seafloor_age_colors,
 };
 use crate::model::{ClimateWorld, GeneratedWorld, GeologyWorld, Phase, TectonicsWorld};
 use bevy::prelude::{Color, Component, GizmoAsset, Mesh, Vec3};
@@ -24,8 +24,10 @@ pub enum DiagnosticLayer {
     Voronoi,
     Plates,
     Crust,
+    CrustalThickness,
     Points,
     SeafloorAge,
+
     BaseElevation,
     Deformation,
     Elevation,
@@ -319,6 +321,7 @@ impl DiagnosticLayer {
         Self::Voronoi,
         Self::Plates,
         Self::Crust,
+        Self::CrustalThickness,
         Self::Points,
         Self::SeafloorAge,
         Self::BaseElevation,
@@ -432,6 +435,12 @@ impl DiagnosticLayer {
                 Some(GizmoSpec::new(2.4, TectonicsBuild(plate_border_asset))),
             ),
             Self::Crust => LayerSpec::colors("Crust classes", TectonicsBuild(crust_colors), None),
+            Self::CrustalThickness => LayerSpec::colors(
+                "Crustal thickness",
+                TectonicsBuild(crustal_thickness_colors),
+                None,
+            ),
+
             Self::Points => LayerSpec::overlay(
                 "Cell centers",
                 OverlayKind::Markers,
@@ -659,7 +668,7 @@ mod tests {
 
     #[test]
     fn every_layer_builds_from_a_complete_world() {
-        let world = Fixture::new(128, 21).into_world();
+        let world = Fixture::new(1792, 21).into_world();
 
         for &layer in DiagnosticLayer::ALL {
             if let Some(surface) = layer.surface() {

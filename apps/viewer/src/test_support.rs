@@ -73,7 +73,6 @@ fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
     }
 }
 
-
 pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSettings {
     TectonicsSettings {
         fibonacci: FibonacciConfig {
@@ -172,6 +171,16 @@ pub(crate) fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
 
 /// Every phase result for one settings profile, owned so tests can corrupt
 /// individual fields before encoding a snapshot.
+///
+/// A complete world runs the climate phase, whose coupling is a fixed-point
+/// iteration that a mesh below a couple of hundred cells does not reliably
+/// reach: swept over fourteen seeds, 7 of 14 converge at 32 cells, 4 at 64,
+/// and 7 at 128, while every one of them converges at 192 and above and the
+/// 65,536-cell default converges in a single iteration. Which seeds fall on
+/// which side is re-rolled by any change that moves elevation at all, so the
+/// callers here use meshes of 1,024 cells and up — well clear of the floor,
+/// and still distinct from each other where a test needs two worlds to
+/// differ. It is the mesh that has to be honest here, not the seed.
 pub(crate) struct Fixture {
     pub tectonics: TectonicsWorld,
     pub geology: GeologyWorld,

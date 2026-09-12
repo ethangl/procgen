@@ -108,7 +108,6 @@ pub struct BoundaryDeformationConfig {
     /// 0.30 past the 0.5 datum with the volcanic uplift on top. That is what
     /// makes an arc an island chain rather than a submarine ridge, and it is
     /// the number to retune if arcs stay drowned.
-
     pub island_arc: BoundaryEffect,
     /// Motion magnitude at which a boundary effect reaches its full offset.
     pub saturation_speed: f32,
@@ -154,14 +153,19 @@ pub struct BoundaryDeformationConfig {
     pub erosion_time: f32,
 }
 
-
 impl Default for BoundaryDeformationConfig {
     fn default() -> Self {
         Self {
             convergent: BoundaryEffect {
-                offset: 0.4,
-                depth: 6.0 * default_hop_length(),
+                // The fold-and-thrust front at the suture, and no longer the
+                // plateau behind it: crustal thickness floats that out of the
+                // material the collision buried, so what this paints would be
+                // counted twice. Halved and narrowed from 0.4 over six hops
+                // when that landed.
+                offset: 0.2,
+                depth: 3.0 * default_hop_length(),
             },
+
             rift: ContinentalRiftProfile {
                 center_offset: -0.2,
                 flank_offset: 0.08,
@@ -188,7 +192,6 @@ impl Default for BoundaryDeformationConfig {
             maximum_magnitude: 0.5,
             erosion_time: 30.0 * DEFAULT_STEP_DURATION,
         }
-
     }
 }
 
@@ -198,7 +201,6 @@ pub enum BoundaryDeformationError {
     InvalidRiftProfile,
     InvalidErosionTime,
 }
-
 
 impl fmt::Display for BoundaryDeformationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -214,7 +216,6 @@ impl fmt::Display for BoundaryDeformationError {
             Self::InvalidErosionTime => formatter
                 .write_str("erosion time must be positive; infinity disables relief decay"),
         }
-
     }
 }
 
@@ -380,7 +381,7 @@ mod tests {
     fn default_depths_resolve_to_the_hop_counts_they_replaced() {
         let config = BoundaryDeformationConfig::default();
         for (effect, depth) in [
-            (config.convergent, 6),
+            (config.convergent, 3),
             (config.transform, 1),
             (config.collision, 5),
             (config.trench, 1),

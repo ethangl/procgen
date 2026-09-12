@@ -5,9 +5,11 @@
 //! this module owns the run: its config, its inputs, the totals it keeps, and
 //! the state it hands on.
 //!
-//! What survives a step: the material itself — one particle per parcel of
-//! crust, each holding its birth time and the deformation the boundaries have
-//! raised on it — the ownership and the two fields the cells read off it, the
+//! What survives a step: the material itself — one column per parcel of
+//! crust, each holding its birth time, the deformation the boundaries have
+//! raised on it, and how many original parcels it has merged — the ownership
+//! and the three fields the cells read off it, the
+
 //! plate set itself with its count and its motion, and how long each
 //! continental pair has been colliding. Crust is not one of them. It is read
 //! from birth, so a continental plate that rifts grows an oceanic margin and
@@ -54,12 +56,24 @@ pub struct PlateEvolutionDiagnostics {
     pub maximum_collision_stack: usize,
     /// Cells that held no particle and read one nearby, summed over steps.
     pub sampled_cell_count: usize,
-    /// Continental particles before step zero and after the last step. The
-    /// two are equal for every run: continental material is neither created
-    /// nor destroyed. The continental *cell* count is a raster of that
-    /// material and is not.
-    pub starting_continental_particle_count: usize,
-    pub final_continental_particle_count: usize,
+    /// Parcels a collision merged into the continent already there, summed
+    /// over steps, plus the orphans compaction merged. It is the count of
+    /// events; what they made is thickness.
+    pub accreted_particle_count: usize,
+    /// Original parcels of continent before step zero and after the last
+    /// step, summed over every column that holds any. The two are equal for
+    /// every run: continental material is neither created nor destroyed, and
+    /// a collision merges two parcels into one column rather than losing
+    /// one. The continental *cell* count is a raster of that material and is
+    /// not equal.
+    pub starting_continental_thickness: u32,
+    pub final_continental_thickness: u32,
+    /// The deepest continental column the run ends with, in parcels.
+    pub maximum_thickness: u32,
+    /// Cells standing on more than one parcel, which is the extent of the
+    /// collision plateaus the run built.
+    pub thickened_cell_count: usize,
+
     /// Continental particles the run ends with that no cell reads, because
     /// another parcel of continent is in the cell with them. It is the gap
     /// between the material a run conserves and the continental cells that
@@ -84,6 +98,8 @@ impl PlateEvolutionDiagnostics {
         self.owner_change_count += counts.owner_change_count;
         self.subducted_particle_count += counts.subducted_particle_count;
         self.born_particle_count += counts.born_particle_count;
+        self.accreted_particle_count += counts.accreted_particle_count;
+
         self.collided_cell_count += counts.collided_cell_count;
         self.maximum_collision_stack = self
             .maximum_collision_stack
@@ -144,6 +160,11 @@ pub struct PlateEvolution {
     /// Deformation summed over every step's boundaries and carried with the
     /// crust, so it records where boundaries were as well as where they are.
     pub deformation: BoundaryDeformation,
+    /// Original parcels the column under each cell holds, zero where the cell
+    /// reads ocean floor. One is undeformed continent; more is crust a
+    /// collision doubled, which base elevation floats as a plateau.
+    pub cell_thickness: Vec<u32>,
+
     pub diagnostics: PlateEvolutionDiagnostics,
 }
 
@@ -212,7 +233,6 @@ pub fn evolve_plate_ownership(
         return Err(PlateEvolutionError::StepOutrunsErosion);
     }
 
-
     let mut world = EvolvingWorld::new(mesh, inputs, config);
     // The motion the kinematics stage fitted is scaled by crust alone: that
     // stage runs before the crust-birth prior, so no trench it could see has a
@@ -224,7 +244,7 @@ pub fn evolve_plate_ownership(
     world.respeed(inputs.boundaries);
     let mut boundaries = classify_boundaries(mesh, &world.partition, &world.kinematics)?;
     let mut diagnostics = PlateEvolutionDiagnostics {
-        starting_continental_particle_count: world.continental_particle_count(),
+        starting_continental_thickness: world.continental_thickness(),
         ..PlateEvolutionDiagnostics::default()
     };
     let mut source_cell_count = 0;
@@ -239,24 +259,33 @@ pub fn evolve_plate_ownership(
         world.respeed(&boundaries);
         boundaries = classify_boundaries(mesh, &world.partition, &world.kinematics)?;
     }
-    // Read before compaction, which drops the material of a plate the run
-    // left owning no cell at all: that plate's particles are stacked under
-    // other plates' cells, and nothing moves them again.
-    diagnostics.final_continental_particle_count = world.continental_particle_count();
+    // Read before compaction, which merges the continent of a plate the run
+    // left owning no cell into the column above it: after it, those parcels
+    // are no longer separate ones to count as covered or foreign.
+
     diagnostics.covered_continental_particle_count = world.covered_continental_particle_count();
     diagnostics.foreign_continental_particle_count = world.foreign_continental_particle_count();
     // Compaction is a bijection on the ids that own cells and carries each
     // plate's motion with it, so the boundaries the loop left behind describe
-    // the same edges either side of it and are not reclassified.
-    world.compact();
+    // the same edges either side of it and are not reclassified. What it does
+    // to the material is accrete the continent of an emptied plate into the
+    // column above it, so the thickness below is read after it rather than
+    // before: that is the whole point of the accretion.
+    diagnostics.accreted_particle_count += world.compact();
+    diagnostics.final_continental_thickness = world.continental_thickness();
+    diagnostics.maximum_thickness = world.maximum_thickness();
+    diagnostics.thickened_cell_count = world.thickened_cell_count();
 
     let cell_deformation = world.cell_deformation;
+
     Ok(PlateEvolution {
         partition: world.partition,
         kinematics: world.kinematics,
         boundaries,
         cell_birth: world.cell_birth,
+        cell_thickness: world.cell_thickness,
         elapsed_time: config.step_count() as f32 * config.step_duration,
+
         deformation: BoundaryDeformation {
             diagnostics: BoundaryDeformationDiagnostics::summarize(
                 &cell_deformation,
@@ -274,11 +303,9 @@ mod tests {
     use crate::step::half_axis_turn;
     use crate::test_support::{
         EvolutionFixture, NO_EROSION, NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint,
-        convergent_fixture,
-
-        drift_config, empty_boundaries, evolution_fixture, fingerprint, forced_rift_fixture,
-        opposed_kinematics, reference_evolution_config, two_plate_boundary_partition,
-        two_plate_fixture,
+        convergent_fixture, drift_config, empty_boundaries, evolution_fixture, fingerprint,
+        forced_rift_fixture, opposed_kinematics, reference_evolution_config,
+        two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::test_support::{REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION};
     use crate::{
@@ -310,17 +337,29 @@ mod tests {
         // multiplier below one for every plate short of saturation, and no
         // plate of this world is half trench, so the run moves about two
         // thirds of the material it used to.
-        assert_eq!(first.diagnostics.owner_change_count, 149);
+        assert_eq!(first.diagnostics.owner_change_count, 147);
         assert_eq!(first.diagnostics.subducted_particle_count, 112);
         assert_eq!(first.diagnostics.born_particle_count, 5);
-        // Cell areas vary, so a rigid rotation alone leaves a third of the
-        // cells empty at any moment. The collision count excludes the doubling
-        // that same variance causes, so it is small beside them.
-        assert_eq!(first.diagnostics.collided_cell_count, 39);
-        assert_eq!(first.diagnostics.maximum_collision_stack, 3);
-        assert_eq!(first.diagnostics.sampled_cell_count, 696);
-        assert_eq!(first.diagnostics.starting_continental_particle_count, 174);
-        assert_eq!(first.diagnostics.final_continental_particle_count, 174);
+        // Every foreign continental stack this world used to hold is now a
+        // merge instead, which is why the two collision counts read zero: the
+        // stacks they counted were continental to a parcel. What is left for
+        // them to count is a parcel of another plate that crossed a transform
+        // or a ridge by lattice jitter, and this world has none.
+        assert_eq!(first.diagnostics.accreted_particle_count, 23);
+        assert_eq!(first.diagnostics.collided_cell_count, 0);
+        assert_eq!(first.diagnostics.maximum_collision_stack, 0);
+        // Up from 696: a merged parcel is one fewer parcel standing in the
+        // world, so a cell it would have been near is now a gap that samples
+        // its neighbour instead.
+        assert_eq!(first.diagnostics.sampled_cell_count, 716);
+
+        // Exact, and the whole of the conservation rule: a collision merges
+        // two parcels into one column rather than losing one.
+        assert_eq!(first.diagnostics.starting_continental_thickness, 174);
+        assert_eq!(first.diagnostics.final_continental_thickness, 174);
+        assert_eq!(first.diagnostics.maximum_thickness, 3);
+        assert_eq!(first.diagnostics.thickened_cell_count, 27);
+
         // Plates of the reference world clear the minimum continental area a
         // rift needs. Two draws split their plate and two separate nothing:
         // slower plates leave more of the world in one piece, so an arc more
@@ -329,10 +368,16 @@ mod tests {
         assert_eq!(first.diagnostics.failed_rift_count, 2);
         assert_eq!(first.diagnostics.suture_count, 7);
         assert_eq!(first.partition.plate_count, 26);
-        assert_eq!(ownership_fingerprint(&first), 15_094_181_814_761_635_121);
+        // Both moved with crustal thickness, and the reason is worth stating
+        // because it is not obvious: within one step accretion only removes a
+        // parcel that already lost its cell, so that step's owners and births
+        // are untouched. Across steps it is not neutral. The parcel is gone
+        // from every later step, so a cell it would have won in step three is
+        // won by something else, and the run's floor is made in other places.
+        assert_eq!(ownership_fingerprint(&first), 5_123_690_239_039_431_048);
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            2_667_659_757_523_359_397
+            3_818_539_641_804_957_589
         );
 
         // Float, so it is never pinned; equality above already covers the whole
@@ -376,7 +421,6 @@ mod tests {
 
     /// The reference run with no lifecycle to split or merge a plate, and a
     /// step short enough that no plate loses its last cell, so an id means the
-
     /// same plate either side of the run and a per-plate comparison is well
     /// defined.
     fn fixed_plate_set_config() -> PlateEvolutionConfig {
@@ -624,10 +668,13 @@ mod tests {
             .cell_birth
             .iter()
             .filter(|birth| birth.is_none())
-            .count();
+            .count() as u32;
         PlateEvolutionDiagnostics {
-            starting_continental_particle_count: continental,
-            final_continental_particle_count: continental,
+            starting_continental_thickness: continental,
+            final_continental_thickness: continental,
+            // Every column is one parcel deep: a still world collides with
+            // nothing, so nothing accretes and nothing thickens.
+            maximum_thickness: 1,
             ..PlateEvolutionDiagnostics::default()
         }
     }
@@ -665,8 +712,8 @@ mod tests {
         // no gap ever opens.
         assert!(evolution.diagnostics.born_particle_count > 0);
         assert_eq!(
-            evolution.diagnostics.final_continental_particle_count,
-            evolution.diagnostics.starting_continental_particle_count
+            evolution.diagnostics.final_continental_thickness,
+            evolution.diagnostics.starting_continental_thickness
         );
         for (cell, birth) in evolution.cell_birth.iter().enumerate() {
             if birth.is_some_and(|birth| birth >= 0.0) {
@@ -720,8 +767,8 @@ mod tests {
 
         assert!(run.diagnostics.subducted_particle_count > 0);
         assert_eq!(
-            run.diagnostics.final_continental_particle_count,
-            run.diagnostics.starting_continental_particle_count,
+            run.diagnostics.final_continental_thickness,
+            run.diagnostics.starting_continental_thickness,
             "subduction takes ocean floor and nothing else"
         );
     }
@@ -765,6 +812,9 @@ mod tests {
         assert_eq!(evolution.diagnostics.subducted_particle_count, 0);
     }
 
+    /// Thickness rather than a particle count, because a collision merges two
+    /// parcels into one column: the count falls where the sum does not, and
+    /// the sum is what the material actually is.
     #[test]
     fn a_run_conserves_its_continental_material() {
         let fixture = evolution_fixture();
@@ -773,7 +823,7 @@ mod tests {
             .cell_birth
             .iter()
             .filter(|birth| birth.is_none())
-            .count();
+            .count() as u32;
         assert!(starting > 0);
 
         for step_count in [1, 2, 5, 13] {
@@ -782,9 +832,9 @@ mod tests {
                     .with_steps(step_count, reference_evolution_config().step_duration),
             );
             let diagnostics = evolution.diagnostics;
-            assert_eq!(diagnostics.starting_continental_particle_count, starting);
+            assert_eq!(diagnostics.starting_continental_thickness, starting);
             assert_eq!(
-                diagnostics.final_continental_particle_count, starting,
+                diagnostics.final_continental_thickness, starting,
                 "{step_count} steps changed how much continental material exists"
             );
         }
@@ -914,7 +964,6 @@ mod tests {
                 "{erosion_time}"
             );
         }
-
 
         let short_prior = CrustBirthPrior {
             cell_birth: fixture.birth_prior.cell_birth[1..].to_vec(),

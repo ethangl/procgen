@@ -378,7 +378,7 @@ mod tests {
         );
 
         // A tectonic fill stays selected once the later phases arrive.
-        app.insert_resource(Fixture::new(128, 62).into_world());
+        app.insert_resource(Fixture::new(1792, 62).into_world());
         app.update();
         assert_eq!(
             app.world().resource::<SurfaceSelection>().selected(),

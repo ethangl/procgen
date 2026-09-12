@@ -236,6 +236,7 @@ mod tests {
             CellCrust {
                 cell_birth: &evolution.cell_birth,
             },
+            &evolution.cell_thickness,
             &reference_flow_field(),
             reference_base_elevation_config(),
         )

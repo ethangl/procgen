@@ -125,18 +125,20 @@ pub(crate) fn validate_interior_relief(
 mod tests {
     use super::*;
     use crate::test_support::{
-        base_elevation_fixture, no_interior_relief, reference_base_elevation_config,
+        base_elevation_fixture, curve_and_taper_only, reference_base_elevation_config,
     };
 
     #[test]
     fn the_basement_reaches_continental_crust_alone() {
         let fixture = base_elevation_fixture();
+        // Built on the isolated config rather than the reference one, so the
+        // basement is the only term standing between `base` and `curve`.
         let config = BaseElevationConfig {
-            dynamic_topography_amplitude: 0.0,
-            ..reference_base_elevation_config()
+            basement_amplitude: reference_base_elevation_config().basement_amplitude,
+            ..curve_and_taper_only()
         };
         let base = fixture.derive(config);
-        let curve = fixture.derive(no_interior_relief());
+        let curve = fixture.derive(curve_and_taper_only());
 
         let mut moved = 0;
         for (cell, (&with, &without)) in base
@@ -164,15 +166,15 @@ mod tests {
         // every cell's whole shift is visible. Doubling it stays clear too.
         let config = BaseElevationConfig {
             dynamic_topography_amplitude: 0.01,
-            basement_amplitude: 0.0,
-            ..reference_base_elevation_config()
+            ..curve_and_taper_only()
         };
+
         let base = fixture.derive(config);
         let doubled = fixture.derive(BaseElevationConfig {
             dynamic_topography_amplitude: config.dynamic_topography_amplitude * 2.0,
             ..config
         });
-        let curve = fixture.derive(no_interior_relief());
+        let curve = fixture.derive(curve_and_taper_only());
         let divergence = fixture
             .mesh
             .cell_divergence(|direction| fixture.flow.velocity_at(direction));
