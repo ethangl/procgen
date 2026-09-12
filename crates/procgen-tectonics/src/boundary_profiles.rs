@@ -1,22 +1,35 @@
 //! The shapes a boundary raises, and the one configuration that holds them.
 //!
 //! A profile is a centre offset at the boundary cell and a decay to zero a
-//! bounded number of mesh hops behind it. [`BoundaryEffect`] states one as a
-//! centre and a depth, [`ContinentalRiftProfile`] states one as a centre and a
-//! flank because a rift valley's shoulders stand above its floor, and both
-//! convert into the [`PropagationProfile`] that `deformation` propagates.
-//! Nothing here reads the mesh: these are the numbers, and `deformation` is
-//! what does them to a world.
+//! bounded distance behind it. [`BoundaryEffect`] states one as a centre and a
+//! depth, [`ContinentalRiftProfile`] states one as a centre and a flank
+//! because a rift valley's shoulders stand above its floor, and both resolve
+//! onto a mesh as the [`PropagationProfile`] that `deformation` propagates.
+//!
+//! Every depth here is a model length on the unit sphere, so a belt is as wide
+//! on a fine mesh as on a coarse one. The one place a length becomes a hop
+//! count is [`BoundaryDeformationConfig::profiles`], which `deformation` calls
+//! once per step.
 
 use crate::field::DEFAULT_STEP_DURATION;
+use procgen_sphere_mesh::{default_hop_length, hops};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundaryEffect {
     /// Signed deformation at the boundary cell.
     pub offset: f32,
-    /// Mesh hops the effect propagates within the current owning plate.
-    pub depth: usize,
+    /// Model length on the unit sphere the effect propagates within the
+    /// current owning plate. One default hop is about 88 km at Earth radius.
+    pub depth: f32,
+}
+
+impl BoundaryEffect {
+    /// The hop profile this effect raises on a mesh of `cell_count` cells. A
+    /// linear effect reaches its own depth and decays to zero one hop past it.
+    fn resolve(self, cell_count: usize) -> PropagationProfile {
+        PropagationProfile::linear(self.offset, hops(cell_count, self.depth))
+    }
 }
 
 /// Graben and shoulders of a continental divergent boundary. A rift valley
@@ -31,19 +44,34 @@ pub struct ContinentalRiftProfile {
     /// Offset one mesh hop away from the boundary. Positive raises rift
     /// shoulders over the plateau; negative widens the depression.
     pub flank_offset: f32,
-    /// Mesh hop at which the flank reaches zero within the owning plate.
-    pub decay_depth: usize,
+    /// Model length on the unit sphere at which the flank reaches zero within
+    /// the owning plate.
+    pub decay_depth: f32,
 }
 
 impl ContinentalRiftProfile {
-    pub const MIN_DECAY_DEPTH: usize = 2;
+    /// Shortest decay a rift can have: on the default mesh the centre takes
+    /// the first hop and the flank needs one of its own, so anything less
+    /// would be a valley with no shoulder. A mesh too coarse to resolve two
+    /// hops of it still draws the centre.
+    pub fn minimum_decay_depth() -> f32 {
+        2.0 * default_hop_length()
+    }
 
     pub fn is_valid(&self) -> bool {
         self.center_offset.is_finite()
             && self.flank_offset.is_finite()
             && self.center_offset < 0.0
             && self.flank_offset > self.center_offset
-            && self.decay_depth >= Self::MIN_DECAY_DEPTH
+            && self.decay_depth >= Self::minimum_decay_depth()
+    }
+
+    fn resolve(self, cell_count: usize) -> PropagationProfile {
+        PropagationProfile::rift(
+            self.center_offset,
+            self.flank_offset,
+            hops(cell_count, self.decay_depth),
+        )
     }
 }
 
@@ -56,9 +84,9 @@ pub struct BoundaryDeformationConfig {
     /// rather than per unit of shear: pure lateral slip builds no relief, and
     /// what a transform makes comes from the small normal component at a bend,
     /// positive where the bend is transpressive and negative where it pulls
-    /// apart. The default depth is 1 because that relief is narrow — a
-    /// restraining bend is a range one cell wide at this resolution, not the
-    /// belt a convergent boundary spreads over six.
+    /// apart. The default depth is one default hop because that relief is
+    /// narrow — a restraining bend is a range some 90 km wide, not the belt a
+    /// convergent boundary spreads over six times that.
     pub transform: BoundaryEffect,
     /// Continental side of a mixed-crust convergent boundary.
     pub collision: BoundaryEffect,
@@ -70,8 +98,8 @@ pub struct BoundaryDeformationConfig {
     /// the overriding plate.
     ///
     /// An arc is narrow — a volcanic front 100 to 200 km behind the trench —
-    /// so the default depth is 2 hops rather than the six a collision belt
-    /// spreads over. The offset matches `convergent` so that a floor at 0.08
+    /// so the default depth is two default hops, about 180 km, rather than the
+    /// six a collision belt spreads over. The offset matches `convergent` so that a floor at 0.08
     /// to 0.30 reaches the 0.5 datum once the boundary has held for the whole
     /// of [`Self::full_deformation_time`] and the volcanic uplift lands on
     /// top. That is what makes an arc an island chain rather than a submarine
@@ -106,28 +134,28 @@ impl Default for BoundaryDeformationConfig {
         Self {
             convergent: BoundaryEffect {
                 offset: 0.4,
-                depth: 6,
+                depth: 6.0 * default_hop_length(),
             },
             rift: ContinentalRiftProfile {
                 center_offset: -0.2,
                 flank_offset: 0.08,
-                decay_depth: 3,
+                decay_depth: 3.0 * default_hop_length(),
             },
             transform: BoundaryEffect {
                 offset: 0.4,
-                depth: 1,
+                depth: default_hop_length(),
             },
             collision: BoundaryEffect {
                 offset: 0.5,
-                depth: 5,
+                depth: 5.0 * default_hop_length(),
             },
             trench: BoundaryEffect {
                 offset: -0.2,
-                depth: 1,
+                depth: default_hop_length(),
             },
             island_arc: BoundaryEffect {
                 offset: 0.4,
-                depth: 2,
+                depth: 2.0 * default_hop_length(),
             },
             saturation_speed: 2.0,
             full_deformation_time: 9.0 * DEFAULT_STEP_DURATION,
@@ -146,12 +174,12 @@ impl fmt::Display for BoundaryDeformationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig => formatter.write_str(
-                "deformation offsets must be finite, and saturation speed, full deformation time, and maximum magnitude must be finite and positive",
+                "deformation offsets must be finite, depths must be finite and non-negative, and saturation speed, full deformation time, and maximum magnitude must be finite and positive",
             ),
             Self::InvalidRiftProfile => write!(
                 formatter,
                 "rift profile must satisfy center < 0 and center < flank, and decay depth >= {}",
-                ContinentalRiftProfile::MIN_DECAY_DEPTH
+                ContinentalRiftProfile::minimum_decay_depth()
             ),
         }
     }
@@ -177,7 +205,9 @@ pub(crate) fn validate_config(
         config.full_deformation_time,
         config.maximum_magnitude,
     ];
-    if effects.iter().any(|effect| !effect.offset.is_finite())
+    if effects
+        .iter()
+        .any(|effect| !effect.offset.is_finite() || !effect.depth.is_finite() || effect.depth < 0.0)
         || positives
             .iter()
             .any(|value| !value.is_finite() || *value <= 0.0)
@@ -195,6 +225,27 @@ pub(crate) struct PropagationProfile {
 }
 
 impl PropagationProfile {
+    /// A linear effect that holds `offset` at the boundary cell and decays to
+    /// zero one hop past `depth`.
+    pub(crate) fn linear(offset: f32, depth: usize) -> Self {
+        let decay_depth = depth.saturating_add(1);
+        Self {
+            center_offset: offset,
+            flank_offset: offset * depth as f32 / decay_depth as f32,
+            decay_depth,
+        }
+    }
+
+    /// A rift's graben and shoulders, the flank falling to zero at
+    /// `decay_depth` hops.
+    pub(crate) fn rift(center_offset: f32, flank_offset: f32, decay_depth: usize) -> Self {
+        Self {
+            center_offset,
+            flank_offset,
+            decay_depth,
+        }
+    }
+
     pub(crate) fn depth(self) -> usize {
         self.decay_depth.saturating_sub(1)
     }
@@ -218,23 +269,30 @@ impl PropagationProfile {
     }
 }
 
-impl From<ContinentalRiftProfile> for PropagationProfile {
-    fn from(profile: ContinentalRiftProfile) -> Self {
-        Self {
-            center_offset: profile.center_offset,
-            flank_offset: profile.flank_offset,
-            decay_depth: profile.decay_depth,
-        }
-    }
+/// The six profiles a [`BoundaryDeformationConfig`] raises, resolved onto one
+/// mesh. Building them once a step is what keeps the length-to-hop conversion
+/// off the per-edge path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PropagationProfiles {
+    pub(crate) convergent: PropagationProfile,
+    pub(crate) rift: PropagationProfile,
+    pub(crate) transform: PropagationProfile,
+    pub(crate) collision: PropagationProfile,
+    pub(crate) trench: PropagationProfile,
+    pub(crate) island_arc: PropagationProfile,
 }
 
-impl From<BoundaryEffect> for PropagationProfile {
-    fn from(effect: BoundaryEffect) -> Self {
-        let decay_depth = effect.depth.saturating_add(1);
-        Self {
-            center_offset: effect.offset,
-            flank_offset: effect.offset * effect.depth as f32 / decay_depth as f32,
-            decay_depth,
+impl BoundaryDeformationConfig {
+    /// Resolves every configured depth onto a mesh of `cell_count` cells. This
+    /// is the one place a model length becomes a hop count.
+    pub(crate) fn profiles(&self, cell_count: usize) -> PropagationProfiles {
+        PropagationProfiles {
+            convergent: self.convergent.resolve(cell_count),
+            rift: self.rift.resolve(cell_count),
+            transform: self.transform.resolve(cell_count),
+            collision: self.collision.resolve(cell_count),
+            trench: self.trench.resolve(cell_count),
+            island_arc: self.island_arc.resolve(cell_count),
         }
     }
 }
@@ -242,14 +300,11 @@ impl From<BoundaryEffect> for PropagationProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
 
     #[test]
     fn continental_rift_has_a_deep_center_raised_shoulders_and_bounded_decay_to_zero() {
-        let source = PropagationProfile::from(ContinentalRiftProfile {
-            center_offset: -0.8,
-            flank_offset: 0.2,
-            decay_depth: 4,
-        });
+        let source = PropagationProfile::rift(-0.8, 0.2, 4);
 
         assert_eq!(source.offset_at(0), -0.8);
         assert_eq!(source.offset_at(1), 0.2);
@@ -264,23 +319,35 @@ mod tests {
 
     #[test]
     fn linear_effect_conversion_preserves_its_profile_and_zero_depth_edge_case() {
-        let effect = BoundaryEffect {
-            offset: 0.6,
-            depth: 3,
-        };
-        let profile = PropagationProfile::from(effect);
-        for depth in 0..=effect.depth {
-            let expected = effect.offset * (1.0 - depth as f32 / (effect.depth + 1) as f32);
+        let (offset, hop_depth) = (0.6, 3);
+        let profile = PropagationProfile::linear(offset, hop_depth);
+        for depth in 0..=hop_depth {
+            let expected = offset * (1.0 - depth as f32 / (hop_depth + 1) as f32);
             assert!((profile.offset_at(depth) - expected).abs() < f32::EPSILON);
         }
 
-        let point = PropagationProfile::from(BoundaryEffect {
-            offset: -0.2,
-            depth: 0,
-        });
+        let point = PropagationProfile::linear(-0.2, 0);
         assert_eq!(point.depth(), 0);
         assert_eq!(point.offset_at(0), -0.2);
         assert_eq!(point.offset_at(1), 0.0);
+    }
+
+    /// The one invariant the whole slice rests on: a default written as a
+    /// multiple of the default hop length resolves back to the hop count it
+    /// replaced, so the default mesh deforms exactly as it did.
+    #[test]
+    fn default_depths_resolve_to_the_hop_counts_they_replaced() {
+        let config = BoundaryDeformationConfig::default();
+        for (effect, depth) in [
+            (config.convergent, 6),
+            (config.transform, 1),
+            (config.collision, 5),
+            (config.trench, 1),
+            (config.island_arc, 2),
+        ] {
+            assert_eq!(hops(DEFAULT_CELL_COUNT, effect.depth), depth);
+        }
+        assert_eq!(hops(DEFAULT_CELL_COUNT, config.rift.decay_depth), 3);
     }
 
     #[test]
@@ -317,6 +384,13 @@ mod tests {
                 },
                 ..Default::default()
             },
+            BoundaryDeformationConfig {
+                collision: BoundaryEffect {
+                    depth: -1.0,
+                    ..BoundaryDeformationConfig::default().collision
+                },
+                ..Default::default()
+            },
         ] {
             assert_eq!(
                 validate_config(config),
@@ -345,7 +419,7 @@ mod tests {
                 ..BoundaryDeformationConfig::default().rift
             },
             ContinentalRiftProfile {
-                decay_depth: 1,
+                decay_depth: default_hop_length(),
                 ..BoundaryDeformationConfig::default().rift
             },
         ] {

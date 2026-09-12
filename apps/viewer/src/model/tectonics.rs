@@ -1,6 +1,6 @@
 use super::{GenerationTimings, WORLD_RADIUS};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-use procgen_sphere_mesh::{SphereMesh, SphericalDelaunay};
+use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, SphereMesh, SphericalDelaunay};
 use procgen_tectonics::{
     BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation, CellCrust,
     CoarseElevation, CoarseElevationConfig, CrustBirthPrior, CrustBirthPriorConfig,
@@ -34,7 +34,7 @@ impl Default for TectonicsSettings {
             fibonacci: FibonacciConfig {
                 jitter: 0.8,
                 seed: 7,
-                ..FibonacciConfig::new(65_536)
+                ..FibonacciConfig::new(DEFAULT_CELL_COUNT)
             },
             plates: PlatePartitionConfig {
                 seed: 7,
@@ -235,7 +235,8 @@ impl TectonicsWorld {
 mod tests {
     use super::WORLD_RADIUS;
     use crate::test_support::{tectonics_settings, tectonics_world};
-    use procgen_tectonics::{maximum_step_duration, mean_cell_width};
+    use procgen_sphere_mesh::mean_cell_width;
+    use procgen_tectonics::maximum_step_duration;
 
     /// The test meshes are far coarser than the default one and their step is
     /// scaled up to match, so this is the assertion that the scaling stays

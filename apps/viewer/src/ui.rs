@@ -10,6 +10,8 @@ use crate::render::{
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use procgen_planet::Planet;
+use procgen_sphere_mesh::default_hop_length;
 
 const SECTION_SPACING: f32 = 6.0;
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -324,4 +326,31 @@ fn slider<T: egui::emath::Numeric>(
         ui.label(label);
         ui.add(egui::Slider::new(value, range));
     });
+}
+
+/// A model length on the unit sphere, with the kilometres it spans on an
+/// Earth-sized planet in its tooltip. The length itself is a fraction of a
+/// radius and reads as noise, so the tooltip is what makes the number mean
+/// something; the planet radius the climate phase carries belongs to another
+/// phase, so the reference here is Earth's, as the crates' own documentation
+/// states these defaults in.
+fn length_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let kilometres = f64::from(*value) * Planet::EARTH.radius_meters / 1_000.0;
+        ui.add(egui::Slider::new(value, range))
+            .on_hover_text(format!("{kilometres:.0} km at Earth radius"));
+    });
+}
+
+/// A slider range stated in hops of the default mesh, as the model lengths
+/// those hops span. Every length default was set against that mesh, so its
+/// hops are the units these ranges were chosen in.
+fn hop_range(hops: std::ops::RangeInclusive<f32>) -> std::ops::RangeInclusive<f32> {
+    hops.start() * default_hop_length()..=hops.end() * default_hop_length()
 }

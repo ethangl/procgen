@@ -3,7 +3,7 @@ use crate::{
     SedimentaryBasinField, VolcanicArcDiagnostics, VolcanicArcField,
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
+use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh, mean_cell_width};
 use procgen_tectonics::{CrustClass, CrustClassification};
 
 /// The birth field an initial per-cell classification implies, for the stages
@@ -15,6 +15,14 @@ pub(crate) fn classified_cell_birth(crust: &CrustClassification) -> Vec<Option<f
         .iter()
         .map(|&class| (class == CrustClass::Oceanic).then_some(0.0))
         .collect()
+}
+
+/// The model length that spans `hops` on a mesh of `cell_count` cells. The
+/// fixture meshes are far coarser than the 65,536-cell mesh the length
+/// defaults were set against, so a fixture that means a hop count says so
+/// through this.
+pub(crate) fn hop_length(cell_count: usize, hops: usize) -> f32 {
+    hops as f32 * mean_cell_width(1.0, cell_count)
 }
 
 pub(crate) fn mesh(cell_count: usize) -> SphereMesh {

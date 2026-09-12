@@ -41,8 +41,9 @@ impl fmt::Display for GeologyStageError {
         match self {
             Self::Input(error) => error.fmt(formatter),
             Self::Geology(error) => error.fmt(formatter),
-            Self::InvalidConfig => formatter
-                .write_str("stage configuration values must be finite and between zero and one"),
+            Self::InvalidConfig => formatter.write_str(
+                "stage configuration values must be finite, fractions between zero and one and lengths not negative",
+            ),
         }
     }
 }

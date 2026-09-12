@@ -15,10 +15,9 @@
 use crate::{
     BoundaryClass, BoundaryClassification, CrustClass, CrustClassification, FieldSummary,
     PlateEvolution, PlateKinematicsConfig, PlateKinematicsError, PlatePartition,
-    field::mean_cell_width, motion::validate_config as validate_motion_config,
-    stage::StageInputError,
+    motion::validate_config as validate_motion_config, stage::StageInputError,
 };
-use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
+use procgen_sphere_mesh::{SphereMesh, mean_cell_width, multi_source_distances};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

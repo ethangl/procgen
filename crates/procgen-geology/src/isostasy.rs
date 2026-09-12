@@ -4,7 +4,7 @@ use crate::{
         GeologyStageError, SignedEffectDiagnostics, apply_elevation_effect, lerp, unit_interval,
     },
 };
-use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
+use procgen_sphere_mesh::{SphereMesh, default_hop_length, edge_cell_distances, hops};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CellCrust, CrustClass, ElevationField, FieldSummary,
 };
@@ -22,8 +22,10 @@ pub struct IsostaticAdjustmentConfig {
     pub divergent_support_penalty: f32,
     /// Maximum support added by full craton strength.
     pub craton_support_bonus: f32,
-    /// Inclusive graph-hop range over which boundary proximity decays.
-    pub maximum_boundary_distance: usize,
+    /// Distance over which boundary proximity decays, as a model length on
+    /// the unit sphere. The cell at that distance is the last one to carry
+    /// any. The default of five default hops is about 440 km at Earth radius.
+    pub maximum_boundary_distance: f32,
 }
 
 impl Default for IsostaticAdjustmentConfig {
@@ -34,7 +36,7 @@ impl Default for IsostaticAdjustmentConfig {
             convergent_support_bonus: 0.25,
             divergent_support_penalty: 0.15,
             craton_support_bonus: 0.10,
-            maximum_boundary_distance: 5,
+            maximum_boundary_distance: 5.0 * default_hop_length(),
         }
     }
 }
@@ -97,6 +99,7 @@ pub fn derive_isostatic_adjustment(
 ) -> Result<IsostaticAdjustment, GeologyStageError> {
     validate_inputs(mesh, inputs, config)?;
 
+    let maximum_boundary_distance = hops(mesh.cell_count(), config.maximum_boundary_distance);
     let convergent_distances = edge_cell_distances(mesh, |edge, _| {
         inputs.boundaries.edge_classes[edge] == BoundaryClass::Convergent
     });
@@ -123,10 +126,10 @@ pub fn derive_isostatic_adjustment(
                 elevation
             } else {
                 (config.continental_support
-                    + proximity(convergent_distances[cell], config.maximum_boundary_distance)
+                    + proximity(convergent_distances[cell], maximum_boundary_distance)
                         * config.convergent_support_bonus
                     + inputs.cratons.cell_strengths[cell] * config.craton_support_bonus
-                    - proximity(divergent_distances[cell], config.maximum_boundary_distance)
+                    - proximity(divergent_distances[cell], maximum_boundary_distance)
                         * config.divergent_support_penalty)
                     .clamp(0.0, 1.0)
             }
@@ -166,7 +169,9 @@ fn validate_inputs(
     inputs: IsostaticAdjustmentInputs<'_>,
     config: IsostaticAdjustmentConfig,
 ) -> Result<(), GeologyStageError> {
-    if !unit_interval(config.adjustment_strength)
+    if !config.maximum_boundary_distance.is_finite()
+        || config.maximum_boundary_distance < 0.0
+        || !unit_interval(config.adjustment_strength)
         || !unit_interval(config.continental_support)
         || !unit_interval(config.convergent_support_bonus)
         || !unit_interval(config.divergent_support_penalty)
@@ -188,9 +193,10 @@ mod tests {
     use crate::{
         ElevationEffectDiagnostics, GeologicalElevationDiagnostics, GeologyInputError,
         SedimentaryBasin,
-        test_support::{empty_basins, empty_cratons, mesh},
+        test_support::{empty_basins, empty_cratons, hop_length, mesh},
     };
     use procgen_core::quantized_fingerprint;
+    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
     use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
@@ -252,16 +258,15 @@ mod tests {
         fixture.cratons.cell_strengths[4] = 1.0;
         fixture.elevation.cell_elevations[5] = 0.9;
         let original = fixture.clone();
+        // The five cells the default decay means, on a mesh this much coarser
+        // than the one it was set against.
+        let config = IsostaticAdjustmentConfig {
+            maximum_boundary_distance: hop_length(32, 5),
+            ..IsostaticAdjustmentConfig::default()
+        };
 
-        let first = fixture
-            .derive(IsostaticAdjustmentConfig::default())
-            .unwrap();
-        assert_eq!(
-            first,
-            fixture
-                .derive(IsostaticAdjustmentConfig::default())
-                .unwrap()
-        );
+        let first = fixture.derive(config).unwrap();
+        assert_eq!(first, fixture.derive(config).unwrap());
         assert_eq!(fixture.cell_birth, original.cell_birth);
         assert_eq!(fixture.boundaries, original.boundaries);
         assert_eq!(fixture.cratons, original.cratons);
@@ -274,6 +279,19 @@ mod tests {
         assert_eq!(
             quantized_fingerprint(first.cell_support.iter().copied()),
             10_475_948_157_526_751_066
+        );
+    }
+
+    /// The default is a model length now, and this is the assertion that it
+    /// still means the five cells it was written as.
+    #[test]
+    fn the_default_boundary_decay_is_five_cells_of_the_default_mesh() {
+        assert_eq!(
+            hops(
+                DEFAULT_CELL_COUNT,
+                IsostaticAdjustmentConfig::default().maximum_boundary_distance
+            ),
+            5
         );
     }
 
@@ -344,7 +362,7 @@ mod tests {
 
         let result = fixture
             .derive(IsostaticAdjustmentConfig {
-                maximum_boundary_distance: 0,
+                maximum_boundary_distance: 0.0,
                 ..Default::default()
             })
             .unwrap();

@@ -1,24 +1,54 @@
 use crate::field::GeologyInputError;
-use procgen_sphere_mesh::{SphereMesh, edge_cell_distances};
+use procgen_sphere_mesh::{SphereMesh, default_hop_length, edge_cell_distances, hops};
 use procgen_tectonics::{
     CellCrust, CrustClass, ElevationField, FieldSummary, PlatePartition, StageInputError,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CratonFieldConfig {
-    /// Minimum graph distance from a final plate boundary before strength can begin.
-    pub minimum_boundary_distance: usize,
-    /// Additional graph distance over which strength ramps from zero to one.
-    /// Zero applies a hard cutoff at `minimum_boundary_distance`.
-    pub ramp_width: usize,
+    /// Minimum distance from a final plate boundary before strength can begin,
+    /// as a model length on the unit sphere. The default of three default hops
+    /// is about 265 km at Earth radius.
+    pub minimum_boundary_distance: f32,
+    /// Additional distance over which strength ramps from zero to one, as a
+    /// model length. Zero applies a hard cutoff at
+    /// `minimum_boundary_distance`.
+    pub ramp_width: f32,
 }
 
 impl Default for CratonFieldConfig {
     fn default() -> Self {
         Self {
-            minimum_boundary_distance: 3,
-            ramp_width: 3,
+            minimum_boundary_distance: 3.0 * default_hop_length(),
+            ramp_width: 3.0 * default_hop_length(),
         }
+    }
+}
+
+/// The configured lengths resolved onto one mesh, in the hops the boundary
+/// distances are counted in.
+#[derive(Clone, Copy, Debug)]
+struct CratonRamp {
+    minimum_boundary_distance: usize,
+    width: usize,
+}
+
+impl CratonRamp {
+    fn new(cell_count: usize, config: CratonFieldConfig) -> Self {
+        Self {
+            minimum_boundary_distance: hops(cell_count, config.minimum_boundary_distance),
+            width: hops(cell_count, config.ramp_width),
+        }
+    }
+
+    fn strength_at(self, distance: usize) -> f32 {
+        if distance < self.minimum_boundary_distance {
+            return 0.0;
+        }
+        if self.width == 0 {
+            return 1.0;
+        }
+        ((distance - self.minimum_boundary_distance) as f32 / self.width as f32).min(1.0)
     }
 }
 
@@ -64,6 +94,7 @@ pub fn derive_craton_field(
     crust.validate(mesh)?;
     elevation.validate(mesh)?;
 
+    let ramp = CratonRamp::new(mesh.cell_count(), config);
     let cell_boundary_distances = plate_boundary_distances(mesh, plates);
     let is_eligible =
         |cell| crust.class(cell) == CrustClass::Continental && elevation.is_land(cell);
@@ -73,7 +104,7 @@ pub fn derive_craton_field(
         .map(|(cell, &distance)| {
             distance
                 .filter(|_| is_eligible(cell))
-                .map_or(0.0, |distance| strength_at_distance(distance, config))
+                .map_or(0.0, |distance| ramp.strength_at(distance))
         })
         .collect();
 
@@ -113,22 +144,13 @@ fn plate_boundary_distances(mesh: &SphereMesh, plates: &PlatePartition) -> Vec<O
     })
 }
 
-fn strength_at_distance(distance: usize, config: CratonFieldConfig) -> f32 {
-    if distance < config.minimum_boundary_distance {
-        return 0.0;
-    }
-    if config.ramp_width == 0 {
-        return 1.0;
-    }
-    ((distance - config.minimum_boundary_distance) as f32 / config.ramp_width as f32).min(1.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::classified_cell_birth;
+    use crate::test_support::{classified_cell_birth, hop_length};
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
+    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
     use procgen_sphere_mesh::build_sphere_mesh;
     use procgen_tectonics::{
         CoarseElevationConfig, CrustClassificationConfig, PlatePartitionConfig, classify_crust,
@@ -239,28 +261,44 @@ mod tests {
 
     #[test]
     fn strength_ramp_has_explicit_cutoff_and_saturation_edges() {
-        let ramped = CratonFieldConfig {
+        let ramped = CratonRamp {
             minimum_boundary_distance: 3,
-            ramp_width: 3,
+            width: 3,
         };
-        assert_eq!(strength_at_distance(2, ramped), 0.0);
-        assert_eq!(strength_at_distance(3, ramped), 0.0);
-        assert_eq!(strength_at_distance(4, ramped), 1.0 / 3.0);
-        assert_eq!(strength_at_distance(6, ramped), 1.0);
-        assert_eq!(strength_at_distance(12, ramped), 1.0);
+        assert_eq!(ramped.strength_at(2), 0.0);
+        assert_eq!(ramped.strength_at(3), 0.0);
+        assert_eq!(ramped.strength_at(4), 1.0 / 3.0);
+        assert_eq!(ramped.strength_at(6), 1.0);
+        assert_eq!(ramped.strength_at(12), 1.0);
 
-        let cutoff = CratonFieldConfig {
+        let cutoff = CratonRamp {
             minimum_boundary_distance: 3,
-            ramp_width: 0,
+            width: 0,
         };
-        assert_eq!(strength_at_distance(2, cutoff), 0.0);
-        assert_eq!(strength_at_distance(3, cutoff), 1.0);
+        assert_eq!(cutoff.strength_at(2), 0.0);
+        assert_eq!(cutoff.strength_at(3), 1.0);
+    }
+
+    /// The defaults are model lengths now, and this is the assertion that they
+    /// still mean the three cells each was written as.
+    #[test]
+    fn the_default_ramp_is_three_cells_out_and_three_cells_wide_on_the_default_mesh() {
+        let config = CratonFieldConfig::default();
+        let ramp = CratonRamp::new(DEFAULT_CELL_COUNT, config);
+        assert_eq!(ramp.minimum_boundary_distance, 3);
+        assert_eq!(ramp.width, 3);
     }
 
     #[test]
     fn reference_field_has_stable_fingerprint() {
         let (mesh, plates, cell_birth, elevations) = fixture(1_024, 6);
-        let config = CratonFieldConfig::default();
+        // The three cells the defaults mean, on a mesh this much coarser than
+        // the one they were set against.
+        let config = CratonFieldConfig {
+            minimum_boundary_distance: hop_length(1_024, 3),
+            ramp_width: hop_length(1_024, 3),
+        };
+        let ramp_width = hops(mesh.cell_count(), config.ramp_width);
         let field = derive_craton_field(
             &mesh,
             &plates,
@@ -280,10 +318,10 @@ mod tests {
         let steps: Vec<_> = field
             .cell_strengths
             .iter()
-            .map(|strength| (strength * config.ramp_width as f32).round() as u64)
+            .map(|strength| (strength * ramp_width as f32).round() as u64)
             .collect();
         assert!(
-            steps.iter().all(|&step| step <= config.ramp_width as u64),
+            steps.iter().all(|&step| step <= ramp_width as u64),
             "a strength left the ramp"
         );
         assert_eq!(
@@ -302,8 +340,8 @@ mod tests {
             crust(&cell_birth),
             elevation(&elevations),
             CratonFieldConfig {
-                minimum_boundary_distance: 0,
-                ramp_width: 0,
+                minimum_boundary_distance: 0.0,
+                ramp_width: 0.0,
             },
         )
         .unwrap();
@@ -334,8 +372,8 @@ mod tests {
             crust(&cell_birth),
             elevation(&elevations),
             CratonFieldConfig {
-                minimum_boundary_distance: 0,
-                ramp_width: 2,
+                minimum_boundary_distance: 0.0,
+                ramp_width: hop_length(512, 2),
             },
         )
         .unwrap();
@@ -363,8 +401,8 @@ mod tests {
             crust(&cell_birth),
             elevation(&elevations),
             CratonFieldConfig {
-                minimum_boundary_distance: 0,
-                ramp_width: 0,
+                minimum_boundary_distance: 0.0,
+                ramp_width: 0.0,
             },
         )
         .unwrap();

@@ -1,13 +1,14 @@
-use super::super::{drag_value, section, slider};
+use super::super::{drag_value, hop_range, length_slider, section, slider};
 use crate::model::{TectonicsSettings, WORLD_RADIUS};
 use bevy_egui::egui;
 use procgen_sphere::FibonacciConfig;
+use procgen_sphere_mesh::mean_cell_width;
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
     DEFAULT_STEP_DURATION, MAX_GAP_RADIUS, MAX_GROWTH_ROUGHNESS, PlateEvolutionConfig,
     PlateKinematicsConfig, PlateLifecycleConfig, PlatePartitionConfig, PoleDriftConfig,
-    maximum_step_duration, mean_cell_width,
+    maximum_step_duration,
 };
 
 // The mesh has no ceiling of its own; this bounds the CPU pipeline's run time.
@@ -63,11 +64,13 @@ const SUTURE_SHARED_EDGE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
 // A hop count, not a time: the prior walks the mesh and turns hops into model
 // time itself.
 const RIDGE_LESS_HOP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
-const DEFORMATION_DEPTH_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+// Lengths, in hops of the default mesh: the units the old hop counts were
+// chosen in.
+const DEFORMATION_DEPTH_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 // A single profile offset is bounded to one, and tectonic elevation clamps to
 // the unit range, so a clamp above one could never bite.
 const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
-const SMOOTHING_PASS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+const SMOOTHING_RADIUS_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 // The datum must stay strictly inside the unit range the field is clamped to.
 // The bottom leaves only the deep floor at 0.08 under water and the top drowns
 // the continental base at 0.65, so the range spans an almost fully exposed
@@ -85,7 +88,7 @@ const BASEMENT_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.5..=8.0;
 // Zero is the cliff a continent's edge was before the shelf existed; the top
 // is a shelf as wide as the few cells a boundary deforms, past which the
 // taper, not the crust mask, would decide where a continent is.
-const MARGIN_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 0..=8;
+const MARGIN_WIDTH_HOPS: std::ops::RangeInclusive<f32> = 0.0..=8.0;
 // The shelf edge spans the deep floor at 0.08 up to the continental base,
 // which the stage rejects being above; the bottom lets a shelf drop to the
 // ocean it meets and the top collapses the taper back to a cliff.
@@ -412,12 +415,11 @@ fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) 
         u64::MIN..=u64::MAX,
         1.0,
     );
-    drag_value(
+    length_slider(
         ui,
         "Margin width",
-        &mut config.margin_width_hops,
-        MARGIN_WIDTH_RANGE,
-        1.0,
+        &mut config.margin_width,
+        hop_range(MARGIN_WIDTH_HOPS),
     );
     slider(
         ui,
@@ -472,23 +474,21 @@ fn continental_rift_controls(ui: &mut egui::Ui, profile: &mut ContinentalRiftPro
         &mut profile.flank_offset,
         -1.0..=0.0,
     );
-    drag_value(
+    length_slider(
         ui,
         "Rift decay depth",
         &mut profile.decay_depth,
-        ContinentalRiftProfile::MIN_DECAY_DEPTH..=*DEFORMATION_DEPTH_RANGE.end(),
-        1.0,
+        ContinentalRiftProfile::minimum_decay_depth()..=*hop_range(DEFORMATION_DEPTH_HOPS).end(),
     );
 }
 
 fn elevation_controls(ui: &mut egui::Ui, config: &mut CoarseElevationConfig) {
     slider(ui, "Sea level", &mut config.sea_level, SEA_LEVEL_RANGE);
-    drag_value(
+    length_slider(
         ui,
-        "Smoothing passes",
-        &mut config.smoothing_passes,
-        SMOOTHING_PASS_RANGE,
-        1.0,
+        "Smoothing radius",
+        &mut config.smoothing_radius,
+        hop_range(SMOOTHING_RADIUS_HOPS),
     );
     slider(
         ui,
@@ -505,11 +505,10 @@ fn boundary_effect_controls(ui: &mut egui::Ui, label: &str, effect: &mut Boundar
         &mut effect.offset,
         -1.0..=1.0,
     );
-    drag_value(
+    length_slider(
         ui,
         &format!("{label} depth"),
         &mut effect.depth,
-        DEFORMATION_DEPTH_RANGE,
-        1.0,
+        hop_range(DEFORMATION_DEPTH_HOPS),
     );
 }

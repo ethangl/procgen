@@ -2,7 +2,7 @@
 //!
 //! Oceanic crust follows a square-root cooling curve from a ridge down to the
 //! deep floor. Continental crust starts from one configured base, tapered to
-//! `margin_edge_elevation` over the outermost `margin_width_hops` cells so
+//! `margin_edge_elevation` over the outermost `margin_width` of a continent so
 //! that a continent ends in a shelf rather than a cliff. Neither varies over a
 //! plate interior, so a plate wider than the few cells a boundary deforms
 //! would be flat by construction; the two interior relief fields are the
@@ -25,7 +25,7 @@ use crate::{
     interior_relief::{basement_field, dynamic_topography_field, validate_interior_relief},
 };
 use procgen_noise::{OctaveConfig, Validated};
-use procgen_sphere_mesh::{SphereMesh, multi_source_distances};
+use procgen_sphere_mesh::{SphereMesh, default_hop_length, hops, multi_source_distances};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,15 +63,16 @@ pub struct BaseElevationConfig {
     /// circle, or some 48 cells of the default mesh — and its shortest, two
     /// octaves up, is a quarter of that, about a dozen cells.
     pub basement_frequency: f32,
-    /// Continental cells within this many hops of the ocean carry the margin
-    /// taper instead of the flat `continental_base`. Zero disables the taper
-    /// and restores the cliff a continent's edge was before it existed.
-    pub margin_width_hops: usize,
+    /// Continental cells within this model length of the ocean carry the
+    /// margin taper instead of the flat `continental_base`. The default of
+    /// three default hops is about 265 km at Earth radius. Zero disables the
+    /// taper and restores the cliff a continent's edge was before it existed.
+    pub margin_width: f32,
     /// Base elevation of the outermost continental cell, the shelf's seaward
     /// edge. Must be within the unit range and not above `continental_base`.
     ///
-    /// This and `margin_width_hops` are chosen together against the default
-    /// sea level of 0.5. With `continental_base` 0.65, three hops, and an edge
+    /// This and `margin_width` are chosen together against the default sea
+    /// level of 0.5. With `continental_base` 0.65, three hops, and an edge
     /// at 0.46, the taper puts the three margin cells at 0.46, `0.46 + 0.19/3`
     /// which is 0.5233, and `0.46 + 0.38/3` which is 0.5867. At the datum the
     /// outermost is flooded and the other two stand; raising it to 0.55 floods
@@ -94,7 +95,7 @@ impl Default for BaseElevationConfig {
             dynamic_topography_amplitude: 0.03,
             basement_amplitude: 0.05,
             basement_frequency: 3.0,
-            margin_width_hops: 3,
+            margin_width: 3.0 * default_hop_length(),
             margin_edge_elevation: 0.46,
         }
     }
@@ -116,7 +117,7 @@ pub struct BaseElevationDiagnostics {
     pub oceanic_cell_count: usize,
     pub continental_cell_count: usize,
     /// Continental cells the taper reached, which is every continental cell
-    /// within `margin_width_hops` of the ocean.
+    /// within `margin_width` of the ocean.
     pub margin_cell_count: usize,
 }
 
@@ -185,7 +186,8 @@ impl From<StageInputError> for BaseElevationError {
 /// The oceanic cooling curve runs from ridge elevation to deep-ocean elevation
 /// with the square root of age over `cooling_age`, and ages at or above it use
 /// the deep floor; continental crust starts from `continental_base`, tapered
-/// to `margin_edge_elevation` over the outermost `margin_width_hops` cells.
+/// to `margin_edge_elevation` over the outermost `margin_width` of a
+/// continent.
 /// Crust that predates the run carries the prior's age plus the time the run
 /// took, so an old ocean reaches the deep floor and crust born at a ridge
 /// during the run does not. Onto that go the dynamic topography of the flow
@@ -278,8 +280,8 @@ fn cooled(age: Option<f32>, continental_base: f32, config: BaseElevationConfig) 
 /// reached. Oceanic cells hold `continental_base` and nothing reads them.
 struct ContinentalBase {
     cell_bases: Vec<f32>,
-    /// Continental cells within `margin_width_hops` of the ocean, in cell
-    /// order. Empty when the width is zero.
+    /// Continental cells within `margin_width` of the ocean, in cell order.
+    /// Empty when the width is zero.
     margin_cells: Vec<usize>,
 }
 
@@ -289,7 +291,7 @@ struct ContinentalBase {
 /// Hop distance comes from every oceanic cell at once and crosses anything,
 /// because a shelf is not a feature of one plate: the ocean a rift opened
 /// during the run is measured against the same as any other. A continental
-/// cell at hop `h` in `1..=margin_width_hops` stands at
+/// cell at hop `h` in `1..=width` stands at
 /// `edge + (base - edge) * (h - 1) / width`, so the outermost cell sits at the
 /// edge elevation and the step from one hop to the next is one `width`th of
 /// the drop. Cells further inland keep `continental_base`. The interpolation
@@ -301,14 +303,17 @@ fn continental_base_field(
 ) -> ContinentalBase {
     let mut cell_bases = vec![config.continental_base; mesh.cell_count()];
     let mut margin_cells = Vec::new();
-    // A zero width disables the taper, and the hop distances would go unread.
-    if config.margin_width_hops > 0 {
+    // The one conversion: the configured width is a model length, and the
+    // taper counts hops. A zero width disables the taper, and the hop
+    // distances would go unread.
+    let width = hops(mesh.cell_count(), config.margin_width);
+    if width > 0 {
         let oceanic: Vec<_> = (0..mesh.cell_count())
             .filter(|&cell| cell_crust.class(cell) == CrustClass::Oceanic)
             .collect();
         let hops = multi_source_distances(mesh, &oceanic, |_, _| true);
         let drop = config.continental_base - config.margin_edge_elevation;
-        let margin = 1..=config.margin_width_hops;
+        let margin = 1..=width;
         for (cell, hops) in hops.iter().enumerate() {
             // Every oceanic cell is a source, so hop zero is exactly the ocean
             // and the range excludes it without a second reading of the crust.
@@ -317,7 +322,7 @@ fn continental_base_field(
             let Some(hops) = hops.filter(|hops| margin.contains(hops)) else {
                 continue;
             };
-            let inland = (hops - 1) as f32 / config.margin_width_hops as f32;
+            let inland = (hops - 1) as f32 / width as f32;
             cell_bases[cell] = config.margin_edge_elevation + drop * inland;
             margin_cells.push(cell);
         }
@@ -369,6 +374,7 @@ mod tests {
         CoarseElevationConfig, CrustClassificationConfig, PlateKinematicsConfig,
         SeafloorAgeDiagnostics, is_land,
     };
+    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
 
     /// `continental_fraction` before the margin taper retuned it. The
     /// pre-slice base elevation is pinned over the world that target grew, so
@@ -376,7 +382,7 @@ mod tests {
     const PRE_MARGIN_CONTINENTAL_FRACTION: f32 = 0.3;
 
     /// No taper, which is the pre-slice continental base exactly.
-    const NO_MARGIN: usize = 0;
+    const NO_MARGIN: f32 = 0.0;
 
     /// The reference world at the target area the pre-slice field was pinned
     /// over, which is the only place that fingerprint still holds.
@@ -390,10 +396,16 @@ mod tests {
     /// The exact base the taper gives a continental cell at `hops` from the
     /// ocean, written the way the config documentation states it rather than
     /// the way the field computes it.
-    fn tapered_base(hops: usize, config: BaseElevationConfig) -> f32 {
+    fn tapered_base(hops: usize, width: usize, config: BaseElevationConfig) -> f32 {
         config.margin_edge_elevation
             + (config.continental_base - config.margin_edge_elevation) * (hops - 1) as f32
-                / config.margin_width_hops as f32
+                / width as f32
+    }
+
+    /// The hop count the configured margin width spans on a fixture's mesh,
+    /// which is what the taper actually counts.
+    fn margin_hops(fixture: &BaseElevationFixture, config: BaseElevationConfig) -> usize {
+        hops(fixture.mesh.cell_count(), config.margin_width)
     }
 
     /// Hops from the nearest oceanic cell for every cell of a fixture, the
@@ -422,7 +434,7 @@ mod tests {
     fn zero_amplitudes_and_no_taper_reproduce_the_curve_alone_deterministically() {
         let fixture = pre_margin_fixture();
         let config = BaseElevationConfig {
-            margin_width_hops: NO_MARGIN,
+            margin_width: NO_MARGIN,
             ..no_interior_relief()
         };
         let first = fixture.derive(config);
@@ -455,14 +467,28 @@ mod tests {
         );
     }
 
+    /// The default width is a model length now, and this is the assertion
+    /// that it still means the three cells it was written as.
+    #[test]
+    fn the_default_margin_width_is_three_cells_of_the_default_mesh() {
+        assert_eq!(
+            hops(
+                DEFAULT_CELL_COUNT,
+                BaseElevationConfig::default().margin_width
+            ),
+            3
+        );
+    }
+
     #[test]
     fn the_taper_lowers_continental_cells_by_their_hops_from_the_ocean() {
         let fixture = base_elevation_fixture();
         let config = no_interior_relief();
         let hops = ocean_hops(&fixture);
+        let width = margin_hops(&fixture, config);
         let base = fixture.derive(config);
 
-        let mut margin_counts = vec![0; config.margin_width_hops + 1];
+        let mut margin_counts = vec![0; width + 1];
         for (cell, &hops) in hops.iter().enumerate() {
             let elevation = base.cell_elevations[cell];
             let Some(hops) = hops else {
@@ -474,10 +500,10 @@ mod tests {
                     cooled(fixture.age.cell_ages[cell], config.continental_base, config),
                     "oceanic cell {cell} left the cooling curve"
                 ),
-                hops if hops <= config.margin_width_hops => {
+                hops if hops <= width => {
                     assert_eq!(
                         elevation,
-                        tapered_base(hops, config),
+                        tapered_base(hops, width, config),
                         "margin cell {cell} at {hops} hops"
                     );
                     margin_counts[hops] += 1;
@@ -499,10 +525,10 @@ mod tests {
         );
         // Strictly increasing in hops, which is what makes the shelf a slope
         // rather than a step: the outermost cell alone sits at the edge.
-        assert_eq!(tapered_base(1, config), config.margin_edge_elevation);
-        for hops in 2..=config.margin_width_hops {
+        assert_eq!(tapered_base(1, width, config), config.margin_edge_elevation);
+        for hops in 2..=width {
             assert!(
-                tapered_base(hops - 1, config) < tapered_base(hops, config),
+                tapered_base(hops - 1, width, config) < tapered_base(hops, width, config),
                 "hop {hops} does not rise above its neighbor"
             );
         }
@@ -538,7 +564,7 @@ mod tests {
     fn crust_born_during_the_run_grows_shelves_on_its_own_margins() {
         let fixture = base_elevation_fixture();
         let hops = ocean_hops(&fixture);
-        let width = reference_base_elevation_config().margin_width_hops;
+        let width = margin_hops(&fixture, reference_base_elevation_config());
         let margin = |cell: usize| hops[cell].is_some_and(|hops| (1..=width).contains(&hops));
 
         let mut checked = 0;
@@ -577,7 +603,7 @@ mod tests {
         assert_ne!(
             first,
             fixture.derive(BaseElevationConfig {
-                margin_width_hops: NO_MARGIN,
+                margin_width: NO_MARGIN,
                 ..config
             })
         );
@@ -605,7 +631,7 @@ mod tests {
             // The one continental cell here is surrounded by ocean, so a
             // taper would put it on the shelf edge rather than the base this
             // test is about.
-            margin_width_hops: NO_MARGIN,
+            margin_width: NO_MARGIN,
             ..no_interior_relief()
         };
 
@@ -662,7 +688,7 @@ mod tests {
             if fixture.age.cell_ages[cell].is_some() {
                 continue;
             }
-            if hops[cell].is_some_and(|hops| hops <= config.margin_width_hops) {
+            if hops[cell].is_some_and(|hops| hops <= margin_hops(&fixture, config)) {
                 flooded_margin += usize::from(!is_land(elevation, sea_level));
             } else {
                 // Interior relief is bounded against the untapered base, so

@@ -6,17 +6,57 @@ use crate::{
         build_mesh,
     },
 };
-use procgen_geology::{HotspotFieldConfig, OceanicPeakFieldConfig};
+use procgen_geology::{
+    CratonFieldConfig, HotspotFieldConfig, IsostaticAdjustmentConfig, OceanicPeakFieldConfig,
+    VolcanicArcFieldConfig,
+};
 use procgen_sphere::FibonacciConfig;
+use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, mean_cell_width};
 use procgen_tectonics::{
-    CrustClassificationConfig, DEFAULT_STEP_DURATION, PlateEvolutionConfig, PlateKinematicsConfig,
-    PlatePartitionConfig,
+    BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
+    ContinentalRiftProfile, CrustClassificationConfig, DEFAULT_STEP_DURATION, PlateEvolutionConfig,
+    PlateKinematicsConfig, PlatePartitionConfig,
 };
 use std::{
     env,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+/// The model length that spans `hops` on a mesh of `cell_count` cells.
+///
+/// Every length default was set against the 65,536-cell mesh, and these test
+/// meshes are coarse enough that a default of a few of its cells would round
+/// to one hop here. Each fixture therefore states the reach the default means
+/// rather than taking the default itself, exactly as it does for the step
+/// duration: a fixture stands in for the default world, not for a world
+/// generated at thirty-two cells.
+fn hop_length(cell_count: usize, hops: f32) -> f32 {
+    hops * mean_cell_width(1.0, cell_count)
+}
+
+/// The default deformation profiles with every depth carried to a mesh of
+/// `cell_count` cells.
+fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
+    let scale = mean_cell_width(1.0, cell_count) / mean_cell_width(1.0, DEFAULT_CELL_COUNT);
+    let default = BoundaryDeformationConfig::default();
+    let deepen = |effect: BoundaryEffect| BoundaryEffect {
+        depth: effect.depth * scale,
+        ..effect
+    };
+    BoundaryDeformationConfig {
+        convergent: deepen(default.convergent),
+        transform: deepen(default.transform),
+        collision: deepen(default.collision),
+        trench: deepen(default.trench),
+        island_arc: deepen(default.island_arc),
+        rift: ContinentalRiftProfile {
+            decay_depth: default.rift.decay_depth * scale,
+            ..default.rift
+        },
+        ..default
+    }
+}
 
 pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSettings {
     TectonicsSettings {
@@ -41,8 +81,18 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
             // width goes as the reciprocal square root of cell count, so a
             // step on these much coarser test meshes has to be that much
             // longer to move a plate the same one cell.
-            step_duration: DEFAULT_STEP_DURATION * (65_536.0 / cell_count as f32).sqrt(),
+            step_duration: DEFAULT_STEP_DURATION
+                * (DEFAULT_CELL_COUNT as f32 / cell_count as f32).sqrt(),
+            deformation: scaled_deformation(cell_count),
             ..Default::default()
+        },
+        base_elevation: BaseElevationConfig {
+            margin_width: hop_length(cell_count, 3.0),
+            ..BaseElevationConfig::default()
+        },
+        elevation: CoarseElevationConfig {
+            smoothing_radius: hop_length(cell_count, 2.0),
+            ..CoarseElevationConfig::default()
         },
         ..TectonicsSettings::default()
     }
@@ -56,14 +106,28 @@ pub(crate) fn tectonics_world(settings: TectonicsSettings) -> TectonicsWorld {
     TectonicsWorld::generate(voronoi, settings, timings).unwrap()
 }
 
-pub(crate) fn geology_settings(seed: u64) -> GeologySettings {
+pub(crate) fn geology_settings(cell_count: usize, seed: u64) -> GeologySettings {
     GeologySettings {
         hotspots: HotspotFieldConfig {
             hotspot_count: 3,
-            maximum_trail_cells: 4,
+            maximum_trail_length: hop_length(cell_count, 4.0),
+            province_radius: hop_length(cell_count, 5.0),
+            province_rim: hop_length(cell_count, 2.0),
             ..HotspotFieldConfig::new(seed)
         },
         oceanic_peaks: OceanicPeakFieldConfig::new(seed),
+        volcanic_arcs: VolcanicArcFieldConfig {
+            inland_offset: hop_length(cell_count, 2.0),
+            ..VolcanicArcFieldConfig::default()
+        },
+        cratons: CratonFieldConfig {
+            minimum_boundary_distance: hop_length(cell_count, 3.0),
+            ramp_width: hop_length(cell_count, 3.0),
+        },
+        isostasy: IsostaticAdjustmentConfig {
+            maximum_boundary_distance: hop_length(cell_count, 5.0),
+            ..IsostaticAdjustmentConfig::default()
+        },
         ..GeologySettings::default()
     }
 }
@@ -71,7 +135,7 @@ pub(crate) fn geology_settings(seed: u64) -> GeologySettings {
 pub(crate) fn settings(cell_count: usize, seed: u64) -> GenerationSettings {
     GenerationSettings {
         tectonics: tectonics_settings(cell_count, seed),
-        geology: geology_settings(seed),
+        geology: geology_settings(cell_count, seed),
         climate: ClimateSettings::default(),
     }
 }

@@ -1,5 +1,5 @@
 use crate::{BaseElevation, BoundaryDeformation, FieldSummary, StageInputError};
-use procgen_sphere_mesh::SphereMesh;
+use procgen_sphere_mesh::{SphereMesh, default_hop_length, hops};
 use std::fmt;
 
 /// Classifies one normalized elevation against a sea-level datum, using the
@@ -25,7 +25,11 @@ pub fn land_elevation_meters(
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CoarseElevationConfig {
-    pub smoothing_passes: usize,
+    /// Model length the simultaneous smoothing reaches over. One pass moves a
+    /// cell one hop toward its neighbors, so this is the radius of the
+    /// neighborhood a composed elevation is averaged over: the default of two
+    /// default hops is about 180 km at Earth radius.
+    pub smoothing_radius: f32,
     pub smoothing_weight: f32,
     /// Normalized elevation of the ocean/land boundary. Raising it floods low
     /// margins and interiors; lowering it exposes them.
@@ -35,7 +39,7 @@ pub struct CoarseElevationConfig {
 impl Default for CoarseElevationConfig {
     fn default() -> Self {
         Self {
-            smoothing_passes: 2,
+            smoothing_radius: 2.0 * default_hop_length(),
             smoothing_weight: 0.2,
             sea_level: 0.5,
         }
@@ -108,9 +112,9 @@ pub enum CoarseElevationError {
 impl fmt::Display for CoarseElevationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidConfig => {
-                formatter.write_str("smoothing weight must be finite and between 0 and 1")
-            }
+            Self::InvalidConfig => formatter.write_str(
+                "smoothing radius must be finite and non-negative, and smoothing weight must be finite and between 0 and 1",
+            ),
             Self::InvalidSeaLevel => {
                 formatter.write_str("sea level must be finite and strictly between 0 and 1")
             }
@@ -146,10 +150,11 @@ pub fn compose_coarse_elevation(
         .map(|(&base, &deformation)| base + deformation)
         .collect();
 
+    // One pass reaches one hop, so the configured radius is a pass count.
     smooth(
         mesh,
         &mut elevation,
-        config.smoothing_passes,
+        hops(mesh.cell_count(), config.smoothing_radius),
         config.smoothing_weight,
     );
     elevation
@@ -165,7 +170,11 @@ pub fn compose_coarse_elevation(
 }
 
 fn validate_config(config: CoarseElevationConfig) -> Result<(), CoarseElevationError> {
-    if !config.smoothing_weight.is_finite() || !(0.0..=1.0).contains(&config.smoothing_weight) {
+    if !config.smoothing_radius.is_finite()
+        || config.smoothing_radius < 0.0
+        || !config.smoothing_weight.is_finite()
+        || !(0.0..=1.0).contains(&config.smoothing_weight)
+    {
         return Err(CoarseElevationError::InvalidConfig);
     }
     if !config.sea_level.is_finite() || config.sea_level <= 0.0 || config.sea_level >= 1.0 {
@@ -207,10 +216,11 @@ fn smooth(mesh: &SphereMesh, elevation: &mut Vec<f32>, passes: usize, weight: f3
 mod tests {
     use super::*;
     use crate::test_support::{
-        final_state_fixture, reference_base_elevation_config, reference_flow_field,
+        final_state_fixture, hop_length, reference_base_elevation_config, reference_flow_field,
         two_plate_boundary_partition,
     };
     use crate::{BaseElevationDiagnostics, CellCrust, derive_base_elevation, derive_seafloor_age};
+    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
 
     /// The datum the pipeline defaults to, which several cases here vary from.
     fn default_sea_level() -> f32 {
@@ -336,6 +346,19 @@ mod tests {
         assert!(first.diagnostics.minimum < first.diagnostics.maximum);
     }
 
+    /// The default radius is a model length now, and this is the assertion
+    /// that it still means the two passes it was written as.
+    #[test]
+    fn the_default_smoothing_radius_is_two_passes_on_the_default_mesh() {
+        assert_eq!(
+            hops(
+                DEFAULT_CELL_COUNT,
+                CoarseElevationConfig::default().smoothing_radius
+            ),
+            2
+        );
+    }
+
     #[test]
     fn composition_adds_base_and_deformation_exactly_once() {
         let (mesh, _, _) = two_plate_boundary_partition();
@@ -358,7 +381,7 @@ mod tests {
             &base,
             &deformation,
             CoarseElevationConfig {
-                smoothing_passes: 0,
+                smoothing_radius: 0.0,
                 ..Default::default()
             },
         )
@@ -387,7 +410,7 @@ mod tests {
             &base,
             &deformation,
             CoarseElevationConfig {
-                smoothing_passes: 0,
+                smoothing_radius: 0.0,
                 ..Default::default()
             },
         )
@@ -400,7 +423,7 @@ mod tests {
             &base,
             &deformation,
             CoarseElevationConfig {
-                smoothing_passes: 1,
+                smoothing_radius: hop_length(mesh.cell_count(), 1),
                 smoothing_weight: 1.0,
                 ..Default::default()
             },

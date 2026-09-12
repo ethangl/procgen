@@ -13,7 +13,9 @@
 
 use crate::{
     BoundaryClass, BoundaryClassification, BoundaryDeformationConfig, CellCrust, CrustClass,
-    FieldSummary, PlatePartition, boundary_profiles::PropagationProfile, field::summarize_field,
+    FieldSummary, PlatePartition,
+    boundary_profiles::{PropagationProfile, PropagationProfiles},
+    field::summarize_field,
     stage::StageInputError,
 };
 use procgen_sphere_mesh::SphereMesh;
@@ -113,6 +115,9 @@ fn collect_boundary_sources(
     boundaries: &BoundaryClassification,
     config: &BoundaryDeformationConfig,
 ) -> Vec<Option<PropagationProfile>> {
+    // Every configured depth is a model length; this is where the mesh turns
+    // them into the hop counts the propagation counts down.
+    let profiles = config.profiles(mesh.cell_count());
     let mut sources = vec![None; mesh.cell_count()];
     for (edge_index, edge) in mesh.edges.iter().enumerate() {
         let class = boundaries.edge_classes[edge_index];
@@ -123,7 +128,7 @@ fn collect_boundary_sources(
         for side in 0..2 {
             let source_cell = edge.cells[side];
             let Some(source) = boundary_source(
-                config,
+                &profiles,
                 class,
                 crust.class(source_cell),
                 crust.order(source_cell, edge.cells[1 - side]),
@@ -173,23 +178,23 @@ fn source_scale(
 /// of the crust on the side, and a transform's relief is its residual normal
 /// component whatever lies across it.
 fn boundary_source(
-    config: &BoundaryDeformationConfig,
+    profiles: &PropagationProfiles,
     class: BoundaryClass,
     own: CrustClass,
     order: Ordering,
 ) -> Option<PropagationProfile> {
     match (class, own, order) {
-        (BoundaryClass::Convergent, _, Ordering::Equal) => Some(config.convergent.into()),
-        (BoundaryClass::Convergent, _, Ordering::Less) => Some(config.trench.into()),
+        (BoundaryClass::Convergent, _, Ordering::Equal) => Some(profiles.convergent),
+        (BoundaryClass::Convergent, _, Ordering::Less) => Some(profiles.trench),
         (BoundaryClass::Convergent, CrustClass::Continental, Ordering::Greater) => {
-            Some(config.collision.into())
+            Some(profiles.collision)
         }
         (BoundaryClass::Convergent, CrustClass::Oceanic, Ordering::Greater) => {
-            Some(config.island_arc.into())
+            Some(profiles.island_arc)
         }
         (BoundaryClass::Divergent, CrustClass::Oceanic, _) => None,
-        (BoundaryClass::Divergent, CrustClass::Continental, _) => Some(config.rift.into()),
-        (BoundaryClass::Transform, _, _) => Some(config.transform.into()),
+        (BoundaryClass::Divergent, CrustClass::Continental, _) => Some(profiles.rift),
+        (BoundaryClass::Transform, _, _) => Some(profiles.transform),
         (BoundaryClass::Interior, _, _) => unreachable!("interior edges are skipped"),
     }
 }
@@ -249,10 +254,12 @@ mod tests {
     use super::*;
     use crate::test_support::{
         EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, empty_boundaries,
-        final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
-        two_plate_boundary_partition, two_plate_fixture,
+        final_state_fixture, hop_length, mesh as test_mesh, plate_cell_birth,
+        plate_cell_birth_times, scaled_deformation, two_plate_boundary_partition,
+        two_plate_fixture,
     };
     use crate::{BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig};
+    use procgen_sphere_mesh::hops;
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
@@ -365,11 +372,11 @@ mod tests {
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
         let config = BoundaryDeformationConfig {
             collision: BoundaryEffect {
-                depth: 0,
+                depth: 0.0,
                 ..BoundaryDeformationConfig::default().collision
             },
             trench: BoundaryEffect {
-                depth: 0,
+                depth: 0.0,
                 ..BoundaryDeformationConfig::default().trench
             },
             ..Default::default()
@@ -397,7 +404,7 @@ mod tests {
         let mut boundaries = empty_boundaries(&mesh);
         boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
         boundaries.edge_normal_speeds[edge_index] = [1.0, 1.0];
-        let config = BoundaryDeformationConfig::default();
+        let config = scaled_deformation(mesh.cell_count());
 
         let deformation = deform_once(&mesh, &partition, &cell_birth, &boundaries, config);
         assert_eq!(deformation[edge.cells[0]], config.island_arc.offset);
@@ -405,7 +412,7 @@ mod tests {
 
         let mut within = vec![false; mesh.cell_count()];
         within[edge.cells[0]] = true;
-        for _ in 0..config.island_arc.depth {
+        for _ in 0..hops(mesh.cell_count(), config.island_arc.depth) {
             within = (0..mesh.cell_count())
                 .map(|cell| {
                     within[cell]
@@ -461,7 +468,7 @@ mod tests {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
                 flank_offset: 0.1,
-                decay_depth: 3,
+                decay_depth: hop_length(mesh.cell_count(), 3),
             },
             saturation_speed: 4.0,
             ..Default::default()
@@ -492,7 +499,7 @@ mod tests {
         let config = BoundaryDeformationConfig {
             transform: BoundaryEffect {
                 offset: 0.4,
-                depth: 1,
+                depth: hop_length(mesh.cell_count(), 1),
             },
             saturation_speed: 4.0,
             ..Default::default()
@@ -565,7 +572,7 @@ mod tests {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
                 flank_offset: -0.1,
-                decay_depth: 3,
+                decay_depth: hop_length(mesh.cell_count(), 3),
             },
             saturation_speed: 2.0,
             ..Default::default()
@@ -614,7 +621,7 @@ mod tests {
         let config = BoundaryDeformationConfig {
             convergent: BoundaryEffect {
                 offset: 0.4,
-                depth: 1,
+                depth: hop_length(mesh.cell_count(), 1),
             },
             ..Default::default()
         };
@@ -640,24 +647,12 @@ mod tests {
     #[test]
     fn maximum_magnitude_wins_and_equal_ties_keep_the_first_source() {
         let mut source = None;
-        let first = PropagationProfile::from(BoundaryEffect {
-            offset: -0.4,
-            depth: 1,
-        });
+        let first = PropagationProfile::linear(-0.4, 1);
         retain_stronger_source(&mut source, first);
-        retain_stronger_source(
-            &mut source,
-            PropagationProfile::from(BoundaryEffect {
-                offset: 0.4,
-                depth: 7,
-            }),
-        );
+        retain_stronger_source(&mut source, PropagationProfile::linear(0.4, 7));
         assert_eq!(source, Some(first));
 
-        let stronger = PropagationProfile::from(BoundaryEffect {
-            offset: 0.5,
-            depth: 2,
-        });
+        let stronger = PropagationProfile::linear(0.5, 2);
         retain_stronger_source(&mut source, stronger);
         assert_eq!(source, Some(stronger));
 
@@ -681,14 +676,8 @@ mod tests {
             plate_count: 1,
         };
         let mut sources = vec![None; mesh.cell_count()];
-        sources[source_cells[0]] = Some(PropagationProfile::from(BoundaryEffect {
-            offset: -0.4,
-            depth: 1,
-        }));
-        sources[source_cells[1]] = Some(PropagationProfile::from(BoundaryEffect {
-            offset: 0.4,
-            depth: 1,
-        }));
+        sources[source_cells[0]] = Some(PropagationProfile::linear(-0.4, 1));
+        sources[source_cells[1]] = Some(PropagationProfile::linear(0.4, 1));
         let propagated = propagate_boundary_effects(&mesh, &partition, &sources);
         assert_eq!(propagated[overlap], -0.2);
     }
@@ -760,7 +749,11 @@ mod tests {
     fn deformation_reaches_no_further_than_the_profiles_propagate() {
         let depth = 2;
         let (fixture, config) = static_boundary_fixture(4, 1.0);
-        let effect = BoundaryEffect { offset: 0.5, depth };
+        let cell_count = fixture.mesh.cell_count();
+        let effect = BoundaryEffect {
+            offset: 0.5,
+            depth: hop_length(cell_count, depth),
+        };
         // Every profile reaches exactly `depth` hops: a linear effect decays to
         // zero one hop past its own, and a rift one hop past its decay depth.
         let run = fixture.evolve(PlateEvolutionConfig {
@@ -770,11 +763,11 @@ mod tests {
                 collision: effect,
                 trench: BoundaryEffect {
                     offset: -0.2,
-                    depth,
+                    depth: effect.depth,
                 },
                 island_arc: effect,
                 rift: ContinentalRiftProfile {
-                    decay_depth: depth + 1,
+                    decay_depth: hop_length(cell_count, depth + 1),
                     ..config.deformation.rift
                 },
                 ..config.deformation

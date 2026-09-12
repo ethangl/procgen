@@ -1,19 +1,54 @@
 use procgen_core::Vec3;
 pub use procgen_core::{fingerprint, quantized_fingerprint};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh};
+use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh, default_hop_length, mean_cell_width};
 
 use crate::field::DEFAULT_STEP_DURATION;
 use crate::{
     BaseElevation, BaseElevationConfig, BoundaryClass, BoundaryClassification,
-    BoundaryDeformationConfig, CellCrust, CrustBirthPrior, CrustBirthPriorConfig, CrustClass,
-    CrustClassification, CrustClassificationConfig, CrustClassificationDiagnostics, FlowField,
-    PlateEvolution, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
-    PlateKinematicsConfig, PlateLifecycleConfig, PlatePartition, PlatePartitionConfig,
-    PoleDriftConfig, SeafloorAge, classify_boundaries, classify_crust, derive_base_elevation,
-    derive_crust_birth_prior, derive_seafloor_age, evolve_plate_ownership,
-    generate_plate_kinematics, partition_plates,
+    BoundaryDeformationConfig, BoundaryEffect, CellCrust, ContinentalRiftProfile, CrustBirthPrior,
+    CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationConfig,
+    CrustClassificationDiagnostics, FlowField, PlateEvolution, PlateEvolutionConfig,
+    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlateLifecycleConfig,
+    PlatePartition, PlatePartitionConfig, PoleDriftConfig, SeafloorAge, classify_boundaries,
+    classify_crust, derive_base_elevation, derive_crust_birth_prior, derive_seafloor_age,
+    evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
+
+/// The reference fixtures' mesh. Every model length they configure is scaled
+/// to it, because a length whose default was set against the 65,536-cell mesh
+/// would resolve to a single hop on a mesh this coarse.
+pub const REFERENCE_CELL_COUNT: usize = 512;
+
+/// The model length that spans `hops` on a mesh of `cell_count` cells. A
+/// fixture that means a hop count says so through this.
+pub fn hop_length(cell_count: usize, hops: usize) -> f32 {
+    hops as f32 * mean_cell_width(1.0, cell_count)
+}
+
+/// The default deformation profiles with every depth carried from the default
+/// mesh to a mesh of `cell_count` cells, so each belt spans the hops there
+/// that it spans on the default mesh.
+pub fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
+    let scale = mean_cell_width(1.0, cell_count) / default_hop_length();
+    let default = BoundaryDeformationConfig::default();
+    let deepen = |effect: BoundaryEffect| BoundaryEffect {
+        depth: effect.depth * scale,
+        ..effect
+    };
+    BoundaryDeformationConfig {
+        convergent: deepen(default.convergent),
+        transform: deepen(default.transform),
+        collision: deepen(default.collision),
+        trench: deepen(default.trench),
+        island_arc: deepen(default.island_arc),
+        rift: ContinentalRiftProfile {
+            decay_depth: default.rift.decay_depth * scale,
+            ..default.rift
+        },
+        ..default
+    }
+}
 
 /// Model time per step scaled to the 512-cell reference mesh. Its cell width
 /// is 0.157 against the default mesh's 0.0138, so a step here has to be about
@@ -77,7 +112,7 @@ pub fn mesh(cell_count: usize) -> SphereMesh {
 pub fn reference_partition_config() -> PlatePartitionConfig {
     PlatePartitionConfig {
         arc_count: 20,
-        piece_fraction: 32.0 / 512.0,
+        piece_fraction: 32.0 / REFERENCE_CELL_COUNT as f32,
         growth_roughness: 0,
         seed: 7,
         ..PlatePartitionConfig::default()
@@ -85,7 +120,7 @@ pub fn reference_partition_config() -> PlatePartitionConfig {
 }
 
 pub fn reference_partition() -> (SphereMesh, PlatePartition) {
-    let mesh = mesh(512);
+    let mesh = mesh(REFERENCE_CELL_COUNT);
     let partition = partition_plates(&mesh, reference_partition_config()).unwrap();
     (mesh, partition)
 }
@@ -113,7 +148,7 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
             // The whole reference run, so a boundary that converged throughout
             // reaches its full profile offset, as the viewer's defaults do.
             full_deformation_time: default.step_count as f32 * REFERENCE_STEP_DURATION,
-            ..BoundaryDeformationConfig::default()
+            ..scaled_deformation(REFERENCE_CELL_COUNT)
         },
         lifecycle: PlateLifecycleConfig {
             // A rate per unit time and a time, scaled by the same ratio as
@@ -275,6 +310,9 @@ pub fn reference_base_elevation_config() -> BaseElevationConfig {
     let default = BaseElevationConfig::default();
     BaseElevationConfig {
         cooling_age: default.cooling_age * REFERENCE_STEP_DURATION / DEFAULT_STEP_DURATION,
+        // A shelf is three cells wide on the default mesh, and the fixtures
+        // pin what those three cells do.
+        margin_width: hop_length(REFERENCE_CELL_COUNT, 3),
         ..default
     }
 }

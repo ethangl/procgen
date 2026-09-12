@@ -1,4 +1,4 @@
-use super::super::{drag_value, section, slider};
+use super::super::{drag_value, hop_range, length_slider, section, slider};
 use crate::model::{GeologySettings, WORLD_RADIUS};
 use bevy_egui::egui;
 use procgen_geology::{
@@ -8,18 +8,20 @@ use procgen_geology::{
 use procgen_tectonics::{DEFAULT_STEP_DURATION, PlateKinematicsConfig};
 
 const HOTSPOT_COUNT_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
-const HOTSPOT_TRAIL_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
+// Lengths, in hops of the default mesh: the units the old cell and hop counts
+// were chosen in.
+const HOTSPOT_TRAIL_HOPS: std::ops::RangeInclusive<f32> = 1.0..=64.0;
 const HOTSPOT_PROVINCE_FRACTION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
-const HOTSPOT_PROVINCE_RADIUS_RANGE: std::ops::RangeInclusive<usize> = 0..=32;
+const HOTSPOT_PROVINCE_RADIUS_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 // The window is a seafloor age, so it is model time: one default evolution
 // step at the bottom, and at the top a stretch of a floor's life longer than
 // any run the tectonics phase allows leaves ocean floor young for.
 const OCEANIC_PEAK_AGE_RANGE: std::ops::RangeInclusive<f32> =
     DEFAULT_STEP_DURATION..=DEFAULT_STEP_DURATION * 64.0;
 const ARC_SEGMENT_EDGE_RANGE: std::ops::RangeInclusive<usize> = 1..=64;
-const ARC_INLAND_OFFSET_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
+const ARC_INLAND_OFFSET_HOPS: std::ops::RangeInclusive<f32> = 1.0..=32.0;
 const ARC_PEAK_DENSITY_DIVISOR_RANGE: std::ops::RangeInclusive<usize> = 1..=32;
-const BOUNDARY_DISTANCE_RANGE: std::ops::RangeInclusive<usize> = 0..=64;
+const BOUNDARY_DISTANCE_HOPS: std::ops::RangeInclusive<f32> = 0.0..=64.0;
 const BASIN_CELL_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=256;
 
 /// Plate kinematics come from the tectonics phase, which bounds the strengths
@@ -62,12 +64,11 @@ fn hotspot_controls(ui: &mut egui::Ui, config: &mut HotspotFieldConfig) {
         HOTSPOT_COUNT_RANGE,
         1.0,
     );
-    drag_value(
+    length_slider(
         ui,
-        "Maximum trail cells",
-        &mut config.maximum_trail_cells,
-        HOTSPOT_TRAIL_RANGE,
-        1.0,
+        "Maximum trail length",
+        &mut config.maximum_trail_length,
+        hop_range(HOTSPOT_TRAIL_HOPS),
     );
     slider(
         ui,
@@ -75,20 +76,18 @@ fn hotspot_controls(ui: &mut egui::Ui, config: &mut HotspotFieldConfig) {
         &mut config.province_fraction,
         HOTSPOT_PROVINCE_FRACTION_RANGE,
     );
-    drag_value(
+    length_slider(
         ui,
-        "Province radius hops",
-        &mut config.province_radius_hops,
-        HOTSPOT_PROVINCE_RADIUS_RANGE,
-        1.0,
+        "Province radius",
+        &mut config.province_radius,
+        hop_range(HOTSPOT_PROVINCE_RADIUS_HOPS),
     );
     // The rim slopes back down inside the radius, so it cannot outrun it.
-    drag_value(
+    length_slider(
         ui,
-        "Province rim hops",
-        &mut config.province_rim_hops,
-        0..=config.province_radius_hops,
-        1.0,
+        "Province rim",
+        &mut config.province_rim,
+        0.0..=config.province_radius,
     );
     drag_value(
         ui,
@@ -151,12 +150,11 @@ fn volcanic_arc_controls(
         ARC_SEGMENT_EDGE_RANGE,
         1.0,
     );
-    drag_value(
+    length_slider(
         ui,
         "Inland offset",
-        &mut config.inland_offset_cells,
-        ARC_INLAND_OFFSET_RANGE,
-        1.0,
+        &mut config.inland_offset,
+        hop_range(ARC_INLAND_OFFSET_HOPS),
     );
     drag_value(
         ui,
@@ -174,19 +172,17 @@ fn volcanic_arc_controls(
 }
 
 fn craton_controls(ui: &mut egui::Ui, config: &mut CratonFieldConfig) {
-    drag_value(
+    length_slider(
         ui,
         "Minimum boundary distance",
         &mut config.minimum_boundary_distance,
-        BOUNDARY_DISTANCE_RANGE,
-        1.0,
+        hop_range(BOUNDARY_DISTANCE_HOPS),
     );
-    drag_value(
+    length_slider(
         ui,
         "Ramp width",
         &mut config.ramp_width,
-        BOUNDARY_DISTANCE_RANGE,
-        1.0,
+        hop_range(BOUNDARY_DISTANCE_HOPS),
     );
 }
 
@@ -266,11 +262,10 @@ fn isostatic_controls(ui: &mut egui::Ui, config: &mut IsostaticAdjustmentConfig)
         &mut config.craton_support_bonus,
         0.0..=1.0,
     );
-    drag_value(
+    length_slider(
         ui,
         "Boundary distance",
         &mut config.maximum_boundary_distance,
-        BOUNDARY_DISTANCE_RANGE,
-        1.0,
+        hop_range(BOUNDARY_DISTANCE_HOPS),
     );
 }
