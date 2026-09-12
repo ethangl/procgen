@@ -24,9 +24,17 @@ pub fn mean_cell_width(radius: f32, cell_count: usize) -> f32 {
     (4.0 * PI * radius * radius / cell_count as f32).sqrt()
 }
 
+/// The model length that spans `hops` on a mesh of `cell_count` cells: the
+/// inverse of [`hops`], for a caller that means a hop count and has to state
+/// it as a length. Fixtures on a mesh far coarser than the default one use it
+/// to ask for the reach a default means.
+pub fn hop_length(cell_count: usize, hops: f32) -> f32 {
+    hops * mean_cell_width(1.0, cell_count)
+}
+
 /// One hop on the default mesh, in model units on the unit sphere.
 pub fn default_hop_length() -> f32 {
-    mean_cell_width(1.0, DEFAULT_CELL_COUNT)
+    hop_length(DEFAULT_CELL_COUNT, 1.0)
 }
 
 /// The hop count a model length spans on a mesh of `cell_count` cells.
@@ -60,10 +68,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hop_length_is_that_many_hops_back_on_the_mesh_it_was_taken_from() {
+        for cell_count in [32, 512, 4_096, DEFAULT_CELL_COUNT] {
+            for count in 1..=8 {
+                assert_eq!(
+                    hops(cell_count, hop_length(cell_count, count as f32)),
+                    count
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_finer_mesh_spends_more_hops_on_the_same_length_and_never_fewer_than_one() {
         // Four times the cells halves the cell width, so the same length
         // spans twice the hops.
-        let length = 8.0 * default_hop_length();
+        let length = hop_length(DEFAULT_CELL_COUNT, 8.0);
         assert_eq!(hops(1_024, length), 1);
         assert_eq!(hops(4_096, length), 2);
         assert_eq!(hops(16_384, length), 4);

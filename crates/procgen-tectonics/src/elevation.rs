@@ -216,11 +216,11 @@ fn smooth(mesh: &SphereMesh, elevation: &mut Vec<f32>, passes: usize, weight: f3
 mod tests {
     use super::*;
     use crate::test_support::{
-        final_state_fixture, hop_length, reference_base_elevation_config, reference_flow_field,
+        final_state_fixture, reference_base_elevation_config, reference_flow_field,
         two_plate_boundary_partition,
     };
     use crate::{BaseElevationDiagnostics, CellCrust, derive_base_elevation, derive_seafloor_age};
-    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
 
     /// The datum the pipeline defaults to, which several cases here vary from.
     fn default_sea_level() -> f32 {
@@ -423,7 +423,7 @@ mod tests {
             &base,
             &deformation,
             CoarseElevationConfig {
-                smoothing_radius: hop_length(mesh.cell_count(), 1),
+                smoothing_radius: hop_length(mesh.cell_count(), 1.0),
                 smoothing_weight: 1.0,
                 ..Default::default()
             },

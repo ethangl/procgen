@@ -2,19 +2,20 @@
 //! province around the continental ones.
 //!
 //! A trail is the few cells a fixed plume has burned through the plate moving
-//! over it, decaying with age. A province is the other thing a plume does:
-//! where one sits under continental crust it can flood a plateau hundreds of
-//! kilometres across in a few million years, as the Deccan Traps and the
-//! Columbia River basalts did. Only a hashed subset of continental-source
-//! hotspots erupt one, and it is one of the few sources of relief a
-//! continental interior has far from any plate boundary.
+//! over it, decaying with age. A province is the other thing a plume does, and
+//! [`crate::provinces`] owns its shape: only a hashed subset of
+//! continental-source hotspots erupt one. This module decides which plumes
+//! there are, where their trails run, and which of them erupt.
 
-use crate::field::{GeologyInputError, MaxWinsField};
+use crate::{
+    field::{GeologyInputError, MaxWinsField},
+    provinces::{ProvinceProfile, trace_province},
+};
 use procgen_core::{
     RandomStream, Vec3,
     random_streams::{HOTSPOT_POSITION, HOTSPOT_PROVINCE},
 };
-use procgen_sphere_mesh::{SphereMesh, default_hop_length, hops, multi_source_distances};
+use procgen_sphere_mesh::{SphereMesh, default_hop_length, hops};
 use procgen_tectonics::{CellCrust, CrustClass, PlateKinematics, PlatePartition, StageInputError};
 use std::fmt;
 
@@ -51,26 +52,6 @@ impl HotspotFieldConfig {
             province_radius: 5.0 * default_hop_length(),
             province_rim: 2.0 * default_hop_length(),
             seed,
-        }
-    }
-}
-
-/// The configured lengths resolved onto one mesh, which is where a province's
-/// shape and a trail's bound stop being distances and become cell counts.
-#[derive(Clone, Copy, Debug)]
-struct HotspotExtents {
-    /// Cells in the longest trail, including its source cell.
-    trail_cells: usize,
-    province_radius: usize,
-    province_rim: usize,
-}
-
-impl HotspotExtents {
-    fn new(cell_count: usize, config: HotspotFieldConfig) -> Self {
-        Self {
-            trail_cells: hops(cell_count, config.maximum_trail_length),
-            province_radius: hops(cell_count, config.province_radius),
-            province_rim: hops(cell_count, config.province_rim),
         }
     }
 }
@@ -193,12 +174,6 @@ impl From<StageInputError> for HotspotFieldError {
     }
 }
 
-/// One cell of a flood basalt province and the plateau weight it stands at.
-struct ProvinceCell {
-    cell: usize,
-    weight: f32,
-}
-
 /// Generates fixed mantle hotspots, present-day trails opposite each source
 /// plate's local motion, and flood basalt provinces around the hashed subset
 /// of hotspots whose source sits on continental crust. Trail walking is
@@ -213,7 +188,14 @@ pub fn generate_hotspot_field(
 ) -> Result<HotspotField, HotspotFieldError> {
     validate_inputs(mesh, plates, cell_crust, kinematics, config)?;
 
-    let extents = HotspotExtents::new(mesh.cell_count(), config);
+    // The two conversions: a trail's bound and a province's shape are model
+    // lengths, and both walk the mesh in cells.
+    let trail_cells = hops(mesh.cell_count(), config.maximum_trail_length);
+    let province_profile = ProvinceProfile::new(
+        mesh.cell_count(),
+        config.province_radius,
+        config.province_rim,
+    );
     let positions = RandomStream::new(config.seed, HOTSPOT_POSITION);
     let provinces = RandomStream::new(config.seed, HOTSPOT_PROVINCE);
     let mut hotspots = Vec::with_capacity(config.hotspot_count);
@@ -227,7 +209,7 @@ pub fn generate_hotspot_field(
         let source_cell = nearest_cell(mesh, mantle_position);
         let plate = plates.cell_plates[source_cell];
         let (trail, source_is_stationary) =
-            trace_trail(mesh, plates, kinematics, plate, source_cell, extents);
+            trace_trail(mesh, plates, kinematics, plate, source_cell, trail_cells);
         stationary_source_count += usize::from(source_is_stationary);
         for point in &trail {
             aggregate.claim(point.cell, point.intensity, hotspot_index);
@@ -236,7 +218,7 @@ pub fn generate_hotspot_field(
         let erupts = cell_crust.class(source_cell) == CrustClass::Continental
             && provinces.unit_f32(hotspot_index as u64, 0) < config.province_fraction;
         let province = if erupts {
-            trace_province(mesh, plates, cell_crust, source_cell, extents)
+            trace_province(mesh, plates, cell_crust, source_cell, province_profile)
         } else {
             Vec::new()
         };
@@ -331,64 +313,22 @@ fn nearest_cell(mesh: &SphereMesh, position: Vec3) -> usize {
         .expect("sphere meshes contain cells")
 }
 
-/// Floods a plateau outward from `source_cell` over the continental cells of
-/// its own plate, so a province stops at a coast and at a plate boundary.
-///
-/// The radius is where the rim would reach zero, so it lies just outside: a
-/// province is the cells strictly inside it, every one of which carries a
-/// positive weight. Hop distances and the two-integer weights are exact, so
-/// the cells and the profile are bit-identical wherever this runs.
-fn trace_province(
-    mesh: &SphereMesh,
-    plates: &PlatePartition,
-    cell_crust: CellCrust<'_>,
-    source_cell: usize,
-    extents: HotspotExtents,
-) -> Vec<ProvinceCell> {
-    let plate = plates.cell_plates[source_cell];
-    let hops = multi_source_distances(mesh, &[source_cell], |_, neighbor| {
-        plates.cell_plates[neighbor] == plate
-            && cell_crust.class(neighbor) == CrustClass::Continental
-    });
-    hops.iter()
-        .enumerate()
-        .filter_map(|(cell, hops)| {
-            let hops = (*hops)?;
-            (hops < extents.province_radius).then(|| ProvinceCell {
-                cell,
-                weight: province_weight(hops, extents),
-            })
-        })
-        .collect()
-}
-
-/// Weight one across the flat top, then falling linearly toward zero at the
-/// radius: the shape a flood basalt pile has at this scale. The caller only
-/// asks about cells inside the radius, so the result is always positive.
-fn province_weight(hops: usize, extents: HotspotExtents) -> f32 {
-    if hops + extents.province_rim <= extents.province_radius {
-        1.0
-    } else {
-        (extents.province_radius - hops) as f32 / extents.province_rim as f32
-    }
-}
-
 fn trace_trail(
     mesh: &SphereMesh,
     plates: &PlatePartition,
     kinematics: &PlateKinematics,
     plate: usize,
     source_cell: usize,
-    extents: HotspotExtents,
+    trail_cells: usize,
 ) -> (Vec<HotspotTrailCell>, bool) {
-    let mut trail = Vec::with_capacity(extents.trail_cells);
+    let mut trail = Vec::with_capacity(trail_cells);
     let mut current = source_cell;
     let mut source_is_stationary = false;
 
-    for step in 0..extents.trail_cells {
+    for step in 0..trail_cells {
         trail.push(HotspotTrailCell {
             cell: current,
-            intensity: 1.0 - step as f32 / extents.trail_cells as f32,
+            intensity: 1.0 - step as f32 / trail_cells as f32,
         });
 
         let velocity = kinematics.velocity_at(plate, mesh.cell_centers[current]);
@@ -427,133 +367,57 @@ fn trace_trail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{classified_cell_birth, hop_length};
-    use procgen_core::fingerprint;
-    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
-    use procgen_sphere_mesh::{build_sphere_mesh, connected_components};
-    use procgen_tectonics::{
-        CrustClassificationConfig, PlateKinematicsConfig, PlatePartitionConfig, classify_crust,
-        generate_plate_kinematics, partition_plates,
+    use crate::test_support::{
+        HOTSPOT_CELL_COUNT, PlateFixture, hotspot_fixture, hotspot_province_config,
+        hotspot_reference_config,
     };
+    use procgen_core::fingerprint;
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
 
-    /// The mesh, its final plate set, the per-cell crust birth the crust class
-    /// is read from, and the plate motion, for one cell count.
-    struct Fixture {
-        mesh: SphereMesh,
-        plates: PlatePartition,
-        cell_birth: Vec<Option<f32>>,
-        kinematics: PlateKinematics,
+    fn generate(
+        fixture: &PlateFixture,
+        config: HotspotFieldConfig,
+    ) -> Result<HotspotField, HotspotFieldError> {
+        generate_hotspot_field(
+            &fixture.mesh,
+            &fixture.plates,
+            fixture.crust(),
+            &fixture.kinematics,
+            config,
+        )
     }
 
-    impl Fixture {
-        fn new(cell_count: usize) -> Self {
-            let mesh = build_sphere_mesh(
-                fibonacci_sphere(FibonacciConfig {
-                    count: cell_count,
-                    jitter: 0.5,
-                    seed: 7,
-                })
-                .unwrap(),
-                1.0,
-            )
-            .unwrap();
-            let plates = partition_plates(
-                &mesh,
-                PlatePartitionConfig {
-                    arc_count: 4,
-                    piece_fraction: 32.0 / cell_count as f32,
-                    growth_roughness: 0,
-                    seed: 11,
-                    ..PlatePartitionConfig::default()
-                },
-            )
-            .unwrap();
-            let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
-            let kinematics =
-                generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
-                    .unwrap();
-            Self {
-                cell_birth: classified_cell_birth(&crust),
-                mesh,
-                plates,
-                kinematics,
-            }
-        }
-
-        fn crust(&self) -> CellCrust<'_> {
-            CellCrust {
-                cell_birth: &self.cell_birth,
-            }
-        }
-
-        fn generate(&self, config: HotspotFieldConfig) -> Result<HotspotField, HotspotFieldError> {
-            generate_hotspot_field(
-                &self.mesh,
-                &self.plates,
-                self.crust(),
-                &self.kinematics,
-                config,
-            )
-        }
-    }
-
-    /// The mesh the pinned fixtures run on. Its cells are far wider than the
-    /// default mesh's, so the lengths below are stated as hops on it.
-    const REFERENCE_CELL_COUNT: usize = 512;
-
-    /// No hotspot erupts a province, which is the field as it stood before
-    /// provinces existed.
-    fn reference_config() -> HotspotFieldConfig {
-        HotspotFieldConfig {
-            hotspot_count: 24,
-            maximum_trail_length: hop_length(REFERENCE_CELL_COUNT, 7),
-            province_fraction: 0.0,
-            // The five and two cells the defaults mean, on this coarser mesh.
-            province_radius: hop_length(REFERENCE_CELL_COUNT, 5),
-            province_rim: hop_length(REFERENCE_CELL_COUNT, 2),
-            ..HotspotFieldConfig::new(17)
-        }
-    }
-
-    /// The hop counts one config resolves to on the reference mesh, which is
-    /// what the assertions below are stated in.
-    fn reference_extents(config: HotspotFieldConfig) -> HotspotExtents {
-        HotspotExtents::new(REFERENCE_CELL_COUNT, config)
-    }
-
-    /// The defaults are model lengths now, and this is the assertion that they
-    /// still mean the cells each was written as.
+    /// The trail bound is a model length now, and this is the assertion that
+    /// it still means the eight cells it was written as.
     #[test]
-    fn the_default_extents_are_the_cell_counts_they_replaced() {
-        let extents = HotspotExtents::new(DEFAULT_CELL_COUNT, HotspotFieldConfig::new(17));
-        assert_eq!(extents.trail_cells, 8);
-        assert_eq!(extents.province_radius, 5);
-        assert_eq!(extents.province_rim, 2);
-    }
-
-    /// Every continental-source hotspot erupts, so the province geometry is
-    /// visible without depending on where the hashed draw happens to fall.
-    fn province_config() -> HotspotFieldConfig {
-        HotspotFieldConfig {
-            province_fraction: 1.0,
-            ..reference_config()
-        }
+    fn the_default_trail_bound_is_eight_cells_of_the_default_mesh() {
+        assert_eq!(
+            hops(
+                DEFAULT_CELL_COUNT,
+                HotspotFieldConfig::new(17).maximum_trail_length
+            ),
+            8
+        );
     }
 
     #[test]
     fn field_is_deterministic_and_seeded() {
-        let fixture = Fixture::new(512);
-        let first = fixture.generate(province_config()).unwrap();
-        assert_eq!(first, fixture.generate(province_config()).unwrap());
+        let fixture = hotspot_fixture(HOTSPOT_CELL_COUNT);
+        let first = generate(&fixture, hotspot_province_config()).unwrap();
+        assert_eq!(
+            first,
+            generate(&fixture, hotspot_province_config()).unwrap()
+        );
         assert_ne!(
             first,
-            fixture
-                .generate(HotspotFieldConfig {
+            generate(
+                &fixture,
+                HotspotFieldConfig {
                     seed: 18,
-                    ..province_config()
-                })
-                .unwrap()
+                    ..hotspot_province_config()
+                }
+            )
+            .unwrap()
         );
         assert!(first.hotspots.iter().all(|hotspot| {
             (hotspot.mantle_position.length() - fixture.mesh.radius).abs() < 1.0e-6
@@ -577,8 +441,8 @@ mod tests {
     /// development machines.
     #[test]
     fn reference_field_has_stable_fingerprint() {
-        let fixture = Fixture::new(512);
-        let field = fixture.generate(reference_config()).unwrap();
+        let fixture = hotspot_fixture(HOTSPOT_CELL_COUNT);
+        let field = generate(&fixture, hotspot_reference_config()).unwrap();
         let values = field.hotspots.iter().flat_map(|hotspot| {
             [
                 hotspot.source_cell as u64,
@@ -610,40 +474,39 @@ mod tests {
 
     #[test]
     fn zero_province_fraction_reproduces_the_field_without_provinces() {
-        let fixture = Fixture::new(512);
-        let field = fixture.generate(reference_config()).unwrap();
+        let fixture = hotspot_fixture(HOTSPOT_CELL_COUNT);
+        let field = generate(&fixture, hotspot_reference_config()).unwrap();
         no_province_field_matches_the_pre_slice_field(&field);
 
         // Every other part of the field is untouched by the province radius
         // and rim, which only a nonzero fraction can reach.
-        let widened = fixture
-            .generate(HotspotFieldConfig {
-                province_radius: hop_length(REFERENCE_CELL_COUNT, 9),
-                province_rim: hop_length(REFERENCE_CELL_COUNT, 4),
-                ..reference_config()
-            })
-            .unwrap();
+        let widened = generate(
+            &fixture,
+            HotspotFieldConfig {
+                province_radius: hop_length(HOTSPOT_CELL_COUNT, 9.0),
+                province_rim: hop_length(HOTSPOT_CELL_COUNT, 4.0),
+                ..hotspot_reference_config()
+            },
+        )
+        .unwrap();
         assert_eq!(field, widened);
     }
 
     #[test]
     fn trails_are_bounded_decaying_motion_opposed_and_owner_constrained() {
-        let fixture = Fixture::new(REFERENCE_CELL_COUNT);
-        let config = province_config();
-        let extents = reference_extents(config);
-        let field = fixture.generate(config).unwrap();
+        let fixture = hotspot_fixture(HOTSPOT_CELL_COUNT);
+        let config = hotspot_province_config();
+        let trail_cells = hops(HOTSPOT_CELL_COUNT, config.maximum_trail_length);
+        let field = generate(&fixture, config).unwrap();
 
         for hotspot in &field.hotspots {
             assert!(!hotspot.trail.is_empty());
-            assert!(hotspot.trail.len() <= extents.trail_cells);
+            assert!(hotspot.trail.len() <= trail_cells);
             assert_eq!(hotspot.trail[0].cell, hotspot.source_cell);
             assert_eq!(hotspot.trail[0].intensity, 1.0);
             for (step, point) in hotspot.trail.iter().enumerate() {
                 assert_eq!(fixture.plates.cell_plates[point.cell], hotspot.plate);
-                assert_eq!(
-                    point.intensity,
-                    1.0 - step as f32 / extents.trail_cells as f32
-                );
+                assert_eq!(point.intensity, 1.0 - step as f32 / trail_cells as f32);
             }
             for pair in hotspot.trail.windows(2) {
                 let current = pair[0].cell;
@@ -665,176 +528,18 @@ mod tests {
     }
 
     #[test]
-    fn provinces_are_bounded_continental_plate_local_and_connected() {
-        let fixture = Fixture::new(REFERENCE_CELL_COUNT);
-        let config = province_config();
-        let extents = reference_extents(config);
-        let field = fixture.generate(config).unwrap();
-        let crust = fixture.crust();
-        assert!(field.diagnostics.province_count > 0);
-
-        for hotspot in &field.hotspots {
-            if hotspot.province_cell_count == 0 {
-                continue;
-            }
-            let province = trace_province(
-                &fixture.mesh,
-                &fixture.plates,
-                crust,
-                hotspot.source_cell,
-                extents,
-            );
-            assert_eq!(province.len(), hotspot.province_cell_count);
-
-            let in_province: Vec<_> = (0..fixture.mesh.cell_count())
-                .map(|cell| province.iter().any(|point| point.cell == cell))
-                .collect();
-            // Hops through the province's own passable cells, which is what
-            // the profile reads, and hops through the whole mesh, which a
-            // detour around ocean or another plate can only lengthen.
-            let hops = multi_source_distances(&fixture.mesh, &[hotspot.source_cell], |_, cell| {
-                fixture.plates.cell_plates[cell] == hotspot.plate
-                    && crust.class(cell) == CrustClass::Continental
-            });
-            let free_hops =
-                multi_source_distances(&fixture.mesh, &[hotspot.source_cell], |_, _| true);
-            for point in &province {
-                let hops = hops[point.cell].expect("province cells are reachable");
-                assert!(hops < extents.province_radius);
-                assert!(free_hops[point.cell].expect("the mesh graph is connected") <= hops);
-                assert_eq!(crust.class(point.cell), CrustClass::Continental);
-                assert_eq!(
-                    fixture.plates.cell_plates[point.cell], hotspot.plate,
-                    "a province stops at a plate boundary"
-                );
-                // The flat top stands at one and the rim falls with distance,
-                // but the weight reaches zero only at the radius, which is
-                // outside the province, so no cell of one carries nothing.
-                if hops + extents.province_rim <= extents.province_radius {
-                    assert_eq!(point.weight, 1.0);
-                } else {
-                    assert!(point.weight > 0.0 && point.weight < 1.0);
-                }
-            }
-            for pair in province.windows(2) {
-                let closer = hops[pair[0].cell].unwrap();
-                let further = hops[pair[1].cell].unwrap();
-                if closer < further {
-                    assert!(pair[0].weight >= pair[1].weight);
-                }
-            }
-
-            let components =
-                connected_components(&fixture.mesh, |cell| in_province[cell], |_, _| true);
-            assert_eq!(components.len(), 1);
-            assert_eq!(components[0].len(), province.len());
-        }
-    }
-
-    #[test]
-    fn an_oceanic_source_erupts_no_province() {
-        let fixture = Fixture::new(512);
-        let field = fixture.generate(province_config()).unwrap();
-        let crust = fixture.crust();
-        let oceanic_sources = field
-            .hotspots
-            .iter()
-            .filter(|hotspot| crust.class(hotspot.source_cell) == CrustClass::Oceanic)
-            .count();
-        assert!(oceanic_sources > 0);
-
-        // The whole fraction erupts, so a missing province can only be an
-        // ineligible source.
-        for hotspot in &field.hotspots {
-            assert_eq!(
-                hotspot.province_cell_count > 0,
-                crust.class(hotspot.source_cell) == CrustClass::Continental
-            );
-        }
-    }
-
-    #[test]
-    fn overlapping_provinces_resolve_to_the_maximum_weight() {
-        let fixture = Fixture::new(512);
-        // A wide radius on a coarse mesh puts several plateaus on top of one
-        // another.
-        let config = HotspotFieldConfig {
-            hotspot_count: 64,
-            province_radius: hop_length(REFERENCE_CELL_COUNT, 6),
-            province_rim: hop_length(REFERENCE_CELL_COUNT, 3),
-            ..province_config()
-        };
-        let extents = reference_extents(config);
-        let field = fixture.generate(config).unwrap();
-
-        let mut expected = vec![0.0_f32; fixture.mesh.cell_count()];
-        let mut contributions = vec![0_usize; fixture.mesh.cell_count()];
-        for hotspot in &field.hotspots {
-            if hotspot.province_cell_count == 0 {
-                continue;
-            }
-            for point in trace_province(
-                &fixture.mesh,
-                &fixture.plates,
-                fixture.crust(),
-                hotspot.source_cell,
-                extents,
-            ) {
-                expected[point.cell] = expected[point.cell].max(point.weight);
-                contributions[point.cell] += 1;
-            }
-        }
-
-        assert!(contributions.iter().any(|&count| count > 1));
-        assert_eq!(field.cell_plateau, expected);
-        assert_eq!(
-            field.diagnostics.province_cell_count,
-            contributions.iter().filter(|&&count| count > 0).count()
-        );
-    }
-
-    #[test]
-    fn reference_provinces_have_a_stable_cell_fingerprint() {
-        let fixture = Fixture::new(512);
-        let field = fixture.generate(province_config()).unwrap();
-        let covered: Vec<_> = field
-            .cell_plateau
-            .iter()
-            .enumerate()
-            .filter(|&(_, &weight)| weight > 0.0)
-            .map(|(cell, _)| cell as u64)
-            .collect();
-        // Every cell a province covers carries weight, so the positive cells
-        // of the field are exactly the cells the diagnostics counted.
-        assert_eq!(covered.len(), field.diagnostics.province_cell_count);
-
-        let values = field
-            .hotspots
-            .iter()
-            .flat_map(|hotspot| {
-                [
-                    hotspot.source_cell as u64,
-                    hotspot.province_cell_count as u64,
-                ]
-            })
-            .chain(covered);
-
-        assert_eq!(fingerprint(values), 17_700_700_707_790_126_781);
-        assert_eq!(field.diagnostics.province_count, 3);
-        assert_eq!(field.diagnostics.province_cell_count, 22);
-    }
-
-    #[test]
     fn overlaps_use_max_intensity_then_lowest_hotspot_index() {
-        let fixture = Fixture::new(32);
-        let field = fixture
-            .generate(HotspotFieldConfig {
+        let fixture = hotspot_fixture(32);
+        let field = generate(
+            &fixture,
+            HotspotFieldConfig {
                 hotspot_count: 64,
-                maximum_trail_length: hop_length(32, 5),
+                maximum_trail_length: hop_length(32, 5.0),
                 province_fraction: 0.0,
                 ..HotspotFieldConfig::new(23)
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(field.diagnostics.overlap_cell_count > 0);
 
         for cell in 0..fixture.mesh.cell_count() {
@@ -862,16 +567,16 @@ mod tests {
 
     #[test]
     fn zero_motion_produces_source_only_trails() {
-        let mut fixture = Fixture::new(128);
+        let mut fixture = hotspot_fixture(128);
         fixture.kinematics = PlateKinematics {
             angular_velocities: vec![Vec3::ZERO; fixture.plates.plate_count],
             base_speeds: vec![0.0; fixture.plates.plate_count],
         };
         let config = HotspotFieldConfig {
             hotspot_count: 12,
-            ..reference_config()
+            ..hotspot_reference_config()
         };
-        let field = fixture.generate(config).unwrap();
+        let field = generate(&fixture, config).unwrap();
 
         assert!(
             field
@@ -887,13 +592,15 @@ mod tests {
 
     #[test]
     fn zero_hotspots_produces_an_empty_field() {
-        let fixture = Fixture::new(32);
-        let field = fixture
-            .generate(HotspotFieldConfig {
+        let fixture = hotspot_fixture(32);
+        let field = generate(
+            &fixture,
+            HotspotFieldConfig {
                 hotspot_count: 0,
-                ..province_config()
-            })
-            .unwrap();
+                ..hotspot_province_config()
+            },
+        )
+        .unwrap();
 
         assert!(field.hotspots.is_empty());
         assert!(field.cell_intensities.iter().all(|&value| value == 0.0));
@@ -904,34 +611,46 @@ mod tests {
 
     #[test]
     fn rejects_invalid_configuration_and_inputs() {
-        let fixture = Fixture::new(32);
+        let fixture = hotspot_fixture(32);
         assert_eq!(
-            fixture.generate(HotspotFieldConfig {
-                maximum_trail_length: 0.0,
-                ..reference_config()
-            }),
+            generate(
+                &fixture,
+                HotspotFieldConfig {
+                    maximum_trail_length: 0.0,
+                    ..hotspot_reference_config()
+                }
+            ),
             Err(HotspotFieldError::EmptyTrail)
         );
         assert_eq!(
-            fixture.generate(HotspotFieldConfig {
-                province_fraction: f32::NAN,
-                ..reference_config()
-            }),
+            generate(
+                &fixture,
+                HotspotFieldConfig {
+                    province_fraction: f32::NAN,
+                    ..hotspot_reference_config()
+                }
+            ),
             Err(HotspotFieldError::InvalidProvinceFraction)
         );
         assert_eq!(
-            fixture.generate(HotspotFieldConfig {
-                province_fraction: 1.5,
-                ..reference_config()
-            }),
+            generate(
+                &fixture,
+                HotspotFieldConfig {
+                    province_fraction: 1.5,
+                    ..hotspot_reference_config()
+                }
+            ),
             Err(HotspotFieldError::InvalidProvinceFraction)
         );
         assert_eq!(
-            fixture.generate(HotspotFieldConfig {
-                province_radius: hop_length(REFERENCE_CELL_COUNT, 2),
-                province_rim: hop_length(REFERENCE_CELL_COUNT, 3),
-                ..reference_config()
-            }),
+            generate(
+                &fixture,
+                HotspotFieldConfig {
+                    province_radius: hop_length(HOTSPOT_CELL_COUNT, 2.0),
+                    province_rim: hop_length(HOTSPOT_CELL_COUNT, 3.0),
+                    ..hotspot_reference_config()
+                }
+            ),
             Err(HotspotFieldError::ProvinceRimExceedsRadius)
         );
 
@@ -943,7 +662,7 @@ mod tests {
                 &invalid_cells,
                 fixture.crust(),
                 &fixture.kinematics,
-                reference_config()
+                hotspot_reference_config()
             ),
             Err(HotspotFieldError::Input(StageInputError::Cells))
         );
@@ -958,7 +677,7 @@ mod tests {
                     cell_birth: &short_birth
                 },
                 &fixture.kinematics,
-                reference_config()
+                hotspot_reference_config()
             ),
             Err(HotspotFieldError::Input(StageInputError::CrustBirth))
         );
@@ -973,7 +692,7 @@ mod tests {
                 &fixture.plates,
                 fixture.crust(),
                 &invalid_kinematics,
-                reference_config()
+                hotspot_reference_config()
             ),
             Err(HotspotFieldError::Input(StageInputError::Plates))
         );
@@ -986,7 +705,7 @@ mod tests {
                 &invalid_ownership,
                 fixture.crust(),
                 &fixture.kinematics,
-                reference_config()
+                hotspot_reference_config()
             ),
             Err(HotspotFieldError::Input(StageInputError::PlateOwnership))
         );
@@ -994,15 +713,15 @@ mod tests {
 
     #[test]
     fn validation_reports_misaligned_aggregate_fields() {
-        let fixture = Fixture::new(32);
-        let mut field = fixture.generate(reference_config()).unwrap();
+        let fixture = hotspot_fixture(32);
+        let mut field = generate(&fixture, hotspot_reference_config()).unwrap();
         field.cell_hotspots.pop();
         assert_eq!(
             field.validate(&fixture.mesh),
             Err(GeologyInputError::Hotspots)
         );
 
-        let mut field = fixture.generate(reference_config()).unwrap();
+        let mut field = generate(&fixture, hotspot_reference_config()).unwrap();
         field.cell_plateau.pop();
         assert_eq!(
             field.validate(&fixture.mesh),

@@ -11,7 +11,7 @@ use procgen_geology::{
     VolcanicArcFieldConfig,
 };
 use procgen_sphere::FibonacciConfig;
-use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, mean_cell_width};
+use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
     ContinentalRiftProfile, CrustClassificationConfig, DEFAULT_STEP_DURATION, PlateEvolutionConfig,
@@ -23,22 +23,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// The model length that spans `hops` on a mesh of `cell_count` cells.
-///
-/// Every length default was set against the 65,536-cell mesh, and these test
-/// meshes are coarse enough that a default of a few of its cells would round
-/// to one hop here. Each fixture therefore states the reach the default means
-/// rather than taking the default itself, exactly as it does for the step
-/// duration: a fixture stands in for the default world, not for a world
-/// generated at thirty-two cells.
-fn hop_length(cell_count: usize, hops: f32) -> f32 {
-    hops * mean_cell_width(1.0, cell_count)
-}
+// Every length default was set against the 65,536-cell mesh, and these test
+// meshes are coarse enough that a default of a few of its cells would round to
+// one hop here. Each fixture therefore states the reach the default means,
+// through `hop_length`, rather than taking the default itself, exactly as it
+// does for the step duration: a fixture stands in for the default world, not
+// for a world generated at thirty-two cells.
 
 /// The default deformation profiles with every depth carried to a mesh of
 /// `cell_count` cells.
 fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
-    let scale = mean_cell_width(1.0, cell_count) / mean_cell_width(1.0, DEFAULT_CELL_COUNT);
+    let scale = hop_length(cell_count, 1.0) / hop_length(DEFAULT_CELL_COUNT, 1.0);
     let default = BoundaryDeformationConfig::default();
     let deepen = |effect: BoundaryEffect| BoundaryEffect {
         depth: effect.depth * scale,

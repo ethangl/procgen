@@ -193,10 +193,10 @@ mod tests {
     use crate::{
         ElevationEffectDiagnostics, GeologicalElevationDiagnostics, GeologyInputError,
         SedimentaryBasin,
-        test_support::{empty_basins, empty_cratons, hop_length, mesh},
+        test_support::{empty_basins, empty_cratons, mesh},
     };
     use procgen_core::quantized_fingerprint;
-    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
     use procgen_tectonics::{CoarseElevationConfig, StageInputError};
 
     #[derive(Clone)]
@@ -261,7 +261,7 @@ mod tests {
         // The five cells the default decay means, on a mesh this much coarser
         // than the one it was set against.
         let config = IsostaticAdjustmentConfig {
-            maximum_boundary_distance: hop_length(32, 5),
+            maximum_boundary_distance: hop_length(32, 5.0),
             ..IsostaticAdjustmentConfig::default()
         };
 

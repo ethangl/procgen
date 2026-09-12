@@ -147,11 +147,11 @@ fn plate_boundary_distances(mesh: &SphereMesh, plates: &PlatePartition) -> Vec<O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{classified_cell_birth, hop_length};
+    use crate::test_support::classified_cell_birth;
     use procgen_core::fingerprint;
     use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
     use procgen_sphere_mesh::build_sphere_mesh;
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
     use procgen_tectonics::{
         CoarseElevationConfig, CrustClassificationConfig, PlatePartitionConfig, classify_crust,
         partition_plates,
@@ -295,8 +295,8 @@ mod tests {
         // The three cells the defaults mean, on a mesh this much coarser than
         // the one they were set against.
         let config = CratonFieldConfig {
-            minimum_boundary_distance: hop_length(1_024, 3),
-            ramp_width: hop_length(1_024, 3),
+            minimum_boundary_distance: hop_length(1_024, 3.0),
+            ramp_width: hop_length(1_024, 3.0),
         };
         let ramp_width = hops(mesh.cell_count(), config.ramp_width);
         let field = derive_craton_field(
@@ -373,7 +373,7 @@ mod tests {
             elevation(&elevations),
             CratonFieldConfig {
                 minimum_boundary_distance: 0.0,
-                ramp_width: hop_length(512, 2),
+                ramp_width: hop_length(512, 2.0),
             },
         )
         .unwrap();

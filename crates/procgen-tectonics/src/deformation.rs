@@ -254,12 +254,11 @@ mod tests {
     use super::*;
     use crate::test_support::{
         EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, convergent_fixture, empty_boundaries,
-        final_state_fixture, hop_length, mesh as test_mesh, plate_cell_birth,
-        plate_cell_birth_times, scaled_deformation, two_plate_boundary_partition,
-        two_plate_fixture,
+        final_state_fixture, mesh as test_mesh, plate_cell_birth, plate_cell_birth_times,
+        scaled_deformation, two_plate_boundary_partition, two_plate_fixture,
     };
     use crate::{BoundaryClass, BoundaryEffect, ContinentalRiftProfile, PlateEvolutionConfig};
-    use procgen_sphere_mesh::hops;
+    use procgen_sphere_mesh::{hop_length, hops};
 
     /// One step's whole profile, over crust nothing has deformed yet.
     fn deform_once(
@@ -468,7 +467,7 @@ mod tests {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
                 flank_offset: 0.1,
-                decay_depth: hop_length(mesh.cell_count(), 3),
+                decay_depth: hop_length(mesh.cell_count(), 3.0),
             },
             saturation_speed: 4.0,
             ..Default::default()
@@ -499,7 +498,7 @@ mod tests {
         let config = BoundaryDeformationConfig {
             transform: BoundaryEffect {
                 offset: 0.4,
-                depth: hop_length(mesh.cell_count(), 1),
+                depth: hop_length(mesh.cell_count(), 1.0),
             },
             saturation_speed: 4.0,
             ..Default::default()
@@ -572,7 +571,7 @@ mod tests {
             rift: ContinentalRiftProfile {
                 center_offset: -0.4,
                 flank_offset: -0.1,
-                decay_depth: hop_length(mesh.cell_count(), 3),
+                decay_depth: hop_length(mesh.cell_count(), 3.0),
             },
             saturation_speed: 2.0,
             ..Default::default()
@@ -621,7 +620,7 @@ mod tests {
         let config = BoundaryDeformationConfig {
             convergent: BoundaryEffect {
                 offset: 0.4,
-                depth: hop_length(mesh.cell_count(), 1),
+                depth: hop_length(mesh.cell_count(), 1.0),
             },
             ..Default::default()
         };
@@ -752,7 +751,7 @@ mod tests {
         let cell_count = fixture.mesh.cell_count();
         let effect = BoundaryEffect {
             offset: 0.5,
-            depth: hop_length(cell_count, depth),
+            depth: hop_length(cell_count, depth as f32),
         };
         // Every profile reaches exactly `depth` hops: a linear effect decays to
         // zero one hop past its own, and a rift one hop past its decay depth.
@@ -767,7 +766,7 @@ mod tests {
                 },
                 island_arc: effect,
                 rift: ContinentalRiftProfile {
-                    decay_depth: hop_length(cell_count, depth + 1),
+                    decay_depth: hop_length(cell_count, depth as f32 + 1.0),
                     ..config.deformation.rift
                 },
                 ..config.deformation

@@ -507,19 +507,15 @@ fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{classified_cell_birth, hop_length};
+    use crate::test_support::{PlateFixture, crust, hemisphere_fixture, plate_birth};
     use procgen_core::fingerprint;
-    use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-    use procgen_sphere_mesh::DEFAULT_CELL_COUNT;
-    use procgen_sphere_mesh::build_sphere_mesh;
-    use procgen_tectonics::{
-        CrustClassificationConfig, PlateKinematicsConfig, PlatePartitionConfig,
-        classify_boundaries, classify_crust, generate_plate_kinematics, partition_plates,
-    };
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
     use std::collections::BTreeSet;
 
-    fn crust(cell_birth: &[Option<f32>]) -> CellCrust<'_> {
-        CellCrust { cell_birth }
+    /// The arc fixtures split into more plates than the hotspot ones, so that
+    /// a mesh this size carries several boundaries with a polarity.
+    fn fixture(cell_count: usize) -> PlateFixture {
+        PlateFixture::new(cell_count, 8)
     }
 
     /// The default config with its inland offset carried to a mesh of
@@ -527,7 +523,7 @@ mod tests {
     /// rather than the one a mesh this coarse would round it to.
     fn reference_config(cell_count: usize) -> VolcanicArcFieldConfig {
         VolcanicArcFieldConfig {
-            inland_offset: hop_length(cell_count, 2),
+            inland_offset: hop_length(cell_count, 2.0),
             ..VolcanicArcFieldConfig::default()
         }
     }
@@ -545,47 +541,16 @@ mod tests {
         );
     }
 
-    fn fixture(
-        cell_count: usize,
-    ) -> (
-        SphereMesh,
-        PlatePartition,
-        Vec<Option<f32>>,
-        BoundaryClassification,
-    ) {
-        let mesh = build_sphere_mesh(
-            fibonacci_sphere(FibonacciConfig {
-                count: cell_count,
-                jitter: 0.5,
-                seed: 7,
-            })
-            .unwrap(),
-            1.0,
-        )
-        .unwrap();
-        let plates = partition_plates(
-            &mesh,
-            PlatePartitionConfig {
-                arc_count: 8,
-                piece_fraction: 32.0 / cell_count as f32,
-                growth_roughness: 0,
-                seed: 11,
-                ..PlatePartitionConfig::default()
-            },
-        )
-        .unwrap();
-        let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
-        let kinematics =
-            generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
-                .unwrap();
-        let boundaries = classify_boundaries(&mesh, &plates, &kinematics).unwrap();
-        let cell_birth = classified_cell_birth(&crust);
-        (mesh, plates, cell_birth, boundaries)
-    }
-
     #[test]
     fn field_is_deterministic_ordered_and_bounded_inland() {
-        let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
+        let world = fixture(1_024);
+        let boundaries = world.boundaries();
+        let PlateFixture {
+            mesh,
+            plates,
+            cell_birth,
+            ..
+        } = world;
         let config = reference_config(mesh.cell_count());
         let field =
             derive_volcanic_arc_field(&mesh, &plates, crust(&cell_birth), &boundaries, config)
@@ -664,7 +629,9 @@ mod tests {
     /// overridden along another part of it.
     #[test]
     fn mixed_crust_plates_group_by_their_continental_side() {
-        let (mesh, plates, _, boundaries) = fixture(1_024);
+        let world = fixture(1_024);
+        let boundaries = world.boundaries();
+        let PlateFixture { mesh, plates, .. } = world;
         // Every segment kept, so the roles below are the grouping's own answer
         // rather than what survived the length filter.
         let config = VolcanicArcFieldConfig {
@@ -715,54 +682,6 @@ mod tests {
             overriding.intersection(&overridden).next().is_some(),
             "no plate both overrides and is overridden"
         );
-    }
-
-    /// Two plates split at the equator, every shared edge converging at the
-    /// same rate. The crust each plate carries is the test's to choose, so one
-    /// fixture covers every polarity a convergent boundary can have.
-    fn hemisphere_fixture(
-        cell_count: usize,
-    ) -> (SphereMesh, PlatePartition, BoundaryClassification) {
-        let mesh = build_sphere_mesh(
-            fibonacci_sphere(FibonacciConfig {
-                count: cell_count,
-                jitter: 0.5,
-                seed: 7,
-            })
-            .unwrap(),
-            1.0,
-        )
-        .unwrap();
-        let cell_plates: Vec<_> = mesh
-            .cell_centers
-            .iter()
-            .map(|center| usize::from(center.z < 0.0))
-            .collect();
-        let mut boundaries = BoundaryClassification {
-            edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
-            edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
-            edge_shear: vec![0.0; mesh.edge_count()],
-        };
-        for (edge_index, edge) in mesh.edges.iter().enumerate() {
-            if cell_plates[edge.cells[0]] != cell_plates[edge.cells[1]] {
-                boundaries.edge_classes[edge_index] = BoundaryClass::Convergent;
-                boundaries.edge_normal_speeds[edge_index] = [0.5, 0.5];
-            }
-        }
-        let plates = PlatePartition {
-            cell_plates,
-            plate_count: 2,
-        };
-        (mesh, plates, boundaries)
-    }
-
-    /// Per-cell birth that gives each plate of the fixture one crust.
-    fn plate_birth(plates: &PlatePartition, plate_births: [Option<f32>; 2]) -> Vec<Option<f32>> {
-        plates
-            .cell_plates
-            .iter()
-            .map(|&plate| plate_births[plate])
-            .collect()
     }
 
     /// Ocean-ocean convergence with a polarity is the Marianas: the younger
@@ -862,7 +781,14 @@ mod tests {
 
     #[test]
     fn reference_field_has_stable_fingerprint() {
-        let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
+        let world = fixture(1_024);
+        let boundaries = world.boundaries();
+        let PlateFixture {
+            mesh,
+            plates,
+            cell_birth,
+            ..
+        } = world;
         let field = derive_volcanic_arc_field(
             &mesh,
             &plates,
@@ -897,10 +823,17 @@ mod tests {
 
     #[test]
     fn peaks_and_overlaps_follow_stable_strength_rules() {
-        let (mesh, plates, cell_birth, boundaries) = fixture(1_024);
+        let world = fixture(1_024);
+        let boundaries = world.boundaries();
+        let PlateFixture {
+            mesh,
+            plates,
+            cell_birth,
+            ..
+        } = world;
         let config = VolcanicArcFieldConfig {
             minimum_boundary_edges: 1,
-            inland_offset: hop_length(1_024, 3),
+            inland_offset: hop_length(1_024, 3.0),
             peak_density_divisor: 2,
             strength_saturation: 2.0,
         };
@@ -952,7 +885,14 @@ mod tests {
 
     #[test]
     fn minimum_edge_filter_reports_discarded_segments() {
-        let (mesh, plates, cell_birth, boundaries) = fixture(512);
+        let world = fixture(512);
+        let boundaries = world.boundaries();
+        let PlateFixture {
+            mesh,
+            plates,
+            cell_birth,
+            ..
+        } = world;
         let field = derive_volcanic_arc_field(
             &mesh,
             &plates,
@@ -974,7 +914,14 @@ mod tests {
 
     #[test]
     fn rejects_invalid_configuration_and_inputs() {
-        let (mesh, plates, cell_birth, boundaries) = fixture(512);
+        let world = fixture(512);
+        let boundaries = world.boundaries();
+        let PlateFixture {
+            mesh,
+            plates,
+            cell_birth,
+            ..
+        } = world;
         for (config, error) in [
             (
                 VolcanicArcFieldConfig {

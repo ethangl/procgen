@@ -1,7 +1,7 @@
 use procgen_core::Vec3;
 pub use procgen_core::{fingerprint, quantized_fingerprint};
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh, default_hop_length, mean_cell_width};
+use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh, default_hop_length, hop_length};
 
 use crate::field::DEFAULT_STEP_DURATION;
 use crate::{
@@ -20,17 +20,11 @@ use crate::{
 /// would resolve to a single hop on a mesh this coarse.
 pub const REFERENCE_CELL_COUNT: usize = 512;
 
-/// The model length that spans `hops` on a mesh of `cell_count` cells. A
-/// fixture that means a hop count says so through this.
-pub fn hop_length(cell_count: usize, hops: usize) -> f32 {
-    hops as f32 * mean_cell_width(1.0, cell_count)
-}
-
 /// The default deformation profiles with every depth carried from the default
 /// mesh to a mesh of `cell_count` cells, so each belt spans the hops there
 /// that it spans on the default mesh.
 pub fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
-    let scale = mean_cell_width(1.0, cell_count) / default_hop_length();
+    let scale = hop_length(cell_count, 1.0) / default_hop_length();
     let default = BoundaryDeformationConfig::default();
     let deepen = |effect: BoundaryEffect| BoundaryEffect {
         depth: effect.depth * scale,
@@ -312,7 +306,7 @@ pub fn reference_base_elevation_config() -> BaseElevationConfig {
         cooling_age: default.cooling_age * REFERENCE_STEP_DURATION / DEFAULT_STEP_DURATION,
         // A shelf is three cells wide on the default mesh, and the fixtures
         // pin what those three cells do.
-        margin_width: hop_length(REFERENCE_CELL_COUNT, 3),
+        margin_width: hop_length(REFERENCE_CELL_COUNT, 3.0),
         ..default
     }
 }
