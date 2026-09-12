@@ -26,6 +26,13 @@ const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
 const NUCLEUS_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=128;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
+// Both are shares, so both stop at one, where the slab factor disappears: at a
+// trenchless factor of one every plate keeps its whole base speed, and at a
+// saturation of one only a plate that is nothing but trench does. The bottoms
+// sit where a plate without a trench barely moves and where the least trench a
+// plate can have already saturates.
+const TRENCHLESS_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
+const SLAB_SATURATION_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 // The top is the crate's own ceiling, which is how far the search reaches. At
 // the bottom every cell a rigid rotation left empty makes floor it should not
@@ -195,7 +202,12 @@ fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
         1.0,
     );
     ui.horizontal(|ui| {
-        ui.label("Angular speed");
+        ui.label("Angular speed").on_hover_text(
+            "The range each plate's hashed base speed is drawn from. Crust and \
+             slab pull scale that draw, so a plate's own speed can sit well \
+             below the minimum; the maximum is also the ceiling every speed is \
+             clamped to.",
+        );
         ui.add(
             egui::DragValue::new(&mut config.minimum_angular_speed)
                 .range(ANGULAR_SPEED_RANGE)
@@ -226,6 +238,18 @@ fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
         "Continental speed",
         &mut config.continental_speed_factor,
         CRUST_SPEED_FACTOR_RANGE,
+    );
+    slider(
+        ui,
+        "Trenchless speed",
+        &mut config.trenchless_speed_factor,
+        TRENCHLESS_SPEED_FACTOR_RANGE,
+    );
+    slider(
+        ui,
+        "Slab saturation",
+        &mut config.slab_saturation_fraction,
+        SLAB_SATURATION_RANGE,
     );
 }
 

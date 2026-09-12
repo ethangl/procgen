@@ -21,91 +21,19 @@
 //! What the cells still decide is ownership, because a cell holding several
 //! particles has to answer with one of them. That resolution is where
 //! subduction, collision, and the ridge live.
+//!
+//! How far this module looks, and the longest step that keeps it honest, are
+//! [`crate::reach`]'s to state: three separate bounds follow from the one ring
+//! count, so they live together rather than beside the searches that read
+//! them.
 
 use crate::{
-    BoundaryClass, BoundaryClassification, PlateEvolutionConfig, crust::material_order,
+    BoundaryClass, BoundaryClassification, TRANSPORT_REACH_HOPS, crust::material_order,
     step::EvolvingWorld,
 };
 use procgen_core::Vec3;
 use procgen_sphere_mesh::SphereMesh;
 use std::{cmp::Ordering, iter};
-
-/// How many hops out from a cell transport looks: the one fact every reach in
-/// this module is stated against.
-///
-/// It bounds three things that have to agree. An empty cell searches this many
-/// rings for material, so a gap radius beyond it would be a silent false floor
-/// rather than a wider search. A trench takes a losing particle only if a
-/// convergent edge lies within it, so a particle that landed further inside
-/// another plate than this would stack instead of subduct. And a step that
-/// carries a plate further than this outruns both: material jumps trenches
-/// without subducting, gaps open that no search can fill, and deformation is
-/// raised at boundary positions the plates left partway through the step.
-/// [`maximum_step_duration`] is that last one as a time.
-pub const TRANSPORT_REACH_HOPS: usize = 2;
-
-/// Largest [`MaterialTransportConfig::gap_radius`] the search can honour, in
-/// cell widths: one per hop of [`TRANSPORT_REACH_HOPS`]. A radius beyond it is
-/// not a wider search but silent false floor, because the cell would accept
-/// material it never looks at. Evolution rejects a larger radius and the
-/// viewer's slider stops here.
-pub const MAX_GAP_RADIUS: f32 = TRANSPORT_REACH_HOPS as f32;
-
-/// The longest step that keeps a run a coarser version of the same world:
-/// what the fastest plate a run can hold takes to cross
-/// [`TRANSPORT_REACH_HOPS`] cells.
-///
-/// It lives here because it is the reach above restated as a time, and the two
-/// have to move together: a step longer than this carries material past
-/// everything this module looks at.
-///
-/// The fastest plate is not the fastest fitted one. Pole drift may raise a
-/// speed by `speed_drift_limit`, and a rift opens its two halves apart at
-/// `rift_opening_speed` on top of the parent's motion, so both are in the
-/// bound. Switching either off gives back the reach they reserved. A world in
-/// which nothing can move has no bound at all, and this returns infinity.
-///
-/// Callers pass the speed they want bounded: evolution passes the fastest
-/// plate its inputs actually hold, and the viewer the fastest the kinematics
-/// config could produce, because a user editing a step duration has not fitted
-/// the plates yet.
-pub fn maximum_step_duration(
-    maximum_angular_speed: f32,
-    radius: f32,
-    cell_width: f32,
-    config: &PlateEvolutionConfig,
-) -> f32 {
-    let reach = TRANSPORT_REACH_HOPS as f32 * cell_width;
-    let fastest = maximum_angular_speed * (1.0 + config.pole_drift.speed_drift_limit)
-        + config.lifecycle.rift_opening_speed;
-    reach / (fastest * radius)
-}
-
-/// How an empty cell decides whether the plates opened a gap there.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MaterialTransportConfig {
-    /// How far, in mesh cell widths, an empty cell reaches for material
-    /// before it decides nothing arrived and makes ocean floor instead.
-    /// Bounded above by [`MAX_GAP_RADIUS`], which is how far the search
-    /// itself reaches.
-    ///
-    /// Cell areas vary, so a rigid rotation alone leaves a third of the cells
-    /// empty and a quarter doubled at any moment; those empty cells have
-    /// material just outside them and must not make floor. Measured on the
-    /// default mesh after rigid rotations of 1, 7, and 50 cell widths, no
-    /// empty cell's nearest particle was further than 1.5 cell widths, where
-    /// a radius of 1.0 would have made 2, 672, and 949 cells of false floor.
-    /// The real gaps a run opens are much wider: after five steps of the
-    /// viewer's plate motion, 103 cells had no particle within two hops at
-    /// all.
-    pub gap_radius: f32,
-}
-
-impl Default for MaterialTransportConfig {
-    fn default() -> Self {
-        Self { gap_radius: 1.5 }
-    }
-}
 
 /// One parcel of crust.
 ///
@@ -651,79 +579,15 @@ fn sample_precedes(candidate: (bool, f32, usize), current: (bool, f32, usize)) -
 mod tests {
     use super::*;
     use crate::test_support::{
-        NO_LIFECYCLE, NO_POLE_DRIFT, evolution_fixture, fingerprint, forced_rift_fixture,
-        mesh as test_mesh, reference_evolution_config, two_plate_fixture,
+        NO_LIFECYCLE, NO_POLE_DRIFT, fingerprint, forced_rift_fixture, mesh as test_mesh,
+        two_plate_fixture,
     };
     use crate::{
         CrustBirthPriorConfig, CrustClass, CrustClassification, CrustClassificationDiagnostics,
-        PlateEvolutionConfig, PlateEvolutionError, PlateEvolutionInputs, PlateKinematics,
+        MaterialTransportConfig, PlateEvolutionConfig, PlateEvolutionInputs, PlateKinematics,
         PlateKinematicsConfig, PlatePartition, classify_boundaries, derive_crust_birth_prior,
-        evolve_plate_ownership, mean_cell_width,
+        evolve_plate_ownership,
     };
-
-    #[test]
-    fn a_step_that_outruns_the_transport_reach_is_rejected() {
-        let fixture = evolution_fixture();
-        let config = reference_evolution_config();
-        let radius = fixture.mesh.radius;
-        let cell_width = mean_cell_width(radius, fixture.mesh.cell_count());
-        let fastest = fixture
-            .kinematics
-            .angular_velocities
-            .iter()
-            .map(|rotation| rotation.length())
-            .fold(0.0, f32::max);
-        let bound = |config: &PlateEvolutionConfig| {
-            maximum_step_duration(fastest, radius, cell_width, config)
-        };
-        let run = |step_duration| {
-            evolve_plate_ownership(
-                &fixture.mesh,
-                fixture.inputs(),
-                PlateEvolutionConfig {
-                    step_duration,
-                    ..config
-                },
-            )
-        };
-
-        assert!(
-            config.step_duration < bound(&config),
-            "the reference run must sit inside its own bound"
-        );
-        assert!(run(bound(&config)).is_ok());
-        assert_eq!(
-            run(bound(&config) * 1.001),
-            Err(PlateEvolutionError::StepOutrunsReach)
-        );
-        assert_eq!(
-            PlateEvolutionError::StepOutrunsReach.to_string(),
-            "step duration must not carry a plate further than the 2 cells transport looks"
-        );
-
-        // Drift may raise a speed and a rift opens its halves apart on top of
-        // the motion, so both reserve part of the reach; switching them off
-        // hands it back and a step between the two bounds becomes legal.
-        let still = PlateEvolutionConfig {
-            pole_drift: NO_POLE_DRIFT,
-            lifecycle: NO_LIFECYCLE,
-            ..config
-        };
-        assert!(bound(&still) > bound(&config));
-        let between = 0.5 * (bound(&config) + bound(&still));
-        assert_eq!(run(between), Err(PlateEvolutionError::StepOutrunsReach));
-        assert!(
-            evolve_plate_ownership(
-                &fixture.mesh,
-                fixture.inputs(),
-                PlateEvolutionConfig {
-                    step_duration: between,
-                    ..still
-                },
-            )
-            .is_ok()
-        );
-    }
 
     /// A run over the two-plate fixture that moves no material at all, so a
     /// test can place a particle by hand and see what one resolution does to
@@ -938,6 +802,7 @@ mod tests {
         };
         let kinematics = PlateKinematics {
             angular_velocities: vec![Vec3::Z],
+            base_speeds: vec![1.0],
         };
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
         let birth_prior = derive_crust_birth_prior(
@@ -956,6 +821,17 @@ mod tests {
             PlateEvolutionInputs {
                 partition: &partition,
                 kinematics: &kinematics,
+                // Every speed factor at one, so each step's respeed hands the
+                // plate back the unit speed it was given and the cap crosses
+                // the forty cells this fixture is built around. What the slab
+                // rule does to a speed is `motion.rs`'s to state; this is
+                // about what a pure rotation conserves.
+                kinematics_config: PlateKinematicsConfig {
+                    oceanic_speed_factor: 1.0,
+                    continental_speed_factor: 1.0,
+                    trenchless_speed_factor: 1.0,
+                    ..PlateKinematicsConfig::new(0)
+                },
                 boundaries: &boundaries,
                 birth_prior: &birth_prior,
             },

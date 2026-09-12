@@ -442,8 +442,8 @@ mod tests {
         // Switching both interior-relief terms off and the taper's width to
         // zero leaves the age curve alone, which is what this pin holds. It
         // moves whenever the reference run's crust or its ages do: last with
-        // ages becoming model time, which re-dated every cell and scaled the
-        // cooling age these fixtures read to match.
+        // speed becoming slab pull, which slowed every plate and so changed
+        // where the run made floor and how long it had to cool.
         //
         // The curve is add, multiply, divide, and square root over a model
         // time, so it is bit-identical on every machine; the grid is what
@@ -451,7 +451,7 @@ mod tests {
         // two oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
             quantized_fingerprint(first.cell_elevations.iter().copied()),
-            8_282_608_213_790_981_193
+            10_920_959_947_316_169_706
         );
     }
 

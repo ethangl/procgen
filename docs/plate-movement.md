@@ -24,12 +24,18 @@ for that one.
 
 - `generate_plate_kinematics(mesh, partition, crust, config)` fits each plate's
   Euler vector to a smooth global flow field over the plate's own cells, then
-  scales the fitted direction by the plate's hashed base speed times a crust
-  factor times the fourth root of the mean plate area over its own. A
+  scales the fitted direction by `crust_scaled_speed`: the plate's hashed base
+  speed times a crust factor, clamped to `maximum_angular_speed`. A
   `coherence` fraction blends the axis back toward the hashed random one.
   Plates too small to fit — one or two cells — keep the hashed axis; the speed
   rule is the same for every plate. Nothing on the path uses a libm call, so
   the integer boundary classes the angular velocities decide stay exact.
+- That is not the speed a plate turns at. `plate_speed` in `speed.rs` is, and
+  it reads the share of a plate's perimeter that is subducting slab, which no
+  stage can answer until the crust-birth prior has dated the ocean. Evolution
+  applies it: once before step zero and once at the end of every step. See
+  "Slab pull" below for the rule, the ordering it forces, and the size factor
+  it replaced.
 - The default flow frequency is 1.0. Averaged over the adjacent plate pairs at
   the viewer's defaults, the signed alignment of their rotation axes is 0.34 to
   0.44 across three motion seeds, against 0.03 or less for the independent
@@ -122,18 +128,20 @@ for that one.
   wander over `n` steps is roughly `theta * sqrt(n)`. Both rates are therefore
   per unit *root* time, not per unit time: see "Time and length units" below
   for why, and for the retune that left a default step behaving as it did.
-- The drifted speed is bounded to `speed_drift_limit` either side of the
-  speed the plate started the run with, not to the kinematics config's global
-  angular-speed range. A random walk against fixed global limits eventually
-  piles every plate against one of them; a band around the fitted speed keeps
-  drift the perturbation of the flow field's answer that it is meant to be,
-  and evolution needs nothing from the kinematics stage but its result.
+- What drifts is a per-plate *factor*, bounded to `speed_drift_limit` either
+  side of one, and the speed a step ends on is `plate_speed` times that
+  factor. A random walk against fixed global limits eventually piles every
+  plate against one of them; a band around the rule's own answer keeps drift
+  the perturbation of it that it is meant to be. Before "Slab pull" the walk
+  was of the speed itself, banded around the speed the plate started the run
+  with, which is the same band expressed against a speed that no longer
+  stands still.
 - `axis_drift_rate` defaults to 1.8 and `speed_drift_rate` to 0.9, both per
   unit root time, and `speed_drift_limit` to 0.5. At `DEFAULT_STEP_DURATION`
   the first turns an axis 0.213 radians a step, so `0.213 * sqrt(15)` is about
   forty-seven degrees of expected wander over a default fifteen-step run, and
-  the second changes a speed by at most about a tenth a step, whose expected
-  fifteen-step excursion is about a quarter. A half therefore bounds the tail
+  the second changes a drift factor by at most about a tenth a step, whose
+  expected fifteen-step excursion is about a quarter. A half therefore bounds the tail
   of the speed walk without shaping its bulk: five of the 111 plates at the
   viewer's defaults reach the band edge. The rates stay bounded on purpose:
   larger drift makes boundaries flicker between regimes from step to step and
@@ -441,9 +449,10 @@ themselves are a float field and are never pinned.
 
 - Keep rigid rotations. Plates are rigid to first order, and the Euler-vector
   model gives boundary classification for free.
-- Fit to a field rather than simulate forces. Slab pull and ridge push would
-  need a mantle model; a smooth field with crust and size factors gets the
-  large-scale pattern at a fraction of the complexity.
+- Fit to a field rather than simulate forces. A real force balance would need
+  a mantle model; a smooth field with speed factors gets the large-scale
+  pattern at a fraction of the complexity. The slab factor "Slab pull" adds is
+  a multiplier on a hashed base, not a force.
 - Keep evolution as simultaneous steps. Everything here is a Jacobi update:
   every cell resolves against the ownership the step began with, and the new
   ownership is written only once every cell has been decided. That is what
@@ -1263,13 +1272,16 @@ collided cells from 20,896 to 9,608 at the viewer's defaults.
 ### The step is bounded
 
 `maximum_step_duration(maximum_angular_speed, radius, cell_width, config)`
-lives in `transport.rs` beside `TRANSPORT_REACH_HOPS`, because it is that reach
-restated as a time and the two have to move together. It returns
+lives beside `TRANSPORT_REACH_HOPS`, because it is that reach restated as a
+time and the two have to move together. It returns
 `TRANSPORT_REACH_HOPS * cell_width / ((maximum_angular_speed *
 (1 + speed_drift_limit) + rift_opening_speed) * radius)`, and
 `evolve_plate_ownership` rejects a longer step with
 `PlateEvolutionError::StepOutrunsReach`, using the largest `|omega|` its inputs
-hold. Beyond that reach a step is not a coarser version of the same run:
+hold. Two details of this paragraph have since moved: "Slab pull" put the
+function in `reach.rs` with the constants it is stated against, and made
+evolution pass the kinematics config's own maximum rather than the fastest
+plate its inputs hold, because every respeed clamps to that maximum. Beyond that reach a step is not a coarser version of the same run:
 material jumps trenches without subducting, gaps open that no search can fill,
 and deformation is painted at boundary positions the plates left partway
 through the step.
@@ -1461,3 +1473,255 @@ fingerprint stands: that fixture's ocean is one age everywhere, so it has no
 ocean-ocean convergence with a polarity and builds no island arc. Ownership
 and birth pins stand, which is the check on the one precedence rule. The
 geology elevation and isostasy pins read synthetic fields and do not move.
+
+## Slab pull
+
+`speed.rs` owns the rule and `motion.rs` the fit that gives it a direction.
+`plate_speed` was `hashed base × crust factor × size factor`, clamped to
+`[minimum_angular_speed, maximum_angular_speed]`, where the size factor was
+the fourth root of the mean plate area over the plate's own. Two things were
+wrong with it.
+
+The size factor is not supported by the data. Forsyth and Uyeda (1975) found
+no correlation between plate area and speed; the Pacific is the largest plate
+and among the fastest. What does correlate is negative with continental area,
+which the crust factor already has, and strong and positive with the fraction
+of the plate's perimeter that is subducting slab: Nazca and Cocos, half
+trench, move at 8 to 10 cm/yr where Eurasia, Antarctica, and Africa, with no
+slab to speak of, move at 1 to 2.
+
+And the spread was too narrow. Base speeds span a factor of two and the lower
+clamp at 0.5 held every plate above half the maximum. Earth's span a factor of
+ten. Slab pull is what produces that spread, and it is also the one feedback
+the model can add cheaply: a plate that starts subducting speeds up, which is
+the Farallon story, and a plate that loses its trench slows down.
+
+### The speed rule, stated once
+
+`motion.rs` exports
+
+```
+pub fn plate_speed(
+    base: f32,                 // the plate's hashed base speed
+    continental_fraction: f64, // area share, as `plate_continental_fraction` gives it
+    subducting_fraction: f64,  // perimeter share, below
+    config: PlateKinematicsConfig,
+) -> f32
+```
+
+which is `base × crust_speed_factor × slab_speed_factor`, clamped only from
+above, to `maximum_angular_speed`. There is no lower clamp: a plate with no
+slab and a continent on it is slow, and that is the point.
+`minimum_angular_speed` and `maximum_angular_speed` stay the range the hashed
+base is drawn from, and the maximum stays the ceiling the step bound reads;
+the minimum is no longer a floor on the result.
+
+`slab_speed_factor(fraction)` is
+`trenchless + (1 − trenchless) × min(1, fraction / saturation)`, with two new
+config fields: `trenchless_speed_factor`, default 0.25, the share of its base
+a plate with no slab keeps; and `slab_saturation_fraction`, default 0.4, the
+perimeter share at which slab pull is fully felt, which is about the Pacific's
+trench share. Both are validated finite and in `(0, 1]`. Together with the
+crust factor and the hashed base this allows a spread of about twelve —
+`0.25 × 1.0 × 0.5` against `1.0 × 1.5 × 1.0` before the ceiling — where
+Earth's is ten. The measurements below say what a real world reaches, which is
+less, because no plate of these worlds is half trench.
+
+### The subducting fraction
+
+`subducting_fractions(mesh, partition, crust, boundaries)` in `boundaries.rs`
+counts, per plate and over the edges whose two cells it owns one of and
+another plate owns the other, how many are `Convergent` with `material_order`
+ranking the plate's own cell `Less` — its floor is the slab — and divides by
+the count of all of them. Two integer counts per plate in one pass over the
+edges, so the fraction is exact. `Equal` edges are not slab: two floors of one
+age, or two continents, pull neither plate. A plate with no boundary edge, which
+compaction guarantees does not exist, would read zero.
+
+`boundaries` need not be the classification of the current ownership. Evolution
+passes the boundaries its step began with over the ownership transport has
+since moved, which is the Jacobi convention every other substep keeps.
+
+
+### Two stages, because the rule needs an age
+
+The rule reads a subducting fraction, the fraction needs a classification, the
+classification needs a motion — and the polarity of an ocean-ocean trench
+needs the floor's *age*, which the crust-birth prior supplies and which the
+prior cannot supply until it has a classification to find its ridges in. The
+ordering is therefore fixed, and the kinematics stage is on the wrong side of
+it:
+
+1. `generate_plate_kinematics` fits each axis and scales it by
+   `crust_scaled_speed` — the base speed times the crust factor, clamped to
+   the ceiling. This is not the speed a plate turns at, and the stage's doc
+   says so.
+2. The caller classifies that motion.
+3. `derive_crust_birth_prior` reads that classification and dates the ocean.
+4. `evolve_plate_ownership` begins by respeeding over the prior's real ages
+   and that classification — the same `respeed` it runs every step — and
+   classifies once more. Step zero then moves a slab-pulled world.
+
+An earlier draft of this slice had the stage do it all, by inventing a birth
+field of one age for every oceanic cell so it could reach step 2 itself. That
+is fabricated data and it showed: with every floor the same age, every
+ocean-ocean trench ranks `Equal`, only 35 of 111 plates at the viewer's
+defaults had any slab at all, the mean fraction was 0.003, and every plate
+began the run at the trenchless quarter of its base. Giving evolution the
+first respeed deletes the invented crust, the stage's second pass, and the
+internal classification helper it needed, and it raises those numbers to 100
+of 111 plates and a mean of 0.082.
+
+### Evolution recomputes speed every step
+
+Speed is per-step state derived from the world, and drift is a multiplier on
+it rather than a walk of the speed itself.
+
+- `PlateKinematics` gains `base_speeds`, the hashed draw each plate's speed is
+  a multiple of, so evolution does not re-derive it. `EvolvingWorld` keeps
+  `drift_factors` in place of `starting_speeds`; both start at one.
+- `PlateEvolutionInputs` gains `kinematics_config`, the config the motion was
+  fitted under. `evolve_plate_ownership` validates it with the kinematics
+  stage's own `validate_config`, and `maximum_step_duration` reads its maximum
+  in place of the fastest fitted plate, so the viewer and evolution now bound
+  the step by the same number.
+- **Drift.** The axis turn is unchanged. The speed walk becomes
+  `drift_factor *= 1 + s × speed_drift_rate × sqrt(step_duration)`, clamped to
+  `[1 − speed_drift_limit, 1 + speed_drift_limit]`.
+- **Respeed** sets `|ω| = plate_speed(base, continental_fraction,
+  subducting_fraction, config) × drift_factor` for every plate, with the
+  continental fraction from the current cell crust and ownership and the
+  subducting fraction from the boundaries the step began with over the current
+  ownership. Direction is preserved; only the length is set, and a plate whose
+  rotation vector is zero has no direction to keep and stays at rest. It runs
+  once before step zero and then between each step's lifecycle and the
+  reclassification that ends it.
+- **Lifecycle.** A rift's halves inherit the parent's base speed and drift
+  factor; the opening is added to the rotation vector as before and the next
+  respeed sets the length, so `rift_opening_speed` decides which way a half
+  parts and the rule decides how fast. A suture takes the area-weighted mean
+  of the two bases and of the two drift factors as well as of the two rotation
+  vectors. Compaction remaps both.
+- The step order is deform, transport, drift, lifecycle, respeed, reclassify.
+- A run of no steps is no longer the identity: it respeeds and reclassifies,
+  which is the rule the stage could not apply. That is what its test now says.
+
+### Measured
+
+Both worlds are 65,536 cells: the viewer's defaults at sampling seed 7, jitter
+0.8, and 15 steps, and the reference world at sampling seed 9, subdivided
+faces 0.2, and 30 steps. "Before" is the pipeline as it stood at "Island
+arcs". The start of a run is after its opening respeed, which is what a
+zero-step run returns.
+
+| Measure | Defaults, before | Defaults, after | Reference, before | Reference, after |
+| --- | --- | --- | --- | --- |
+| Start speed minimum | 0.500 | 0.134 | 0.668 | 0.156 |
+| Start speed median | 1.000 | 0.404 | 1.000 | 0.437 |
+| Start speed maximum | 1.000 | 1.000 | 1.000 | 0.698 |
+| Start maximum over minimum | 2.00 | 7.45 | 1.50 | 4.48 |
+| Start plates with any slab | — | 100 of 111 | — | 16 of 18 |
+| Start mean trench share | — | 0.082 | — | 0.099 |
+| End speed minimum | 0.272 | 0.096 | 0.535 | 0.190 |
+| End speed median | 0.876 | 0.389 | 1.034 | 0.405 |
+| End speed maximum | 1.500 | 0.879 | 1.460 | 0.670 |
+| End maximum over minimum | 5.52 | 9.18 | 2.73 | 3.53 |
+| Rank correlation, fraction against speed | 0.313 | 0.626 | −0.236 | 0.500 |
+| Rank correlation, area against speed | −0.289 | −0.070 | −0.110 | −0.159 |
+| Convergent edges | 6,539 | 5,593 | 2,252 | 1,742 |
+| Divergent edges | 6,928 | 6,033 | 2,220 | 1,883 |
+| Transform edges | 6,109 | 5,070 | 2,101 | 1,617 |
+| Land cells at the datum | 16,328 | 16,732 | 17,316 | 17,048 |
+| Born particles | 4,851 | 1,418 | 4,036 | 1,681 |
+| Subducted particles | 15,404 | 8,127 | 10,490 | 5,848 |
+| Rifts | 2 | 3 | 2 | 3 |
+| Sutures | 14 | 12 | 7 | 8 |
+| Continental particles | 19,365 to 19,365 | 19,365 to 19,365 | 19,358 to 19,358 | 19,358 to 19,358 |
+| Final plates | 99 | 102 | 13 | 13 |
+
+The spread is there and it comes from the trenches. The end-of-run rank
+correlation between subducting fraction and speed goes from 0.31 to 0.63 at
+the defaults and from −0.24 to 0.50 at the reference world — it had the wrong
+sign before — while the correlation with plate area falls to −0.07 and −0.16,
+which is the size factor going away. The spread widens from 2.0 to 7.5 at the
+start and from 5.5 to 9.2 at the end.
+
+Plates are slower on the whole: slab pull is a multiplier below one for every
+plate short of saturation, and no plate of either world is half trench. The
+median falls by a bit over two at both ends of both runs, subducted particles
+by about half, and born particles by about two thirds. Boundary edges fall by
+about a sixth, because a slower world migrates less and leaves plates in fewer
+pieces. Continental particles are exact either side, as they must be.
+
+Land moves by about two percent in opposite directions at the two worlds — up
+404 cells at the defaults and down 268 at the reference — which is deformation
+following the boundaries rather than any rule about land.
+
+A sixty-step run at the defaults, the speed and subducting fraction of the two
+fastest and two slowest plates at every tenth step:
+
+| Step | Fastest | Slowest |
+| --- | --- | --- |
+| 0 | 1.000 at 0.16, 0.993 at 0.27 | 0.135 at 0.00, 0.134 at 0.00 |
+| 10 | 1.080 at 0.18, 0.824 at 0.25 | 0.112 at 0.00, 0.110 at 0.01 |
+| 20 | 0.947 at 0.15, 0.796 at 0.13 | 0.108 at 0.03, 0.095 at 0.02 |
+| 30 | 0.918 at 0.14, 0.911 at 0.25 | 0.125 at 0.04, 0.081 at 0.02 |
+| 40 | 0.922 at 0.16, 0.865 at 0.16 | 0.158 at 0.09, 0.156 at 0.12 |
+| 50 | 1.128 at 0.24, 0.949 at 0.21 | 0.139 at 0.09, 0.131 at 0.06 |
+| 60 | 1.168 at 0.27, 0.950 at 0.16 | 0.158 at 0.04, 0.120 at 0.05 |
+
+The separation is there from step zero, which is what the opening respeed
+buys: the two fastest plates carry trench shares of 0.16 and 0.27 and the two
+slowest carry none at all, and the fast end is seven times the slow end. The
+same run before the change had its fastest plates pinned at 1.500, the drift
+band's ceiling over a speed the run could not otherwise change, with trench
+shares of 0.00 to 0.21 — no relation at all.
+
+### What this deliberately does not do
+
+- No plate-boundary force balance, no ridge push, no basal drag. Slab pull is
+  a multiplier on a hashed base, not a force. The fit to the flow field still
+  sets direction.
+- No response time. A plate's speed follows its trench share within one step.
+  Real plates respond over a few million years, which is one to three steps;
+  if the measurements show speeds flickering with the fraction, a relaxation
+  is the follow-up, not part of this slice.
+- No change to the crust factor, the coherence blend, the flow field, or
+  `maximum_angular_speed`.
+- `maximum_step_duration` still reserves `rift_opening_speed` on top of the
+  ceiling, and that reserve is now dead. A rift adds the opening to its
+  halves' rotation vectors, but the respeed ending the same step sets their
+  lengths back inside the ceiling, and a run respeeds the motion it was handed
+  before its first step as well, so no transport reads a speed carrying it.
+  Dropping the term would loosen the bound, which changes what step durations
+  are legal and how far the viewer's slider reaches, so it is its own change.
+
+### Pins
+
+Every ownership, birth, seafloor-age, and base-elevation pin moved: speeds
+changed for every plate. Each was re-pinned once. The reference run's
+aggregates moved with them — owner changes 396 to 149, subducted particles 195
+to 112, born particles 29 to 5, rifts 3 to 2 with two that separated nothing,
+sutures 4 to 7 — which is a slower world overriding less and colliding for
+longer. The crust-birth prior's own aggregates moved too, because it reads a
+classification of the crust-scaled motion rather than of the old
+crust-and-size one: every plate of the reference world now holds a ridge where
+one used to hold none.
+
+The volcanic-arc reference fingerprint did not move. That fixture fits its own
+plate motion, so it would have moved under the draft that made the stage apply
+the slab factor; with the stage stopping at the crust factor its boundaries
+classify as they did. The geology and climate pins that read synthetic fields
+did not move. One viewer cache fixture had to change seed: climate coupling
+does not reach a fixed point on every 32-cell world, and seed 30 stopped
+converging under the new tectonics.
+
+### Files
+
+`motion.rs`, `evolution.rs`, `lifecycle.rs`, and `transport.rs` each crossed a
+thousand lines, so each gave up a concept it was only housing: `speed.rs`
+takes the speed rule, its factors, and the spread summary; `evolution_error.rs`
+takes the run's error enum; `rifting.rs` takes the half of the plate lifecycle
+that creates a plate, leaving suturing and compaction behind; and `reach.rs`
+takes the one ring count and the two bounds derived from it, which evolution
+and the viewer both read.

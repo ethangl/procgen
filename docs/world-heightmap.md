@@ -70,20 +70,24 @@ Completed foundations:
   they cross as walls; the connected components between the walls are the
   primary faces, and a configured fraction of them split into minor plates by
   integer-cost growth confined to their own face. It also derives rigid plate
-  angular velocities, fitted per plate to a smooth global flow field and scaled
-  by each plate's continental area fraction and its size, local spherical
-  tangent motion, static convergent, divergent, and transform boundary
-  classification, and per-cell continental crust grown from farthest-first
-  nuclei by integer-cost growth to a target continental area, ignoring plate
-  boundaries so that most of the coastline is a passive margin. Those
-  velocities are only where a run starts: every evolution step ends by
-  drifting each plate's rotation vector, turning its axis through a fixed
-  angle toward a fresh hashed direction and scaling its speed by a hashed
-  fraction, bounded to a band around the speed the plate started with, so
-  boundaries change regime during a run. It
-  repeatedly reclassifies current boundaries and, for a configured step count,
-  moves the crust itself: the material lives in particles, one per cell before
-  step zero, each rotating rigidly with its plate, and every cell then takes
+  angular velocities, fitted per plate to a smooth global flow field for
+  direction and scaled by each plate's continental area fraction, local
+  spherical tangent motion, static convergent, divergent, and transform
+  boundary classification, and per-cell continental crust grown from
+  farthest-first nuclei by integer-cost growth to a target continental area,
+  ignoring plate boundaries so that most of the coastline is a passive margin.
+  Those velocities are only where a run starts, and they are not even its
+  speeds: what sets speed also reads the share of a plate's perimeter that is
+  subducting slab, which needs ocean-floor ages the kinematics stage does not
+  have yet. Evolution applies it, once before step zero and again at the end
+  of every step, turning each plate's axis through a fixed angle toward a
+  fresh hashed direction and then recomputing its speed from the crust and the
+  trenches the plate then has, times a hashed drift factor bounded to a band
+  around one. Boundaries therefore change regime during a run, and a plate
+  that gains a trench speeds up. It repeatedly reclassifies current boundaries
+  and, for a configured step count, moves the crust itself: the material lives
+  in particles, one per cell before step zero, each rotating rigidly with its
+  plate, and every cell then takes
   whichever particle won it. Continental material covers ocean floor, a cell
   keeps its own plate's material over a newcomer's, and younger floor covers
   older; a losing oceanic particle is destroyed only where a trench takes it,

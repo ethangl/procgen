@@ -1,4 +1,8 @@
-use crate::{AreaWeightedSummary, ClimateOutputError, SECONDS_PER_DAY, validate_range};
+use crate::{
+    AreaWeightedSummary, ClimateOutputError, SECONDS_PER_DAY,
+    advection::{Route, advect, build_routes},
+    validate_range,
+};
 use procgen_core::Vec3;
 use procgen_planet::{Planet, PlanetValidationError};
 use procgen_sphere_mesh::SphereMesh;
@@ -188,12 +192,6 @@ impl From<PlanetValidationError> for MoistureTransportError {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Route {
-    export_fraction: f64,
-    destinations: Vec<(usize, f64)>,
-}
-
 struct CellModel {
     areas: Vec<f64>,
     capacity_mass: Vec<f64>,
@@ -315,15 +313,7 @@ impl WaterBudget {
     }
 
     fn transport(&mut self, routes: &[Route]) {
-        self.transport_scratch.clone_from_slice(&self.humidity_mass);
-        for (cell, route) in routes.iter().enumerate() {
-            let exported = self.humidity_mass[cell] * route.export_fraction;
-            self.transport_scratch[cell] -= exported;
-            for &(neighbor, share) in &route.destinations {
-                self.transport_scratch[neighbor] += exported * share;
-            }
-        }
-        std::mem::swap(&mut self.humidity_mass, &mut self.transport_scratch);
+        advect(routes, &mut self.humidity_mass, &mut self.transport_scratch);
     }
 
     fn precipitate(&mut self, model: &CellModel, rainfall_fraction: f64) {
@@ -419,9 +409,10 @@ pub fn derive_moisture_transport(
     let model = CellModel::new(mesh, inputs, config);
     let routes = build_routes(
         mesh,
-        inputs.planet.radius_meters,
         inputs.cell_wind_meters_per_second,
-        config,
+        inputs.planet.radius_meters,
+        config.step_seconds,
+        config.maximum_transport_fraction_per_step,
     );
 
     let rainfall_fraction = 1.0 - (-config.rainfall_rate_per_second * config.step_seconds).exp();
@@ -439,53 +430,6 @@ fn columns(mass: &[f64], areas: &[f64], scale: f64) -> Vec<f32> {
     mass.iter()
         .zip(areas)
         .map(|(&mass, &area)| (mass / area * scale) as f32)
-        .collect()
-}
-
-fn build_routes(
-    mesh: &SphereMesh,
-    planet_radius_meters: f64,
-    winds: &[Vec3],
-    config: MoistureTransportConfig,
-) -> Vec<Route> {
-    (0..mesh.cell_count())
-        .map(|cell| {
-            let normal = mesh.cell_centers[cell].normalized();
-            let speed = f64::from(winds[cell].length());
-            let mut destinations = Vec::new();
-            let mut total_weight = 0.0_f64;
-            let mut minimum_distance = f64::INFINITY;
-            for corner in mesh.cell_corners(cell) {
-                let neighbor_normal = mesh.cell_centers[corner.neighbor].normalized();
-                let direction =
-                    (neighbor_normal - normal * normal.dot(neighbor_normal)).normalized();
-                let alignment = f64::from(winds[cell].dot(direction));
-                if alignment <= 0.0 {
-                    continue;
-                }
-                let weight = alignment * alignment;
-                total_weight += weight;
-                let angle = f64::from(normal.dot(neighbor_normal))
-                    .clamp(-1.0, 1.0)
-                    .acos();
-                minimum_distance = minimum_distance.min(angle * planet_radius_meters);
-                destinations.push((corner.neighbor, weight));
-            }
-            if total_weight == 0.0 {
-                return Route {
-                    export_fraction: 0.0,
-                    destinations: Vec::new(),
-                };
-            }
-            for (_, weight) in &mut destinations {
-                *weight /= total_weight;
-            }
-            Route {
-                export_fraction: (speed * config.step_seconds / minimum_distance)
-                    .min(config.maximum_transport_fraction_per_step),
-                destinations,
-            }
-        })
         .collect()
 }
 

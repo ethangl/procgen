@@ -320,26 +320,30 @@ mod tests {
             .unwrap()
         );
         assert_eq!(first.cell_birth.len(), mesh.cell_count());
+        // The prior reads the fixture's boundaries, which the crust factor
+        // alone now scales the motion behind: every plate keeps a ridge of its
+        // own where one used to have none.
         assert_eq!(
             first.diagnostics,
             CrustBirthPriorDiagnostics {
                 hops: FieldSummary {
                     minimum: 0.0,
                     maximum: 9.0,
-                    mean: 1.801_775_1,
+                    mean: 1.778_106_5,
                 },
                 oceanic_cell_count: 338,
-                ridge_cell_count: 103,
-                ridge_plate_count: 29,
-                // One plate of the reference world owns oceanic crust with no
-                // ridge of its own, so its cells take the fallback age.
-                ridge_less_plate_count: 1,
-                fallback_cell_count: 7,
+                ridge_cell_count: 102,
+                ridge_plate_count: 30,
+                ridge_less_plate_count: 0,
+                // A plate can hold a ridge and still leave cells the walk
+                // never reaches, in a piece of itself the ridge is not on.
+                // Those take the fallback age too.
+                fallback_cell_count: 6,
             }
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            7_845_085_305_370_493_663
+            13_907_807_829_833_123_813
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0.0),
@@ -561,7 +565,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_ages),
-            11_586_516_672_180_657_809
+            16_070_050_445_168_748_665
         );
     }
 

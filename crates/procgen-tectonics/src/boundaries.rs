@@ -1,6 +1,6 @@
-use crate::{PlateKinematics, PlatePartition, StageInputError};
+use crate::{CellCrust, PlateKinematics, PlatePartition, StageInputError};
 use procgen_sphere_mesh::SphereMesh;
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 /// Ratio of shear a boundary's convergence must exceed to be read as normal
 /// motion rather than transform motion.
@@ -169,14 +169,171 @@ pub fn classify_boundaries(
     })
 }
 
+/// The share of each plate's boundary edges that are subducting slab: the
+/// convergent ones where the plate's own cell is the one going under, which is
+/// the cell [`crate::material_order`] ranks `Less`.
+///
+/// It is the one thing about a plate that predicts how fast it moves — Forsyth
+/// and Uyeda's result, and what [`crate::plate_speed`] reads. Two integer
+/// counts per plate over one pass of the edges, so the fraction is exact.
+///
+/// An `Equal` edge is not slab: two continents, or two floors of one age, pull
+/// neither side. A plate owning no boundary edge at all reads zero, which
+/// compaction makes unreachable for a plate that owns a cell.
+///
+/// `boundaries` need not be the classification of the current ownership.
+/// Evolution passes the boundaries its step began with over the ownership
+/// transport has since moved, so an edge counts when its two cells are on
+/// different plates now and it was convergent then.
+pub fn subducting_fractions(
+    mesh: &SphereMesh,
+    partition: &PlatePartition,
+    crust: CellCrust<'_>,
+    boundaries: &BoundaryClassification,
+) -> Vec<f64> {
+    let mut slab = vec![0_usize; partition.plate_count];
+    let mut boundary = vec![0_usize; partition.plate_count];
+    for (index, edge) in mesh.edges.iter().enumerate() {
+        let plates = edge.cells.map(|cell| partition.cell_plates[cell]);
+        if plates[0] == plates[1] {
+            continue;
+        }
+        boundary[plates[0]] += 1;
+        boundary[plates[1]] += 1;
+        if boundaries.edge_classes[index] != BoundaryClass::Convergent {
+            continue;
+        }
+        // The lesser cell's floor is the slab, so its plate is the one pulled.
+        match crust.order(edge.cells[0], edge.cells[1]) {
+            Ordering::Less => slab[plates[0]] += 1,
+            Ordering::Greater => slab[plates[1]] += 1,
+            Ordering::Equal => {}
+        }
+    }
+    slab.iter()
+        .zip(&boundary)
+        .map(|(&slab, &boundary)| match boundary {
+            0 => 0.0,
+            boundary => slab as f64 / boundary as f64,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{
-        reference_crust_config, reference_partition, two_plate_boundary_partition,
+        mesh as test_mesh, reference_crust_config, reference_partition,
+        two_plate_boundary_partition,
     };
     use crate::{PlateKinematicsConfig, classify_crust, generate_plate_kinematics};
     use procgen_core::Vec3;
+
+    /// Cell count of the hemisphere fixture. Its equator runs through 92
+    /// edges, an even number, so a test can converge exactly half of them.
+    const HEMISPHERE_CELLS: usize = 512;
+
+    /// Two plates split at the equator, every shared edge converging. The
+    /// crust each plate carries is the test's to choose, so one fixture covers
+    /// every polarity a convergent boundary can have. It is the shape the
+    /// volcanic-arc tests use for the same reason.
+    fn hemispheres() -> (SphereMesh, PlatePartition, BoundaryClassification) {
+        let mesh = test_mesh(HEMISPHERE_CELLS);
+        let cell_plates: Vec<usize> = mesh
+            .cell_centers
+            .iter()
+            .map(|center| usize::from(center.z < 0.0))
+            .collect();
+        let mut boundaries = BoundaryClassification {
+            edge_classes: vec![BoundaryClass::Interior; mesh.edge_count()],
+            edge_normal_speeds: vec![[0.0; 2]; mesh.edge_count()],
+            edge_shear: vec![0.0; mesh.edge_count()],
+        };
+        for (index, edge) in mesh.edges.iter().enumerate() {
+            if cell_plates[edge.cells[0]] != cell_plates[edge.cells[1]] {
+                boundaries.edge_classes[index] = BoundaryClass::Convergent;
+                boundaries.edge_normal_speeds[index] = [0.5, 0.5];
+            }
+        }
+        let partition = PlatePartition {
+            cell_plates,
+            plate_count: 2,
+        };
+        (mesh, partition, boundaries)
+    }
+
+    /// The per-cell birth that gives each hemisphere one crust.
+    fn hemisphere_crust(partition: &PlatePartition, births: [Option<f32>; 2]) -> Vec<Option<f32>> {
+        partition
+            .cell_plates
+            .iter()
+            .map(|&plate| births[plate])
+            .collect()
+    }
+
+    #[test]
+    fn a_subducting_plate_owns_the_whole_of_a_convergent_boundary() {
+        let (mesh, partition, boundaries) = hemispheres();
+        let fractions = |births: [Option<f32>; 2]| {
+            let cell_birth = hemisphere_crust(&partition, births);
+            subducting_fractions(
+                &mesh,
+                &partition,
+                CellCrust {
+                    cell_birth: &cell_birth,
+                },
+                &boundaries,
+            )
+        };
+
+        // Older floor under younger — a birth further back is the older — so
+        // every boundary edge the older plate owns is its own slab and none of
+        // the younger plate's is.
+        assert_eq!(fractions([Some(0.5), Some(0.1)]), vec![0.0, 1.0]);
+        assert_eq!(fractions([Some(0.1), Some(0.5)]), vec![1.0, 0.0]);
+        // Ocean under continent is the same polarity read the other way.
+        assert_eq!(fractions([Some(0.1), None]), vec![1.0, 0.0]);
+        // Two continents and two floors of one age each rank `Equal`, which
+        // pulls neither plate.
+        assert_eq!(fractions([None, None]), vec![0.0, 0.0]);
+        assert_eq!(fractions([Some(0.1), Some(0.1)]), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn only_convergent_edges_are_slab_and_only_they_are_counted() {
+        let (mesh, partition, mut boundaries) = hemispheres();
+        let cell_birth = hemisphere_crust(&partition, [Some(0.5), Some(0.1)]);
+        let crust = CellCrust {
+            cell_birth: &cell_birth,
+        };
+
+        // A boundary that shears carries no slab whatever lies either side.
+        let shared: Vec<usize> = (0..mesh.edge_count())
+            .filter(|&edge| boundaries.edge_classes[edge] != BoundaryClass::Interior)
+            .collect();
+        for &edge in &shared {
+            boundaries.edge_classes[edge] = BoundaryClass::Transform;
+        }
+        assert_eq!(
+            subducting_fractions(&mesh, &partition, crust, &boundaries),
+            vec![0.0, 0.0]
+        );
+
+        // Half the shared edges converging is half the perimeter of the older
+        // plate, exactly: the fraction is two integer counts and one divide.
+        assert!(
+            shared.len().is_multiple_of(2),
+            "{} shared edges",
+            shared.len()
+        );
+        for &edge in &shared[..shared.len() / 2] {
+            boundaries.edge_classes[edge] = BoundaryClass::Convergent;
+        }
+        assert_eq!(
+            subducting_fractions(&mesh, &partition, crust, &boundaries),
+            vec![0.0, 0.5]
+        );
+    }
 
     #[test]
     fn classification_is_deterministic_complete_and_static() {
@@ -250,6 +407,7 @@ mod tests {
             (mesh.cell_centers[edge.cells[1]] - mesh.cell_centers[edge.cells[0]]).normalized();
         let kinematics = PlateKinematics {
             angular_velocities: vec![unit_position.cross(normal), Vec3::ZERO],
+            base_speeds: vec![1.0; 2],
         };
 
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();

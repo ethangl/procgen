@@ -384,7 +384,7 @@ struct_codec! {
     Planet { star, orbit, radius_meters, sidereal_rotation_period_seconds, atmospheric_specific_gas_constant_joules_per_kilogram_kelvin, maximum_land_elevation_meters }
     PlatePartitionConfig { arc_count, curvature, subdivided_fraction, piece_fraction, growth_roughness, seed }
     CrustClassificationConfig { continental_fraction, nucleus_count, growth_roughness, seed }
-    PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
+    PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor, trenchless_speed_factor, slab_saturation_fraction }
     MaterialTransportConfig { gap_radius }
     PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_edges }
@@ -420,7 +420,7 @@ struct_codec! {
     SphereMesh { radius, cell_centers, cell_offsets, corners, cell_areas, vertices, vertex_cells, vertex_neighbors, edges }
     PlatePartition { cell_plates, plate_count }
     CrustClassificationDiagnostics { continental_fraction, component_count }
-    PlateKinematics { angular_velocities }
+    PlateKinematics { angular_velocities, base_speeds }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
     PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, collided_cell_count, maximum_collision_stack, sampled_cell_count, starting_continental_particle_count, final_continental_particle_count, rift_count, failed_rift_count, suture_count }
     FieldSummary { minimum, maximum, mean }
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_dimensions_are_rejected() {
-        let fixture = Fixture::new(32, 30);
+        let fixture = Fixture::new(32, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes);
         bytes[offset..offset + size_of::<u32>()].copy_from_slice(&3_u32.to_le_bytes());
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn corrupt_bake_data_is_rejected() {
-        let fixture = Fixture::new(32, 30);
+        let fixture = Fixture::new(32, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         bytes[offset..offset + size_of::<f32>()].copy_from_slice(&f32::NAN.to_le_bytes());
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn loaded_snapshot_reuses_cached_bake_data() {
         let (cache_dir, cache) = test_cache("reuse-bake");
-        let fixture = Fixture::new(32, 30);
+        let fixture = Fixture::new(32, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         let offset = bake_offset(&fixture, &bytes) + size_of::<u32>() + size_of::<u64>();
         let cached_value = 123.25_f32;
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn truncated_snapshot_is_nonfatal_corruption() {
-        let fixture = Fixture::new(32, 30);
+        let fixture = Fixture::new(32, 31);
         let mut bytes = encode_snapshot(fixture.complete());
         bytes.truncate(bytes.len() / 2);
 

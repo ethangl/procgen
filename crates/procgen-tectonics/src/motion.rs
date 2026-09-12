@@ -10,12 +10,15 @@
 //! 3-by-3 solve per plate. Fitting neighbouring plates to one field is what
 //! gives boundary regimes a pattern larger than a plate.
 //!
-//! The fit sets direction only. Speed is the plate's hashed base speed scaled
-//! by crust and by plate size, because where the field does make adjacent
-//! plates move together those factors are the only contrast left for a
-//! boundary to move any material across itself. A `coherence` fraction
-//! blends the fitted axis back toward the hashed random one, so zero
-//! reproduces independent random motion apart from those speed factors.
+//! The fit sets direction only. What sets speed is [`crate::speed`], and this
+//! stage can apply only half of that rule: [`crate::plate_speed`] reads the
+//! share of a plate's perimeter that is subducting slab, and a trench has a
+//! side only once the ocean floor has ages, which the crust-birth prior gives
+//! it after this stage runs. So the fitted axes are scaled by the crust factor
+//! alone, and evolution applies the slab factor before its first step moves
+//! anything. A `coherence` fraction blends the fitted axis back toward the
+//! hashed random one, so zero reproduces independent random motion apart from
+//! that factor.
 //!
 //! A plate with too few cells has no rotation to fit at all: its normal
 //! equations are singular, and it keeps the hashed axis. Only direction falls
@@ -25,11 +28,13 @@
 //! call sits between the field and the integer boundary classes the angular
 //! velocities decide.
 //!
-//! What this stage produces is the motion evolution starts from. Evolution
-//! drifts its own copy of it step by step and returns the motion it ended on,
-//! which is what every consumer downstream of a run reads.
+//! What this stage produces is one classification, and through it the
+//! crust-birth prior and the subducting fractions a run's first respeed reads.
+//! Evolution drifts and respeeds its own copy of the motion step by step and
+//! returns the motion it ended on, which is what every consumer downstream of
+//! a run reads.
 
-use crate::{CrustClassification, PlatePartition, StageInputError};
+use crate::{CrustClassification, PlatePartition, StageInputError, speed::crust_scaled_speed};
 use procgen_core::{
     RandomStream, Vec3,
     random_streams::{PLATE_ANGULAR_SPEED, PLATE_FLOW_FIELD, PLATE_ROTATION_AXIS},
@@ -48,13 +53,19 @@ const SINGULAR_DETERMINANT_FRACTION: f64 = 1.0e-6;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlateKinematicsConfig {
     pub seed: u64,
+    /// Bottom of the range each plate's hashed base speed is drawn from. It
+    /// bounds the draw alone and not the speed that comes out: a plate with a
+    /// continent on it and no slab to pull it is slower than this, which is
+    /// the point of [`plate_speed`].
     pub minimum_angular_speed: f32,
-    /// Ceiling every fitted speed is clamped to, so it is the fastest plate a
-    /// world can hold and not merely the top of the hashed draw. Must be
-    /// positive: at zero every plate is fitted at rest, every boundary is
-    /// interior, and the stages that measure a length against a plate speed
-    /// have nothing to divide by. [`crate::derive_crust_birth_prior`] reads it
-    /// as the speed one hop of its walk is crossed at.
+    /// Top of that range, and the ceiling [`plate_speed`] clamps its answer
+    /// to, so it is the fastest plate a world can hold and not merely the top
+    /// of the hashed draw. Must be positive: at zero every plate is fitted at
+    /// rest, every boundary is interior, and the stages that measure a length
+    /// against a plate speed have nothing to divide by.
+    /// [`crate::derive_crust_birth_prior`] reads it as the speed one hop of
+    /// its walk is crossed at, and [`crate::maximum_step_duration`] as the
+    /// fastest plate a step has to stay inside the transport reach for.
     pub maximum_angular_speed: f32,
     /// Lattice frequency of the flow field, in cycles per unit direction. A
     /// flow cell has to be much larger than a plate for adjacent plates to
@@ -70,6 +81,15 @@ pub struct PlateKinematicsConfig {
     /// that carries both crusts interpolates between the two factors by its
     /// continental area fraction.
     pub continental_speed_factor: f32,
+    /// Share of its base speed a plate with no subducting slab keeps. Slab
+    /// pull is what spreads plate speeds over a factor of ten on Earth, so
+    /// this is the bottom of that spread rather than a correction to it.
+    /// Must lie in `(0, 1]`; at one the slab factor is gone.
+    pub trenchless_speed_factor: f32,
+    /// Share of a plate's boundary edges that must be subducting slab for the
+    /// pull to be felt in full. The Pacific's trench share is about the
+    /// default. Must lie in `(0, 1]`.
+    pub slab_saturation_fraction: f32,
 }
 
 impl PlateKinematicsConfig {
@@ -82,6 +102,8 @@ impl PlateKinematicsConfig {
             coherence: 0.85,
             oceanic_speed_factor: 1.5,
             continental_speed_factor: 1.0,
+            trenchless_speed_factor: 0.25,
+            slab_saturation_fraction: 0.4,
         }
     }
 
@@ -143,11 +165,18 @@ pub struct PlateKinematics {
     /// Euler rotation vector per plate. Direction is the rotation axis and
     /// magnitude is angular speed in model radians per unit time.
     pub angular_velocities: Vec<Vec3>,
+    /// The hashed base speed each plate's own speed is a multiple of, carried
+    /// beside the motion because [`plate_speed`] is recomputed from it every
+    /// evolution step. It is the draw itself, so a plate keeps it whatever its
+    /// trenches and its crust then do to the speed it turns at.
+    pub base_speeds: Vec<f32>,
 }
 
 impl PlateKinematics {
     pub fn validate(&self, partition: &PlatePartition) -> Result<(), StageInputError> {
-        if self.angular_velocities.len() != partition.plate_count {
+        if self.angular_velocities.len() != partition.plate_count
+            || self.base_speeds.len() != partition.plate_count
+        {
             return Err(StageInputError::Plates);
         }
         Ok(())
@@ -166,6 +195,8 @@ pub enum PlateKinematicsError {
     InvalidFlowFrequency,
     InvalidCoherence,
     InvalidCrustSpeedFactor,
+    InvalidTrenchlessSpeedFactor,
+    InvalidSlabSaturationFraction,
     Input(StageInputError),
 }
 
@@ -184,6 +215,12 @@ impl fmt::Display for PlateKinematicsError {
             }
             Self::InvalidCrustSpeedFactor => formatter
                 .write_str("oceanic and continental speed factors must be finite and positive"),
+            Self::InvalidTrenchlessSpeedFactor => {
+                formatter.write_str("trenchless speed factor must lie in (0, 1]")
+            }
+            Self::InvalidSlabSaturationFraction => {
+                formatter.write_str("slab saturation fraction must lie in (0, 1]")
+            }
             Self::Input(error) => error.fmt(formatter),
         }
     }
@@ -205,8 +242,20 @@ impl From<StageInputError> for PlateKinematicsError {
 }
 
 /// Generates each plate's rigid-rotation vector by fitting the flow field over
-/// the plate's cells, then scaling the fitted direction by a speed that
-/// depends on the plate's crust and size.
+/// the plate's cells, then scaling the fitted direction by
+/// [`crust_scaled_speed`].
+///
+/// This is not the speed a plate turns at. [`plate_speed`] is, and it reads a
+/// subducting fraction that nothing can supply yet: a trench has a side only
+/// once the ocean floor has ages, and the crust-birth prior that dates it runs
+/// after this stage and reads the boundaries this motion implies. So the stage
+/// stops at the crust factor, and evolution applies the slab factor before its
+/// first step moves anything.
+///
+/// What this motion is for, therefore, is one classification: the one its
+/// caller takes from it, which the prior reads to find its ridges and which
+/// [`crate::evolve_plate_ownership`] reads once to reach the fractions its own
+/// first respeed needs.
 pub fn generate_plate_kinematics(
     mesh: &SphereMesh,
     partition: &PlatePartition,
@@ -219,18 +268,20 @@ pub fn generate_plate_kinematics(
 
     let continental = crust.plate_continental_fraction(mesh, partition);
     let areas = partition.plate_areas(mesh);
-    let reference_area = mesh.total_area() / partition.plate_count as f64;
     let flow = FlowField::new(&config);
     let fitted = fit_plate_rotations(mesh, partition, &areas, |direction| {
         flow.velocity_at(direction)
     });
 
+    let base_speeds: Vec<f32> = (0..partition.plate_count)
+        .map(|plate| random_speed(plate, config))
+        .collect();
     let angular_velocities = fitted
         .iter()
+        .zip(&base_speeds)
         .zip(&continental)
-        .zip(&areas)
         .enumerate()
-        .map(|(plate, ((fitted, &continental), &area))| {
+        .map(|(plate, ((fitted, &base), &continental))| {
             let random = random_axis(plate, config);
             let axis = match fitted {
                 Some(rotation) => blend_axis(random, rotation.normalized(), config.coherence),
@@ -243,11 +294,14 @@ pub fn generate_plate_kinematics(
                 // every plate.
                 None => random,
             };
-            axis * plate_speed(plate, area, reference_area, continental, config)
+            axis * crust_scaled_speed(base, continental, config)
         })
         .collect();
 
-    Ok(PlateKinematics { angular_velocities })
+    Ok(PlateKinematics {
+        angular_velocities,
+        base_speeds,
+    })
 }
 
 /// The one place the motion config's rules live. It is `pub(crate)` because
@@ -280,6 +334,17 @@ pub(crate) fn validate_config(config: PlateKinematicsConfig) -> Result<(), Plate
     {
         return Err(PlateKinematicsError::InvalidCrustSpeedFactor);
     }
+    // Both are shares of something, so both stop at one: a trenchless plate
+    // faster than its base, or a slab that saturates past a whole perimeter,
+    // would each be a factor whose name no longer describes it.
+    // Written as one comparison each rather than a range test, because a NaN
+    // must fail both and a range contains neither it nor zero.
+    if !(config.trenchless_speed_factor > 0.0 && config.trenchless_speed_factor <= 1.0) {
+        return Err(PlateKinematicsError::InvalidTrenchlessSpeedFactor);
+    }
+    if !(config.slab_saturation_fraction > 0.0 && config.slab_saturation_fraction <= 1.0) {
+        return Err(PlateKinematicsError::InvalidSlabSaturationFraction);
+    }
     Ok(())
 }
 
@@ -298,35 +363,6 @@ fn random_speed(plate: usize, config: PlateKinematicsConfig) -> f32 {
 /// so normalizing the linear blend lands on the arc between them.
 fn blend_axis(random: Vec3, fitted: Vec3, coherence: f32) -> Vec3 {
     (random + (fitted - random) * coherence).normalized()
-}
-
-/// The speed multiplier a plate's crust earns it: the oceanic factor at no
-/// continental area, the continental factor at nothing but, and a linear
-/// interpolation in between, because a plate that is half continent is half
-/// as slowed by it.
-fn crust_speed_factor(continental_fraction: f64, config: PlateKinematicsConfig) -> f32 {
-    let oceanic = f64::from(config.oceanic_speed_factor);
-    let continental = f64::from(config.continental_speed_factor);
-    (oceanic + (continental - oceanic) * continental_fraction) as f32
-}
-
-fn plate_speed(
-    plate: usize,
-    plate_area: f64,
-    reference_area: f64,
-    continental_fraction: f64,
-    config: PlateKinematicsConfig,
-) -> f32 {
-    let crust_factor = crust_speed_factor(continental_fraction, config);
-    // Larger plates move more slowly, by the fourth root of the mean plate area
-    // over their own. Two square roots rather than a configurable exponent
-    // because `powf` would put libm on the path that decides boundary classes,
-    // and every integer downstream of them, while `sqrt` is exact in IEEE 754.
-    // A plate that owns no cells has no area to scale by and no edges either,
-    // so nothing reads the maximum speed the clamp then hands it.
-    let size_factor = (reference_area / plate_area).sqrt().sqrt() as f32;
-    (random_speed(plate, config) * crust_factor * size_factor)
-        .clamp(config.minimum_angular_speed, config.maximum_angular_speed)
 }
 
 /// Area-weighted normal equations `matrix * ω = vector` for one plate.
@@ -433,8 +469,8 @@ mod tests {
     }
 
     /// Splits a mesh into two plates of nearly equal area by handing each cell
-    /// to whichever plate is smaller so far, so comparing the two isolates the
-    /// crust factor from the size factor.
+    /// to whichever plate is smaller so far, so the two differ in crust and in
+    /// nothing else that a speed reads.
     fn two_equal_plates() -> (SphereMesh, PlatePartition) {
         let mesh = test_support::mesh(64);
         let mut areas = [0.0_f64; 2];
@@ -480,11 +516,68 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(first.angular_velocities.len(), partition.plate_count);
-        assert!(speeds(&first).iter().all(|&speed| {
-            (config.minimum_angular_speed - SPEED_TOLERANCE
-                ..=config.maximum_angular_speed + SPEED_TOLERANCE)
-                .contains(&speed)
-        }));
+        assert_eq!(first.base_speeds.len(), partition.plate_count);
+        assert!(
+            speeds(&first)
+                .iter()
+                .all(|&speed| speed <= config.maximum_angular_speed + SPEED_TOLERANCE)
+        );
+    }
+
+    /// The stage scales its fitted axes by the crust factor and by nothing
+    /// else. It cannot read a trench — the ocean has no ages until the
+    /// crust-birth prior runs — so a plate carrying no continent turns at
+    /// exactly its hashed base times the oceanic factor, and one carrying
+    /// some continent is slower than that.
+    #[test]
+    fn every_fitted_speed_is_the_hashed_base_scaled_by_crust_alone() {
+        let (mesh, partition, crust) = reference_inputs();
+        let config = PlateKinematicsConfig::new(7);
+        let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
+        let continental = crust.plate_continental_fraction(&mesh, &partition);
+
+        let factors: Vec<f32> = speeds(&kinematics)
+            .iter()
+            .zip(&kinematics.base_speeds)
+            .map(|(&speed, &base)| speed / base)
+            .collect();
+        let all_ocean: Vec<usize> = (0..partition.plate_count)
+            .filter(|&plate| continental[plate] == 0.0)
+            .collect();
+        assert!(!all_ocean.is_empty(), "the world must hold an ocean plate");
+        let mut clamped = 0;
+        for plate in all_ocean {
+            let speed = kinematics.angular_velocities[plate].length();
+            // The ceiling is the one thing besides the crust factor that may
+            // touch a fitted speed, and the oceanic factor of 1.5 carries the
+            // faster half of the hashed range into it.
+            if speed >= config.maximum_angular_speed - SPEED_TOLERANCE {
+                clamped += 1;
+                continue;
+            }
+            assert!(
+                (factors[plate] - config.oceanic_speed_factor).abs() < SPEED_TOLERANCE,
+                "plate {plate}: {}",
+                factors[plate]
+            );
+        }
+        assert!(clamped > 0, "the ceiling must bite somewhere");
+        for (plate, &factor) in factors.iter().enumerate() {
+            if continental[plate] > 0.0 {
+                assert!(
+                    factor < config.oceanic_speed_factor,
+                    "plate {plate} carries continent and was not slowed: {factor}"
+                );
+            }
+        }
+        // A size factor would have moved plates apart by area; a slab factor
+        // would have moved them apart by trench. Neither is applied, so every
+        // all-ocean plate under the ceiling shares one factor.
+        assert!(
+            factors
+                .iter()
+                .all(|&factor| factor <= config.oceanic_speed_factor)
+        );
     }
 
     #[test]
@@ -553,22 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn the_crust_factor_interpolates_by_continental_area() {
-        let config = PlateKinematicsConfig::new(7);
-        // The defaults are 1.5 and 1.0, whose mean is exact in binary, so the
-        // midpoint is an equality rather than a tolerance.
-        assert_eq!(crust_speed_factor(0.0, config), config.oceanic_speed_factor);
-        assert_eq!(
-            crust_speed_factor(1.0, config),
-            config.continental_speed_factor
-        );
-        assert_eq!(
-            crust_speed_factor(0.5, config),
-            (config.oceanic_speed_factor + config.continental_speed_factor) / 2.0
-        );
-    }
-
-    #[test]
     fn oceanic_plates_outrun_continental_plates_of_similar_size() {
         let (mesh, partition) = two_equal_plates();
         let areas = partition.plate_areas(&mesh);
@@ -587,48 +664,6 @@ mod tests {
     }
 
     #[test]
-    fn larger_plates_move_more_slowly_than_smaller_ones() {
-        let mesh = test_support::mesh(64);
-        // A minor plate of six cells beside one holding the rest. Both span
-        // enough cells to fit, both are oceanic, and the speed range is wide
-        // enough that nothing clamps, so size is the only factor that differs.
-        let minor_cells = 6;
-        let cell_plates = (0..mesh.cell_count())
-            .map(|cell| usize::from(cell >= mesh.cell_count() - minor_cells))
-            .collect();
-        let partition = PlatePartition {
-            cell_plates,
-            plate_count: 2,
-        };
-        let crust = plate_crust(&partition, &[CrustClass::Oceanic; 2]);
-        let config = PlateKinematicsConfig {
-            minimum_angular_speed: 0.0,
-            maximum_angular_speed: 100.0,
-            ..PlateKinematicsConfig::new(7)
-        };
-
-        let areas = partition.plate_areas(&mesh);
-        assert!(areas[0] > areas[1] * 5.0, "{areas:?}");
-        let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
-        let factors: Vec<_> = speeds(&kinematics)
-            .iter()
-            .enumerate()
-            .map(|(plate, &speed)| {
-                speed / (random_speed(plate, config) * config.oceanic_speed_factor)
-            })
-            .collect();
-
-        assert!(
-            factors[0] < 1.0,
-            "the larger plate is held back: {factors:?}"
-        );
-        assert!(
-            factors[1] > 1.0,
-            "the smaller plate is pushed on: {factors:?}"
-        );
-    }
-
-    #[test]
     fn single_cell_plates_fall_back_to_the_hashed_axis() {
         let (mesh, _, partition) = test_support::two_plate_boundary_partition();
         let crust = plate_crust(&partition, &[CrustClass::Oceanic; 2]);
@@ -642,24 +677,20 @@ mod tests {
         assert!(fits[1].is_none(), "a one-cell plate has no rotation to fit");
 
         // Only the axis falls back. The speed rule still reads the plate's
-        // crust and its area, exactly as it does for a plate that fitted.
+        // crust and its trenches, exactly as it does for a plate that fitted.
         let kinematics = generate_plate_kinematics(&mesh, &partition, &crust, config).unwrap();
         assert!(
             (kinematics.angular_velocities[1].normalized() - random_axis(1, config)).length()
                 < 1.0e-6
         );
-        let reference_area = mesh.total_area() / 2.0;
-        let expected = plate_speed(1, areas[1], reference_area, 0.0, config);
-        assert!(
-            (kinematics.angular_velocities[1].length() - expected).abs()
-                < SPEED_TOLERANCE * expected
-        );
+        assert_eq!(kinematics.base_speeds[1], random_speed(1, config));
     }
 
     #[test]
     fn local_velocity_is_tangent_and_scales_with_radius() {
         let kinematics = PlateKinematics {
             angular_velocities: vec![Vec3::new(0.0, 2.0, 0.0)],
+            base_speeds: vec![2.0],
         };
         let unit_position = Vec3::new(1.0, 0.0, 0.0);
         let unit_velocity = kinematics.velocity_at(0, unit_position);
@@ -761,6 +792,36 @@ mod tests {
                     ..base
                 },
                 PlateKinematicsError::InvalidCrustSpeedFactor,
+            ),
+            // At zero a trenchless plate is frozen rather than slow, and past
+            // one the factor no longer names a share of the base speed.
+            (
+                PlateKinematicsConfig {
+                    trenchless_speed_factor: 0.0,
+                    ..base
+                },
+                PlateKinematicsError::InvalidTrenchlessSpeedFactor,
+            ),
+            (
+                PlateKinematicsConfig {
+                    trenchless_speed_factor: 1.5,
+                    ..base
+                },
+                PlateKinematicsError::InvalidTrenchlessSpeedFactor,
+            ),
+            (
+                PlateKinematicsConfig {
+                    slab_saturation_fraction: 0.0,
+                    ..base
+                },
+                PlateKinematicsError::InvalidSlabSaturationFraction,
+            ),
+            (
+                PlateKinematicsConfig {
+                    slab_saturation_fraction: f32::NAN,
+                    ..base
+                },
+                PlateKinematicsError::InvalidSlabSaturationFraction,
             ),
         ];
 
