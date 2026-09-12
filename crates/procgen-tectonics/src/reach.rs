@@ -39,18 +39,19 @@ pub const MAX_GAP_RADIUS: f32 = TRANSPORT_REACH_HOPS as f32;
 /// everything this module looks at.
 ///
 /// The fastest plate is the configured ceiling, not the fastest a fit
-/// produced: every step's respeed clamps to that ceiling, so a plate that
-/// gains a trench reaches it. Pole drift may raise a speed by
-/// `speed_drift_limit` on top, and a rift opens its two halves apart at
-/// `rift_opening_speed` on top of the parent's motion, so both are in the
-/// bound. Switching either off gives back the reach they reserved. A world in
-/// which nothing can move has no bound at all, and this returns infinity.
+/// produced: every respeed clamps to that ceiling, so a plate that gains a
+/// trench reaches it. Pole drift may raise a speed by `speed_drift_limit` on
+/// top of it, and that is the fastest any plate can be when a step moves
+/// material. A world in which nothing can move has no bound at all, and this
+/// returns infinity.
 ///
-/// The rift term is reserve the respeed no longer spends: a half's opening
-/// sets its direction and the respeed that ends the same step sets its length
-/// back inside the ceiling. It is kept because the bound also has to hold for
-/// step zero, whose transport reads the motion the caller supplied rather than
-/// a respeeded one.
+/// The `rift_opening_speed` term below is dead reserve. A rift adds the
+/// opening to the halves' rotation vectors, but the respeed that ends the same
+/// step sets their lengths back inside the ceiling, and a run respeeds the
+/// motion it was handed before its first step too, so no transport ever reads
+/// a speed carrying it. It is kept only because dropping it would loosen the
+/// bound, which changes what step durations are legal and how far the viewer's
+/// slider reaches; that is its own change and not this one.
 ///
 /// Evolution and the viewer pass the same number, the kinematics config's own
 /// maximum: a user editing a step duration has not fitted the plates yet, and
@@ -141,9 +142,9 @@ mod tests {
             "step duration must not carry a plate further than the 2 cells transport looks"
         );
 
-        // Drift may raise a speed and a rift opens its halves apart on top of
-        // the motion, so both reserve part of the reach; switching them off
-        // hands it back and a step between the two bounds becomes legal.
+        // Both terms reserve part of the reach, so switching them off hands it
+        // back and a step between the two bounds becomes legal. Only the drift
+        // term is spent: see this function's doc for why the rift term is not.
         let still = PlateEvolutionConfig {
             pole_drift: NO_POLE_DRIFT,
             lifecycle: NO_LIFECYCLE,

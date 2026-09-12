@@ -1272,13 +1272,16 @@ collided cells from 20,896 to 9,608 at the viewer's defaults.
 ### The step is bounded
 
 `maximum_step_duration(maximum_angular_speed, radius, cell_width, config)`
-lives in `transport.rs` beside `TRANSPORT_REACH_HOPS`, because it is that reach
-restated as a time and the two have to move together. It returns
+lives beside `TRANSPORT_REACH_HOPS`, because it is that reach restated as a
+time and the two have to move together. It returns
 `TRANSPORT_REACH_HOPS * cell_width / ((maximum_angular_speed *
 (1 + speed_drift_limit) + rift_opening_speed) * radius)`, and
 `evolve_plate_ownership` rejects a longer step with
 `PlateEvolutionError::StepOutrunsReach`, using the largest `|omega|` its inputs
-hold. Beyond that reach a step is not a coarser version of the same run:
+hold. Two details of this paragraph have since moved: "Slab pull" put the
+function in `reach.rs` with the constants it is stated against, and made
+evolution pass the kinematics config's own maximum rather than the fastest
+plate its inputs hold, because every respeed clamps to that maximum. Beyond that reach a step is not a coarser version of the same run:
 material jumps trenches without subducting, gaps open that no search can fill,
 and deformation is painted at boundary positions the plates left partway
 through the step.
@@ -1686,9 +1689,12 @@ shares of 0.00 to 0.21 — no relation at all.
 - No change to the crust factor, the coherence blend, the flow field, or
   `maximum_angular_speed`.
 - `maximum_step_duration` still reserves `rift_opening_speed` on top of the
-  ceiling. The respeed now clamps a rift's halves back inside the ceiling
-  within the same step, so that reserve is unspendable. Removing it would
-  loosen the bound and is a separate change.
+  ceiling, and that reserve is now dead. A rift adds the opening to its
+  halves' rotation vectors, but the respeed ending the same step sets their
+  lengths back inside the ceiling, and a run respeeds the motion it was handed
+  before its first step as well, so no transport reads a speed carrying it.
+  Dropping the term would loosen the bound, which changes what step durations
+  are legal and how far the viewer's slider reaches, so it is its own change.
 
 ### Pins
 
