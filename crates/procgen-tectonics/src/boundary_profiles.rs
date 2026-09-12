@@ -93,8 +93,11 @@ pub struct BoundaryDeformationConfig {
     /// 0.5, against 0.4 for the convergent, transform, and island arc centres
     /// and 0.2 for the trench and the rift centre — so it bites only where a
     /// boundary held one regime for longer than
-    /// [`Self::full_deformation_time`]: 164 of the 65,536 cells at the
-    /// viewer's defaults.
+    /// [`Self::full_deformation_time`]: 866 of the 65,536 cells at the
+    /// viewer's default sixty-step run, and none at all over fifteen. The
+    /// share grows without bound with run length, because uplift is added
+    /// every step and nothing takes it away; see "Run length" in
+    /// `docs/plate-movement.md`.
     pub maximum_magnitude: f32,
 }
 

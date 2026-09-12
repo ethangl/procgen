@@ -17,6 +17,10 @@ them.
 
 ## Current state
 
+Every measurement in this document down to "Run length" was taken at a viewer
+default of 15 evolution steps; that section moves the default to 60, and every
+measurement from it on names its own step count in the table caption.
+
 All five slices — coherent kinematics, displacement-proportional migration,
 accumulated deformation, drifting Euler poles, and plate lifecycle — have
 landed, and so has the interior relief that follows them; see the last section
@@ -1725,3 +1729,198 @@ takes the run's error enum; `rifting.rs` takes the half of the plate lifecycle
 that creates a plate, leaving suturing and compaction behind; and `reach.rs`
 takes the one ring count and the two bounds derived from it, which evolution
 and the viewer both read.
+
+## Run length
+
+Every default so far has been a short run — nine steps, then fifteen — and
+nothing said whether that is a world or the first act of one. This section
+runs the same two worlds over five lengths and one per-step series to find
+out. Three things reach a steady state; one does
+not, and it is the reason a default cannot simply be made long.
+
+Both worlds are 65,536 cells. "Defaults" is sampling seed 7 and jitter 0.8.
+"Reference" is the same with sampling seed 9 and subdivided faces 0.2, the
+world of a dozen large plates used for judging continental interior relief.
+Each row is a complete run of that length from the same inputs, not a snapshot
+taken during one long run. Times are the tectonics phase alone, over a mesh
+already built, in `--release` on an M1 Max.
+
+Two columns are new. "Covered" is continental particles that no cell reads,
+because another parcel of continent shares the cell with them; continental
+material outranks every parcel of ocean floor, so the cells that hold some are
+exactly the continental cells that material accounts for, and the covered
+count is the gap between the material a run conserves and the raster it can
+show. "Foreign" is the subset of those lying under a cell their own plate does
+not own, which is what a collision stacked rather than what one plate's own
+material crowded together. "Deepest stack" is the largest column of foreign
+material over any one cell at any step, which the run already kept.
+
+### At the viewer's defaults
+
+Sampling seed 7, jitter 0.8, 65,536 cells.
+
+| steps | continental cells | land at 0.5 | plates | rifts / sutures | born / subducted | cells at clamp | covered / foreign | deepest stack | deformation mean | ocean age p10 / p50 / p90 | speed min / median / max | tectonics phase |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | 19,588 | 16,732 | 102 | 3 / 12 | 1,418 / 8,127 | 0 | 6,725 / 628 | 7 | 0.030 | 0.21 / 0.25 / 0.32 | 0.096 / 0.389 / 0.879 | 0.6 s |
+| 30 | 19,196 | 16,845 | 85 | 5 / 31 | 5,094 / 17,246 | 0 | 7,059 / 316 | 7 | 0.053 | 0.10 / 0.45 / 0.53 | 0.081 / 0.446 / 0.918 | 1.2 s |
+| 60 | 18,903 | 17,870 | 77 | 10 / 44 | 14,741 / 35,091 | 866 | 7,168 / 61 | 7 | 0.080 | 0.08 / 0.45 / 0.92 | 0.120 / 0.410 / 1.168 | 2.2 s |
+| 120 | 18,364 | 18,139 | 84 | 28 / 53 | 37,019 / 62,642 | 4,260 | 7,572 / 157 | 7 | 0.109 | 0.07 / 0.41 / 1.68 | 0.094 / 0.337 / 1.066 | 4.3 s |
+| 240 | 17,573 | 17,800 | 76 | 52 / 77 | 86,287 / 113,580 | 9,971 | 7,995 / 92 | 10 | 0.142 | 0.07 / 0.36 / 1.23 | 0.072 / 0.380 / 1.038 | 8.6 s |
+
+Continental particles are 19,365 at every length, exactly.
+
+### At the reference world
+
+Sampling seed 9, subdivided faces 0.2, 65,536 cells.
+
+| steps | continental cells | land at 0.5 | plates | rifts / sutures | born / subducted | cells at clamp | covered / foreign | deepest stack | deformation mean | ocean age p10 / p50 / p90 | speed min / median / max | tectonics phase |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 15 | 19,772 | 16,864 | 16 | 2 / 4 | 504 / 2,914 | 0 | 6,722 / 158 | 7 | 0.013 | 0.22 / 0.35 / 0.57 | 0.145 / 0.429 / 0.580 | 0.5 s |
+| 30 | 19,638 | 17,048 | 13 | 3 / 8 | 1,681 / 5,848 | 0 | 6,748 / 50 | 7 | 0.023 | 0.42 / 0.56 / 0.78 | 0.190 / 0.405 / 0.670 | 1.0 s |
+| 60 | 19,548 | 17,345 | 13 | 5 / 10 | 5,174 / 14,115 | 632 | 6,745 / 50 | 7 | 0.038 | 0.20 / 0.95 / 1.20 | 0.184 / 0.406 / 0.663 | 1.9 s |
+| 120 | 19,586 | 18,157 | 18 | 16 / 16 | 12,475 / 27,280 | 2,116 | 6,863 / 79 | 8 | 0.059 | 0.17 / 1.71 / 2.03 | 0.214 / 0.366 / 0.914 | 3.9 s |
+| 240 | 18,811 | 17,826 | 11 | 25 / 28 | 27,497 / 46,863 | 3,252 | 7,148 / 94 | 8 | 0.077 | 0.18 / 1.82 / 3.65 | 0.220 / 0.454 / 0.846 | 7.6 s |
+
+Continental particles are 19,358 at every length, exactly. The two worlds
+agree on every shape above: the same settling, the same unbounded clamp share,
+the same slow loss of continental cells. The reference world reaches about
+half the defaults' clamp share, because a dozen plates hold fewer boundaries
+to raise it, and its ocean grows much older, because it holds fewer trenches
+to consume it.
+
+### Where each quantity settles
+
+At the defaults, every tenth step of a 240-step run.
+
+| steps | plates | cells at clamp | continental cells | land at 0.5 |
+| --- | --- | --- | --- | --- |
+| 0 | 111 | 0 | 19,365 | 16,432 |
+| 10 | 102 | 0 | 19,886 | 16,819 |
+| 20 | 93 | 0 | 19,366 | 16,603 |
+| 30 | 85 | 0 | 19,196 | 16,845 |
+| 40 | 81 | 76 | 19,102 | 17,183 |
+| 50 | 82 | 402 | 19,077 | 17,628 |
+| 60 | 77 | 866 | 18,903 | 17,870 |
+| 70 | 79 | 1,331 | 18,597 | 17,705 |
+| 80 | 77 | 1,799 | 18,475 | 17,724 |
+| 90 | 79 | 2,435 | 18,493 | 17,917 |
+| 100 | 80 | 3,091 | 18,354 | 17,930 |
+| 110 | 79 | 3,713 | 18,359 | 18,057 |
+| 120 | 84 | 4,260 | 18,364 | 18,139 |
+| 130 | 82 | 4,587 | 18,468 | 18,262 |
+| 140 | 82 | 5,158 | 18,382 | 18,291 |
+| 150 | 83 | 5,747 | 18,404 | 18,346 |
+| 160 | 82 | 6,347 | 18,263 | 18,271 |
+| 170 | 86 | 6,984 | 18,412 | 18,502 |
+| 180 | 86 | 7,637 | 18,407 | 18,500 |
+| 190 | 84 | 8,073 | 18,469 | 18,588 |
+| 200 | 83 | 8,554 | 18,155 | 18,234 |
+| 210 | 80 | 9,018 | 18,030 | 18,159 |
+| 220 | 76 | 9,436 | 17,789 | 17,904 |
+| 230 | 75 | 9,712 | 17,660 | 17,851 |
+| 240 | 76 | 9,971 | 17,573 | 17,800 |
+
+- **Plates settle by 60 steps.** The partition makes 111; the run falls to 102
+  by step 10 and 85 by step 30, and then holds between 75 and 86 for the
+  remaining 180 steps. Rifting and suturing hold it there against each other:
+  rifts run at a steady 0.17 to 0.23 a step at every length, while sutures fall
+  from about one a step to about a third as the pairs available to merge run
+  out. The count never runs away in either direction.
+- **Land settles by 60 steps**, near 18,000 cells, and wanders between 17,700
+  and 18,600 for the rest of the run. It starts lower — 16,432 at step zero and
+  16,732 at step 15 — because deformation has not yet raised the belts.
+- **Ocean age reaches its own distribution by 30 steps.** The prior's ages are
+  consumed and the median holds near 0.4 model time from step 30 to step 240.
+  One default step is one cell width of travel for the fastest plate, about
+  88 km at the length scale the "Profile retune" section works in, which at a
+  fast-plate speed of about 6 cm a year is roughly 1.5 Myr; on that reading the
+  median floor is about 48 Myr against Earth's 60, and `cooling_age` at 0.56
+  model time — about 60 Myr — sits inside the distribution as it should.
+- **Cells at the clamp do not settle.** They are 0 out to step 30, first appear
+  at step 40, and then climb by about 50 cells a step for the remaining 200
+  steps with no sign of turning over: 866 at step 60, 4,260 at 120, and 9,971
+  at 240, which is 15 percent of the world. The field's mean climbs with them,
+  0.030 to 0.142. This is the finding of the slice.
+- **Continental cells fall slowly**, 19,588 to 17,573 over 240 steps, while the
+  particle count is exact. See the third item below for where they go.
+
+### Cost
+
+Cost is linear in the step count, about 36 ms a step on the whole tectonics
+phase at this mesh. The viewer regenerates all three phases, and the other two
+do not read the step count:
+
+| steps | mesh | tectonics | geology | climate | whole pipeline |
+| --- | --- | --- | --- | --- | --- |
+| 15 | 0.12 s | 0.64 s | 0.08 s | 1.12 s | 1.96 s |
+| 45 | 0.12 s | 1.74 s | 0.09 s | 1.13 s | 3.09 s |
+| 60 | 0.12 s | 2.28 s | 0.09 s | 1.12 s | 3.61 s |
+
+Climate costs more than tectonics at 15 steps and half as much at 60. The
+whole pipeline goes from 2.0 to 3.6 seconds, which is not enough to argue for
+a shorter default.
+
+### The default is 60 steps
+
+`TectonicsSettings::default()` takes `step_count` from 15 to 60. That is the
+shortest run at which the age distribution, the plate count, and land have all
+reached the steady states they hold out to 240 steps, and at which the clamp
+still touches about one cell in eighty rather than one in seven. At
+`DEFAULT_STEP_DURATION` it is 0.84 model time, about 90 Myr on the reading
+above: the time an ocean takes to open.
+
+The crate default of 5 in `PlateEvolutionConfig` is a library default the
+fixtures scale from and does not change. No library pin and no viewer fixture
+reads the viewer default — `test_support` sets its own step count of 4 — so
+nothing was re-pinned for this. The viewer's step slider already reached 256.
+
+### What a long run exposes
+
+In priority order, each with the number that shows it.
+
+1. **Deformation needs a sink.** The clamp share grows without bound, because
+   uplift is added every step and nothing removes it: 0 cells at 30 steps, 866
+   at 60, 4,260 at 120, and 9,971 at 240, climbing about 50 a step with no
+   turnover. Every belt that holds its regime long enough becomes a flat-topped
+   plateau at `maximum_magnitude`, and the later history of a long run is
+   written as a saturated field rather than as a record. Erosion is the planned
+   answer and this is its motivation. Until it lands, 60 steps is as far as a
+   default should run.
+2. **Ocean floor gets too old.** The median settles, but the old tail does not.
+   The defaults' p90 goes 0.32, 0.53, 0.92, 1.68, 1.23 — 34 to 180 Myr — so by
+   120 steps the oldest tenth of the floor is as old as the oldest floor on
+   Earth. The reference world is far worse: its median reaches 1.82 and its p90
+   3.65, about 195 and 390 Myr, because a dozen large plates hold too little
+   trench to consume what their ridges make. Nothing in the model retires old
+   floor except a trench it happens to meet.
+3. **Continental material crowds, and nothing spreads it back out.** The
+   particle count is exact at every length, but the cells holding continental
+   material fall from 12,640 at 15 steps to 11,370 at 240, and the continental
+   raster with them, 19,588 to 17,573. That is ten percent of the continents in
+   240 steps, and it splits into 1,270 more covered particles and 745 fewer
+   empty cells that read a continental neighbour. Almost none of it is one
+   plate overriding another: the foreign count is 628 at 15 steps and 92 at
+   240, and it falls rather than rises, because stacked material usually meets
+   a trench or belongs to a plate that is itself absorbed. Most of the crowding
+   arrives in the first ten steps — 1,525 covered particles after one step and
+   6,603 after ten — which makes it a property of rotating a point set across
+   an irregular Voronoi lattice rather than of run length. What run length adds
+   is the slow creep of about five particles a step on top. The thickness slice
+   that reads the collision stack is where both belong.
+4. **The drift band shapes a long run rather than bounding it.**
+   `speed_drift_limit` of 0.5 was set against a fifteen-step walk whose
+   unclamped excursion is expected to be about a quarter. The expectation goes
+   as `0.061 * sqrt(n)`, so it is about a half at 60 steps and about 0.95 at
+   240: the clamp is what holds the speed distribution together on a long run,
+   not a bound on its tail. The distribution does not in fact run away — the
+   median plate speed holds near 0.4 at every length at both worlds — which is
+   the clamp doing that work. Whoever next touches the speed rule should decide whether
+   that is wanted.
+
+### Not changed here, and why
+
+`DEFAULT_STEP_DURATION`, `cooling_age`, `suture_time`,
+`full_deformation_time`, `rift_rate`, and `maximum_magnitude` all stay. Each is
+a model-time quantity that already means the same thing at any run length, and
+the clamp share is the symptom of a missing sink rather than of a wrong clamp.
+Erosion and unstacking are the next two slices; this one exists to size them.

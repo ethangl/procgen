@@ -120,9 +120,9 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
             // the drift rates, so the reference run sees the events at about
             // the density the viewer's defaults produce.
             rift_rate: default.lifecycle.rift_rate * time_scale,
-            // Roughly the share of the run the default eight steps are of the
-            // viewer's fifteen, so a collision can still merge inside a
-            // reference run of five.
+            // Three of the reference run's five steps, about the share of a
+            // run the default eight steps were of the fifteen-step run they
+            // were swept against, so a collision can still merge inside it.
             suture_time: 3.0 * REFERENCE_STEP_DURATION,
             // A collision front is a length, and an edge count for a fixed
             // area fraction goes as the square root of the cell count: this

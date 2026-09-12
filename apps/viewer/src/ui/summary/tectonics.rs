@@ -86,6 +86,15 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
                 world.evolution.final_continental_particle_count
             ),
         );
+        stat(
+            ui,
+            "Covered continental particles",
+            format!(
+                "{} ({} foreign)",
+                world.evolution.covered_continental_particle_count,
+                world.evolution.foreign_continental_particle_count
+            ),
+        );
         stat(ui, "Rifts", world.evolution.rift_count);
         stat(ui, "Failed rifts", world.evolution.failed_rift_count);
         stat(ui, "Sutures", world.evolution.suture_count);

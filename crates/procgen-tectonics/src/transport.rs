@@ -562,6 +562,40 @@ impl EvolvingWorld<'_> {
             .filter(|particle| particle.is_continental())
             .count()
     }
+
+    /// Continental particles no cell reads, because another parcel of
+    /// continent shares the cell with them.
+    ///
+    /// Continental material outranks every parcel of ocean floor, so a cell
+    /// holding any of it reads continental and the cells holding some are
+    /// exactly the continental cells the material itself accounts for. What is
+    /// left over is covered, and nothing spreads it back out: it is the gap
+    /// between the material a run conserves and the raster it can show.
+    pub(crate) fn covered_continental_particle_count(&self) -> usize {
+        let mut occupied = vec![false; self.mesh.cell_count()];
+        let mut continental = 0;
+        for particle in &self.particles {
+            if particle.is_continental() {
+                continental += 1;
+                occupied[particle.cell] = true;
+            }
+        }
+        continental - occupied.iter().filter(|held| **held).count()
+    }
+
+    /// Continental particles lying in a cell their own plate does not own,
+    /// which is the part of
+    /// [`Self::covered_continental_particle_count`] that a collision stacked
+    /// rather than that one plate's own material crowded together.
+    pub(crate) fn foreign_continental_particle_count(&self) -> usize {
+        self.particles
+            .iter()
+            .filter(|particle| {
+                particle.is_continental()
+                    && self.partition.cell_plates[particle.cell] != particle.plate
+            })
+            .count()
+    }
 }
 
 /// Orders two candidates an empty cell could sample: its own plate first,

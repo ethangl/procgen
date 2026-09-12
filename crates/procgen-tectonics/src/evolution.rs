@@ -115,6 +115,15 @@ pub struct PlateEvolutionDiagnostics {
     /// material and is not.
     pub starting_continental_particle_count: usize,
     pub final_continental_particle_count: usize,
+    /// Continental particles the run ends with that no cell reads, because
+    /// another parcel of continent is in the cell with them. It is the gap
+    /// between the material a run conserves and the continental cells that
+    /// material accounts for, and nothing ever spreads it back out.
+    pub covered_continental_particle_count: usize,
+    /// The subset of those that lie under a cell their own plate does not
+    /// own, which is what a collision stacked rather than what one plate's
+    /// own material crowded together.
+    pub foreign_continental_particle_count: usize,
     /// Continental plates that split in two across all steps.
     pub rift_count: usize,
     /// Rift arcs that failed to separate a plate into two pieces, which left
@@ -297,6 +306,8 @@ pub fn evolve_plate_ownership(
     // left owning no cell at all: that plate's particles are stacked under
     // other plates' cells, and nothing moves them again.
     diagnostics.final_continental_particle_count = world.continental_particle_count();
+    diagnostics.covered_continental_particle_count = world.covered_continental_particle_count();
+    diagnostics.foreign_continental_particle_count = world.foreign_continental_particle_count();
     // Compaction is a bijection on the ids that own cells and carries each
     // plate's motion with it, so the boundaries the loop left behind describe
     // the same edges either side of it and are not reclassified.
