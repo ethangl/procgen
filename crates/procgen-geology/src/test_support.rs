@@ -3,13 +3,23 @@ use crate::{
     SedimentaryBasinDiagnostics, SedimentaryBasinField, VolcanicArcDiagnostics, VolcanicArcField,
 };
 use procgen_sphere::{FibonacciConfig, fibonacci_sphere};
-use procgen_sphere_mesh::{SphereMesh, build_sphere_mesh, hop_length};
+use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, SphereMesh, build_sphere_mesh, hop_length};
 use procgen_tectonics::{
     BoundaryClass, BoundaryClassification, CellCrust, CrustClass, CrustClassification,
     CrustClassificationConfig, PlateKinematics, PlateKinematicsConfig, PlatePartition,
     PlatePartitionConfig, classify_boundaries, classify_crust, generate_plate_kinematics,
     partition_plates,
 };
+
+/// The normalized density that gives one cell of a mesh of `cell_count` cells
+/// the chance a cell of the default mesh has at `per_default_cell`.
+///
+/// A density is per unit area, and these fixture meshes have cells hundreds of
+/// times wider than the default mesh's, so a fixture that wants a draw its own
+/// cells can express has to state a much smaller density than the default.
+pub(crate) fn density_per_cell(cell_count: usize, per_default_cell: f32) -> f32 {
+    per_default_cell * cell_count as f32 / DEFAULT_CELL_COUNT as f32
+}
 
 /// The mesh the hotspot and province pins run on. Its cells are far wider than
 /// the default mesh's, so the configs below state their lengths as hops on it.

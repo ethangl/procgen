@@ -387,7 +387,7 @@ struct_codec! {
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor, trenchless_speed_factor, slab_saturation_fraction }
     MaterialTransportConfig { gap_radius }
     PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
-    PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_edges }
+    PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_length }
     PlateEvolutionConfig { seed, step_count, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation }
@@ -397,9 +397,9 @@ struct_codec! {
     CoarseElevationConfig { smoothing_radius, smoothing_weight, sea_level }
     HotspotFieldConfig { hotspot_count, maximum_trail_length, province_fraction, province_radius, province_rim, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }
-    VolcanicArcFieldConfig { minimum_boundary_edges, inland_offset, peak_density_divisor, strength_saturation }
+    VolcanicArcFieldConfig { minimum_boundary_length, inland_offset, peak_density, strength_saturation }
     CratonFieldConfig { minimum_boundary_distance, ramp_width }
-    SedimentaryBasinFieldConfig { maximum_elevation, minimum_cell_count, maximum_ocean_perimeter_fraction }
+    SedimentaryBasinFieldConfig { maximum_elevation, minimum_area_fraction, maximum_ocean_perimeter_fraction }
     GeologicalElevationConfig { hotspot_uplift, plateau_uplift, volcanic_arc_uplift, craton_flattening, basin_flattening }
     IsostaticAdjustmentConfig { adjustment_strength, continental_support, convergent_support_bonus, divergent_support_penalty, craton_support_bonus, maximum_boundary_distance }
     TerrainControlConfig { base_detail_amplitude, craton_amplitude_delta, volcanic_arc_amplitude, convergent_boundary_amplitude, divergent_boundary_amplitude, transform_boundary_amplitude, basin_amplitude_delta, boundary_strength_saturation, base_ridge_weight, convergent_ridge_weight, volcanic_arc_ridge_weight, base_octave_gain, craton_octave_gain_delta, basin_octave_gain_delta, maximum_abyssal_amplitude, abyssal_age_saturation, hotspot_stamp_strength, volcanic_arc_stamp_scale, oceanic_peak_stamp_scale }
@@ -424,7 +424,7 @@ struct_codec! {
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
     PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, collided_cell_count, maximum_collision_stack, sampled_cell_count, starting_continental_particle_count, final_continental_particle_count, covered_continental_particle_count, foreign_continental_particle_count, rift_count, failed_rift_count, suture_count }
     FieldSummary { minimum, maximum, mean }
-    CrustBirthPriorDiagnostics { hops, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
+    CrustBirthPriorDiagnostics { age, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
     SeafloorAgeDiagnostics { summary, oceanic_cell_count }
     SeafloorAge { cell_ages, diagnostics }
     BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, margin_depth, oceanic_cell_count, continental_cell_count, margin_cell_count }
@@ -445,7 +445,7 @@ struct_codec! {
     VolcanicArcField { segments, cell_strengths, cell_segments, diagnostics }
     CratonDiagnostics { boundary_cell_count, continental_land_cell_count, craton_cell_count, full_strength_cell_count, maximum_boundary_distance, strength }
     CratonField { cell_strengths, diagnostics }
-    SedimentaryBasin { root_cell, cell_count, ocean_perimeter_fraction, minimum_elevation }
+    SedimentaryBasin { root_cell, cell_count, area, ocean_perimeter_fraction, minimum_elevation }
     SedimentaryBasinDiagnostics { candidate_cell_count, component_count, basin_count, basin_cell_count, rejected_small_component_count, rejected_ocean_exposed_component_count, basin_cell_count_range }
     SedimentaryBasinField { cell_basins, basins, diagnostics }
     ElevationEffectDiagnostics { affected_cell_count, total_delta, maximum_absolute_delta }

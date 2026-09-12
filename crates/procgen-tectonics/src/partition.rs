@@ -39,6 +39,10 @@ pub struct PlatePartitionConfig {
     pub piece_fraction: f32,
     /// Maximum percentage that an edge's deterministic traversal cost varies
     /// above or below the baseline. Must not exceed `MAX_GROWTH_ROUGHNESS`.
+    ///
+    /// It is a percentage of a cost rather than a count of cells, so it is
+    /// already resolution independent: a finer mesh gives a plate more edges
+    /// to vary, and each varies by the same share.
     pub growth_roughness: u32,
     pub seed: u64,
 }

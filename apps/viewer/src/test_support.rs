@@ -8,14 +8,15 @@ use crate::{
 };
 use procgen_geology::{
     CratonFieldConfig, HotspotFieldConfig, IsostaticAdjustmentConfig, OceanicPeakFieldConfig,
-    VolcanicArcFieldConfig,
+    SedimentaryBasinFieldConfig, VolcanicArcFieldConfig,
 };
 use procgen_sphere::FibonacciConfig;
-use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
+use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length, mean_cell_area};
 use procgen_tectonics::{
     BaseElevationConfig, BoundaryDeformationConfig, BoundaryEffect, CoarseElevationConfig,
-    ContinentalRiftProfile, CrustClassificationConfig, DEFAULT_STEP_DURATION, PlateEvolutionConfig,
-    PlateKinematicsConfig, PlatePartitionConfig,
+    ContinentalRiftProfile, CrustBirthPriorConfig, CrustClassificationConfig,
+    DEFAULT_STEP_DURATION, PlateEvolutionConfig, PlateKinematicsConfig, PlateLifecycleConfig,
+    PlatePartitionConfig,
 };
 use std::{
     env,
@@ -32,6 +33,12 @@ use std::{
 
 /// The default deformation profiles with every depth carried to a mesh of
 /// `cell_count` cells.
+/// The normalized density that gives one cell of a mesh of `cell_count` cells
+/// the chance a cell of the default mesh has at `per_default_cell`.
+fn density_per_cell(cell_count: usize, per_default_cell: f32) -> f32 {
+    per_default_cell * cell_count as f32 / DEFAULT_CELL_COUNT as f32
+}
+
 fn scaled_deformation(cell_count: usize) -> BoundaryDeformationConfig {
     let scale = hop_length(cell_count, 1.0) / hop_length(DEFAULT_CELL_COUNT, 1.0);
     let default = BoundaryDeformationConfig::default();
@@ -79,7 +86,14 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
             step_duration: DEFAULT_STEP_DURATION
                 * (DEFAULT_CELL_COUNT as f32 / cell_count as f32).sqrt(),
             deformation: scaled_deformation(cell_count),
+            lifecycle: PlateLifecycleConfig {
+                suture_minimum_shared_length: hop_length(cell_count, 20.0),
+                ..PlateLifecycleConfig::default()
+            },
             ..Default::default()
+        },
+        birth_prior: CrustBirthPriorConfig {
+            ridge_less_age: 8.0 * hop_length(cell_count, 1.0),
         },
         base_elevation: BaseElevationConfig {
             margin_width: hop_length(cell_count, 3.0),
@@ -89,7 +103,6 @@ pub(crate) fn tectonics_settings(cell_count: usize, seed: u64) -> TectonicsSetti
             smoothing_radius: hop_length(cell_count, 2.0),
             ..CoarseElevationConfig::default()
         },
-        ..TectonicsSettings::default()
     }
 }
 
@@ -110,14 +123,27 @@ pub(crate) fn geology_settings(cell_count: usize, seed: u64) -> GeologySettings 
             province_rim: hop_length(cell_count, 2.0),
             ..HotspotFieldConfig::new(seed)
         },
-        oceanic_peaks: OceanicPeakFieldConfig::new(seed),
+        oceanic_peaks: OceanicPeakFieldConfig {
+            // Densities are per unit area, and a cell of these meshes is
+            // hundreds of times wider than one of the default mesh, so a
+            // default density would put a peak on every candidate cell.
+            seamount_density_scale: density_per_cell(cell_count, 0.75),
+            abyssal_hill_density_scale: density_per_cell(cell_count, 0.35),
+            ..OceanicPeakFieldConfig::new(seed)
+        },
         volcanic_arcs: VolcanicArcFieldConfig {
+            minimum_boundary_length: hop_length(cell_count, 3.0),
             inland_offset: hop_length(cell_count, 2.0),
+            peak_density: 1.0 / (2.0 * mean_cell_area(cell_count)),
             ..VolcanicArcFieldConfig::default()
         },
         cratons: CratonFieldConfig {
             minimum_boundary_distance: hop_length(cell_count, 3.0),
             ramp_width: hop_length(cell_count, 3.0),
+        },
+        basins: SedimentaryBasinFieldConfig {
+            minimum_area_fraction: 3.0 / cell_count as f32,
+            ..SedimentaryBasinFieldConfig::default()
         },
         isostasy: IsostaticAdjustmentConfig {
             maximum_boundary_distance: hop_length(cell_count, 5.0),

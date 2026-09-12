@@ -39,7 +39,7 @@ fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
 
 fn birth_prior_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
     stat_grid(ui, "Crust birth prior", "birth_prior", |ui| {
-        field_summary_stats(ui, &world.birth_prior.hops);
+        field_summary_stats(ui, &world.birth_prior.age);
         stat(ui, "Oceanic cells", world.birth_prior.oceanic_cell_count);
         stat(ui, "Ridge cells", world.birth_prior.ridge_cell_count);
         stat(ui, "Ridge plates", world.birth_prior.ridge_plate_count);

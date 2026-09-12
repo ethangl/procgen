@@ -5,6 +5,7 @@
 //! composition produces a separate elevation field. All stages remain
 //! independent of rendering.
 
+mod arc_segments;
 mod basins;
 mod cratons;
 mod elevation;
@@ -22,6 +23,7 @@ pub use field::{
     ElevationEffectDiagnostics, GeologyInputError, GeologyStageError, SignedEffectDiagnostics,
 };
 
+pub use arc_segments::{ArcKind, VolcanicArcCell, VolcanicArcSegment};
 pub use basins::{
     SedimentaryBasin, SedimentaryBasinDiagnostics, SedimentaryBasinField,
     SedimentaryBasinFieldConfig, SedimentaryBasinFieldError, derive_sedimentary_basin_field,
@@ -44,6 +46,6 @@ pub use oceanic_peaks::{
     OceanicPeakFieldError, OceanicPeakKind, derive_oceanic_peak_field,
 };
 pub use volcanic_arcs::{
-    ArcKind, VolcanicArcCell, VolcanicArcDiagnostics, VolcanicArcField, VolcanicArcFieldConfig,
-    VolcanicArcFieldError, VolcanicArcSegment, derive_volcanic_arc_field,
+    VolcanicArcDiagnostics, VolcanicArcField, VolcanicArcFieldConfig, VolcanicArcFieldError,
+    derive_volcanic_arc_field,
 };

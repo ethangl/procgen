@@ -1,22 +1,36 @@
-use crate::field::{GeologyInputError, MaxWinsField};
-use procgen_sphere_mesh::{SphereMesh, connected_components, default_hop_length, hops};
+use crate::{
+    arc_segments::{
+        ArcKind, BoundaryGroup, InlandClaim, VolcanicArcSegment, arc_kind, claim_precedes,
+        derive_segment,
+    },
+    field::{GeologyInputError, MaxWinsField},
+};
+use procgen_sphere_mesh::{
+    SphereMesh, connected_components, default_cell_area, default_hop_length, hops,
+};
 use procgen_tectonics::{
-    BoundaryClass, BoundaryClassification, CellCrust, CrustClass, PlatePartition, StageInputError,
+    BoundaryClass, BoundaryClassification, CellCrust, PlatePartition, StageInputError,
 };
 use std::{cmp::Ordering, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolcanicArcFieldConfig {
-    /// Minimum qualifying boundary edges required to retain a segment.
-    pub minimum_boundary_edges: usize,
+    /// Minimum length of qualifying boundary required to retain a segment, as
+    /// a model length on the unit sphere. A boundary's edges are its length in
+    /// hops, to within the mesh's irregularity, so the stage converts this to
+    /// an edge count once against the mesh. The default of three default hops
+    /// is about 265 km at Earth radius.
+    pub minimum_boundary_length: f32,
     /// Desired distance from the boundary on the overriding plate, as a model
     /// length on the unit sphere. The default of two default hops is about
     /// 180 km at Earth radius, which is where a volcanic front sits behind a
     /// trench.
     pub inland_offset: f32,
-    /// Selects approximately one peak candidate per this many inland cells,
-    /// retaining the strongest candidates first.
-    pub peak_density_divisor: usize,
+    /// Peak candidates per unit area of arc on the unit sphere, retaining the
+    /// strongest candidates first. The default is one peak per two cells of
+    /// the default mesh, which is a volcano every 120 km or so of arc at Earth
+    /// radius.
+    pub peak_density: f32,
     /// Convergence at which diagnostic strength reaches one.
     pub strength_saturation: f32,
 }
@@ -24,46 +38,12 @@ pub struct VolcanicArcFieldConfig {
 impl Default for VolcanicArcFieldConfig {
     fn default() -> Self {
         Self {
-            minimum_boundary_edges: 3,
+            minimum_boundary_length: 3.0 * default_hop_length(),
             inland_offset: 2.0 * default_hop_length(),
-            peak_density_divisor: 2,
+            peak_density: 1.0 / (2.0 * default_cell_area()),
             strength_saturation: 1.0,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VolcanicArcCell {
-    pub cell: usize,
-    /// Normalized strength propagated from the strongest nearest boundary source.
-    pub strength: f32,
-}
-
-/// What the overriding plate carries the arc on. A continental arc is the
-/// Andes and an island arc is the Marianas: the same construction, over a
-/// continent or over ocean floor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArcKind {
-    Continental,
-    Island,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct VolcanicArcSegment {
-    pub overriding_plate: usize,
-    /// Crust the overriding cells carry, which every cell of a segment
-    /// shares because grouping and the inland walk both stay on one class.
-    pub kind: ArcKind,
-    /// Qualifying mesh edge ids in ascending order.
-    pub boundary_edges: Vec<usize>,
-    /// Overriding boundary cells in ascending order.
-    pub boundary_cells: Vec<usize>,
-    /// Inland cells in ascending order.
-    pub arc_cells: Vec<VolcanicArcCell>,
-    /// Peak candidate cells in ascending order.
-    pub peaks: Vec<usize>,
-    /// Actual inland depth used, which may be shallower than the requested bound.
-    pub inland_depth: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -129,7 +109,7 @@ pub enum VolcanicArcFieldError {
     Input(StageInputError),
     EmptyMinimumSegment,
     ZeroInlandOffset,
-    ZeroPeakDensityDivisor,
+    InvalidPeakDensity,
     InvalidStrengthSaturation,
 }
 
@@ -138,13 +118,13 @@ impl fmt::Display for VolcanicArcFieldError {
         match self {
             Self::Input(error) => error.fmt(formatter),
             Self::EmptyMinimumSegment => {
-                formatter.write_str("minimum boundary edges must be at least one")
+                formatter.write_str("minimum boundary length must be a finite positive length")
             }
             Self::ZeroInlandOffset => {
                 formatter.write_str("inland offset must be a finite positive length")
             }
-            Self::ZeroPeakDensityDivisor => {
-                formatter.write_str("peak density divisor must be at least one")
+            Self::InvalidPeakDensity => {
+                formatter.write_str("peak density must be a finite positive density per unit area")
             }
             Self::InvalidStrengthSaturation => {
                 formatter.write_str("strength saturation must be finite and greater than zero")
@@ -168,23 +148,10 @@ impl From<StageInputError> for VolcanicArcFieldError {
     }
 }
 
-#[derive(Clone, Copy)]
-struct InlandClaim {
-    strength: f32,
-    source_edge: usize,
-}
-
 struct BoundaryData {
     edges_by_cell: Vec<Vec<usize>>,
     claims: Vec<Option<InlandClaim>>,
     qualifying_edge_count: usize,
-}
-
-struct BoundaryGroup {
-    overriding_plate: usize,
-    kind: ArcKind,
-    boundary_edges: Vec<usize>,
-    boundary_cells: Vec<usize>,
 }
 
 /// Derives present-day volcanic-arc fields from the final convergent
@@ -206,7 +173,8 @@ pub fn derive_volcanic_arc_field(
     let boundary_cell_count = boundary.claims.iter().flatten().count();
     let mut groups = group_boundaries(mesh, plates, crust, &boundary);
     let original_group_count = groups.len();
-    groups.retain(|group| group.boundary_edges.len() >= config.minimum_boundary_edges);
+    let minimum_boundary_edges = hops(mesh.cell_count(), config.minimum_boundary_length);
+    groups.retain(|group| group.boundary_edges.len() >= minimum_boundary_edges);
     let discarded_short_segment_count = original_group_count - groups.len();
 
     let mut discarded_landlocked_segment_count = 0;
@@ -218,7 +186,7 @@ pub fn derive_volcanic_arc_field(
                 plates,
                 crust,
                 &boundary.claims,
-                config,
+                config.peak_density,
                 inland_offset,
                 group,
             );
@@ -278,14 +246,14 @@ fn validate_inputs(
     boundaries: &BoundaryClassification,
     config: VolcanicArcFieldConfig,
 ) -> Result<(), VolcanicArcFieldError> {
-    if config.minimum_boundary_edges == 0 {
+    if !config.minimum_boundary_length.is_finite() || config.minimum_boundary_length <= 0.0 {
         return Err(VolcanicArcFieldError::EmptyMinimumSegment);
     }
     if !config.inland_offset.is_finite() || config.inland_offset <= 0.0 {
         return Err(VolcanicArcFieldError::ZeroInlandOffset);
     }
-    if config.peak_density_divisor == 0 {
-        return Err(VolcanicArcFieldError::ZeroPeakDensityDivisor);
+    if !config.peak_density.is_finite() || config.peak_density <= 0.0 {
+        return Err(VolcanicArcFieldError::InvalidPeakDensity);
     }
     if !config.strength_saturation.is_finite() || config.strength_saturation <= 0.0 {
         return Err(VolcanicArcFieldError::InvalidStrengthSaturation);
@@ -378,138 +346,13 @@ fn group_boundaries(
     .collect()
 }
 
-const fn arc_kind(class: CrustClass) -> ArcKind {
-    match class {
-        CrustClass::Continental => ArcKind::Continental,
-        CrustClass::Oceanic => ArcKind::Island,
-    }
-}
-
-fn derive_segment(
-    mesh: &SphereMesh,
-    plates: &PlatePartition,
-    crust: CellCrust<'_>,
-    boundary_claims: &[Option<InlandClaim>],
-    config: VolcanicArcFieldConfig,
-    inland_offset: usize,
-    group: BoundaryGroup,
-) -> Option<VolcanicArcSegment> {
-    let (arc_cells, inland_depth) =
-        walk_inland(mesh, plates, crust, boundary_claims, &group, inland_offset)?;
-    let peaks = select_peak_candidates(&arc_cells, config.peak_density_divisor);
-    Some(VolcanicArcSegment {
-        overriding_plate: group.overriding_plate,
-        kind: group.kind,
-        boundary_edges: group.boundary_edges,
-        boundary_cells: group.boundary_cells,
-        arc_cells,
-        peaks,
-        inland_depth,
-    })
-}
-
-/// Steps the strongest claim inland cell by cell, over the overriding plate's
-/// own crust of the segment's class: an arc sits on the plate the trench is
-/// eating under, so the walk stops at that plate's boundary, and it sits on
-/// one kind of crust, so a continental arc stops at the coast and an island
-/// arc stops where the plate's floor meets its own continent.
-fn walk_inland(
-    mesh: &SphereMesh,
-    plates: &PlatePartition,
-    crust: CellCrust<'_>,
-    boundary_claims: &[Option<InlandClaim>],
-    group: &BoundaryGroup,
-    maximum_depth: usize,
-) -> Option<(Vec<VolcanicArcCell>, usize)> {
-    let BoundaryGroup {
-        overriding_plate,
-        kind,
-        boundary_cells,
-        ..
-    } = group;
-    let mut visited: Vec<_> = boundary_claims.iter().map(Option::is_some).collect();
-    let mut claim_buffer = vec![None; mesh.cell_count()];
-    let mut touched = Vec::new();
-    let mut frontier: Vec<_> = boundary_cells
-        .iter()
-        .filter_map(|&cell| boundary_claims[cell].map(|claim| (cell, claim)))
-        .collect();
-    let mut inland_depth = 0;
-
-    for depth in 1..=maximum_depth {
-        touched.clear();
-        for &(cell, claim) in &frontier {
-            for corner in mesh.cell_corners(cell) {
-                let neighbor = corner.neighbor;
-                if visited[neighbor]
-                    || plates.cell_plates[neighbor] != *overriding_plate
-                    || arc_kind(crust.class(neighbor)) != *kind
-                {
-                    continue;
-                }
-                touched.push(neighbor);
-                let slot = &mut claim_buffer[neighbor];
-                if slot.is_none_or(|existing| claim_precedes(claim, existing)) {
-                    *slot = Some(claim);
-                }
-            }
-        }
-        touched.sort_unstable();
-        touched.dedup();
-        let next: Vec<_> = touched
-            .iter()
-            .filter_map(|&cell| claim_buffer[cell].take().map(|claim| (cell, claim)))
-            .collect();
-        if next.is_empty() {
-            break;
-        }
-        for &(cell, _) in &next {
-            visited[cell] = true;
-        }
-        frontier = next;
-        inland_depth = depth;
-    }
-
-    (inland_depth > 0).then(|| {
-        let cells = frontier
-            .into_iter()
-            .map(|(cell, claim)| VolcanicArcCell {
-                cell,
-                strength: claim.strength,
-            })
-            .collect();
-        (cells, inland_depth)
-    })
-}
-
-fn select_peak_candidates(arc_cells: &[VolcanicArcCell], density_divisor: usize) -> Vec<usize> {
-    let peak_count = arc_cells.len().div_ceil(density_divisor);
-    let mut peak_cells: Vec<_> = arc_cells.iter().collect();
-    peak_cells.sort_unstable_by(|left, right| {
-        right
-            .strength
-            .total_cmp(&left.strength)
-            .then_with(|| left.cell.cmp(&right.cell))
-    });
-    peak_cells.truncate(peak_count);
-    peak_cells.sort_unstable_by_key(|arc_cell| arc_cell.cell);
-    peak_cells
-        .into_iter()
-        .map(|arc_cell| arc_cell.cell)
-        .collect()
-}
-
-fn claim_precedes(candidate: InlandClaim, existing: InlandClaim) -> bool {
-    candidate.strength > existing.strength
-        || (candidate.strength == existing.strength && candidate.source_edge < existing.source_edge)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{PlateFixture, crust, hemisphere_fixture, plate_birth};
     use procgen_core::fingerprint;
-    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length};
+    use procgen_sphere_mesh::{DEFAULT_CELL_COUNT, hop_length, mean_cell_area};
+    use procgen_tectonics::CrustClass;
     use std::collections::BTreeSet;
 
     /// The arc fixtures split into more plates than the hotspot ones, so that
@@ -518,12 +361,15 @@ mod tests {
         PlateFixture::new(cell_count, 8)
     }
 
-    /// The default config with its inland offset carried to a mesh of
-    /// `cell_count` cells, so the walk reaches the two cells the default means
-    /// rather than the one a mesh this coarse would round it to.
+    /// The default config with its lengths and its peak density carried to a
+    /// mesh of `cell_count` cells, so the walk reaches the two cells and the
+    /// filter the three edges that the defaults mean, rather than the one a
+    /// mesh this coarse would round each to.
     fn reference_config(cell_count: usize) -> VolcanicArcFieldConfig {
         VolcanicArcFieldConfig {
+            minimum_boundary_length: hop_length(cell_count, 3.0),
             inland_offset: hop_length(cell_count, 2.0),
+            peak_density: 1.0 / (2.0 * mean_cell_area(cell_count)),
             ..VolcanicArcFieldConfig::default()
         }
     }
@@ -635,7 +481,7 @@ mod tests {
         // Every segment kept, so the roles below are the grouping's own answer
         // rather than what survived the length filter.
         let config = VolcanicArcFieldConfig {
-            minimum_boundary_edges: 1,
+            minimum_boundary_length: hop_length(mesh.cell_count(), 1.0),
             ..reference_config(mesh.cell_count())
         };
         let cell_birth: Vec<_> = mesh
@@ -822,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn peaks_and_overlaps_follow_stable_strength_rules() {
+    fn overlapping_segments_resolve_to_the_strongest_claim() {
         let world = fixture(1_024);
         let boundaries = world.boundaries();
         let PlateFixture {
@@ -832,9 +678,9 @@ mod tests {
             ..
         } = world;
         let config = VolcanicArcFieldConfig {
-            minimum_boundary_edges: 1,
+            minimum_boundary_length: hop_length(1_024, 1.0),
             inland_offset: hop_length(1_024, 3.0),
-            peak_density_divisor: 2,
+            peak_density: 1.0 / (2.0 * mean_cell_area(1_024)),
             strength_saturation: 2.0,
         };
         let field =
@@ -842,24 +688,14 @@ mod tests {
                 .unwrap();
 
         assert!(field.diagnostics.overlap_cell_count > 0);
-        for segment in &field.segments {
-            let mut expected: Vec<_> = segment.arc_cells.iter().collect();
-            expected.sort_unstable_by(|left, right| {
-                right
-                    .strength
-                    .total_cmp(&left.strength)
-                    .then_with(|| left.cell.cmp(&right.cell))
-            });
-            expected.truncate(
-                segment
-                    .arc_cells
-                    .len()
-                    .div_ceil(config.peak_density_divisor),
-            );
-            let mut expected: Vec<_> = expected.into_iter().map(|arc_cell| arc_cell.cell).collect();
-            expected.sort_unstable();
-            assert_eq!(segment.peaks, expected);
-        }
+        // What a segment's peaks are is `arc_segments`' own rule and its own
+        // test; this is about the field the segments aggregate into.
+        assert!(
+            field
+                .segments
+                .iter()
+                .all(|segment| !segment.peaks.is_empty())
+        );
         for cell in 0..mesh.cell_count() {
             let expected = field
                 .segments
@@ -899,7 +735,8 @@ mod tests {
             crust(&cell_birth),
             &boundaries,
             VolcanicArcFieldConfig {
-                minimum_boundary_edges: usize::MAX,
+                // Longer than any boundary a sphere can carry.
+                minimum_boundary_length: 1.0e3,
                 ..Default::default()
             },
         )
@@ -925,7 +762,7 @@ mod tests {
         for (config, error) in [
             (
                 VolcanicArcFieldConfig {
-                    minimum_boundary_edges: 0,
+                    minimum_boundary_length: 0.0,
                     ..Default::default()
                 },
                 VolcanicArcFieldError::EmptyMinimumSegment,
@@ -939,10 +776,10 @@ mod tests {
             ),
             (
                 VolcanicArcFieldConfig {
-                    peak_density_divisor: 0,
+                    peak_density: 0.0,
                     ..Default::default()
                 },
-                VolcanicArcFieldError::ZeroPeakDensityDivisor,
+                VolcanicArcFieldError::InvalidPeakDensity,
             ),
             (
                 VolcanicArcFieldConfig {

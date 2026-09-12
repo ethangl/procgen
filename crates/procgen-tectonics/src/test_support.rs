@@ -20,6 +20,19 @@ use crate::{
 /// would resolve to a single hop on a mesh this coarse.
 pub const REFERENCE_CELL_COUNT: usize = 512;
 
+/// The two-plate fixtures' mesh: one cell against every other, for the
+/// assertions about a single boundary.
+pub const TWO_PLATE_CELL_COUNT: usize = 32;
+
+/// The default fallback age for crust with no ridge, carried to a mesh of
+/// `cell_count` cells: eight hops of the default mesh is a much longer time on
+/// a mesh this coarse, and the fixtures stand in for the default world.
+pub fn scaled_birth_prior_config(cell_count: usize) -> CrustBirthPriorConfig {
+    CrustBirthPriorConfig {
+        ridge_less_age: 8.0 * hop_length(cell_count, 1.0),
+    }
+}
+
 /// The default deformation profiles with every depth carried from the default
 /// mesh to a mesh of `cell_count` cells, so each belt spans the hops there
 /// that it spans on the default mesh.
@@ -84,7 +97,7 @@ pub const NO_LIFECYCLE: PlateLifecycleConfig = PlateLifecycleConfig {
     rift_curvature: 0.0,
     rift_opening_speed: 0.0,
     suture_time: f32::INFINITY,
-    suture_minimum_shared_edges: 0,
+    suture_minimum_shared_length: 0.0,
 };
 
 pub fn mesh(cell_count: usize) -> SphereMesh {
@@ -156,8 +169,9 @@ pub fn reference_evolution_config() -> PlateEvolutionConfig {
             // A collision front is a length, and an edge count for a fixed
             // area fraction goes as the square root of the cell count: this
             // mesh has an eighth of the default's cells per plate, so a front
-            // here is about a tenth of the edges.
-            suture_minimum_shared_edges: 2,
+            // here is about a tenth of the edges the default mesh spends on
+            // the same fraction of a perimeter.
+            suture_minimum_shared_length: hop_length(REFERENCE_CELL_COUNT, 2.0),
             ..default.lifecycle
         },
         ..default
@@ -206,7 +220,7 @@ fn fixture_over_crust(crust_config: CrustClassificationConfig) -> EvolutionFixtu
         &crust,
         reference_motion_config(),
         &boundaries,
-        CrustBirthPriorConfig::default(),
+        scaled_birth_prior_config(mesh.cell_count()),
     )
     .unwrap();
     EvolutionFixture {
@@ -365,7 +379,7 @@ pub fn two_plate_fixture(outward: f32, plate_classes: Vec<CrustClass>) -> Evolut
         &crust,
         reference_motion_config(),
         &boundaries,
-        CrustBirthPriorConfig::default(),
+        scaled_birth_prior_config(mesh.cell_count()),
     )
     .unwrap();
     EvolutionFixture {
@@ -425,7 +439,7 @@ pub fn convergent_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize) {
 }
 
 pub fn two_plate_boundary_partition() -> (SphereMesh, usize, PlatePartition) {
-    let mesh = mesh(32);
+    let mesh = mesh(TWO_PLATE_CELL_COUNT);
     let edge_index = 0;
     let edge = mesh.edges[edge_index];
     let mut cell_plates = vec![0; mesh.cell_count()];
@@ -660,7 +674,7 @@ pub fn forced_suture_fixture() -> (EvolutionFixture, PlateEvolutionConfig, usize
             suture_time: (steps as f32 - 0.5) * step_duration,
             // The one-cell plate shares five or six edges with its neighbour;
             // every convergent one of them counts.
-            suture_minimum_shared_edges: 1,
+            suture_minimum_shared_length: hop_length(TWO_PLATE_CELL_COUNT, 1.0),
             ..PlateLifecycleConfig::default()
         },
         ..PlateEvolutionConfig::default()
@@ -684,7 +698,7 @@ fn fixture_over(
         &crust,
         reference_motion_config(),
         &boundaries,
-        CrustBirthPriorConfig::default(),
+        scaled_birth_prior_config(mesh.cell_count()),
     )
     .unwrap();
     EvolutionFixture {

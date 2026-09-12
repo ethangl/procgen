@@ -5,6 +5,12 @@
 //! same distance over more cells. Configs therefore hold model lengths on the
 //! unit sphere and convert once, at the top of the stage that walks the graph,
 //! through [`hops`].
+//!
+//! A stage that counts features works the same way with area: a config holds a
+//! density per unit area or a fraction of the sphere, and the stage measures
+//! the real area it applies to. [`SphereMesh::unit_cell_area`] is where that
+//! area comes from, and [`default_cell_area`] is what a density default is
+//! written against.
 
 use std::f32::consts::PI;
 
@@ -14,6 +20,9 @@ use std::f32::consts::PI;
 /// the hop count it replaced, exactly.
 pub const DEFAULT_CELL_COUNT: usize = 65_536;
 
+/// The unit sphere's area, which every area fraction is a fraction of.
+pub const UNIT_SPHERE_AREA: f32 = 4.0 * PI;
+
 /// The one representative cell width of a sphere of `radius` covered by
 /// `cell_count` cells: the side of a square with the mean cell area.
 ///
@@ -22,6 +31,21 @@ pub const DEFAULT_CELL_COUNT: usize = 65_536;
 /// against a cell count the user has only typed.
 pub fn mean_cell_width(radius: f32, cell_count: usize) -> f32 {
     (4.0 * PI * radius * radius / cell_count as f32).sqrt()
+}
+
+/// The mean cell area of a mesh of `cell_count` cells on the unit sphere: the
+/// sphere's area shared out evenly. A real mesh's cells vary around it, which
+/// is why a stage that counts features measures the cells it covers rather
+/// than counting them.
+pub fn mean_cell_area(cell_count: usize) -> f32 {
+    UNIT_SPHERE_AREA / cell_count as f32
+}
+
+/// One cell of the default mesh, in model area on the unit sphere. Every
+/// density default is written against it, the way every length default is
+/// written against [`default_hop_length`].
+pub fn default_cell_area() -> f32 {
+    mean_cell_area(DEFAULT_CELL_COUNT)
 }
 
 /// The model length that spans `hops` on a mesh of `cell_count` cells: the
@@ -65,6 +89,14 @@ mod tests {
             );
         }
         assert_eq!(hops(DEFAULT_CELL_COUNT, 0.0), 0);
+    }
+
+    #[test]
+    fn a_mesh_of_mean_cells_covers_the_sphere() {
+        for cell_count in [32, 512, DEFAULT_CELL_COUNT] {
+            let total = mean_cell_area(cell_count) * cell_count as f32;
+            assert!((total - UNIT_SPHERE_AREA).abs() < 1.0e-4, "{cell_count}");
+        }
     }
 
     #[test]

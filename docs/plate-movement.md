@@ -69,9 +69,8 @@ for that one.
   crust decides which of two parcels in it wins. A rifting continental plate therefore grows an oceanic margin.
 - `derive_crust_birth_prior` is the old hop-distance algorithm, now producing
   the birth field evolution starts from, in model time:
-  `Some(-hops * hop_duration)` for oceanic cells,
-  `Some(-ridge_less_age * hop_duration)` for ridge-less oceanic plates, `None`
-  for continental. `derive_seafloor_age` is `elapsed_time - birth`. See "Time
+  `Some(-hops * hop_duration)` for oceanic cells, `Some(-ridge_less_age)` for
+  ridge-less oceanic plates, `None` for continental. `derive_seafloor_age` is `elapsed_time - birth`. See "Time
   and length units" for what a hop duration is and why both are times.
 - `step_duration` defaults to 0.014, the time a plate at the default maximum
   angular speed of 1.0 takes to cross one cell width on the 65,536-cell default
@@ -222,9 +221,10 @@ for that one.
   undefined, so a rift is only well posed on a plate an arc can cross rather
   than circle.
 - Suturing: each step counts, for every adjacent continental pair, the shared
-  edges that are convergent with continental crust on both sides. A pair at or
-  above `suture_minimum_shared_edges` grows its collision time by the step; a
-  pair below it starts over, the same convention the closing debt uses for an
+  edges that are convergent with continental crust on both sides. A pair whose
+  front is at least `suture_minimum_shared_length`, converted to an edge count
+  against the mesh, grows its collision time by the step; a pair below it
+  starts over, the same convention the closing debt uses for an
   edge that stopped converging. At `suture_time` the plate with more area
   absorbs the other: every cell takes the absorber's id, the absorber's
   rotation vector becomes the area-weighted mean of the two, and the absorbed
@@ -246,7 +246,8 @@ for that one.
 - Defaults: `rift_rate` 4.5 per unit time, `rift_minimum_area_fraction` 0.04
   at the time and 0.012 since the profile retune below,
   `rift_curvature` 8.0 (the partition's own), `rift_opening_speed` 0.33,
-  `suture_time` eight default steps, and `suture_minimum_shared_edges` 20.
+  `suture_time` eight default steps, and `suture_minimum_shared_length` twenty
+  default hops.
   They were calibrated by running the viewer's defaults over nine, fifteen,
   and thirty steps and sweeping the two knobs that matter. The area fraction
   is one of them: the largest continental plate covered 0.044 of the sphere
@@ -314,9 +315,53 @@ for that one.
   and change type. Every default is written as a multiple of
   `default_hop_length`, the width of one cell of the 65,536-cell default mesh,
   so each converts back to the integer it replaced exactly and no pin on that
-  mesh moves; a unit test per stage asserts that. `TRANSPORT_REACH_HOPS`,
-  `gap_radius`, and `ridge_less_age` stay in hops, because they describe the
-  raster rather than the world.
+  mesh moves; a unit test per stage asserts that. `TRANSPORT_REACH_HOPS` and
+  `gap_radius` stay in hops, because they describe the raster rather than the
+  world; they are the only two that do.
+- A stage that counts features states a density per unit area or a fraction of
+  the sphere and measures the area it applies to, for the same reason.
+  `PlateLifecycleConfig::suture_minimum_shared_edges` became
+  `suture_minimum_shared_length` and
+  `VolcanicArcFieldConfig::minimum_boundary_edges` became
+  `minimum_boundary_length`, each converted to an edge count against the mesh,
+  because a boundary's edges are its length in hops to within the mesh's
+  irregularity. `SedimentaryBasinFieldConfig::minimum_cell_count` became
+  `minimum_area_fraction` of the sphere and the stage sums the component's own
+  cell areas. `VolcanicArcFieldConfig::peak_density_divisor` became
+  `peak_density` per unit area, and a segment keeps `round(arc area x density)`
+  peaks, never fewer than one: a segment long enough to survive the
+  minimum-length filter is an arc, and an arc has a volcano on it.
+  `CrustBirthPriorConfig::ridge_less_age` became model time, which is what
+  every other age in the pipeline is; as a hop count it made a ridge-less
+  plate's floor younger on a finer mesh, and its diagnostic summary changed
+  unit with it. `growth_roughness` stays a percentage, which is a fraction
+  rather than a count and was already resolution independent.
+- The oceanic-peak presence draw became a density per unit area: a cell holds a
+  peak with probability `density x cell area / default cell area`, so a floor
+  carries the same seamounts per square kilometre on any mesh. A cell of
+  exactly the mean area draws what it drew and every other cell shifts by its
+  own area over the mean. That is the one fingerprint this work moved: over the
+  reference fixture's 201 candidates it loses four peaks and gains five.
+- Measured on the default world, the three rules that now read real cell area
+  change what it holds. That is the point of the change rather than a cost of
+  it: a mesh's cells vary around the mean, so no area test can reproduce a cell
+  count on one, and the area is the quantity that means the same thing on every
+  mesh.
+  - Arc peaks go from 2390 to 2259 over 635 segments, 217 of which change by
+    one. `div_ceil` was the integer arithmetic that happened to be there and it
+    rounded every segment up; once the quantity is peaks per unit area, the
+    unbiased estimator is the only one under which the number means the same
+    thing at any resolution. `ceil` measures 2530 and puts that per-segment
+    bias back, and a default of one peak per 1.9 cells would bury it in a
+    constant nobody could explain later. The floor at one peak keeps the only
+    part of the old behaviour a reader would notice. If arcs look sparse, that
+    is a measured retune of `peak_density` and not this change.
+  - Basins go from 41 to 37 of 231 components. The four dropped are three-cell
+    components covering less than three mean cells of area, which is what the
+    threshold now says.
+  - Oceanic peaks go from 1345 to 1326 of 8717 candidates.
+  - No test fixture sits near any of those thresholds, so the pins that stand
+    are not evidence that the default world is unchanged; these numbers are.
 - Carried risk: the viewer's small-mesh fixtures each use a seed at which
   climate coupling reaches its fixed point, and every slice that moves terrain
   moves which seeds those are. Five changed here, two in slice 3, three in

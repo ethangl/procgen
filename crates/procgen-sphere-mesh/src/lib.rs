@@ -15,7 +15,10 @@ pub use mesh::{
     CellCorner, SphereMesh, VoronoiEdge, connected_components, edge_cell_distances,
     multi_source_distances,
 };
-pub use resolution::{DEFAULT_CELL_COUNT, default_hop_length, hop_length, hops, mean_cell_width};
+pub use resolution::{
+    DEFAULT_CELL_COUNT, UNIT_SPHERE_AREA, default_cell_area, default_hop_length, hop_length, hops,
+    mean_cell_area, mean_cell_width,
+};
 
 use procgen_core::Vec3;
 use std::fmt;

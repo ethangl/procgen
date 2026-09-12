@@ -213,6 +213,15 @@ impl SphereMesh {
         self.cell_areas.iter().map(|&area| f64::from(area)).sum()
     }
 
+    /// A cell's own area on the unit sphere.
+    ///
+    /// Area goes as the square of the radius, which is divided out here the
+    /// same way `hops` divides it out of a length: a config states a density
+    /// per unit area on the unit sphere, and this is the area it applies to.
+    pub fn unit_cell_area(&self, cell: usize) -> f32 {
+        self.cell_areas[cell] / (self.radius * self.radius)
+    }
+
     pub fn area_weighted_mean(&self, values: &[f32]) -> f64 {
         assert_eq!(
             values.len(),

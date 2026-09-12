@@ -11,7 +11,9 @@ use crate::render::{
 use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use procgen_planet::Planet;
-use procgen_sphere_mesh::default_hop_length;
+use procgen_sphere_mesh::{
+    DEFAULT_CELL_COUNT, UNIT_SPHERE_AREA, default_cell_area, default_hop_length,
+};
 
 const SECTION_SPACING: f32 = 6.0;
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -353,4 +355,59 @@ fn length_slider(
 /// hops are the units these ranges were chosen in.
 fn hop_range(hops: std::ops::RangeInclusive<f32>) -> std::ops::RangeInclusive<f32> {
     hops.start() * default_hop_length()..=hops.end() * default_hop_length()
+}
+
+/// An area on the unit sphere, in the square kilometres it covers on an
+/// Earth-sized planet. The reference is Earth's, as the crates' own
+/// documentation states these defaults in.
+fn earth_square_kilometres(unit_area: f32) -> f64 {
+    let radius = Planet::EARTH.radius_meters / 1_000.0;
+    f64::from(unit_area) * radius * radius
+}
+
+/// An area as a fraction of the sphere, with the ground it covers on an
+/// Earth-sized planet in its tooltip.
+fn area_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let square_kilometres = earth_square_kilometres(*value * UNIT_SPHERE_AREA);
+        ui.add(egui::Slider::new(value, range))
+            .on_hover_text(format!("{square_kilometres:.0} km² at Earth radius"));
+    });
+}
+
+/// A density per unit area on the unit sphere, with the ground one feature
+/// gets to itself in its tooltip.
+fn density_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let square_kilometres = earth_square_kilometres(value.recip());
+        ui.add(egui::Slider::new(value, range))
+            .on_hover_text(format!(
+                "one per {square_kilometres:.0} km² at Earth radius"
+            ));
+    });
+}
+
+/// A slider range stated in cells of the default mesh, as the fractions of the
+/// sphere those cells cover.
+fn cell_range(cells: std::ops::RangeInclusive<f32>) -> std::ops::RangeInclusive<f32> {
+    let sphere = DEFAULT_CELL_COUNT as f32;
+    cells.start() / sphere..=cells.end() / sphere
+}
+
+/// A density range stated as one feature per that many cells of the default
+/// mesh. More cells per feature is a lower density, so the ends swap.
+fn per_cell_range(cells: std::ops::RangeInclusive<f32>) -> std::ops::RangeInclusive<f32> {
+    1.0 / (cells.end() * default_cell_area())..=1.0 / (cells.start() * default_cell_area())
 }
