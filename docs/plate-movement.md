@@ -336,6 +336,18 @@ for that one.
   plate's floor younger on a finer mesh, and its diagnostic summary changed
   unit with it. `growth_roughness` stays a percentage, which is a fraction
   rather than a count and was already resolution independent.
+- A run is a duration and the step count follows from it.
+  `PlateEvolutionConfig::step_count` became `run_duration`, with the count
+  derived as the run over the step and `step_duration` still configured and
+  still bounded by `maximum_step_duration`. A finer mesh takes the shorter
+  step its transport needs and covers the same history in more of them, where a
+  step count would have covered less of it. `MoistureTransportConfig`'s
+  `step_count` and `step_seconds` became `simulated_days`, with both derived
+  from the mesh: the count goes as the reciprocal of the cell width, because a
+  step may not carry moisture past a cell. `PlateEvolutionConfig::with_steps`
+  states a run as a product for the fixtures that pin what a given number of
+  steps does. See "Resolution independence" below for what the three slices
+  bought, measured.
 - The oceanic-peak presence draw became a density per unit area: a cell holds a
   peak with probability `density x cell area / default cell area`, so a floor
   carries the same seamounts per square kilometre on any mesh. A cell of
@@ -1987,3 +1999,132 @@ In priority order, each with the number that shows it.
 a model-time quantity that already means the same thing at any run length, and
 the clamp share is the symptom of a missing sink rather than of a wrong clamp.
 Erosion and unstacking are the next two slices; this one exists to size them.
+
+## Resolution independence
+
+Three slices replaced every config field that was a hop, a cell, an edge, or a
+step with the quantity it stood for: a model length on the unit sphere, a
+density per unit area, a fraction of the sphere, or model time. A stage
+converts once against its own mesh. The point is that the same settings
+describe the same world at any cell count, and this section is what that is
+worth measured rather than argued.
+
+### What was renamed
+
+Lengths, converted through `procgen_sphere_mesh::hops`:
+
+| Was | Is |
+| --- | --- |
+| `BaseElevationConfig::margin_width_hops` | `margin_width` |
+| `CoarseElevationConfig::smoothing_passes` | `smoothing_radius` |
+| `VolcanicArcFieldConfig::inland_offset_cells` | `inland_offset` |
+| `VolcanicArcFieldConfig::minimum_boundary_edges` | `minimum_boundary_length` |
+| `HotspotFieldConfig::maximum_trail_cells` | `maximum_trail_length` |
+| `HotspotFieldConfig::province_radius_hops` | `province_radius` |
+| `HotspotFieldConfig::province_rim_hops` | `province_rim` |
+| `PlateLifecycleConfig::suture_minimum_shared_edges` | `suture_minimum_shared_length` |
+
+`BoundaryEffect::depth`, `ContinentalRiftProfile::decay_depth`,
+`CratonFieldConfig`'s two distances, and
+`IsostaticAdjustmentConfig::maximum_boundary_distance` keep their names and
+changed type.
+
+Areas and densities: `SedimentaryBasinFieldConfig::minimum_cell_count` became
+`minimum_area_fraction`, `VolcanicArcFieldConfig::peak_density_divisor` became
+`peak_density` per unit area, and the oceanic-peak presence draw scales with a
+cell's own area.
+
+Times: `CrustBirthPriorConfig::ridge_less_age` became model time.
+`PlateEvolutionConfig::step_count` became `run_duration`, with the count
+derived as the run over the step. `MoistureTransportConfig`'s `step_count` and
+`step_seconds` became `simulated_days`, with the schedule derived from the
+mesh.
+
+`TRANSPORT_REACH_HOPS` and `MaterialTransportConfig::gap_radius` stay in hops,
+because they describe the raster rather than the world.
+
+### Measured
+
+The viewer's defaults at sampling seed 7, at three cell counts. The step
+duration is clamped to what transport can see, which is what the viewer's
+slider does when the cell count rises; at 262,144 that clamp is what raises the
+derived step count.
+
+| | 16,384 | 65,536 | 262,144 |
+| --- | --- | --- | --- |
+| land fraction | 0.297 | 0.273 | 0.261 |
+| plates | 86 | 77 | 80 |
+| ocean age p10 / p50 / p90 | 0.098 / 0.588 / 0.923 | 0.084 / 0.448 / 0.923 | 0.061 / 0.416 / 0.902 |
+| deformation clamp share | 2.13% | 1.32% | 1.36% |
+| collision belt | 529 km | 441 km | 441 km |
+| island arc belt | 176 km | 176 km | 176 km |
+| rift belt | 353 km | 265 km | 265 km |
+| evolution steps | 60 | 60 | 111 |
+| sutures | 41 | 44 | 49 |
+| arc peaks | 1691 | 2259 | 1140 |
+| seamounts | 62 | 57 | 22 |
+| abyssal hills | 912 | 1269 | 1884 |
+| basins | 68 | 37 | 20 |
+| flood basalt provinces | 2 | 2 | 0 |
+| moisture steps | 60 | 120 | 240 |
+| moisture range | 529 km | 265 km | 132 km |
+| whole pipeline | 1.0 s | 4.2 s | 32.5 s |
+
+Moisture range is the distance inland at which ocean-sourced precipitation
+falls to a tenth of its value one cell from the coast.
+
+A mesh makes its own world, so a count that reads the boundary network varies
+between meshes for reasons that are not resolution. The control is the same
+table at sampling seeds 7, 11, and 23:
+
+| | 16,384 | 65,536 |
+| --- | --- | --- |
+| land fraction | 0.297, 0.307, 0.278 | 0.273, 0.272, 0.270 |
+| plates | 86, 95, 73 | 77, 68, 91 |
+| arc peaks | 1691, 1713, 1635 | 2259, 2247, 2364 |
+| seamounts | 62, 43, 49 | 57, 57, 44 |
+| abyssal hills | 912, 1100, 887 | 1269, 1253, 1432 |
+
+### What this bought, and what it did not
+
+Independent, within what an irregular mesh allows:
+
+- Belt widths. A collision belt is 441 km at 65,536 and at 262,144, an island
+  arc 176 km at all three. At 16,384 the collision belt is 529 km because five
+  default hops is two and a half cells there and a belt is a whole number of
+  cell rings: the mesh cannot draw the width it was asked for, and rounds up.
+  This is the quantisation the conversion admits to, not a scaling error.
+- The evolution run. All three cover the same 0.84 of model time; 262,144
+  takes 111 steps rather than 60 because its transport needs a shorter one.
+  Before this work it would have run 60 steps and covered half the history.
+- The moisture run. 60, 120, and 240 steps over the same thirty days.
+- Deformation clamp share, ocean age p90, plate count, and suture count agree
+  to within the seed spread.
+- Seamount count: 43 to 62 at 16,384 against 44 to 57 at 65,536, which is one
+  range.
+
+Not independent, and why:
+
+- Moisture range halves with the cell width, 529 to 265 to 132 km. The CFL
+  clamp rather than the wind is what sets it: `maximum_transport_fraction_per_step`
+  binds over most of the world, so moisture crosses a fixed number of *cells*
+  per step whatever the wind does. Stating the run as days fixed how long the
+  weather runs, not how far it reaches. That is the next slice and this table
+  is what sizes it.
+- Arc peaks: 1691, 2259, 1140, against a seed spread of under five percent
+  within a resolution, so this is the mesh. Two causes. At 16,384 every arc
+  cell is a peak — the peak count equals the arc cell count exactly — because
+  a density of one per two default cells asks for more peaks than a coarse
+  mesh has cells to put them in, and a per-cell field saturates. And the arc
+  belt itself covers 0.103 of the sphere at 16,384 against 0.068 at 65,536,
+  because the belt is a whole number of cell rings around a boundary network
+  that is itself a different length.
+- Basin count falls by about half per fourfold cell count. The area threshold
+  is a fixed area, but what it measures is a connected component, and a finer
+  mesh resolves low-lying land into more and smaller pieces. Connectivity is
+  not something an area threshold can make resolution independent.
+- Land fraction drifts from 0.297 to 0.261. The seed spread at 16,384 is 0.029
+  and the gap to 65,536 is 0.02, so part of this is the world; the tight
+  clustering at 65,536 says part of it is not.
+- Province count is two, two, and zero, which is a hashed draw over twenty
+  hotspots. Small-number noise rather than a trend.

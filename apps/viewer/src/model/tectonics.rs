@@ -5,9 +5,9 @@ use procgen_tectonics::{
     BaseElevation, BaseElevationConfig, BoundaryClassification, BoundaryDeformation, CellCrust,
     CoarseElevation, CoarseElevationConfig, CrustBirthPrior, CrustBirthPriorConfig,
     CrustBirthPriorDiagnostics, CrustClassificationConfig, CrustClassificationDiagnostics,
-    FlowField, PlateEvolution, PlateEvolutionConfig, PlateEvolutionDiagnostics,
-    PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig, PlatePartition,
-    PlatePartitionConfig, SeafloorAge, classify_boundaries, classify_crust,
+    DEFAULT_STEP_DURATION, FlowField, PlateEvolution, PlateEvolutionConfig,
+    PlateEvolutionDiagnostics, PlateEvolutionInputs, PlateKinematics, PlateKinematicsConfig,
+    PlatePartition, PlatePartitionConfig, SeafloorAge, classify_boundaries, classify_crust,
     compose_coarse_elevation, derive_base_elevation, derive_crust_birth_prior, derive_seafloor_age,
     evolve_plate_ownership, generate_plate_kinematics, partition_plates,
 };
@@ -51,16 +51,19 @@ impl Default for TectonicsSettings {
             birth_prior: CrustBirthPriorConfig::default(),
             evolution: PlateEvolutionConfig {
                 seed: 7,
-                // The shortest run at which the age distribution, the plate
-                // count, and land have all reached the steady state they hold
-                // out to 240 steps. At `DEFAULT_STEP_DURATION` it is about
-                // 90 Myr, the time an ocean takes to open. Longer is not a
-                // longer version of the same world: deformation has no sink,
-                // so the share of cells pinned at `maximum_magnitude` grows
-                // without bound, and 60 steps is where it still touches about
-                // one cell in eighty. See "Run length" in
-                // `docs/plate-movement.md`.
-                step_count: 60,
+                // Sixty default steps: the shortest run at which the age
+                // distribution, the plate count, and land have all reached the
+                // steady state they hold out to 240. It is about 90 Myr, the
+                // time an ocean takes to open. Longer is not a longer version
+                // of the same world: deformation has no sink, so the share of
+                // cells pinned at `maximum_magnitude` grows without bound, and
+                // this is where it still touches about one cell in eighty. See
+                // "Run length" in `docs/plate-movement.md`.
+                //
+                // It is the run rather than a step count, so a finer mesh
+                // takes the shorter step its transport needs and covers the
+                // same 90 Myr in more of them.
+                run_duration: 60.0 * DEFAULT_STEP_DURATION,
                 ..Default::default()
             },
             base_elevation: BaseElevationConfig::default(),
@@ -262,7 +265,7 @@ mod tests {
 
     #[test]
     fn tectonics_runs_without_the_later_phases() {
-        let world = tectonics_world(tectonics_settings(128, 7));
+        let world = tectonics_world(tectonics_settings(128, 6));
 
         world.validate().unwrap();
         let [oceanic, continental] = world.cell_crust().cell_counts();

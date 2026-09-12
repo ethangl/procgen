@@ -44,9 +44,14 @@ pub struct PlateEvolutionConfig {
     /// kinematics seed so that re-rolling the drift does not re-roll the
     /// motion it starts from.
     pub seed: u64,
-    /// Number of complete boundary-classification, deformation, transport,
-    /// and pole-drift transitions.
-    pub step_count: usize,
+    /// Model time the whole run covers.
+    ///
+    /// It is the run, and the step count follows from it: a finer mesh needs
+    /// a shorter step to keep transport honest, and deriving the count means
+    /// that shorter step slices the same span of the world's history more
+    /// finely rather than covering less of it. A run stated as a step count
+    /// did the opposite, and a mesh twice as fine ran half the history.
+    pub run_duration: f32,
     /// Model time advanced per step. Every displacement is a speed times this
     /// duration measured against the mesh's cell width, so a finer mesh has a
     /// smaller cell width and moves more cells per step for the same motion,
@@ -72,11 +77,43 @@ pub struct PlateEvolutionConfig {
     pub lifecycle: PlateLifecycleConfig,
 }
 
+impl PlateEvolutionConfig {
+    /// Complete boundary-classification, deformation, transport, and
+    /// pole-drift transitions the run takes: its duration over one step,
+    /// rounded to the nearest whole step.
+    ///
+    /// A step duration of zero freezes the world and takes no steps at all,
+    /// which is the same world a run of zero duration leaves.
+    pub fn step_count(&self) -> usize {
+        if self.step_duration <= 0.0
+            || !self.step_duration.is_finite()
+            || !self.run_duration.is_finite()
+        {
+            return 0;
+        }
+        (self.run_duration / self.step_duration).round().max(0.0) as usize
+    }
+
+    /// This config over a run of exactly `step_count` steps of
+    /// `step_duration`.
+    ///
+    /// The fixtures pin what a given number of steps does, and a run stated as
+    /// that product lands on that number exactly. Nothing outside a test
+    /// should need it: a run is a duration.
+    pub fn with_steps(self, step_count: usize, step_duration: f32) -> Self {
+        Self {
+            run_duration: step_count as f32 * step_duration,
+            step_duration,
+            ..self
+        }
+    }
+}
+
 impl Default for PlateEvolutionConfig {
     fn default() -> Self {
         Self {
             seed: 0,
-            step_count: 5,
+            run_duration: 5.0 * DEFAULT_STEP_DURATION,
             step_duration: DEFAULT_STEP_DURATION,
             transport: MaterialTransportConfig::default(),
             deformation: BoundaryDeformationConfig::default(),
@@ -189,7 +226,9 @@ pub struct PlateEvolution {
     /// from the prior for crust that predates step zero; `None` is original
     /// continental crust that evolution never re-made.
     pub cell_birth: Vec<Option<f32>>,
-    /// Model time the run covered, `step_count * step_duration`. It rides with
+    /// Model time the run covered, the derived step count times the step. It
+    /// is what the run actually advanced, which a run duration that is not a
+    /// whole number of steps rounds away from. It rides with
     /// the result because every age read off `cell_birth` is measured against
     /// it, and a caller keeping its own copy of the step count could disagree
     /// with the run that produced these births.
@@ -234,7 +273,11 @@ pub fn evolve_plate_ownership(
     inputs: PlateEvolutionInputs<'_>,
     config: PlateEvolutionConfig,
 ) -> Result<PlateEvolution, PlateEvolutionError> {
-    if !config.step_duration.is_finite() || config.step_duration < 0.0 {
+    if !config.step_duration.is_finite()
+        || config.step_duration < 0.0
+        || !config.run_duration.is_finite()
+        || config.run_duration < 0.0
+    {
         return Err(PlateEvolutionError::InvalidStepDuration);
     }
     if !(0.0..=MAX_GAP_RADIUS).contains(&config.transport.gap_radius) {
@@ -292,7 +335,7 @@ pub fn evolve_plate_ownership(
     };
     let mut source_cell_count = 0;
 
-    for step in 0..config.step_count {
+    for step in 0..config.step_count() {
         source_cell_count += world.deform(&boundaries);
         let birth_time = step as f32 * config.step_duration;
         let active = diagnostics.record_transport(world.transport(&boundaries, birth_time));
@@ -319,7 +362,7 @@ pub fn evolve_plate_ownership(
         kinematics: world.kinematics,
         boundaries,
         cell_birth: world.cell_birth,
-        elapsed_time: config.step_count as f32 * config.step_duration,
+        elapsed_time: config.step_count() as f32 * config.step_duration,
         deformation: BoundaryDeformation {
             diagnostics: BoundaryDeformationDiagnostics::summarize(
                 &cell_deformation,
@@ -335,13 +378,13 @@ pub fn evolve_plate_ownership(
 mod tests {
     use super::*;
     use crate::step::half_axis_turn;
-    use crate::test_support::REFERENCE_STEP_DURATION;
     use crate::test_support::{
         EvolutionFixture, NO_LIFECYCLE, NO_POLE_DRIFT, birth_fingerprint, convergent_fixture,
         drift_config, empty_boundaries, evolution_fixture, fingerprint, forced_rift_fixture,
         opposed_kinematics, reference_evolution_config, two_plate_boundary_partition,
         two_plate_fixture,
     };
+    use crate::test_support::{REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION};
     use crate::{BoundaryClass, BoundaryDeformationError, CrustClass, subducting_fractions};
     use procgen_core::Vec3;
 
@@ -363,7 +406,7 @@ mod tests {
 
         assert_eq!(first, fixture.evolve(config));
         first.validate(&fixture.mesh).unwrap();
-        assert_eq!(first.diagnostics.active_step_count, config.step_count);
+        assert_eq!(first.diagnostics.active_step_count, config.step_count());
         // Every count here fell when speed became slab pull. Slab pull is a
         // multiplier below one for every plate short of saturation, and no
         // plate of this world is half trench, so the run moves about two
@@ -406,16 +449,47 @@ mod tests {
         );
     }
 
+    /// The run is the fact a config states and the count follows from it, so
+    /// slicing a run more finely covers the same history rather than less of
+    /// it. That is what a step count could not do.
+    #[test]
+    fn the_step_count_is_the_run_over_the_step() {
+        let config = PlateEvolutionConfig::default();
+        assert_eq!(config.step_count(), 5);
+        assert_eq!(
+            PlateEvolutionConfig {
+                step_duration: config.step_duration / 2.0,
+                ..config
+            }
+            .step_count(),
+            10
+        );
+        // A frozen world takes no steps at all, which is the world a run of
+        // no duration leaves too.
+        for frozen in [
+            PlateEvolutionConfig {
+                step_duration: 0.0,
+                ..config
+            },
+            PlateEvolutionConfig {
+                run_duration: 0.0,
+                ..config
+            },
+        ] {
+            assert_eq!(frozen.step_count(), 0);
+        }
+    }
+
     /// The reference run with no lifecycle to split or merge a plate, and a
     /// step short enough that no plate loses its last cell, so an id means the
     /// same plate either side of the run and a per-plate comparison is well
     /// defined.
     fn fixed_plate_set_config() -> PlateEvolutionConfig {
         PlateEvolutionConfig {
-            step_duration: REFERENCE_STEP_DURATION * 0.01,
             lifecycle: NO_LIFECYCLE,
             ..reference_evolution_config()
         }
+        .with_steps(REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION * 0.01)
     }
 
     /// The angle one step turns an axis through, recovered from the
@@ -438,9 +512,9 @@ mod tests {
         let config = PlateEvolutionConfig {
             pole_drift: NO_POLE_DRIFT,
             lifecycle: NO_LIFECYCLE,
-            step_duration: REFERENCE_STEP_DURATION * 0.01,
             ..reference_evolution_config()
-        };
+        }
+        .with_steps(REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION * 0.01);
         let evolution = fixture.evolve(config);
 
         // Nothing turns an axis and nothing splits a plate, so every plate
@@ -492,10 +566,7 @@ mod tests {
             motion.maximum_angular_speed * (1.0 + config.pole_drift.speed_drift_limit) + 1.0e-6;
 
         for step_count in [1, 2, 5, 13] {
-            let evolution = fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..config
-            });
+            let evolution = fixture.evolve(config.with_steps(step_count, config.step_duration));
             for (plate, rotation) in evolution.kinematics.angular_velocities.iter().enumerate() {
                 assert!(
                     rotation.length() <= ceiling,
@@ -523,12 +594,7 @@ mod tests {
             },
             ..drift_config(0)
         };
-        let run = |step_count| {
-            fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..config
-            })
-        };
+        let run = |step_count| fixture.evolve(config.with_steps(step_count, config.step_duration));
 
         // The one-cell oceanic plate is the one with a floor to subduct. The
         // run stops before the continent around it overrides that last cell,
@@ -577,10 +643,7 @@ mod tests {
         let per_step = per_step_angle(config);
 
         for step_count in [1, 3, 9] {
-            let evolution = fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..config
-            });
+            let evolution = fixture.evolve(config.with_steps(step_count, config.step_duration));
             let mut moved = false;
             for (plate, &rotation) in evolution.kinematics.angular_velocities.iter().enumerate() {
                 let wander = angle_between(fixture.kinematics.angular_velocities[plate], rotation);
@@ -609,11 +672,8 @@ mod tests {
         // the walk is free to bring an axis back to where it started, so the
         // end state alone would be a coin toss.
         let mut changed = false;
-        for step_count in 1..=config.step_count {
-            let run = fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..config
-            });
+        for step_count in 1..=config.step_count() {
+            let run = fixture.evolve(config.with_steps(step_count, config.step_duration));
             assert_eq!(run.partition, fixture.partition);
             changed |= convergent
                 .iter()
@@ -622,7 +682,7 @@ mod tests {
         assert!(
             changed,
             "no convergent edge held another regime over {} steps",
-            config.step_count
+            config.step_count()
         );
     }
 
@@ -633,10 +693,9 @@ mod tests {
     #[test]
     fn zero_steps_respeeds_the_plates_and_moves_nothing() {
         let fixture = evolution_fixture();
-        let evolution = fixture.evolve(PlateEvolutionConfig {
-            step_count: 0,
-            ..reference_evolution_config()
-        });
+        let evolution = fixture.evolve(
+            reference_evolution_config().with_steps(0, reference_evolution_config().step_duration),
+        );
 
         assert_eq!(evolution.partition, fixture.partition);
         assert_eq!(evolution.cell_birth, fixture.birth_prior.cell_birth);
@@ -729,31 +788,19 @@ mod tests {
     fn converging_material_crosses_the_boundary_at_the_step_its_speed_predicts() {
         let (fixture, config, steps) = convergent_fixture();
 
-        let waiting = fixture.evolve(PlateEvolutionConfig {
-            step_count: steps - 1,
-            ..config
-        });
+        let waiting = fixture.evolve(config.with_steps(steps - 1, config.step_duration));
         assert_eq!(waiting.diagnostics.owner_change_count, 0);
         assert_eq!(waiting.partition, fixture.partition);
 
-        let moved = fixture.evolve(PlateEvolutionConfig {
-            step_count: steps,
-            ..config
-        });
+        let moved = fixture.evolve(config.with_steps(steps, config.step_duration));
         assert_eq!(moved.diagnostics.owner_change_count, 1);
     }
 
     #[test]
     fn an_overridden_cell_takes_the_arriving_materials_crust() {
         let (fixture, config, steps) = convergent_fixture();
-        let before = fixture.evolve(PlateEvolutionConfig {
-            step_count: steps - 1,
-            ..config
-        });
-        let after = fixture.evolve(PlateEvolutionConfig {
-            step_count: steps,
-            ..config
-        });
+        let before = fixture.evolve(config.with_steps(steps - 1, config.step_duration));
+        let after = fixture.evolve(config.with_steps(steps, config.step_duration));
 
         let overridden = (0..fixture.mesh.cell_count())
             .find(|&cell| after.partition.cell_plates[cell] != before.partition.cell_plates[cell])
@@ -806,15 +853,16 @@ mod tests {
     #[test]
     fn a_step_too_short_to_leave_a_cell_changes_no_owner() {
         let fixture = evolution_fixture();
-        let evolution = fixture.evolve(PlateEvolutionConfig {
-            step_count: 4,
+        let evolution = fixture.evolve(
+            PlateEvolutionConfig {
+                // Transport is the subject; a rift would move ownership too.
+                lifecycle: NO_LIFECYCLE,
+                ..reference_evolution_config()
+            }
             // A hundredth of a cell width per step: every particle stays in
             // the cell it started in, so nothing can change hands.
-            step_duration: REFERENCE_STEP_DURATION * 0.01,
-            // Transport is the subject; a rift would move ownership too.
-            lifecycle: NO_LIFECYCLE,
-            ..reference_evolution_config()
-        });
+            .with_steps(4, REFERENCE_STEP_DURATION * 0.01),
+        );
 
         assert_eq!(evolution.partition, fixture.partition);
         assert_eq!(evolution.diagnostics.owner_change_count, 0);
@@ -834,10 +882,10 @@ mod tests {
         assert!(starting > 0);
 
         for step_count in [1, 2, 5, 13] {
-            let evolution = fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..reference_evolution_config()
-            });
+            let evolution = fixture.evolve(
+                reference_evolution_config()
+                    .with_steps(step_count, reference_evolution_config().step_duration),
+            );
             let diagnostics = evolution.diagnostics;
             assert_eq!(diagnostics.starting_continental_particle_count, starting);
             assert_eq!(

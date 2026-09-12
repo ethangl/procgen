@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn every_layer_builds_from_a_complete_world() {
-        let world = Fixture::new(128, 31).into_world();
+        let world = Fixture::new(128, 21).into_world();
 
         for &layer in DiagnosticLayer::ALL {
             if let Some(surface) = layer.surface() {

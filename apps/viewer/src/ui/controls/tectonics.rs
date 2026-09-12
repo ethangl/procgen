@@ -260,13 +260,19 @@ fn evolution_controls(
     kinematics: PlateKinematicsConfig,
     cell_count: usize,
 ) {
-    drag_value(
+    slider(
         ui,
-        "Steps",
-        &mut config.step_count,
-        EVOLUTION_STEP_RANGE,
-        1.0,
+        "Run duration",
+        &mut config.run_duration,
+        0.0..=DEFAULT_STEP_DURATION * *EVOLUTION_STEP_RANGE.end() as f32,
     );
+    // The run is what the user sets; the count is what this mesh and this step
+    // make of it, and it is worth seeing because it is what the phase costs.
+    ui.horizontal(|ui| {
+        ui.label("Steps");
+        ui.label(config.step_count().to_string())
+            .on_hover_text("the run duration over the step duration");
+    });
     // Zero freezes the world, and the top is as far as a step may carry
     // material before it outruns what transport can see. The fastest plate the
     // kinematics config could fit bounds it, because the plates are not fitted

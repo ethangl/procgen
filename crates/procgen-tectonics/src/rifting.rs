@@ -298,7 +298,7 @@ mod tests {
         EvolutionFixture, closed_arc_rift_fixture, empty_boundaries, failed_rift_fixture,
         forced_rift_fixture, half_oceanic_rift_fixture,
     };
-    use crate::{BoundaryClass, CrustClass, PlateEvolution, PlateEvolutionConfig};
+    use crate::{BoundaryClass, CrustClass, PlateEvolution};
 
     /// The plate the forced-rift fixture splits and the id its larger half
     /// keeps, and the id its smaller half takes.
@@ -319,10 +319,7 @@ mod tests {
     #[test]
     fn a_forced_rift_splits_one_plate_into_two_connected_continental_halves() {
         let (fixture, config) = forced_rift_fixture();
-        let evolution = fixture.evolve(PlateEvolutionConfig {
-            step_count: 1,
-            ..config
-        });
+        let evolution = fixture.evolve(config.with_steps(1, config.step_duration));
 
         assert_eq!(evolution.diagnostics.rift_count, 1);
         assert_eq!(evolution.diagnostics.failed_rift_count, 0);
@@ -354,10 +351,7 @@ mod tests {
     #[test]
     fn a_forced_rift_opens_a_ridge_that_makes_oceanic_crust() {
         let (fixture, config) = forced_rift_fixture();
-        let opened = fixture.evolve(PlateEvolutionConfig {
-            step_count: 1,
-            ..config
-        });
+        let opened = fixture.evolve(config.with_steps(1, config.step_duration));
         let edges = rift_edges(&fixture, &opened);
         assert!(!edges.is_empty(), "the rift left no boundary");
 

@@ -439,7 +439,7 @@ mod tests {
         fs::create_dir_all(&cache_dir).unwrap();
         fs::write(cache_dir.join("world.bin"), b"not a snapshot").unwrap();
 
-        let app = app_with(cache, test_settings(32, 43));
+        let app = app_with(cache, test_settings(32, 4));
 
         assert!(matches!(
             app.world().resource::<GenerationStatus>(),
@@ -456,7 +456,7 @@ mod tests {
         let fixture = Fixture::generate(cached_settings);
         cache.store(fixture.complete()).unwrap();
 
-        let app = app_with(cache, test_settings(48, 42));
+        let app = app_with(cache, test_settings(48, 2));
 
         assert_eq!(
             *app.world().resource::<GenerationSettings>(),
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn generating_one_phase_reuses_the_upstream_results_in_memory() {
         let (cache_dir, cache) = test_cache("phase-reuse");
-        let mut app = app_with(cache, test_settings(32, 51));
+        let mut app = app_with(cache, test_settings(32, 5));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
         // A later tectonics edit must not reach a geology-only run.
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn regenerating_tectonics_reuses_the_mesh_of_an_unchanged_sampling_config() {
         let (cache_dir, cache) = test_cache("mesh-reuse");
-        let mut app = app_with(cache, test_settings(128, 57));
+        let mut app = app_with(cache, test_settings(128, 25));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
         assert!(ran_delaunay(&app), "the first run has no mesh to reuse");
 
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn regenerating_tectonics_rebuilds_the_mesh_of_a_changed_sampling_config() {
         let (cache_dir, cache) = test_cache("mesh-rebuild");
-        let mut app = app_with(cache, test_settings(128, 58));
+        let mut app = app_with(cache, test_settings(128, 28));
         generate(&mut app, GenerateRequest::Phase(Phase::Tectonics));
 
         // The whole tectonics profile rather than the cell count alone: the
@@ -602,7 +602,7 @@ mod tests {
         let previous = Fixture::generate(test_settings(32, 60));
         cache.store(previous.complete()).unwrap();
         let mut app = app_with(cache.clone(), GenerationSettings::default());
-        let requested = test_settings(64, 60);
+        let requested = test_settings(64, 7);
         app.world_mut().insert_resource(requested);
 
         generate(&mut app, GenerateRequest::AllPhases);

@@ -85,7 +85,8 @@ Completed foundations:
   trenches the plate then has, times a hashed drift factor bounded to a band
   around one. Boundaries therefore change regime during a run, and a plate
   that gains a trench speeds up. It repeatedly reclassifies current boundaries
-  and, for a configured step count, moves the crust itself: the material lives
+  and, over a configured run duration sliced into as many steps as the mesh
+  needs, moves the crust itself: the material lives
   in particles, one per cell before step zero, each rotating rigidly with its
   plate, and every cell then takes
   whichever particle won it. Continental material covers ocean floor, a cell

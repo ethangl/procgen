@@ -689,15 +689,14 @@ mod tests {
         maximum_magnitude: f32,
     ) -> (EvolutionFixture, PlateEvolutionConfig) {
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
+        // Short enough that no particle leaves its own cell: two cells of
+        // this coarse mesh have centres 0.0034 apart, and a cell that sampled
+        // its neighbour would raise a different increment on the next step.
+        // Two to the minus fourteen, with a full deformation time of ten times
+        // it, so the tenth of a profile a step raises is exactly a tenth and
+        // the assertions below can be exact.
+        const STEP_DURATION: f32 = 0.000_061_035_156;
         let config = PlateEvolutionConfig {
-            step_count,
-            // Short enough that no particle leaves its own cell: two cells of
-            // this coarse mesh have centres 0.0034 apart, and a cell that
-            // sampled its neighbour would raise a different increment on the
-            // next step. Two to the minus fourteen, with a full deformation
-            // time of ten times it, so the tenth of a profile a step raises
-            // is exactly a tenth and the assertions below can be exact.
-            step_duration: 0.000_061_035_156,
             deformation: BoundaryDeformationConfig {
                 // A tenth of the profile per step, and every boundary here
                 // closes far faster than this, so every source saturates.
@@ -711,7 +710,8 @@ mod tests {
             pole_drift: NO_POLE_DRIFT,
             lifecycle: NO_LIFECYCLE,
             ..PlateEvolutionConfig::default()
-        };
+        }
+        .with_steps(step_count, STEP_DURATION);
         (fixture, config)
     }
 
@@ -723,10 +723,7 @@ mod tests {
         assert_eq!(single[fixture.mesh.edges[0].cells[0]], 0.05);
 
         for step_count in 1..=6 {
-            let run = fixture.evolve(PlateEvolutionConfig {
-                step_count,
-                ..config
-            });
+            let run = fixture.evolve(config.with_steps(step_count, config.step_duration));
             assert_eq!(
                 run.partition, fixture.partition,
                 "nothing may move, or the increments would differ between steps"
@@ -813,13 +810,13 @@ mod tests {
     fn a_boundary_that_has_moved_on_leaves_its_deformation_behind() {
         let (fixture, config, steps) = convergent_fixture();
         let config = PlateEvolutionConfig {
-            step_count: steps,
             deformation: BoundaryDeformationConfig {
                 full_deformation_time: 1.0,
                 ..BoundaryDeformationConfig::default()
             },
             ..config
-        };
+        }
+        .with_steps(steps, config.step_duration);
         let run = fixture.evolve(config);
 
         // The overridden cell was the whole of its plate, so the boundary that

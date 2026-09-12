@@ -5,7 +5,10 @@ selected seasonal temperature, final adjusted elevation, and coarse tangent
 wind field. It is a pure generation stage: every run begins with an empty
 atmospheric column and retains no history from an earlier run.
 
-The solver uses a configured number of fixed-duration explicit steps. Humidity
+The solver runs a configured number of simulated days as explicit steps of
+equal duration, as many of them as the mesh needs: the count goes as the
+reciprocal of the cell width, because a step may not carry moisture past a
+cell. Humidity
 is represented as column water in `kg/m2`; multiplication by spherical cell area
 gives the conserved quantity used internally. Each step performs four bounded
 operations in stable cell and edge order:
@@ -38,8 +41,8 @@ evaporation - final atmospheric humidity - precipitation
 With an initially empty atmosphere, that residual should remain near floating-
 point roundoff. Transport itself neither creates nor removes water.
 
-`MoistureTransportConfig::EARTHLIKE` owns convenient values for step duration,
-capacity, temperature response, evaporation and rainfall rates, orographic
+`MoistureTransportConfig::EARTHLIKE` owns convenient values for simulated
+days, capacity, temperature response, evaporation and rainfall rates, orographic
 conversion and bound, and the transport bound. `Planet` owns the physical land
 elevation scale used by this and future terrain-aware stages. The algorithm
 contains no built-in Earth temperature, humidity, or precipitation constants.

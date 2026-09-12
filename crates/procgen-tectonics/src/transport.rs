@@ -871,14 +871,13 @@ mod tests {
                 birth_prior: &birth_prior,
             },
             PlateEvolutionConfig {
-                step_count: 40,
-                // One cell width per step at the unit speed above, so the cap
-                // crosses forty cells over the run.
-                step_duration: mean_cell_width(mesh.radius, mesh.cell_count()),
                 pole_drift: NO_POLE_DRIFT,
                 lifecycle: NO_LIFECYCLE,
                 ..PlateEvolutionConfig::default()
-            },
+            }
+            // One cell width per step at the unit speed above, so the cap
+            // crosses forty cells over the run.
+            .with_steps(40, mean_cell_width(mesh.radius, mesh.cell_count())),
         )
         .unwrap();
 

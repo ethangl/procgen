@@ -177,13 +177,12 @@ fn cryosphere_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
 
 fn moisture_transport_summary(ui: &mut egui::Ui, world: &ClimateWorld) {
     let diagnostics = &world.moisture_transport.diagnostics;
-    let config = world.config.coupling.moisture_transport;
     stat_grid(ui, "Moisture and precipitation", "moisture", |ui| {
-        stat(ui, "Steps", config.step_count);
+        stat(ui, "Steps", diagnostics.schedule.step_count);
         stat(
             ui,
             "Step duration",
-            format!("{:.1} h", config.step_seconds / 3_600.0),
+            format!("{:.1} h", diagnostics.schedule.step_seconds / 3_600.0),
         );
         stat(
             ui,

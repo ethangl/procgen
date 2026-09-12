@@ -388,7 +388,7 @@ struct_codec! {
     MaterialTransportConfig { gap_radius }
     PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_length }
-    PlateEvolutionConfig { seed, step_count, step_duration, transport, deformation, pole_drift, lifecycle }
+    PlateEvolutionConfig { seed, run_duration, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
     BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation }
     BoundaryEffect { offset, depth }
@@ -408,7 +408,8 @@ struct_codec! {
     RadiativeEquilibriumConfig { emissivity }
     SeasonalThermalConfig { land_heat_capacity, ocean_heat_capacity, orbital_period_days }
     AtmosphericCirculationConfig { surface_drag_per_second, terrain_steering, maximum_wind_speed_meters_per_second }
-    MoistureTransportConfig { step_count, step_seconds, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
+    MoistureSchedule { step_count, step_seconds }
+    MoistureTransportConfig { simulated_days, reference_capacity_kg_per_m2, reference_temperature_kelvin, capacity_temperature_sensitivity_per_kelvin, minimum_capacity_kg_per_m2, maximum_capacity_kg_per_m2, ocean_evaporation_rate_per_second, rainfall_rate_per_second, orographic_coefficient_per_meter, maximum_orographic_fraction_per_step, maximum_transport_fraction_per_step }
     CryosphereConfig { maximum_iterations, closure_tolerance, snowfall_temperature_kelvin, melt_temperature_kelvin, full_snow_cover_kg_per_m2, seasonal_snow_capacity_kg_per_m2, snow_melt_kg_per_m2_per_kelvin_day, land_ice_melt_kg_per_m2_per_kelvin_day, sea_ice_growth_fraction_per_kelvin_day, sea_ice_melt_fraction_per_kelvin_day }
     ClimateCouplingConfig { maximum_iterations, under_relaxation, albedo_tolerance, temperature_tolerance_kelvin, precipitation_tolerance_kg_per_m2_per_day, cover_fraction_tolerance, albedo, radiative_equilibrium, seasonal_thermal, atmospheric_circulation, moisture_transport, cryosphere }
     TectonicsSettings { fibonacci, plates, crust, kinematics, birth_prior, evolution, base_elevation, elevation }
@@ -464,7 +465,7 @@ struct_codec! {
     SeasonalThermalResponse { selected_temperature_kelvin, annual_temperature_samples_kelvin, annual_sample_count, annual_mean_temperature_kelvin, annual_minimum_temperature_kelvin, annual_maximum_temperature_kelvin, annual_amplitude_kelvin, diagnostics }
     AtmosphericCirculationDiagnostics { wind_speed_meters_per_second, temperature_gradient_kelvin_per_radian, pressure_gradient_acceleration_meters_per_second_squared, coriolis_parameter_per_second, terrain_steering_fraction, calm_cell_count, terrain_steered_cell_count, speed_capped_cell_count, maximum_tangency_error_meters_per_second }
     AtmosphericCirculation { cell_wind_meters_per_second, cell_wind_speed_meters_per_second, cell_temperature_gradient_kelvin_per_radian, cell_pressure_gradient_acceleration_meters_per_second_squared, cell_coriolis_parameter_per_second, cell_terrain_steering_fraction, diagnostics }
-    MoistureTransportDiagnostics { humidity_kg_per_m2, moisture_capacity_kg_per_m2, evaporation_kg_per_m2_per_day, precipitation_kg_per_m2_per_day, condensation_kg_per_m2_per_day, orographic_precipitation_kg_per_m2_per_day, simulated_days, ocean_cell_count, precipitating_cell_count, orographic_cell_count, maximum_orographic_fraction_per_step, mass_balance_error_kg_per_m2 }
+    MoistureTransportDiagnostics { humidity_kg_per_m2, moisture_capacity_kg_per_m2, evaporation_kg_per_m2_per_day, precipitation_kg_per_m2_per_day, condensation_kg_per_m2_per_day, orographic_precipitation_kg_per_m2_per_day, simulated_days, schedule, ocean_cell_count, precipitating_cell_count, orographic_cell_count, maximum_orographic_fraction_per_step, mass_balance_error_kg_per_m2 }
     MoistureTransport { cell_humidity_kg_per_m2, cell_moisture_capacity_kg_per_m2, cell_evaporation_kg_per_m2_per_day, cell_precipitation_kg_per_m2_per_day, cell_condensation_kg_per_m2_per_day, cell_orographic_precipitation_kg_per_m2_per_day, diagnostics }
     CryosphereDiagnostics { selected_snowfall_kg_per_m2_per_day, selected_melt_kg_per_m2_per_day, selected_snow_cover_fraction, land_ice_cover_fraction, selected_sea_ice_cover_fraction, annual_snowfall_kg_per_m2, annual_snow_melt_kg_per_m2, annual_land_ice_accumulation_kg_per_m2, annual_land_ice_ablation_kg_per_m2, annual_sea_ice_growth_fraction, annual_sea_ice_melt_fraction, land_cell_count, ocean_cell_count, snow_covered_cell_count, land_ice_cell_count, sea_ice_cell_count, maximum_iterations_used, maximum_snow_closure_error_kg_per_m2, maximum_sea_ice_closure_error, snow_mass_balance_error_kg_per_m2, land_ice_mass_balance_kg_per_m2, sea_ice_cover_balance_error }
     Cryosphere { cell_snowfall_kg_per_m2_per_day, cell_melt_kg_per_m2_per_day, cell_snow_cover_fraction, cell_land_ice_cover_fraction, cell_sea_ice_cover_fraction, diagnostics }
@@ -730,7 +731,7 @@ mod tests {
 
     #[test]
     fn invalid_topology_sparse_indices_and_field_lengths_are_rejected() {
-        let mut fixture = Fixture::new(32, 21);
+        let mut fixture = Fixture::new(32, 3);
         let cell_count = fixture.tectonics.voronoi.cell_count();
         fixture.tectonics.voronoi.edges[0].cells[0] = cell_count;
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
@@ -743,7 +744,7 @@ mod tests {
         fixture.geology.hotspots.hotspots[0].plate = fixture.tectonics.plates.plate_count;
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 
-        let mut fixture = Fixture::new(32, 17);
+        let mut fixture = Fixture::new(32, 1);
         fixture.climate.cryosphere.cell_snow_cover_fraction.pop();
         assert!(decode_snapshot(&encode_snapshot(fixture.complete())).is_err());
 

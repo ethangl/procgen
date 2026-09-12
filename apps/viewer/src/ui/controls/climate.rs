@@ -8,11 +8,10 @@ use procgen_climate::{
     CRYOSPHERE_ITERATION_LIMIT_RANGE, CRYOSPHERE_MASS_RANGE, CRYOSPHERE_RATE_RANGE,
     CRYOSPHERE_TEMPERATURE_RANGE, ClimateCouplingConfig, CryosphereConfig, DRAG_RATE_RANGE,
     MAXIMUM_WIND_SPEED_RANGE, MOISTURE_CAPACITY_RANGE, MOISTURE_RATE_RANGE,
-    MOISTURE_STEP_COUNT_RANGE, MOISTURE_STEP_SECONDS_RANGE, MoistureTransportConfig,
-    ORBITAL_PERIOD_DAYS_RANGE, OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE,
-    RadiativeEquilibriumConfig, SeasonalThermalConfig, SolarForcingConfig,
-    TEMPERATURE_SENSITIVITY_RANGE, TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE,
-    TRANSPORT_FRACTION_RANGE,
+    MOISTURE_SIMULATED_DAYS_RANGE, MoistureTransportConfig, ORBITAL_PERIOD_DAYS_RANGE,
+    OROGRAPHIC_COEFFICIENT_RANGE, REFERENCE_TEMPERATURE_KELVIN_RANGE, RadiativeEquilibriumConfig,
+    SeasonalThermalConfig, SolarForcingConfig, TEMPERATURE_SENSITIVITY_RANGE,
+    TERRAIN_STEERING_RANGE, THERMAL_CAPACITY_RANGE, TRANSPORT_FRACTION_RANGE,
 };
 use procgen_planet::{
     ATMOSPHERIC_SPECIFIC_GAS_CONSTANT_RANGE, MAXIMUM_LAND_ELEVATION_METERS_RANGE,
@@ -146,17 +145,10 @@ fn atmospheric_circulation_controls(ui: &mut egui::Ui, config: &mut AtmosphericC
 fn moisture_transport_controls(ui: &mut egui::Ui, config: &mut MoistureTransportConfig) {
     drag_value(
         ui,
-        "Steps",
-        &mut config.step_count,
-        MOISTURE_STEP_COUNT_RANGE,
+        "Simulated days",
+        &mut config.simulated_days,
+        MOISTURE_SIMULATED_DAYS_RANGE,
         1.0,
-    );
-    drag_value(
-        ui,
-        "Step seconds",
-        &mut config.step_seconds,
-        MOISTURE_STEP_SECONDS_RANGE,
-        3_600.0,
     );
     drag_value(
         ui,
