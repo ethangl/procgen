@@ -128,11 +128,13 @@ pub fn evolve_plate_ownership(
     inputs.kinematics.validate(inputs.partition)?;
     inputs.boundaries.validate(mesh)?;
     inputs.birth_prior.validate(mesh)?;
-    // Last, because it reads both a validated drift band and a validated
-    // motion config: a nonsensical band would otherwise report itself as a
-    // step that outruns the reach it inflates. The bound is the configured
-    // ceiling rather than the fastest plate the inputs hold, because every
-    // respeed clamps to that ceiling and a plate that gains a slab reaches it.
+    // The one rule a config cannot be held to on its own, because it reads
+    // the mesh. It is last because it also reads a validated drift band and a
+    // validated motion config: a nonsensical band would otherwise report
+    // itself as a step that outruns the reach it inflates. The bound is the
+    // configured ceiling rather than the fastest plate the inputs hold,
+    // because every respeed clamps to that ceiling and a plate that gains a
+    // slab reaches it.
     if config.step_duration
         > maximum_step_duration(
             inputs.kinematics_config.maximum_angular_speed,
@@ -142,19 +144,6 @@ pub fn evolve_plate_ownership(
         )
     {
         return Err(PlateEvolutionError::StepOutrunsReach);
-    }
-    // Beside the step bound, because it is the same kind of rule: a step that
-    // is not shorter than the sink's time constant would keep none of the
-    // relief it carries, or invert it, rather than decaying it.
-    if config.step_duration >= config.deformation.erosion_time {
-        return Err(PlateEvolutionError::StepOutrunsErosion);
-    }
-    // And beside that one for the same reason: a step that is not shorter
-    // than the reversion time would carry a plate past the motion it started
-    // from rather than back toward it, which is a different rule and not a
-    // coarse version of this one.
-    if config.step_duration >= config.pole_drift.reversion_time {
-        return Err(PlateEvolutionError::StepOutrunsReversion);
     }
 
     let mut world = EvolvingWorld::new(mesh, inputs, config);
@@ -233,8 +222,7 @@ mod tests {
     };
     use crate::test_support::{REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION};
     use crate::{
-        BoundaryClass, BoundaryDeformationConfig, BoundaryDeformationError, CrustClass,
-        MAX_GAP_RADIUS, MaterialTransportConfig, PoleDriftConfig, subducting_fractions,
+        BoundaryClass, BoundaryDeformationConfig, CrustClass, PoleDriftConfig, subducting_fractions,
     };
     use procgen_core::Vec3;
 
@@ -823,167 +811,26 @@ mod tests {
         }
     }
 
+    /// Everything a run checks that the config alone cannot answer. The
+    /// config-only rules are `evolution_config`'s, and its own test block
+    /// holds them; a run reaching them at all is covered by the one rejection
+    /// below that travels through `validate`.
     #[test]
-    fn rejects_invalid_configuration_and_mismatched_inputs() {
+    fn rejects_mismatched_inputs() {
         let fixture = evolution_fixture();
-        for step_duration in [f32::NAN, -1.0] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        step_duration,
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::InvalidStepDuration)
-            );
-        }
-        for gap_radius in [f32::NAN, -1.0, MAX_GAP_RADIUS + 0.1] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        transport: MaterialTransportConfig { gap_radius },
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::InvalidGapRadius)
-            );
-        }
-        for pole_drift in [
-            PoleDriftConfig {
-                axis_drift_rate: -1.0,
-                ..PoleDriftConfig::default()
-            },
-            PoleDriftConfig {
-                speed_drift_rate: f32::NAN,
-                ..PoleDriftConfig::default()
-            },
-        ] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        pole_drift,
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::InvalidPoleDriftRate),
-                "{pole_drift:?}"
-            );
-        }
-        for reversion_time in [0.0, -1.0, f32::NAN] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        pole_drift: PoleDriftConfig {
-                            reversion_time,
-                            ..PoleDriftConfig::default()
-                        },
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::InvalidReversionTime),
-                "{reversion_time}"
-            );
-        }
-        // A step as long as the reversion time would cross the starting
-        // motion rather than approach it, and a longer one would cross it and
-        // come out further away than it went in.
-        for reversion_time in [REFERENCE_STEP_DURATION, REFERENCE_STEP_DURATION / 2.0] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        pole_drift: PoleDriftConfig {
-                            reversion_time,
-                            ..reference_evolution_config().pole_drift
-                        },
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::StepOutrunsReversion),
-                "{reversion_time}"
-            );
-        }
-        for speed_drift_limit in [-0.1, 1.5, f32::NAN] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        pole_drift: PoleDriftConfig {
-                            speed_drift_limit,
-                            ..PoleDriftConfig::default()
-                        },
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::InvalidSpeedDriftLimit),
-                "{speed_drift_limit}"
-            );
-        }
+        // One config-only rejection, to pin that a run still runs the config
+        // rules before it touches the inputs at all.
         assert_eq!(
             evolve_plate_ownership(
                 &fixture.mesh,
                 fixture.inputs(),
                 PlateEvolutionConfig {
-                    deformation: BoundaryDeformationConfig {
-                        full_deformation_time: 0.0,
-                        ..BoundaryDeformationConfig::default()
-                    },
+                    step_duration: f32::NAN,
                     ..reference_evolution_config()
                 }
             ),
-            Err(PlateEvolutionError::Deformation(
-                BoundaryDeformationError::InvalidConfig
-            ))
+            Err(PlateEvolutionError::InvalidStepDuration)
         );
-        for erosion_time in [0.0, -1.0, f32::NAN] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        deformation: BoundaryDeformationConfig {
-                            erosion_time,
-                            ..BoundaryDeformationConfig::default()
-                        },
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::Deformation(
-                    BoundaryDeformationError::InvalidErosionTime
-                )),
-                "{erosion_time}"
-            );
-        }
-        // The step and the sink are each valid alone; what is rejected is a
-        // step that is not shorter than the time constant, which would keep
-        // none of the relief it carries or invert it.
-        for erosion_time in [REFERENCE_STEP_DURATION, REFERENCE_STEP_DURATION * 0.5] {
-            assert_eq!(
-                evolve_plate_ownership(
-                    &fixture.mesh,
-                    fixture.inputs(),
-                    PlateEvolutionConfig {
-                        deformation: BoundaryDeformationConfig {
-                            erosion_time,
-                            ..reference_evolution_config().deformation
-                        },
-                        ..reference_evolution_config()
-                    }
-                ),
-                Err(PlateEvolutionError::StepOutrunsErosion),
-                "{erosion_time}"
-            );
-        }
 
         let short_prior = CrustBirthPrior {
             cell_birth: fixture.birth_prior.cell_birth[1..].to_vec(),

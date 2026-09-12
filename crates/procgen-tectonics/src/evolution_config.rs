@@ -129,12 +129,193 @@ pub(crate) fn validate(config: &PlateEvolutionConfig) -> Result<(), PlateEvoluti
     }
     boundary_profiles::validate_config(config.deformation)?;
     lifecycle::validate_config(config.lifecycle)?;
+    // Last, and together, because each of these reads a time the rules above
+    // have already held to be a time at all. Both say the same thing about a
+    // step: it may not be so long that a decay toward a value overshoots it
+    // instead of approaching it. They are config-only like everything else
+    // here, so they sit beside the rules that check the same two fields on
+    // their own rather than in the run that reads a mesh.
+    if config.step_duration >= config.deformation.erosion_time {
+        return Err(PlateEvolutionError::StepOutrunsErosion);
+    }
+    if config.step_duration >= config.pole_drift.reversion_time {
+        return Err(PlateEvolutionError::StepOutrunsReversion);
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BoundaryDeformationError, PoleDriftConfig};
+
+    /// Every rule here reads the config alone, so the config alone is what
+    /// the assertions pass. A run adds one more rule on top of these, the
+    /// reach bound, and that one needs a mesh; `reach.rs` owns its test.
+    fn rejects(config: PlateEvolutionConfig) -> PlateEvolutionError {
+        validate(&config).expect_err("the config must be rejected")
+    }
+
+    #[test]
+    fn rejects_a_step_or_a_run_that_is_not_a_duration() {
+        for (step_duration, run_duration) in [
+            (f32::NAN, 1.0),
+            (-1.0, 1.0),
+            (1.0, f32::INFINITY),
+            (1.0, -1.0),
+        ] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    step_duration,
+                    run_duration,
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::InvalidStepDuration,
+                "{step_duration} over {run_duration}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_pole_drift_that_is_not_a_perturbation() {
+        for pole_drift in [
+            PoleDriftConfig {
+                axis_drift_rate: -1.0,
+                ..PoleDriftConfig::default()
+            },
+            PoleDriftConfig {
+                speed_drift_rate: f32::NAN,
+                ..PoleDriftConfig::default()
+            },
+        ] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    pole_drift,
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::InvalidPoleDriftRate,
+                "{pole_drift:?}"
+            );
+        }
+        for speed_drift_limit in [-0.1, 1.5, f32::NAN] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    pole_drift: PoleDriftConfig {
+                        speed_drift_limit,
+                        ..PoleDriftConfig::default()
+                    },
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::InvalidSpeedDriftLimit,
+                "{speed_drift_limit}"
+            );
+        }
+    }
+
+    /// The reversion time on its own, and then against the step. Infinity is
+    /// the value that turns the pull off, so it has to pass both.
+    #[test]
+    fn rejects_a_reversion_the_step_would_overshoot() {
+        for reversion_time in [0.0, -1.0, f32::NAN] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    pole_drift: PoleDriftConfig {
+                        reversion_time,
+                        ..PoleDriftConfig::default()
+                    },
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::InvalidReversionTime,
+                "{reversion_time}"
+            );
+        }
+        // A step as long as the reversion time would cross the starting
+        // motion rather than approach it, and a longer one would come out
+        // further away than it went in.
+        for reversion_time in [DEFAULT_STEP_DURATION, DEFAULT_STEP_DURATION * 0.5] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    pole_drift: PoleDriftConfig {
+                        reversion_time,
+                        ..PoleDriftConfig::default()
+                    },
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::StepOutrunsReversion,
+                "{reversion_time}"
+            );
+        }
+        assert!(
+            validate(&PlateEvolutionConfig {
+                pole_drift: PoleDriftConfig {
+                    reversion_time: f32::INFINITY,
+                    ..PoleDriftConfig::default()
+                },
+                ..PlateEvolutionConfig::default()
+            })
+            .is_ok()
+        );
+    }
+
+    /// The same two rules for the sink's time constant, which is the other
+    /// time a step may not outrun. The deformation config's own errors arrive
+    /// through `From` rather than as a second copy of them.
+    #[test]
+    fn rejects_an_erosion_time_the_step_would_outrun() {
+        assert_eq!(
+            rejects(PlateEvolutionConfig {
+                deformation: BoundaryDeformationConfig {
+                    full_deformation_time: 0.0,
+                    ..BoundaryDeformationConfig::default()
+                },
+                ..PlateEvolutionConfig::default()
+            }),
+            PlateEvolutionError::Deformation(BoundaryDeformationError::InvalidConfig)
+        );
+        for erosion_time in [0.0, -1.0, f32::NAN] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    deformation: BoundaryDeformationConfig {
+                        erosion_time,
+                        ..BoundaryDeformationConfig::default()
+                    },
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::Deformation(BoundaryDeformationError::InvalidErosionTime),
+                "{erosion_time}"
+            );
+        }
+        // The step and the sink are each valid alone; what is rejected is a
+        // step that is not shorter than the time constant, which would keep
+        // none of the relief it carries or invert it.
+        for erosion_time in [DEFAULT_STEP_DURATION, DEFAULT_STEP_DURATION * 0.5] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    deformation: BoundaryDeformationConfig {
+                        erosion_time,
+                        ..BoundaryDeformationConfig::default()
+                    },
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::StepOutrunsErosion,
+                "{erosion_time}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_gap_radius_outside_the_search() {
+        for gap_radius in [f32::NAN, -1.0, MAX_GAP_RADIUS + 0.1] {
+            assert_eq!(
+                rejects(PlateEvolutionConfig {
+                    transport: MaterialTransportConfig { gap_radius },
+                    ..PlateEvolutionConfig::default()
+                }),
+                PlateEvolutionError::InvalidGapRadius,
+                "{gap_radius}"
+            );
+        }
+    }
 
     /// The run is the fact a config states and the count follows from it, so
     /// slicing a run more finely covers the same history rather than less of
