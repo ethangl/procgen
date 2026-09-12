@@ -386,7 +386,7 @@ struct_codec! {
     CrustClassificationConfig { continental_fraction, nucleus_count, growth_roughness, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor, trenchless_speed_factor, slab_saturation_fraction }
     MaterialTransportConfig { gap_radius }
-    PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
+    PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit, reversion_time }
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_length }
     PlateEvolutionConfig { seed, run_duration, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }

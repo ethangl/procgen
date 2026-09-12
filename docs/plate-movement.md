@@ -2027,15 +2027,19 @@ In priority order, each with the number that shows it.
    than slower, because merging leaves fewer parcels to fill cells with, so
    the crowding this item is really about is still open.*
 
-4. **The drift band shapes a long run rather than bounding it.**
-   `speed_drift_limit` of 0.5 was set against a fifteen-step walk whose
-   unclamped excursion is expected to be about a quarter. The expectation goes
-   as `0.061 * sqrt(n)`, so it is about a half at 60 steps and about 0.95 at
-   240: the clamp is what holds the speed distribution together on a long run,
-   not a bound on its tail. The distribution does not in fact run away — the
-   median plate speed holds near 0.4 at every length at both worlds — which is
-   the clamp doing that work. Whoever next touches the speed rule should decide whether
-   that is wanted.
+4. **The drift band shapes a long run rather than bounding it.** *Resolved;
+   see "Mean-reverting drift".* `speed_drift_limit` of 0.5 was set against a
+   fifteen-step walk whose unclamped excursion is expected to be about a
+   quarter. The expectation goes as `0.061 * sqrt(n)`, so it is about a half at
+   60 steps and about 0.95 at 240: the clamp is what holds the speed
+   distribution together on a long run, not a bound on its tail. The
+   distribution does not in fact run away — the median plate speed holds near
+   0.4 at every length at both worlds — which is the clamp doing that work.
+   Both walks now revert toward the motion the run started from over one time
+   constant, which settles the speed spread at 0.12 at every length and leaves
+   no plate against the band. The axis walk turned out to be the larger half of
+   the same problem: it had no bound at all, and by sixty steps the plates had
+   lost the flow field they were fitted to.
 
 ### Not changed here, and why
 
@@ -2731,3 +2735,184 @@ here: the continental area that falls because area times thickness is
 conserved, the plateau that never wears down once its boundary moves on, and
 the handful of actively fed columns that still outrun a two-parcel drain.
 
+
+## Mean-reverting drift
+
+"Run length" left one item open: the drift band shaped a long run rather than
+bounding it. This slice answers it by giving both drift walks a memory. Each
+plate's speed factor and each plate's rotation axis are pulled back toward the
+value the run began with, by one fraction `step_duration / reversion_time` a
+step, after that step's hashed move. `PoleDriftConfig::reversion_time` defaults
+to eleven default steps, 0.154 model time; infinity turns the pull off and
+reproduces the unreverted walk exactly.
+
+### The problem was the axis, not the band
+
+The band was the item on the list, and it is the smaller half of the answer.
+`speed_drift_limit` of 0.5 was set against a fifteen-step walk whose unclamped
+excursion is about a quarter; the excursion goes as the root of the run, so it
+is about a half at sixty steps and about 0.95 at 240, and the clamp rather than
+the walk was setting the shape of the speed distribution.
+
+The axis walk had no bound at all. At `DEFAULT_STEP_DURATION` it turns an axis
+0.213 radians a step in a fresh hashed direction, so the expected wander over
+the viewer's default sixty steps is 1.65 radians. Measured, the root-mean-square
+angle between a plate's final axis and its starting axis is 1.47 radians at
+sixty steps and 1.80 at 240, and the mean alignment with the starting axis is
+0.19 and −0.06. By the end of a default run the plates were pointing nowhere
+near the flow field they had been fitted to, and neighbouring plates agreed
+with each other no better than chance: mean alignment across a boundary −0.03
+at sixty steps and −0.06 at 240. Coherent kinematics is the first thing this
+document builds, and run length was quietly undoing it.
+
+Real plate speeds and directions are not random walks over 90 Myr. They respond
+to a mantle that changes slowly, so they wander around it rather than away from
+it. One time constant for both walks says that, and says it once: how long a
+plate remembers the field it was fitted to.
+
+### Where the time constant sits
+
+A walk with a pull back toward its start is an Ornstein-Uhlenbeck walk, whose
+spread stops growing and settles at `rate * sqrt(reversion_time / 2)`. For the
+axis that is `1.8 * sqrt(0.077) = 0.50` radians, about thirty degrees. For the
+speed factor the same expression carries a further `sqrt(3)`, because the walk
+steps by a uniform draw rather than a normal one, giving 0.14 — so the band at
+0.5 sits close to four deviations out and is a bound on the tail again, which
+is what it was set to be.
+
+Eleven steps is the value that puts the settled spread where the band was set
+for it. It has to be longer than a step — a pull of a whole step or more would
+carry a plate past the motion it started from rather than back toward it — and
+evolution rejects a run whose step is not shorter than it, beside the same rule
+for the erosion time.
+
+The rift and suture rules carry the starting axis the way they already carry
+the base speed and the drift factor: a rift's new half inherits its parent's,
+so a rifted pair stays part of one flow field instead of each half wandering
+alone, a suture takes the pair's normalized area-weighted mean, and compaction
+carries it with the id.
+
+### Measured
+
+Both worlds are 65,536 cells at `DEFAULT_STEP_DURATION`. "Defaults" is sampling
+seed 7 and jitter 0.8, 111 plates; "Reference" is the same with sampling seed 9
+and subdivided faces 0.2, 18 plates. "Off" is `reversion_time` infinite, the
+world this slice replaced. "vs start" is the mean alignment of each plate's
+final axis with the axis it began the run on, and "axis spread" the
+root-mean-square angle between them. "vs re-fit" is the mean alignment with the
+flow field's own answer for the plate's current cells. "Coherence" is the mean
+alignment of the two axes across every boundary edge, the metric "Coherent
+kinematics from a flow field" is written against. "Factor spread" is the
+standard deviation of the per-plate drift factor, and "at edge" how many plates
+end the run against the band.
+
+| world | steps | reversion | vs start | axis spread | coherence | vs re-fit | factor spread | at edge | speed min / median / max |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Defaults | 60 | off | 0.191 | 1.473 | −0.032 | 0.159 | 0.265 | 4 of 94 | 0.109 / 0.387 / 0.922 |
+| Defaults | 60 | on | 0.890 | 0.478 | 0.260 | 0.624 | 0.120 | 0 of 97 | 0.166 / 0.478 / 0.860 |
+| Defaults | 240 | off | −0.063 | 1.800 | −0.061 | −0.060 | 0.294 | 4 of 83 | 0.115 / 0.387 / 0.987 |
+| Defaults | 240 | on | 0.906 | 0.441 | 0.246 | 0.254 | 0.132 | 0 of 83 | 0.143 / 0.479 / 1.104 |
+| Reference | 60 | off | 0.245 | 1.423 | −0.250 | 0.128 | 0.321 | 1 of 13 | 0.175 / 0.402 / 0.825 |
+| Reference | 60 | on | 0.820 | 0.617 | 0.390 | 0.524 | 0.124 | 0 of 21 | 0.172 / 0.403 / 0.631 |
+| Reference | 240 | off | 0.041 | 1.670 | 0.126 | −0.026 | 0.301 | 2 of 40 | 0.126 / 0.402 / 0.737 |
+| Reference | 240 | on | 0.893 | 0.471 | 0.581 | 0.338 | 0.131 | 0 of 30 | 0.282 / 0.493 / 0.846 |
+
+Boundary regimes over the same runs. "Ever a boundary" counts edges that
+separated two plates at any step of the run, and "changed" those that held more
+than one regime while they did:
+
+| world | steps | reversion | ever a boundary | changed | divergent | convergent | transform |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Defaults | 60 | off | 108,674 | 69,886 | 6,731 | 6,449 | 5,815 |
+| Defaults | 60 | on | 108,753 | 69,575 | 6,615 | 6,082 | 5,702 |
+| Defaults | 240 | off | 181,811 | 162,532 | 7,142 | 6,986 | 6,444 |
+| Defaults | 240 | on | 184,254 | 165,492 | 6,836 | 6,628 | 6,178 |
+| Reference | 60 | off | 46,078 | 23,553 | 2,088 | 2,066 | 1,811 |
+| Reference | 60 | on | 47,749 | 23,227 | 2,098 | 2,228 | 1,948 |
+| Reference | 240 | off | 138,829 | 108,227 | 4,822 | 4,700 | 3,892 |
+| Reference | 240 | on | 152,426 | 113,249 | 3,892 | 3,800 | 3,257 |
+
+### What the numbers say
+
+**The axis claim holds exactly.** Alignment with the starting axis is 0.89 and
+0.91 at the defaults and 0.82 and 0.89 at the reference world, against a
+predicted `cos(0.50) = 0.88`, where before it fell from 0.19 to −0.06 with run
+length. The axis spread settles at 0.44 to 0.62 radians against a predicted
+0.50, and it no longer grows: 0.478 at sixty steps and 0.441 at 240.
+
+**Coherence comes back.** Mean alignment across a boundary goes from −0.03 to
+0.26 at the defaults and from −0.25 to 0.39 at the reference world at sixty
+steps, and from −0.06 to 0.25 and 0.13 to 0.58 at 240. Neighbouring plates
+agree about the mantle again at every run length.
+
+**The band is a tail bound again.** The factor spread falls from 0.27 to 0.12 at
+the defaults and holds there at 240 steps, where the unreverted walk grew to
+0.29. No plate of either world at either length ends a run against the band,
+where the unreverted walk left one to four there. The measured 0.12 to 0.13 is
+a little under the 0.14 the expression predicts, because the walk is
+multiplicative and the clamp still trims its tail.
+
+**Speeds come up, and stop depending on run length.** The median rises from
+0.387 to 0.478 at the defaults and the minimum from 0.109 to 0.166. A
+multiplicative walk with a symmetric draw has an unbiased mean but a falling
+median, so the unreverted walk was quietly slowing the typical plate away from
+the speed the slab rule gives it. Reverting the factor puts it back.
+
+**Regime changes do not fall.** This was the risk: a plate that stays near its
+fitted axis might hold every boundary in the regime it started with, and the
+accumulated fields exist to record regimes changing. They do not fall at the
+defaults — 64.3 percent of ever-boundary edges held more than one regime before
+and 64.0 percent after at sixty steps, 89.4 and 89.8 at 240 — and fall by two
+to four points at the reference world. Thirty degrees of wander is enough to
+reclassify a boundary that is not exactly head on, and almost no boundary of a
+real world is.
+
+The one case where it does vanish is a boundary between two plates fitted
+exactly opposed, which needs most of a right angle to stop being convergent.
+The two-plate fixture in `evolution.rs` is that case, and its test now states
+so: it turns the reversion off and pins what the unreverted walk does, and
+points here for what the reverted one does to a world of many plates.
+
+**Boundary class counts barely move.** Divergent, convergent, and transform
+edges all shift by under six percent at the defaults. The plate count moves
+more at the reference world — 13 to 21 at sixty steps and 40 to 30 at 240 —
+because a world of a dozen plates has few enough sutures that holding a pair's
+axes near the flow field changes which of them stay in contact long enough to
+merge.
+
+One number to read carefully: alignment with the **re-fitted** flow field falls
+with run length even with the reversion on, 0.62 to 0.25 at the defaults. That
+is not the walk. A plate that has travelled across the sphere for 240 steps
+sits under a different part of the field from the one it was fitted under, so
+the field's answer for where it now stands is a different axis. The
+starting-axis column is the one that isolates what the walk did.
+
+### Pins
+
+Everything downstream of kinematics moved once, and nothing upstream moved at
+all. `an_infinite_reversion_time_reproduces_the_unreverted_walk` is the check:
+with the pull off, the reference fixture reproduces its previous ownership and
+birth fingerprints and every count beside them exactly, so the new default is
+the only thing that moved.
+
+On the reference fixture: `owner_change_count` 147 to 144, `born_particle_count`
+5 to 8, `subducted_particle_count` 112 to 111, `sampled_cell_count` 716 to 721,
+`maximum_thickness` 3 to 2, `thickness_transfer_count` 7 to 11, `suture_count`
+7 to 6, and the plate count 26 to 27. The ownership, birth, seafloor-age, and
+base-elevation fingerprints each move once. Plates held nearer the speed the
+slab rule gives them move their material differently from step one, so the run
+opens its ridges and makes its floor in other places.
+
+The viewer's coarse test fixtures scale `reversion_time` to eleven of their own
+much longer steps, for the same reason and in the same place they already scale
+the erosion time: the shipped default is shorter than one step of a 512-cell
+mesh, which a run may not be.
+
+### Not this slice
+
+No per-plate time constant: how long a plate remembers is a property of the
+mantle, not of the plate. No reversion of the plate's position, only of its
+motion — a plate that has travelled is meant to have travelled. No change to
+`speed_drift_limit`, `axis_drift_rate`, or `speed_drift_rate`: with the walks
+settled, those three now mean what they were set to mean, and retuning them is
+a separate question from giving them a scale.

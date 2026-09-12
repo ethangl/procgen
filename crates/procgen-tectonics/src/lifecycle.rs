@@ -230,9 +230,9 @@ impl EvolvingWorld<'_> {
 
     /// Absorbs the smaller of a colliding pair into the larger: every cell of
     /// the absorbed plate takes the absorber's id, the absorber's rotation
-    /// vector, base speed, and drift factor each become the area-weighted mean
-    /// of the pair's, and the absorbed id is left owning nothing until
-    /// [`Self::compact`] removes it.
+    /// vector, base speed, drift factor, and starting axis each become the
+    /// area-weighted mean of the pair's, and the absorbed id is left owning
+    /// nothing until [`Self::compact`] removes it.
     fn merge_plates(&mut self, pair: (usize, usize)) {
         // Both plates own the cells of a shared boundary edge, so neither
         // area is zero and the weights are well defined.
@@ -248,12 +248,18 @@ impl EvolvingWorld<'_> {
         let rotations = [absorber, absorbed].map(|plate| self.kinematics.angular_velocities[plate]);
         self.kinematics.angular_velocities[absorber] =
             rotations[0] * weights[0] + rotations[1] * weights[1];
-        // The merged plate is one plate, so it has one base speed and one
-        // drift factor. Left at the absorber's own, the smaller plate would
-        // bring nothing to the motion the next respeed derives.
+        // The merged plate is one plate, so it has one base speed, one drift
+        // factor, and one axis to revert toward. Left at the absorber's own,
+        // the smaller plate would bring nothing to the motion the next
+        // respeed derives. The mean of two unit axes is not a unit vector, so
+        // the starting axis is normalized back onto the sphere; two exactly
+        // opposed axes leave zero, which is a merged plate that reverts
+        // toward nothing rather than toward one half's direction.
         let mean = |values: &[f32]| values[absorber] * weights[0] + values[absorbed] * weights[1];
         self.kinematics.base_speeds[absorber] = mean(&self.kinematics.base_speeds);
         self.drift_factors[absorber] = mean(&self.drift_factors);
+        let axes = [absorber, absorbed].map(|plate| self.starting_axes[plate]);
+        self.starting_axes[absorber] = (axes[0] * weights[0] + axes[1] * weights[1]).normalized();
         for plate in self.partition.cell_plates.iter_mut() {
             if *plate == absorbed {
                 *plate = absorber;
@@ -304,6 +310,10 @@ impl EvolvingWorld<'_> {
         self.drift_factors = live
             .iter()
             .map(|&plate| self.drift_factors[plate])
+            .collect();
+        self.starting_axes = live
+            .iter()
+            .map(|&plate| self.starting_axes[plate])
             .collect();
         self.partition.plate_count = live.len();
         accreted
