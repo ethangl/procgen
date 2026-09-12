@@ -2211,7 +2211,10 @@ Checked against the source it sits under: a saturated convergent boundary adds
 They balance at `D = 1.33`, well above the 0.5 clamp, so an active belt still
 reaches the clamp and holds there. That is now what the clamp means — the
 steady state of a belt that keeps converging — rather than an accumulator
-overflowing.
+overflowing. A belt whose boundary moves on decays from 0.5 to 0.18 in thirty
+steps and to 0.05 in about seventy, roughly 100 Myr, which is a worn-down
+range a kilometre high at the vertical scale the profile retune works in.
+
 
 The kept fraction is the linear `1 - dt/tau` rather than `exp(-dt/tau)`, which
 costs a multiply and a divide instead of libm on a path a kernel would mirror.
@@ -2293,38 +2296,85 @@ Every tenth step of a 240-step run at the defaults, with the sink on:
   reaches it at step 50 and the count then oscillates between 0 and 81 for the
   remaining 190 steps with no trend: 19 at 60, 33 at 120, 59 at 240. It was
   866, 4,260, and 9,971, climbing about fifty a step. This is the finding the
-  slice was for.
+  slice was for. The count is small and noisy rather than a smooth plateau,
+  because it counts only the handful of cells whose boundary is both saturated
+  and long-lived enough to have reached 1.33 worth of uplift against the 0.5
+  bound.
+
 - **Relic belts are fewer and much lower.** At 60 steps they fall from 3,486
-  cells to 916 and the largest from the clamp itself to 0.343; at 240, from
-  6,478 to 716 and 0.500 to 0.373. With the sink off a relic belt was as high
-  as an active one, which is the thing that made a long run unreadable. With
-  it on, no relic reaches the clamp at any length at either world.
+  cells to 916 and the largest from the clamp itself to 0.343; at 120, from
+  4,270 to 174 and 0.500 to 0.268; at 240, from 6,478 to 716 and 0.500 to
+  0.373. With the sink off a relic belt was as high as an active one, which is
+  the thing that made a long run unreadable. With it on, no relic reaches the
+  clamp at any length at either world. The count is noisy from sample to
+  sample — 916 at step 60, 304 at 70, 798 at 80 — because it depends on where
+  the current convergent boundaries happen to lie, not only on what the field
+  carries.
+
 - **The mean still creeps, slowly.** 0.0183 at ten steps, 0.0405 at sixty,
-  0.0511 at 240. A third of the sink-off mean at 240 and far flatter, but not
-  flat: the height of a belt is bounded now, its area is not.
+  0.0439 at 120, 0.0511 at 240. It is a third of the sink-off mean at 240 and
+  its slope is far flatter, but it is not flat. The height of a belt is
+  bounded now; its area is not, and the creep is belts spreading rather than
+  rising. "Crustal thickness" is where that went: the lateral flow spreads a
+  column into its neighbours, and the mean turns over by 240 steps.
+
 - **Land falls by about 1,200 cells at sixty steps** — 17,870 to 16,684 — and
-  stops climbing with run length. Lower belts clear the 0.5 datum in fewer
-  cells; this is the visible price of the sink and it is the intended one.
+  stops climbing with run length. Sink off, land rose from 16,432 at step zero
+  to about 18,100 by step 120 as the belts accumulated. Sink on it holds
+  between 15,900 and 16,700 for the whole 240 steps, near where step zero left
+  it, and drifts slowly down with the continental-cell decline "Run length"
+  recorded. Lower belts clear the 0.5 datum in fewer cells; this is the
+  visible price of the sink and it is the intended one.
 
-### Pins
 
-None moved. Ownership, crust birth, the plate set, and every count a run keeps
-read the crust and the motion rather than the relief on them, so the whole
-tectonics suite stood unchanged;
-`turning_the_sink_off_changes_the_deformation_field_alone` in `evolution.rs`
-is the assertion that says so, comparing whole results rather than named
-fields. The deformation field itself was never pinned, because a float
-fingerprint pins the toolchain rather than the algorithm.
+### The 240-step world, before and after
+
+Described rather than shown, from the rows above. Sink off, the 240-step
+default world carries 9,971 cells — one in seven — flat-topped at exactly 0.5,
+and 6,478 cells of relief above 0.1 stand where no convergent boundary is, the
+largest of them also at 0.5. An old suture is indistinguishable from an active
+collision, and the field is a saturated wash rather than a record. Sink on, 59
+cells sit at the clamp and they are the active belts; 716 relic cells remain
+and the largest of them reaches 0.373, so a belt that lost its boundary is
+visibly lower than one that still has it. Land is 15,948 against 17,800: the
+extra 1,850 cells the sink-off world calls land are the drowned margins of
+plateaus that should have worn down.
 
 ### Not this slice
 
 No slope-driven transport, no sediment deposition, no isostatic rebound as a
 separate term, and no reading of the collision stack: the time constant folds
 rebound in and the thickness slice unfolds it. No change to the profile
-offsets, `full_deformation_time`, or `maximum_magnitude`. `erosion_time` is
-the one knob here: lower it and belts wear down faster and land falls further;
-raise it and the clamp share starts climbing again, reaching the sink-off
-behaviour at infinity.
+offsets, `full_deformation_time`, or `maximum_magnitude`: active belts do
+still reach the clamp — 19 cells at sixty steps at the defaults, one at the
+reference world — and relic belts no longer stand as high as active ones, so
+neither needed moving. `erosion_time` is the one knob here: lower it and belts
+wear down faster and land falls further; raise it and the clamp share starts
+climbing again, reaching the sink-off behaviour at infinity.
+
+### Pins
+
+None moved. Ownership, crust birth, the plate set, and every count a run keeps
+read the crust and the motion rather than the relief on them, so the whole
+
+tectonics suite stood unchanged;
+`turning_the_sink_off_changes_the_deformation_field_alone` in `evolution.rs`
+is the assertion that says so, comparing whole results rather than named
+fields. The deformation field itself was never pinned, because a float
+fingerprint pins the toolchain rather than the algorithm.
+
+One viewer test moved mesh rather than pins.
+`climate_runs_on_the_upstream_phases_alone` ran at 128 cells, where the
+climate coupling's fixed-point iteration does not reliably converge: of
+fourteen seeds swept there, eight fail the iteration limit with the sink off
+as well as on, and at 192 cells ten do. The sink flipped that test's seed from
+the lucky side to the unlucky one. Every one of the fourteen converges at
+1,024 cells and at 65,536 the coupling converges in one iteration with the
+sink either way, so the test moved to 1,024 cells. That fragility is older
+than this slice and is a property of coarse meshes, not of the sink. "Crustal
+thickness" hit it again across nine tests and moved every complete-world
+fixture above the same floor.
+
 
 ## Crustal thickness
 
