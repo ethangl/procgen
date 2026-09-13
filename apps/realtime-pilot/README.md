@@ -1,6 +1,6 @@
 # Real-time world pilot
 
-Slices 1–2 of [the pilot design](../../docs/realtime-world-pilot.md). This is a
+Slices 1–3 of [the pilot design](../../docs/realtime-world-pilot.md). This is a
 separate application. It uses `procgen-core` and the CPU gradient-noise primitive
 from `procgen-noise`, plus cube-face geometry from `procgen-cubesphere`.
 It does not use the existing world pipeline or viewer.
@@ -99,9 +99,9 @@ agreement, field envelopes, finite values at control extremes, cave entrances,
 agreement with a wider cave search, control effects, analytical gradient checks, invalid inputs, and quantized
 initial fingerprints. Exact float bits are not pinned.
 
-Mixed-resolution meshes, streaming, collision, GPU generation, and precision
-across large distances remain for later slices. No frame-time or planet-scale
-performance claim follows from these bounded CPU experiments.
+Slice 3 adds mixed-detail render meshes and streaming below. Collision, GPU
+generation, and precision across large distances remain for later slices. No
+planet-scale performance claim follows from these bounded CPU experiments.
 
 ## Spherical regions (slice 2)
 
@@ -202,3 +202,81 @@ triangles, and a 3,072-triangle overview. An optimized development build on the
 macOS test host generated these CPU products in about 70–90 ms. This excludes
 topology inspection, render upload, and frame time. Metal was used for native visual inspection;
 this slice has no generation kernel or Vulkan agreement claim.
+
+## Streaming and detail (slice 3)
+
+```sh
+cargo run -p procgen-realtime-pilot -- --stream --seed 42
+cargo run -p procgen-realtime-pilot -- --stream --seed 42 \
+  --record /tmp/procgen-stream/seed42.csv
+```
+
+Drag to look, use WASD and Q/E to fly, and hold Shift for fast flight. Colors
+identify mesh detail: blue is coarse, green is medium, and gold is fine.
+The recording command runs a 36-second descent, rapid turns, fast flight,
+and retreat, then exits. It writes frame data and a summary. Add `--screenshots` to write
+one PNG per phase beside the CSV in a separate visual run; image readback
+adds frame stalls. Recording begins after initial coarse GPU coverage is
+ready. The route has no grounded movement or collision.
+
+This slice keeps the bounded CPU contour source resident and streams **render
+meshes**, not density pages. The source uses the slice-2 64-by-64 face grid and
+16 radial cells. This is a deliberate scale limit for the six-region pilot;
+it is not a solution for storing an arbitrarily large planet. Density data is
+released after extraction. The cheap overview covers the planet during source
+preparation and remains until all six initial coarse regions are ready.
+
+Coarse and medium meshes cluster tangential cell vertices in blocks of four
+and two respectively. Fine meshes retain the original vertices. Clustering
+keeps radial layers separate, selects the mean position of the source vertices,
+and removes triangles collapsed to fewer than three distinct vertices. A cluster
+that reverses or flattens a surviving triangle retains its fine vertices; this
+check repeats until neighboring changes preserve orientation.
+Every face retains a four-cell fine collar. The collar's sample identities,
+positions, and normals are identical at every detail level. Mixed-detail joins
+therefore use the same polygons as slice 2. This costs more border geometry
+than an adaptive transition mesh, but needs no skirts or overlapping seam
+surfaces. Reduction inherits the extractor's nonmanifold limitation.
+
+The renderer-independent scheduler admits two region jobs at most. Its queue
+has at most one current request per face. Serial tickets reject late results,
+including a request that changes from fine to medium and back to fine.
+Workers check cancellation before work, during reduction, and during triangle assembly. A cancelled
+worker retains its memory reservation until its result is consumed. Fine meshes
+are replaced with coarse meshes and released when the camera leaves; every
+face retains resident coverage while its replacement is built.
+
+Uploads are split into at most 1,024 triangles per piece. Each frame admits
+at most 512 KiB of conservatively counted upload data and stops admitting pieces
+after 2 ms of installation work. One piece can cross that time target, so the
+recording includes measured installation time. A region becomes ready only
+after every piece appears in Bevy's render-world mesh assets. A 0.15-second
+complementary ordered-dither transition then replaces the old region. Its
+memory reservation remains until the old render assets disappear and the GPU
+queue confirms completion of previously submitted work. Further
+replacement of that face waits for retirement.
+
+Managed source, job, staging, resident, and retiring-product reservations are
+capped at 128 MiB. Job reservations cover map scratch and worst-case region
+output from the actual source triangle count. Render accounting allows both
+CPU and GPU copies at 132 bytes per source triangle; indexed chunks normally
+use less. Initial fixed-grid source preparation has a separate conservative
+1 GiB working reservation and runs once with no concurrent region jobs. These
+are application buffer budgets, not a cap on Bevy, the driver, thread stacks,
+window buffers, or diagnostic screenshot readback. Process peak RSS is measured
+separately in the route report.
+
+The baseline remains radius 4 with about 0.1 tangential sample spacing near
+face centers and 0.04375 radial spacing. Manual flight speeds are 0.5 and 4
+model lengths per second. The recorded descent moves at 0.7125. The turn phase ends with two seconds of
+deliberate 0.12-second revolutions to outrun uploads and test cancellation. Fast flight
+circles at radius 5.5 and speed 4. The viewport is 1280 by 900 logical pixels.
+Detail uses altitude and viewing direction, with distance hysteresis. Coarse
+coverage remains behind the camera. Late detail retains that coarse coverage;
+waiting frames and cancelled/rejected work are recorded rather than hidden.
+
+Tests weld mixed-detail face products by their canonical identities and check
+for open edges, unbalanced winding, and reversed surviving triangles. They also check readiness of every
+upload piece, rejected obsolete results, request reversal, memory admission,
+and delayed retirement. GPU visual and timing evidence is recorded separately;
+headless scheduler tests do not establish GPU performance.

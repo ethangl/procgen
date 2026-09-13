@@ -44,8 +44,8 @@ pub struct MeshTopology {
 }
 
 pub struct SurfaceMesh {
-    positions: Vec<Vec3>,
-    triangles: Vec<SurfaceTriangle>,
+    pub(crate) positions: Vec<Vec3>,
+    pub(crate) triangles: Vec<SurfaceTriangle>,
 }
 impl SurfaceMesh {
     pub fn positions(&self) -> &[Vec3] {
@@ -69,6 +69,18 @@ impl SurfaceMesh {
         }
         Ok(())
     }
+    pub fn vertex_normals(&self) -> Vec<Vec3> {
+        let mut normals = vec![Vec3::ZERO; self.positions.len()];
+        for triangle in &self.triangles {
+            let [a, b, c] = triangle.vertices.map(|i| self.positions[i as usize]);
+            let normal = (b - a).cross(c - a);
+            for id in triangle.vertices {
+                normals[id as usize] = normals[id as usize] + normal;
+            }
+        }
+        normals.into_iter().map(Vec3::normalized).collect()
+    }
+
     pub fn topology(&self) -> MeshTopology {
         let mut edges = BTreeMap::<[u32; 2], (usize, i32)>::new();
         let mut degenerate_triangles = 0;
@@ -106,6 +118,7 @@ impl SurfaceMesh {
 }
 
 struct CellVertex {
+    address: usize,
     region: RegionAddress,
     samples: [usize; 8],
     position: Vec3,
@@ -117,10 +130,17 @@ struct CellVertex {
 /// with several disconnected sheets still has one vertex: thin features need
 /// more samples; manifold topology is not guaranteed for arbitrary fields.
 pub fn contour_shell(volume: &ShellVolume) -> Result<SurfaceMesh, PlanetError> {
+    Ok(contour_source(volume)?.0)
+}
+
+pub(crate) fn contour_source(
+    volume: &ShellVolume,
+) -> Result<(SurfaceMesh, Vec<usize>), PlanetError> {
     volume.validate()?;
     let cells: Vec<_> = volume
         .cells()
-        .map(|(region, ids)| {
+        .enumerate()
+        .map(|(address, (region, ids))| {
             let samples = ids.map(|i| volume.samples[i]);
             cell_vertex(samples).map(|position| {
                 let crossings = EDGES
@@ -133,6 +153,7 @@ pub fn contour_shell(volume: &ShellVolume) -> Result<SurfaceMesh, PlanetError> {
                     })
                     .collect();
                 CellVertex {
+                    address,
                     region,
                     samples: ids,
                     position,
@@ -177,12 +198,13 @@ pub fn contour_shell(volume: &ShellVolume) -> Result<SurfaceMesh, PlanetError> {
             });
         }
     }
+    let addresses = cells.iter().map(|c| c.address).collect();
     let mesh = SurfaceMesh {
         positions: cells.into_iter().map(|c| c.position).collect(),
         triangles,
     };
     mesh.validate()?;
-    Ok(mesh)
+    Ok((mesh, addresses))
 }
 
 // Walk cell-face adjacency, not a floating-point angle sort. This handles the

@@ -17,6 +17,6 @@ bevy = { version = "0.18.1", optional = true, default-features = false, features
   "async_executor", "bevy_asset", "bevy_camera", "bevy_color",
   "bevy_core_pipeline", "bevy_image", "bevy_log", "bevy_render",
   "bevy_mesh", "bevy_light", "bevy_pbr", "bevy_shader", "bevy_window", "bevy_winit", "default_font",
-  "multi_threaded", "std", "wayland", "x11",
+  "multi_threaded", "png", "std", "wayland", "x11",
 ] }
 bevy_egui = { version = "0.39.1", optional = true, default-features = false, features = ["default_fonts", "render"] }

@@ -5,6 +5,12 @@ mod display;
 mod inspector;
 #[cfg(feature = "inspector")]
 mod planet_inspector;
+#[cfg(feature = "inspector")]
+mod stream_inspector;
+#[cfg(feature = "inspector")]
+mod stream_record;
+#[cfg(feature = "inspector")]
+mod stream_render;
 
 use std::{error::Error, fs, path::PathBuf, time::Instant};
 
@@ -14,11 +20,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut capture = None;
     let mut planet = false;
+    let mut stream = false;
+    let mut record = None;
+    let mut screenshots = false;
     let mut check = false;
     let mut seed = 42_u64;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--planet" => planet = true,
+            "--stream" => stream = true,
+            "--screenshots" => screenshots = true,
+            "--record" => {
+                record = Some(PathBuf::from(
+                    args.next().ok_or("--record requires a path")?,
+                ))
+            }
             "--check" => check = true,
             "--seed" => {
                 seed = args
@@ -33,12 +49,32 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "procgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY]\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
+                    "procgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if screenshots && (!stream || record.is_none()) {
+        return Err("--screenshots requires --stream and --record".into());
+    }
+    if stream {
+        if planet || check || capture.is_some() {
+            return Err("--stream cannot combine with --planet, --check, or --capture".into());
+        }
+        #[cfg(feature = "inspector")]
+        stream_inspector::run(
+            seed,
+            record.map(|path| stream_record::RecordingConfig { path, screenshots }),
+        )?;
+        #[cfg(not(feature = "inspector"))]
+        return Err("--stream requires the inspector feature".into());
+        #[cfg(feature = "inspector")]
+        return Ok(());
+    }
+    if record.is_some() {
+        return Err("--record requires --stream".into());
     }
     if planet {
         if capture.is_some() {

@@ -1,6 +1,6 @@
 # Real-time procedural world pilot
 
-Status: slices 1–2 are implemented. Slices 3–5 remain proposals.
+Status: slices 1–3 are implemented as bounded pilot experiments. Slices 4–5 remain proposals.
 
 ## Purpose
 
@@ -482,7 +482,18 @@ Shared samples and polygon ownership cover same-resolution joins and cube
 corners. The initial extractor uses one vertex per cell and reports unresolved
 nonmanifold edges; manifold extraction remains an explicit follow-up before a
 consumer requires it. The inspector can compare overview, region ownership,
-and shifted render origins. It does not implement streaming or mixed LOD.
+and shifted render origins. Its static inspector remains available alongside the slice-3 streaming inspector.
+
+Slice 3 adds bounded render-mesh streaming over the resident slice-2 CPU
+contour source. Six face regions use three mesh detail levels with a shared
+fine collar, bounded jobs and uploads, cancellation tickets, and GPU-readiness
+checks followed by dithered replacement. Initial coarse coverage replaces the
+overview only as a complete set. See the
+[streaming scope and budgets](../apps/realtime-pilot/README.md#streaming-and-detail-slice-3)
+and the [recorded route results](realtime-world-streaming-results.md).
+Density paging and arbitrary planet scale remain outside this bounded version.
+The resident source and fixed fine borders are explicit costs of the selected
+mixed-resolution boundary construction, not claims about the source games.
 
 | Slice                     | Deliverable                                                                              | Exit evidence                                                                                                                          |
 | ------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

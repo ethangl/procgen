@@ -222,18 +222,11 @@ fn orbit(
 }
 
 // Rendering owns color and shading; generation exposes ordinary indexed triangles.
-fn render_mesh(surface: &SurfaceMesh, origin: Vec3, regions: bool, radius: f32) -> Mesh {
+pub(crate) fn render_mesh(surface: &SurfaceMesh, origin: Vec3, regions: bool, radius: f32) -> Mesh {
     let positions = surface
         .relative_positions(Point::new(origin.x, origin.y, origin.z))
         .expect("finite UI origin");
-    let mut normals = vec![Point::ZERO; positions.len()];
-    for triangle in surface.triangles() {
-        let [a, b, c] = triangle.vertices.map(|i| positions[i as usize]);
-        let normal = (b - a).cross(c - a);
-        for i in triangle.vertices {
-            normals[i as usize] = normals[i as usize] + normal;
-        }
-    }
+    let normals = surface.vertex_normals();
     let mut vertices = Vec::new();
     let mut vertex_normals = Vec::new();
     let mut colors = Vec::new();

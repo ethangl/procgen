@@ -1,0 +1,518 @@
+use crate::stream_record::{FrameTiming, Recording, RecordingConfig};
+use crate::stream_render::{UploadBridge, chunk_mesh};
+use bevy::{
+    camera::visibility::VisibilityRange,
+    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
+    prelude::*,
+    render::view::screenshot::{Screenshot, save_to_disk},
+};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use procgen_core::Vec3 as Point;
+use procgen_realtime_pilot::REPLACEMENT_SECONDS;
+use procgen_realtime_pilot::{
+    DetailSource, FAST_FLIGHT_SPEED, FLIGHT_SPEED, INSTALL_MILLIS_PER_FRAME, OVERVIEW_FACE_QUADS,
+    PILOT_PLANET, PlanetError, ROUTE_SECONDS, StreamEvent, StreamView, StreamingWorld, Ticket,
+    UPLOAD_BYTES_PER_FRAME, planet_overview, prepare_detail, streaming_route,
+};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
+    },
+    time::Instant,
+};
+
+type SourceResult = Result<Option<DetailSource>, PlanetError>;
+enum Fade {
+    In(f32),
+    Out(f32),
+}
+struct Region {
+    entities: Vec<Entity>,
+    handles: Vec<Handle<Mesh>>,
+    committed: bool,
+    fade: Option<Fade>,
+}
+struct Inspector {
+    receiver: Receiver<SourceResult>,
+    cancel: Arc<AtomicBool>,
+    world: Option<StreamingWorld>,
+    regions: BTreeMap<Ticket, Region>,
+    status: String,
+    record: Option<Recording>,
+    last_install_ms: f64,
+    last_upload_bytes: usize,
+}
+impl Drop for Inspector {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+#[derive(Resource)]
+struct CameraState {
+    position: Vec3,
+    forward: Vec3,
+}
+impl CameraState {
+    fn view(&self) -> StreamView {
+        StreamView {
+            position: Point::new(self.position.x, self.position.y, self.position.z),
+            forward: Point::new(self.forward.x, self.forward.y, self.forward.z),
+        }
+    }
+    fn transform(&self) -> Transform {
+        Transform::from_translation(self.position).looking_to(self.forward, Vec3::Y)
+    }
+}
+#[derive(Component)]
+struct FlightCamera;
+#[derive(Component)]
+struct Overview;
+#[derive(Resource)]
+struct TerrainMaterial(Handle<StandardMaterial>);
+
+pub fn run(seed: u64, record: Option<RecordingConfig>) -> Result<(), Box<dyn std::error::Error>> {
+    let field = PILOT_PLANET.validate(seed)?;
+    let overview = planet_overview(&field, OVERVIEW_FACE_QUADS)?;
+    let overview_mesh =
+        crate::planet_inspector::render_mesh(&overview, Vec3::ZERO, false, PILOT_PLANET.radius);
+    let record = record.map(|path| Recording::new(path, seed)).transpose()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
+    std::thread::spawn(move || {
+        let result = prepare_detail(&field, &worker_cancel);
+        let _ = sender.send(result);
+    });
+    let state = Inspector {
+        receiver,
+        cancel,
+        world: None,
+        regions: BTreeMap::new(),
+        status: "Preparing bounded CPU source…".into(),
+        record,
+        last_install_ms: 0.0,
+        last_upload_bytes: 0,
+    };
+    App::new()
+        .insert_non_send_resource(state)
+        .insert_resource(CameraState {
+            position: Vec3::Z * 13.0,
+            forward: -Vec3::Z,
+        })
+        .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.04)))
+        .insert_resource(GlobalAmbientLight {
+            color: Color::WHITE,
+            brightness: 100.0,
+            ..default()
+        })
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Real-time world pilot — streaming".into(),
+                resolution: (1280, 900).into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins((EguiPlugin::default(), UploadBridge::default()))
+        .add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>,
+                  camera: Res<CameraState>| {
+                commands.spawn((
+                    Camera3d::default(),
+                    bevy::core_pipeline::tonemapping::Tonemapping::Reinhard,
+                    Projection::Perspective(PerspectiveProjection {
+                        near: 0.001,
+                        far: 200.0,
+                        ..default()
+                    }),
+                    camera.transform(),
+                    FlightCamera,
+                ));
+                commands.spawn((
+                    DirectionalLight {
+                        illuminance: 8000.0,
+                        ..default()
+                    },
+                    Transform::from_xyz(8.0, 12.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+                ));
+                let material = materials.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    perceptual_roughness: 0.9,
+                    ..default()
+                });
+                commands.insert_resource(TerrainMaterial(material.clone()));
+                commands.spawn((
+                    Mesh3d(meshes.add(overview_mesh.clone())),
+                    MeshMaterial3d(material),
+                    Overview,
+                    full_visibility(),
+                ));
+            },
+        )
+        .add_systems(Update, (camera_input, advance).chain())
+        .add_systems(EguiPrimaryContextPass, ui)
+        .run();
+    Ok(())
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct FlightInput<'w> {
+    buttons: Res<'w, ButtonInput<MouseButton>>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    motion: Res<'w, AccumulatedMouseMotion>,
+    scroll: Res<'w, AccumulatedMouseScroll>,
+    time: Res<'w, Time<Real>>,
+}
+fn camera_input(
+    input: FlightInput,
+    mut camera: ResMut<CameraState>,
+    state: NonSend<Inspector>,
+    mut contexts: EguiContexts,
+) {
+    if state.record.is_some() {
+        return;
+    }
+    if contexts
+        .ctx_mut()
+        .is_ok_and(|ctx| ctx.wants_pointer_input() || ctx.wants_keyboard_input())
+    {
+        return;
+    }
+    if input.buttons.pressed(MouseButton::Left) {
+        let yaw = Quat::from_rotation_y(-input.motion.delta.x * 0.004);
+        let right = camera.forward.cross(Vec3::Y).normalize();
+        let pitch = Quat::from_axis_angle(right, -input.motion.delta.y * 0.004);
+        let forward = yaw * pitch * camera.forward;
+        if forward.dot(Vec3::Y).abs() < 0.99 {
+            camera.forward = forward.normalize();
+        }
+    }
+    let speed = if input.keys.pressed(KeyCode::ShiftLeft) {
+        FAST_FLIGHT_SPEED
+    } else {
+        FLIGHT_SPEED
+    };
+    let mut movement = Vec3::ZERO;
+    let right = camera.forward.cross(Vec3::Y).normalize();
+    for (key, direction) in [
+        (KeyCode::KeyW, camera.forward),
+        (KeyCode::KeyS, -camera.forward),
+        (KeyCode::KeyD, right),
+        (KeyCode::KeyA, -right),
+        (KeyCode::KeyE, Vec3::Y),
+        (KeyCode::KeyQ, -Vec3::Y),
+    ] {
+        if input.keys.pressed(key) {
+            movement += direction;
+        }
+    }
+    camera.position += movement.normalize_or_zero() * speed * input.time.delta_secs();
+    let zoom = match input.scroll.unit {
+        MouseScrollUnit::Line => 0.2,
+        MouseScrollUnit::Pixel => 0.006,
+    };
+    let forward = camera.forward;
+    camera.position += forward * input.scroll.delta.y * zoom;
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct Scene<'w, 's> {
+    commands: Commands<'w, 's>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    material: Res<'w, TerrainMaterial>,
+    bridge: Res<'w, UploadBridge>,
+    cameras: Query<'w, 's, &'static mut Transform, With<FlightCamera>>,
+    overview: Query<'w, 's, Entity, With<Overview>>,
+    exit: MessageWriter<'w, AppExit>,
+}
+fn advance(
+    mut state: NonSendMut<Inspector>,
+    mut camera: ResMut<CameraState>,
+    time: Res<Time<Real>>,
+    mut scene: Scene,
+) {
+    if state.world.is_none() {
+        match state.receiver.try_recv() {
+            Ok(Ok(Some(source))) => match StreamingWorld::new(Arc::new(source)) {
+                Ok(world) => {
+                    state.world = Some(world);
+                    state.status = "Installing initial coarse coverage…".into();
+                }
+                Err(error) => {
+                    state.status = error.to_string();
+                    return;
+                }
+            },
+            Ok(Ok(None)) => {
+                state.status = "Source generation cancelled.".into();
+                return;
+            }
+            Ok(Err(error)) => {
+                state.status = error.to_string();
+                return;
+            }
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                state.status = "Source worker stopped.".into();
+                return;
+            }
+        }
+    }
+    let is_visible = state.world.as_ref().expect("initialized world").visible();
+    if is_visible && let Some(record) = &mut state.record {
+        let route = streaming_route(record.elapsed());
+        camera.position = Vec3::new(
+            route.view.position.x,
+            route.view.position.y,
+            route.view.position.z,
+        );
+        camera.forward = Vec3::new(
+            route.view.forward.x,
+            route.view.forward.y,
+            route.view.forward.z,
+        );
+        if let Some(path) = record.screenshot() {
+            scene
+                .commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(path));
+        }
+    }
+    for mut transform in &mut scene.cameras {
+        *transform = camera.transform();
+    }
+    let (ready, retired) = {
+        let mut bridge = scene.bridge.0.lock().expect("upload bridge");
+        (
+            std::mem::take(&mut bridge.ready),
+            std::mem::take(&mut bridge.retired),
+        )
+    };
+    let world = state.world.as_mut().expect("initialized world");
+    // Update requests before processing readiness from the previous render frame.
+    if let Err(error) = world.update(camera.view()) {
+        state.status = error.to_string();
+        return;
+    }
+    let install_start = Instant::now();
+    for ticket in retired {
+        world.acknowledge_retirement(ticket);
+    }
+    for (ticket, piece) in ready {
+        world.acknowledge_upload(ticket, piece);
+    }
+    let events = world.events();
+    for event in events {
+        match event {
+            StreamEvent::Retire(ticket) => {
+                if let Some(region) = state.regions.get_mut(&ticket)
+                    && region.committed
+                {
+                    region.fade = Some(Fade::Out(0.0));
+                } else {
+                    retire_region(&mut state, ticket, &mut scene);
+                }
+            }
+            StreamEvent::Commit(ticket) => {
+                let visible = state.world.as_ref().expect("world").visible();
+                let replacement = state.regions.iter().any(|(old, region)| {
+                    old.face == ticket.face && matches!(region.fade, Some(Fade::Out(_)))
+                });
+                if let Some(region) = state.regions.get_mut(&ticket) {
+                    region.committed = true;
+                    if replacement {
+                        region.fade = Some(Fade::In(0.0));
+                    }
+                    if visible {
+                        for &entity in &region.entities {
+                            scene.commands.entity(entity).insert(Visibility::Visible);
+                        }
+                    }
+                }
+            }
+            StreamEvent::Reveal => {
+                for region in state.regions.values().filter(|r| r.committed) {
+                    for &entity in &region.entities {
+                        scene.commands.entity(entity).insert(Visibility::Visible);
+                    }
+                }
+                for entity in &scene.overview {
+                    scene.commands.entity(entity).despawn();
+                }
+            }
+        }
+    }
+    let mut finished = Vec::new();
+    let distance = camera.position.length();
+    for (&ticket, region) in &mut state.regions {
+        if let Some(fade) = &mut region.fade {
+            let (elapsed, out) = match fade {
+                Fade::In(t) => (t, false),
+                Fade::Out(t) => (t, true),
+            };
+            *elapsed += time.delta_secs();
+            if *elapsed >= REPLACEMENT_SECONDS {
+                if out {
+                    finished.push(ticket);
+                } else {
+                    region.fade = None;
+                    for &entity in &region.entities {
+                        scene.commands.entity(entity).insert(full_visibility());
+                    }
+                }
+            } else {
+                let progress = *elapsed / REPLACEMENT_SECONDS;
+                let margin = distance - progress..distance + 1.0 - progress;
+                let range = if out {
+                    VisibilityRange {
+                        end_margin: margin,
+                        ..full_visibility()
+                    }
+                } else {
+                    VisibilityRange {
+                        start_margin: margin,
+                        ..full_visibility()
+                    }
+                };
+                for &entity in &region.entities {
+                    scene.commands.entity(entity).insert(range.clone());
+                }
+            }
+        }
+    }
+    for ticket in finished {
+        retire_region(&mut state, ticket, &mut scene);
+    }
+    let mut remaining = UPLOAD_BYTES_PER_FRAME;
+    while install_start.elapsed().as_secs_f64() * 1000.0 < INSTALL_MILLIS_PER_FRAME {
+        let Some(piece) = state.world.as_mut().expect("world").next_upload(remaining) else {
+            break;
+        };
+        remaining -= piece.reserved_bytes();
+        let handle = scene.meshes.add(chunk_mesh(&piece));
+        let entity = scene
+            .commands
+            .spawn((
+                Mesh3d(handle.clone()),
+                MeshMaterial3d(scene.material.0.clone()),
+                Visibility::Hidden,
+                full_visibility(),
+            ))
+            .id();
+        scene.bridge.0.lock().expect("upload bridge").pending.push((
+            piece.ticket,
+            piece.index,
+            handle.id(),
+        ));
+        let region = state.regions.entry(piece.ticket).or_insert_with(|| Region {
+            entities: Vec::new(),
+            handles: Vec::new(),
+            committed: false,
+            fade: None,
+        });
+        region.entities.push(entity);
+        region.handles.push(handle);
+    }
+    state.last_install_ms = install_start.elapsed().as_secs_f64() * 1000.0;
+    state.last_upload_bytes = UPLOAD_BYTES_PER_FRAME - remaining;
+    let stats = state.world.as_ref().expect("world").stats();
+    state.status = format!(
+        "{} jobs · {} queued\n{:.1} MiB managed\n{} cancellations · {} rejected\n{} installed",
+        stats.active_jobs,
+        stats.queued_jobs,
+        stats.managed_bytes as f64 / (1024.0 * 1024.0),
+        stats.cancellations,
+        stats.rejected_results,
+        stats.installations
+    );
+    if is_visible {
+        record_frame(&mut state, &camera, time.delta_secs_f64(), &mut scene);
+    }
+}
+
+// Keep the same dither shader variant warm on overview, resident, and staged meshes.
+fn full_visibility() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: -2.0..-1.0,
+        end_margin: f32::MAX..f32::MAX,
+        use_aabb: false,
+    }
+}
+fn retire_region(state: &mut Inspector, ticket: Ticket, scene: &mut Scene) {
+    let ids = if let Some(region) = state.regions.remove(&ticket) {
+        for entity in region.entities {
+            scene.commands.entity(entity).despawn();
+        }
+        region.handles.iter().map(Handle::id).collect()
+    } else {
+        Vec::new()
+    };
+    let mut bridge = scene.bridge.0.lock().expect("upload bridge");
+    bridge.pending.retain(|(t, _, _)| *t != ticket);
+    bridge.retiring.push((ticket, ids));
+}
+
+fn record_frame(state: &mut Inspector, camera: &CameraState, dt: f64, scene: &mut Scene) {
+    let Some(record) = &mut state.record else {
+        return;
+    };
+    let timing = FrameTiming {
+        seconds: dt,
+        install_ms: state.last_install_ms,
+        upload_bytes: state.last_upload_bytes,
+    };
+    match record.frame(state.world.as_ref().expect("world"), camera.view(), timing) {
+        Ok(Some(summary)) => {
+            eprintln!("{summary}");
+            scene.exit.write(AppExit::Success);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            state.status = error.to_string();
+            scene.exit.write(AppExit::error());
+        }
+    }
+}
+fn ui(mut contexts: EguiContexts, state: NonSend<Inspector>, camera: Res<CameraState>) -> Result {
+    egui::SidePanel::left("stream-controls")
+        .exact_width(280.0)
+        .show(contexts.ctx_mut()?, |ui| {
+            ui.heading("Streaming terrain");
+            ui.label("Slice 3 · six face regions");
+            ui.separator();
+            ui.label("Blue: coarse · Green: medium\nGold: fine · Fixed fine borders");
+            ui.separator();
+            ui.label("Drag: look · Scroll: move\nWASD: fly · Q/E: down/up\nShift: fast flight");
+            ui.label(format!(
+                "Flight: {FLIGHT_SPEED} · Fast: {FAST_FLIGHT_SPEED}\nModel lengths per second"
+            ));
+            ui.separator();
+            ui.label(&state.status);
+            ui.label(format!(
+                "Installation: {:.2} ms\nUpload: {} KiB",
+                state.last_install_ms,
+                state.last_upload_bytes / 1024
+            ));
+            ui.label(format!(
+                "Altitude: {:.2}",
+                camera.position.length() - PILOT_PLANET.radius
+            ));
+            if let Some(record) = &state.record {
+                ui.separator();
+                ui.label(format!(
+                    "Recording: {}\n{:.1} / {ROUTE_SECONDS} seconds",
+                    streaming_route(record.elapsed()).phase,
+                    record.elapsed()
+                ));
+            }
+            ui.separator();
+            ui.label("CPU source stays resident. Complete uploads start a short dithered replacement. No collision; flying inside terrain is possible.");
+        });
+    Ok(())
+}
