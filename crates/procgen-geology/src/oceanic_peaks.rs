@@ -1,6 +1,6 @@
 use crate::{
     HotspotField,
-    field::{GeologyInputError, MaxWinsField, position_in_cell},
+    field::{GeologyInputError, MaxWinsField},
 };
 use procgen_core::{
     RandomStream, Vec3,
@@ -200,38 +200,29 @@ pub fn derive_oceanic_peak_field(
     let (cell_densities, cell_kinds) = aggregate.into_parts();
     let presence = RandomStream::new(config.seed, OCEANIC_PEAK_PRESENCE);
     let positions = RandomStream::new(config.seed, OCEANIC_PEAK_POSITION);
-    let mut peaks = Vec::new();
-    for (cell, (&kind, &strength)) in cell_kinds.iter().zip(&cell_densities).enumerate() {
-        let Some(kind) = kind else {
-            continue;
-        };
-        // A density is per unit area, so a cell holds peaks in proportion to
-        // the area it covers: on a mesh twice as fine each cell carries half
-        // as many and the floor carries the same seamounts. The densities are
-        // stated against one cell of the default mesh, so a cell of that size
-        // carries exactly its own density.
-        let expected = strength * mesh.unit_cell_area(cell) / default_cell_area();
-        let height = strength
-            * match kind {
-                OceanicPeakKind::Seamount => config.maximum_seamount_height,
-                OceanicPeakKind::AbyssalHill => config.maximum_abyssal_hill_height,
-            };
-        peaks.extend(
-            (0..peak_count_in_cell(expected, presence, cell)).map(|peak| OceanicPeak {
+    let peaks: Vec<_> = (0..mesh.cell_count())
+        .filter_map(|cell| {
+            let kind = cell_kinds[cell]?;
+            let strength = cell_densities[cell];
+            // A density is per unit area, so a cell holds a peak in proportion
+            // to the area it covers: on a mesh twice as fine each cell draws
+            // half as often and the floor carries the same seamounts. The
+            // densities are stated against one cell of the default mesh, so a
+            // cell of that size draws exactly its own density.
+            let chance = strength * mesh.unit_cell_area(cell) / default_cell_area();
+            (presence.unit_f32(cell as u64, 0) < chance).then(|| OceanicPeak {
                 cell,
                 kind,
-                position: position_in_cell(
-                    mesh,
-                    cell,
-                    positions,
-                    peak,
-                    config.maximum_position_offset,
-                ),
+                position: position_in_cell(mesh, cell, positions, config.maximum_position_offset),
                 strength,
-                height,
-            }),
-        );
-    }
+                height: strength
+                    * match kind {
+                        OceanicPeakKind::Seamount => config.maximum_seamount_height,
+                        OceanicPeakKind::AbyssalHill => config.maximum_abyssal_hill_height,
+                    },
+            })
+        })
+        .collect();
     let seamount_peak_count = peaks
         .iter()
         .filter(|peak| peak.kind == OceanicPeakKind::Seamount)
@@ -294,19 +285,31 @@ fn validate_inputs(
     Ok(())
 }
 
-/// How many peaks a cell carries when a field asks for `density` of them per
-/// cell of the default mesh.
-///
-/// The count is exact in the density at any resolution. A cell whose share of
-/// the density is more than one peak takes every whole peak it asks for, and
-/// the fraction left over is the chance of one more: a rule that drew once per
-/// cell could never place the second, so on a mesh whose cells are larger than
-/// a peak's share of area the count saturated at one peak per cell rather than
-/// following the density. Where the share is below one this is the single draw
-/// that rule made.
-fn peak_count_in_cell(expected: f32, stream: RandomStream, cell: usize) -> usize {
-    let whole = expected.floor();
-    whole as usize + usize::from(stream.unit_f32(cell as u64, 0) < expected - whole)
+fn position_in_cell(
+    mesh: &SphereMesh,
+    cell: usize,
+    stream: RandomStream,
+    maximum_offset: f32,
+) -> Vec3 {
+    let corners = mesh.cell_corners(cell);
+    let corner_index = stream.sample_u64(cell as u64, 0) as usize % corners.len();
+    let mut first_weight = stream.unit_f32(cell as u64, 1);
+    let mut second_weight = stream.unit_f32(cell as u64, 2);
+    if first_weight + second_weight > 1.0 {
+        first_weight = 1.0 - first_weight;
+        second_weight = 1.0 - second_weight;
+    }
+    first_weight *= maximum_offset;
+    second_weight *= maximum_offset;
+    mesh.interpolate_cell_triangle(
+        cell,
+        corner_index,
+        [
+            1.0 - first_weight - second_weight,
+            first_weight,
+            second_weight,
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -375,88 +378,6 @@ mod tests {
         (hotspots, seafloor_age)
     }
 
-    /// A cell whose share of the density is more than one peak carries every
-    /// peak it asks for. The rule drew once per cell before, so a mesh whose
-    /// cells are larger than a peak's share of area could place only one and
-    /// the count saturated at the candidate cell count instead of following
-    /// the density.
-    #[test]
-    fn a_cell_carries_every_peak_its_area_asks_for() {
-        let mesh = mesh();
-        let (hotspots, ages) = inputs(&mesh);
-        // The crate's own densities, which are stated per cell of the default
-        // mesh. A cell here covers 256 of those, so most candidate cells ask
-        // for many peaks.
-        let config = OceanicPeakFieldConfig::new(19);
-        let field = derive_oceanic_peak_field(&mesh, &hotspots, &ages, config).unwrap();
-
-        let mut counts = vec![0usize; mesh.cell_count()];
-        for peak in &field.peaks {
-            counts[peak.cell] += 1;
-        }
-        let mut saturating_cells = 0;
-        let mut expected_total = 0.0_f64;
-        for (cell, (kind, &strength)) in field
-            .cell_kinds
-            .iter()
-            .zip(&field.cell_densities)
-            .enumerate()
-        {
-            if kind.is_none() {
-                assert_eq!(counts[cell], 0, "cell {cell} has peaks with no kind");
-                continue;
-            }
-            let expected = strength * mesh.unit_cell_area(cell) / default_cell_area();
-            expected_total += f64::from(expected);
-            saturating_cells += usize::from(expected > 1.0);
-            // Exactly the whole part, and one more or not as the fraction
-            // decides. Nothing else is a count this rule can produce.
-            let whole = expected.floor() as usize;
-            assert!(
-                counts[cell] == whole || counts[cell] == whole + 1,
-                "cell {cell} asked for {expected} and carries {}",
-                counts[cell]
-            );
-        }
-        // The old rule could not have placed these: one draw a cell caps the
-        // count at the number of candidate cells.
-        assert!(saturating_cells > 0, "the fixture must saturate somewhere");
-        assert!(
-            field.peaks.len() > field.diagnostics.oceanic_cell_count,
-            "{} peaks over {} oceanic cells is not past the old cap",
-            field.peaks.len(),
-            field.diagnostics.oceanic_cell_count
-        );
-        // The total is the density's own answer, to within the one fractional
-        // peak a cell rounds by.
-        let slack = mesh.cell_count() as f64;
-        assert!(
-            (field.peaks.len() as f64 - expected_total).abs() < slack,
-            "{} peaks against an expected {expected_total}",
-            field.peaks.len()
-        );
-
-        // Two peaks of one cell are two peaks, so they sit at their own
-        // positions rather than on top of each other.
-        let crowded = (0..mesh.cell_count())
-            .find(|&cell| counts[cell] > 1)
-            .expect("a cell must carry more than one peak");
-        let positions: Vec<_> = field
-            .peaks
-            .iter()
-            .filter(|peak| peak.cell == crowded)
-            .map(|peak| peak.position)
-            .collect();
-        for (index, position) in positions.iter().enumerate() {
-            assert!(
-                positions[index + 1..]
-                    .iter()
-                    .all(|other| (*other - *position).length() > 1.0e-6),
-                "cell {crowded} stacked two peaks at one point"
-            );
-        }
-    }
-
     #[test]
     fn field_is_deterministic_seeded_sparse_and_position_bounded() {
         let mesh = mesh();
@@ -479,9 +400,6 @@ mod tests {
         assert_eq!(first.cell_kinds, reseeded.cell_kinds);
         assert_ne!(first.peaks, reseeded.peaks);
         assert!(first.peaks.len() < first.diagnostics.oceanic_cell_count);
-        // Ascending, and at this density one peak a cell at most, which is
-        // all a cell of a mesh this coarse asks for once the density is
-        // stated against its own area.
         assert!(
             first
                 .peaks

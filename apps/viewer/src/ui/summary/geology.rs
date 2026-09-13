@@ -206,16 +206,6 @@ fn basin_summary(ui: &mut egui::Ui, world: &GeologyWorld) {
         stat(ui, "Components", world.basins.diagnostics.component_count);
         stat(ui, "Basins", world.basins.diagnostics.basin_count);
         stat(ui, "Basin cells", world.basins.diagnostics.basin_cell_count);
-        // Beside the count, because the count alone is a reading of the
-        // raster: a finer mesh cuts the same low ground into more components.
-        stat(
-            ui,
-            "Basin area",
-            format!(
-                "{:.2}% of land",
-                world.basins.diagnostics.basin_area_fraction * 100.0
-            ),
-        );
         stat(
             ui,
             "Rejected small",
