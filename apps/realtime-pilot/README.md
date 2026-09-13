@@ -231,11 +231,12 @@ released after extraction. The cheap overview covers the planet during source
 preparation and remains until all six initial coarse regions are ready.
 
 Coarse and medium meshes cluster tangential cell vertices in blocks of four
-and two respectively. Fine meshes retain the original vertices. Clustering
+and two respectively. Fine meshes use the refined collision surface described
+below. Clustering
 keeps radial layers separate, selects the mean position of the source vertices,
 and removes triangles collapsed to fewer than three distinct vertices. A cluster
 that reverses or flattens a surviving triangle retains its preceding-level
-vertices. Medium reduces fine; coarse reduces medium, so the coarse mesh cannot
+vertices. Medium reduces the base contour; coarse reduces medium, so the coarse mesh cannot
 restore triangles already removed by medium. This
 check repeats until neighboring changes preserve orientation. Blocks that
 contain separate cell parts stay at their preceding level. Complete closed
@@ -266,10 +267,10 @@ queue confirms completion of previously submitted work. Further
 replacement of that face waits for retirement.
 
 Managed source, job, staging, resident, and retiring-product reservations are
-capped at 128 MiB. Job reservations cover map scratch and worst-case region
-output from the actual source triangle count. Render accounting allows both
-CPU and GPU copies at 132 bytes per source triangle; indexed chunks normally
-use less. Initial fixed-grid source preparation has a separate conservative
+capped at 256 MiB after surface-quality slice 3. Job reservations cover reduction
+scratch and the larger fine-region output. Render accounting reserves both CPU
+and GPU copies at 156 bytes per expanded triangle per copy. The 512 KiB frame
+upload limit stays fixed. Initial source preparation has a separate conservative
 1 GiB working reservation and runs once with no concurrent region jobs. These
 are application buffer budgets, not a cap on Bevy, the driver, thread stacks,
 window buffers, or diagnostic screenshot readback. Process peak RSS is measured
@@ -306,9 +307,32 @@ remain flight controls. The walker is a sphere of radius 0.035; the camera is
 The sidebar reports the nearest accepted landmark within a chord distance of
 3, or no result. Decorations and posts do not have collision.
 
+### Fine geometry refinement
+
+Surface-quality slice 3 adds one conforming edge split inside fine regions.
+A shared edge is split only when both incident triangles lie outside the fixed
+four-cell collar. Triangles with one or two split edges form the transition to
+the unchanged collar; there are no hanging vertices, skirts, or overlapping
+patches. Each fully refined triangle becomes four triangles.
+
+New edge vertices search for a density root along the averaged endpoint normals,
+within one quarter of the edge length. Ten bisections refine a valid sign
+bracket. An absent bracket or zero normal retains the midpoint. Projections
+that reverse or flatten a child triangle are rejected on all incident triangles.
+The result retains the contour's connectivity; it does not discover new sheets
+below the original sampling resolution.
+
+The canonical refined CPU mesh is prepared once across the bounded planet for
+stable collision and placement. Fine render products copy its triangles only
+on nearby faces. Coarse and medium use the original contour reductions. This
+retains more CPU geometry rather than switching collision underneath the walker;
+it is not demand-paged high-resolution density. See the
+[slice 3 record](../../docs/realtime-world-surface-quality.md#slice-3-fine-geometry)
+for counts, validation, and memory costs.
+
 ### Collision and movement
 
-Collision uses the repaired fine source triangles. Render reduction, upload,
+Collision uses the repaired and refined fine source triangles. Render reduction, upload,
 dither, and retirement cannot change the collision surface. The query contract
 remains a **two-sided triangle query surface**. The topology repair adds no
 inside/outside classification or solid-volume physics behavior. It supports a kinematic sphere, not a
@@ -318,11 +342,14 @@ Before those uploads are ready, coarse render surfaces can differ from the
 fine contact surface; collision remains ready and stable.
 
 A bounding-volume hierarchy indexes canonical source triangles. A nearby patch
-holds at most 8,192 triangle IDs in a cube with half-width 0.6. Patches rebuild
+holds at most 32,768 triangle IDs in a cube with half-width 0.6. Patches rebuild
 before the walker leaves an inner margin. Sphere sweeps require the complete
 start/end swept bounds to fit the patch; missing coverage or an oversized patch
 stops movement and increments a visible failure count. Triangle distances drive
 conservative advancement; density magnitude is never used as a distance bound.
+Nearest-distance queries traverse the existing BVH near-first and prune nodes
+that cannot improve the result, while retaining the patch's exact candidate IDs.
+This avoids scanning the whole refined patch for every sweep iteration.
 Each sweep has at most 64 iterations; exhaustion rejects the sweep, retains
 its safe start, and reports a failure. A substep has at most four slide contacts.
 
@@ -353,10 +380,10 @@ population residency, not world-scale placement paging.
 Preparation sends the fine source to the render scheduler first. Collision
 indexing and population resolution then run on the preparation worker; coarse
 render installation can proceed during that work. Walking waits for collision
-readiness. A separate 8 MiB reservation covers collision indexing, nearby IDs,
-placement data, and population buffers within the existing 128 MiB managed cap.
-The index uses about 1.81 MiB for seed 42. Source preparation retains its separate
-1 GiB working reservation until extraction ends. Engine and driver allocations
+readiness. A 32 MiB reservation covers the larger collision index, nearby IDs,
+placement data, and population buffers within the 256 MiB managed cap.
+Source preparation retains its separate 1 GiB working reservation until contour
+extraction and refinement end. Engine and driver allocations
 remain outside these application buffer reservations.
 
 The walking recording starts at the first accepted candidate with clear

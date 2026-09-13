@@ -3,9 +3,9 @@ use crate::DetailSource;
 use procgen_core::Vec3;
 use std::{ops::Range, sync::Arc};
 
-pub const USABLE_MEMORY_RESERVATION: usize = 8 * 1024 * 1024;
+pub const USABLE_MEMORY_RESERVATION: usize = 32 * 1024 * 1024;
 pub const COLLISION_REACH: f32 = 0.6;
-const MAX_PATCH_TRIANGLES: usize = 8192;
+const MAX_PATCH_TRIANGLES: usize = 32768;
 pub const CONTACT_SKIN: f32 = 0.0001;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +41,10 @@ impl Bounds {
             min: p - r,
             max: p + r,
         }
+    }
+    fn distance_squared(self, p: Vec3) -> f32 {
+        let closest = components(components(p, self.min, f32::max), self.max, f32::min);
+        closest.distance_squared(p)
     }
     fn include(self, other: Self) -> Self {
         Self {
@@ -212,6 +216,49 @@ impl TerrainQueries {
         triangles.sort_unstable();
         Ok(CollisionPatch { center, triangles })
     }
+    // Traverse nearby BVH nodes first and prune by their distance lower bound.
+    // The patch's sorted IDs retain the exact candidate set used by the sweep.
+    fn nearest(&self, p: Vec3, candidates: &[usize]) -> Option<(f32, Vec3)> {
+        if candidates.is_empty() {
+            return None;
+        }
+        let mut best: Option<(f32, usize, Vec3)> = None;
+        let mut stack = vec![0];
+        while let Some(id) = stack.pop() {
+            let node = &self.nodes[id];
+            if best.is_some_and(|(d, _, _)| node.bounds.distance_squared(p) > d) {
+                continue;
+            }
+            if let Some([a, b]) = node.children {
+                let (near, far) = if self.nodes[a].bounds.distance_squared(p)
+                    <= self.nodes[b].bounds.distance_squared(p)
+                {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                stack.push(far);
+                stack.push(near);
+            } else {
+                for &triangle in &self.order[node.range.clone()] {
+                    if candidates.binary_search(&triangle).is_err() {
+                        continue;
+                    }
+                    if best.is_some_and(|(d, _, _)| self.bounds(triangle).distance_squared(p) > d) {
+                        continue;
+                    }
+                    let q = closest(p, self.triangle(triangle));
+                    let distance = p.distance_squared(q);
+                    if best
+                        .is_none_or(|(d, id, _)| distance < d || (distance == d && triangle < id))
+                    {
+                        best = Some((distance, triangle, q));
+                    }
+                }
+            }
+        }
+        best.map(|(d, _, q)| (d.sqrt(), q))
+    }
     pub fn exterior(&self, direction: Vec3) -> Option<SurfaceContact> {
         // Source vertices lie within this fixed pilot's validated spherical shell.
         let bounds = self.nodes[0].bounds;
@@ -267,13 +314,7 @@ impl CollisionPatch {
             && d.z.abs() + radius < COLLISION_REACH
     }
     pub fn clearance(&self, terrain: &TerrainQueries, p: Vec3) -> Option<(f32, Vec3)> {
-        self.triangles
-            .iter()
-            .map(|&id| {
-                let q = closest(p, terrain.triangle(id));
-                ((p - q).length(), q)
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
+        terrain.nearest(p, &self.triangles)
     }
     /// Conservative advancement uses exact triangle distance, never density magnitude.
     /// Iteration exhaustion rejects this sweep; the caller retains its safe start.
@@ -370,5 +411,40 @@ mod tests {
             patch.sweep(&terrain, Vec3::Z * 0.4, Vec3::X, 0.035),
             Err(ContactError::MissingCoverage)
         ));
+    }
+    #[test]
+    fn nearest_tree_search_matches_exhaustive_patch_distance() {
+        let positions: Vec<_> = crate::test_support::positions().collect();
+        let mesh = SurfaceMesh {
+            triangles: (0..positions.len() as u32 / 3)
+                .map(|i| SurfaceTriangle {
+                    vertices: [i * 3, i * 3 + 1, i * 3 + 2],
+                    region: RegionAddress {
+                        face: CubeFace::PositiveX,
+                    },
+                })
+                .collect(),
+            positions,
+        };
+        let terrain = TerrainQueries::new(crate::detail::test_source(mesh)).unwrap();
+        for center in [Vec3::ZERO, Vec3::X * 0.8, Vec3::Y * -0.8] {
+            let patch = terrain.patch(center).unwrap();
+            for p in crate::test_support::positions() {
+                let expected = patch
+                    .triangles
+                    .iter()
+                    .map(|&id| p.distance_squared(closest(p, terrain.triangle(id))))
+                    .min_by(f32::total_cmp)
+                    .unwrap()
+                    .sqrt();
+                let (actual, q) = patch.clearance(&terrain, p).unwrap();
+                assert!(
+                    (actual - expected).abs() < 0.000001,
+                    "actual={actual} expected={expected}"
+                );
+                assert!(((p - q).length() - actual).abs() < 0.000001);
+            }
+        }
+        assert!(terrain.nearest(Vec3::ZERO, &[]).is_none());
     }
 }

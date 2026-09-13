@@ -15,8 +15,8 @@ use crate::{
     sample_shell,
 };
 
-/// Fixed density resolution for this slice. Only mesh detail streams; the CPU
-/// contour source remains resident. Arbitrary-size density paging is not implied.
+/// Base density resolution. Fine geometry adds field-guided edge vertices.
+/// Canonical collision geometry stays resident; this is not density paging.
 pub const STREAM_SHELL: ShellConfig = ShellConfig {
     face_quads: 64,
     radial_cells: 16,
@@ -41,27 +41,42 @@ impl DetailLevel {
 
 pub struct DetailSource {
     pub(crate) field: PlanetField,
+    /// Canonical refined collision surface. Fine render products use these triangles.
     pub(crate) mesh: SurfaceMesh,
-    addresses: Vec<VertexAddress>,
-    normals: Vec<Vec3>,
-    regions: [Vec<usize>; 6],
+    base_mesh: SurfaceMesh,
+    fine_addresses: Vec<VertexAddress>,
+    fine_regions: [Vec<usize>; 6],
+    base_addresses: Vec<VertexAddress>,
+    base_normals: Vec<Vec3>,
+    base_regions: [Vec<usize>; 6],
 }
 impl DetailSource {
     pub fn allocated_bytes(&self) -> usize {
         self.mesh.positions.capacity() * size_of::<Vec3>()
             + self.mesh.triangles.capacity() * size_of::<SurfaceTriangle>()
-            + self.addresses.capacity() * size_of::<VertexAddress>()
-            + self.normals.capacity() * size_of::<Vec3>()
+            + self.base_mesh.positions.capacity() * size_of::<Vec3>()
+            + self.base_mesh.triangles.capacity() * size_of::<SurfaceTriangle>()
+            + self.fine_addresses.capacity() * size_of::<VertexAddress>()
             + self
-                .regions
+                .fine_regions
+                .iter()
+                .map(|r| r.capacity() * size_of::<usize>())
+                .sum::<usize>()
+            + self.base_addresses.capacity() * size_of::<VertexAddress>()
+            + self.base_normals.capacity() * size_of::<Vec3>()
+            + self
+                .base_regions
                 .iter()
                 .map(|r| r.capacity() * size_of::<usize>())
                 .sum::<usize>()
     }
     pub(crate) fn region_work_bytes(&self, face: CubeFace) -> usize {
-        self.mesh.triangles.len() * 256
-            + self.regions[face.index()].len() * 512
-            + self.addresses.len() * 256
+        let reduction = self.base_mesh.triangles.len() * 256
+            + self.base_regions[face.index()].len() * 512
+            + self.base_addresses.len() * 256;
+        let fine = self.fine_regions[face.index()].len() * 512
+            + self.mesh.positions.len() * size_of::<ReducedVertex>();
+        reduction.max(fine)
     }
     pub fn triangle_count(&self) -> usize {
         self.mesh.triangles.len()
@@ -81,23 +96,66 @@ pub fn prepare_detail(
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
-    let (mesh, addresses) = contour_source(&volume)?;
+    let (mesh, base_addresses) = contour_source(&volume)?;
     drop(volume);
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
-    let mut regions: [Vec<usize>; 6] = std::array::from_fn(|_| Vec::new());
-    for (id, triangle) in mesh.triangles.iter().enumerate() {
-        regions[triangle.region.face.index()].push(id);
-    }
+    let eligible: Vec<_> = mesh
+        .triangles
+        .iter()
+        .map(|t| {
+            t.vertices
+                .iter()
+                .all(|&v| !boundary(base_addresses[v as usize]))
+        })
+        .collect();
     let normals = mesh.vertex_normals();
+    let Some(refined) =
+        crate::refinement::refine_surface(field, &mesh, &eligible, &normals, cancel)
+    else {
+        return Ok(None);
+    };
+    refined.mesh.validate()?;
+    if !refined.mesh.topology().is_closed_manifold() {
+        return Err(PlanetError::Topology);
+    }
+    let mut next_part = BTreeMap::<usize, usize>::new();
+    for address in &base_addresses {
+        next_part
+            .entry(address.cell)
+            .and_modify(|n| *n = (*n).max(address.part + 1))
+            .or_insert(address.part + 1);
+    }
+    let mut fine_addresses = base_addresses.clone();
+    for edge in &refined.edges {
+        let cell = edge
+            .map(|i| base_addresses[i as usize].cell)
+            .into_iter()
+            .min()
+            .unwrap();
+        let part = next_part.get_mut(&cell).unwrap();
+        fine_addresses.push(VertexAddress { cell, part: *part });
+        *part += 1;
+    }
     Ok(Some(DetailSource {
         field: field.clone(),
-        mesh,
-        addresses,
-        normals,
-        regions,
+        base_regions: region_triangles(&mesh),
+        fine_regions: region_triangles(&refined.mesh),
+        mesh: refined.mesh,
+        base_mesh: mesh,
+        fine_addresses,
+        base_addresses,
+        base_normals: normals,
     }))
+}
+
+fn region_triangles(mesh: &SurfaceMesh) -> [Vec<usize>; 6] {
+    let mut regions: [Vec<usize>; 6] = std::array::from_fn(|_| Vec::new());
+    for (i, t) in mesh.triangles.iter().enumerate() {
+        regions[t.region.face.index()].push(i);
+    }
+    regions
 }
 
 pub struct RegionMesh {
@@ -168,16 +226,14 @@ fn reduce_vertices(
     level: DetailLevel,
     cancel: &AtomicBool,
 ) -> Option<Vec<ReducedVertex>> {
-    let fine: Vec<_> = source
-        .addresses
+    let base: Vec<_> = source
+        .base_addresses
         .iter()
-        .zip(&source.mesh.positions)
+        .zip(&source.base_mesh.positions)
         .map(|(&identity, &position)| ReducedVertex { identity, position })
         .collect();
-    if level == DetailLevel::Fine {
-        return Some(fine);
-    }
-    let medium = collapse_clusters(source, face, DetailLevel::Medium, &fine, cancel)?;
+    debug_assert_ne!(level, DetailLevel::Fine);
+    let medium = collapse_clusters(source, face, DetailLevel::Medium, &base, cancel)?;
     if level == DetailLevel::Medium {
         return Some(medium);
     }
@@ -197,7 +253,7 @@ fn collapse_clusters(
     let mut groups: BTreeMap<VertexAddress, Cluster> = BTreeMap::new();
     // Weight by original vertices at both levels so partition changes do not
     // alter the weighting of a surviving medium cluster.
-    for (&address, vertex) in source.addresses.iter().zip(previous) {
+    for (&address, vertex) in source.base_addresses.iter().zip(previous) {
         let position = vertex.position;
         if address.cell / cells_per_face == face.index() {
             let cluster = groups.entry(representative(address, level)).or_default();
@@ -209,7 +265,7 @@ fn collapse_clusters(
     // Component numbers are local to a cell, not correspondence across cells.
     // Keep every reduction block containing a split cell at its preceding level.
     let protected: BTreeSet<_> = source
-        .addresses
+        .base_addresses
         .iter()
         .filter(|a| a.part != 0)
         .map(|a| representative(*a, level).cell)
@@ -225,7 +281,7 @@ fn collapse_clusters(
             return None;
         }
         let vertices: Vec<_> = source
-            .addresses
+            .base_addresses
             .iter()
             .zip(previous)
             .map(|(&address, &vertex)| {
@@ -244,11 +300,11 @@ fn collapse_clusters(
             })
             .collect();
         let before = rejected.len();
-        for (offset, &id) in source.regions[face.index()].iter().enumerate() {
+        for (offset, &id) in source.base_regions[face.index()].iter().enumerate() {
             if offset % 1024 == 0 && cancel.load(Ordering::Relaxed) {
                 return None;
             }
-            let original = source.mesh.triangles[id].vertices.map(|i| i as usize);
+            let original = source.base_mesh.triangles[id].vertices.map(|i| i as usize);
             let next = original.map(|i| &vertices[i]);
             if next[0].identity == next[1].identity
                 || next[1].identity == next[2].identity
@@ -256,7 +312,7 @@ fn collapse_clusters(
             {
                 continue;
             }
-            let p = original.map(|i| source.mesh.positions[i]);
+            let p = original.map(|i| source.base_mesh.positions[i]);
             let normal = (p[1] - p[0]).cross(p[2] - p[0]);
             let prior = original.map(|i| previous[i].position);
             let prior_normal = (prior[1] - prior[0]).cross(prior[2] - prior[0]);
@@ -264,7 +320,7 @@ fn collapse_clusters(
                 (next[1].position - next[0].position).cross(next[2].position - next[0].position);
             if normal.dot(new_normal) <= 0.0 || prior_normal.dot(new_normal) <= 0.0 {
                 for i in original {
-                    let address = source.addresses[i];
+                    let address = source.base_addresses[i];
                     let group = representative(address, level);
                     if address.cell / cells_per_face == face.index() && groups[&group].count > 1 {
                         rejected.insert(group);
@@ -283,7 +339,7 @@ fn collapse_clusters(
             })
             .collect();
         let mapped: Vec<_> = source
-            .mesh
+            .base_mesh
             .triangles
             .iter()
             .map(|t| t.vertices.map(|i| remap[i as usize]))
@@ -294,10 +350,10 @@ fn collapse_clusters(
                 .copied()
                 .filter(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]),
         );
-        for (triangle, mapped) in source.mesh.triangles.iter().zip(mapped) {
+        for (triangle, mapped) in source.base_mesh.triangles.iter().zip(mapped) {
             if mapped.iter().any(|v| bad.contains(v)) {
                 for i in triangle.vertices {
-                    let address = source.addresses[i as usize];
+                    let address = source.base_addresses[i as usize];
                     if address.cell / cells_per_face == face.index() {
                         let group = representative(address, level);
                         if groups[&group].count > 1 {
@@ -320,7 +376,8 @@ fn collapse_clusters(
 }
 
 /// Cluster only tangentially inside each face; radial sheets remain separate.
-/// Medium reduces the fine source; coarse reduces medium. Clusters that reverse
+/// Fine uses the refined collision surface. Medium reduces the base contour;
+/// coarse reduces medium. Clusters that reverse
 /// or flatten a surviving triangle retain their preceding-level vertices.
 /// Triangles collapsed to fewer than three identities are removed. This is a
 /// render reduction; invalid closed vertex neighborhoods reject their clusters.
@@ -333,16 +390,33 @@ pub fn build_region(
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    let reduced = reduce_vertices(source, face, level, cancel)?;
+    let (mesh, region, reduced) = if level == DetailLevel::Fine {
+        (
+            &source.mesh,
+            &source.fine_regions[face.index()],
+            source
+                .fine_addresses
+                .iter()
+                .zip(&source.mesh.positions)
+                .map(|(&identity, &position)| ReducedVertex { identity, position })
+                .collect(),
+        )
+    } else {
+        (
+            &source.base_mesh,
+            &source.base_regions[face.index()],
+            reduce_vertices(source, face, level, cancel)?,
+        )
+    };
     let mut positions = Vec::new();
     let mut identities = Vec::new();
     let mut local_ids = BTreeMap::new();
     let mut triangles = Vec::new();
-    for (offset, &id) in source.regions[face.index()].iter().enumerate() {
+    for (offset, &id) in region.iter().enumerate() {
         if offset % 1024 == 0 && cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let triangle = source.mesh.triangles[id];
+        let triangle = mesh.triangles[id];
         let vertices = triangle.vertices.map(|id| {
             let id = id as usize;
             let reduced = &reduced[id];
@@ -369,8 +443,8 @@ pub fn build_region(
     let mut normals = surface.vertex_normals();
     for (&identity, normal) in identities.iter().zip(&mut normals) {
         if boundary(identity) {
-            *normal = source.normals[source
-                .addresses
+            *normal = source.base_normals[source
+                .base_addresses
                 .binary_search(&identity)
                 .expect("fixed border cell")];
         }
@@ -425,9 +499,15 @@ pub(crate) fn test_source(mesh: SurfaceMesh) -> std::sync::Arc<DetailSource> {
     std::sync::Arc::new(DetailSource {
         field: crate::PILOT_PLANET.validate(42).unwrap(),
         mesh,
-        addresses: Vec::new(),
-        normals: Vec::new(),
-        regions: std::array::from_fn(|_| Vec::new()),
+        base_mesh: SurfaceMesh {
+            positions: Vec::new(),
+            triangles: Vec::new(),
+        },
+        fine_addresses: Vec::new(),
+        fine_regions: std::array::from_fn(|_| Vec::new()),
+        base_addresses: Vec::new(),
+        base_normals: Vec::new(),
+        base_regions: std::array::from_fn(|_| Vec::new()),
     })
 }
 
@@ -448,6 +528,19 @@ mod tests {
             })
             .collect();
         for (face, levels) in products.iter().enumerate() {
+            let fine = &levels[2].surface;
+            assert_eq!(fine.triangles.len(), source.fine_regions[face].len());
+            assert!(fine.triangles.len() > source.base_regions[face].len() * 2);
+            for (render, &id) in fine.triangles.iter().zip(&source.fine_regions[face]) {
+                assert_eq!(
+                    render.vertices.map(|i| fine.positions[i as usize]),
+                    source.mesh.triangles[id]
+                        .vertices
+                        .map(|i| source.mesh.positions[i as usize]),
+                    "fine rendering and collision must use the same triangles"
+                );
+            }
+
             let counts = levels.each_ref().map(|p| p.surface.triangles.len());
             assert!(
                 counts[0] <= counts[1] && counts[1] <= counts[2],
@@ -467,7 +560,7 @@ mod tests {
                     assert_eq!(parent, c.identity, "medium vertex split at coarse LOD");
                 }
             }
-            for (level, product) in DetailLevel::ALL.into_iter().zip(levels) {
+            for (level, product) in DetailLevel::ALL.into_iter().zip(levels).take(2) {
                 let reduced =
                     reduce_vertices(&source, CubeFace::ALL[face], level, &cancel).unwrap();
                 let positions: BTreeMap<_, _> = product
@@ -476,13 +569,13 @@ mod tests {
                     .copied()
                     .zip(product.surface.positions().iter().copied())
                     .collect();
-                for &id in &source.regions[face] {
-                    let original = source.mesh.triangles[id].vertices.map(|v| v as usize);
+                for &id in &source.base_regions[face] {
+                    let original = source.base_mesh.triangles[id].vertices.map(|v| v as usize);
                     let ids = original.map(|v| reduced[v].identity);
                     if ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2] {
                         continue;
                     }
-                    let a = original.map(|v| source.mesh.positions[v]);
+                    let a = original.map(|v| source.base_mesh.positions[v]);
                     let b = ids.map(|id| positions[&id]);
                     assert!(
                         (a[1] - a[0])

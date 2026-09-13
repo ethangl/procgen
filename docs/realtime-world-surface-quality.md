@@ -69,8 +69,9 @@ neutral shading; comparisons begin after region coverage is ready.
 The mesh buffer now expands triangle corners to carry barycentric coordinates.
 The reservation is 156 bytes per triangle per copy, including positions,
 averaged normals, density normals plus LOD, UVs, and indices. The scheduler
-continues to reserve both CPU and GPU copies and enforce the existing 128 MiB
-managed limit and 512 KiB upload limit. Region memory also includes the added
+reserves both CPU and GPU copies. Slice 1 used a 128 MiB managed limit;
+slice 3 increases it to 256 MiB for refined geometry. The 512 KiB upload limit
+stays fixed. Region memory also includes the added
 normal vector. More vertices and CPU field queries are a measured inspection
 cost, not a claim of free rendering detail.
 
@@ -79,7 +80,8 @@ cost, not a claim of free rendering detail.
 1. Neutral surface inspection and normal comparison: complete.
 2. Repair demonstrated extraction defects, including ambiguous cells and
    nonmanifold surfaces: complete; see the repair record below.
-3. Generate finer nearby geometry with valid joins and collision support.
+3. Finer nearby geometry with valid joins and collision support: complete;
+   see the bounded refinement record below.
 4. Add restrained surface roughness and normal detail with stable mapping.
 
 Normal selection cannot repair topology, change a silhouette, or increase the
@@ -267,3 +269,111 @@ replacement jobs. Screenshot readbacks were enabled; these runs do not establish
 frame pacing. CSVs, summaries, view settings, replays, and screenshots are in
 `/tmp/procgen-surface-slice2`. Formatting, the full headless test suite, and
 Clippy with warnings denied pass.
+
+
+## Slice 3: fine geometry
+
+Fine render regions now split interior edges and place new vertices with fresh
+queries of the final density field. The base contour remains 64-by-64-by-16.
+Each edge has one shared new vertex. Its two incident triangles must both be
+outside the fixed four-cell face collar to permit a split. One-, two-, and
+three-edge triangle patterns fill the transition without hanging vertices.
+The collar's positions, triangles, and normal stencil remain unchanged at every
+LOD, including cube seams and corners.
+
+New positions start at edge midpoints. The search direction is the normalized
+sum of the endpoint mesh normals, and the search radius is one quarter of the
+edge length. A sign bracket gets ten bisections of the composed density.
+Stationary normals and missing brackets retain linear interpolation. A proposed
+position that reverses or flattens any child triangle is rejected for the
+shared edge; rejection repeats until all children retain parent orientation.
+Original contour vertices stay fixed. This is bounded geometric refinement,
+not an exact distance projection or a method for discovering unsampled caves.
+
+The canonical refined CPU surface is prepared once for all six faces and kept
+resident for collision and placement. Fine render products copy exactly its
+triangles on nearby faces; coarse and medium use their existing base-contour
+reductions. Collision does not switch during rendering fades, cancellation,
+or retirement. This slice adds useful geometry to the bounded pilot without
+claiming demand-paged density or arbitrary planet scale. General finer density
+extraction remains separate work.
+
+The refined surface and its BVH cost more memory. Managed reservations increase
+from 128 to 256 MiB, with collision/population reservations increasing from 8 to
+32 MiB. Region jobs reserve the larger of reduction scratch and fine output.
+The source-preparation reservation stays 1 GiB and the upload limit stays
+512 KiB per frame. These are application buffer reservations, not process-RSS
+or driver limits.
+
+Collision patches admit up to 32,768 triangle IDs. Closest-point queries visit
+the existing BVH near-first and reject nodes farther than the current best
+result. Membership in the patch's sorted IDs keeps the same candidate set.
+This avoids a complete triangle scan on every conservative-advancement step;
+collision continues to use exact triangle distances rather than density values.
+
+### Validation
+
+The sphere fixture shows over 90% reduction in midpoint radial error while
+preserving original vertices, outward winding, a closed manifold, and identical
+results with one and four workers. All eight split patterns preserve area,
+winding, and the expected boundary. Mixed-LOD tests check closed edges and
+vertex links, density ordering, and exact border positions and normals. They
+also compare every fine render triangle directly with its collision triangle.
+The BVH nearest search matches an exhaustive patch search. Existing contact,
+placement, cancellation, GPU-readiness bookkeeping, and replay tests pass.
+
+
+The fixed sweep again covers hills, ridges, and basins with seeds 0, 42, and
+4,294,967,338. All nine pass fine and mixed topology, contact clearance, and
+stationary support, with zero nonmanifold edges or vertices and zero rest drift.
+The minimum clearances range from 0.035012 to 0.035037. Source and walking
+fingerprints change because collision now includes the new geometry.
+
+| Preset, seed 42 | Base triangles | Refined fine triangles | Resident source bytes | Collision index bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Hills | 106,502 | 341,600 | 22,824,536 | 6,927,104 |
+| Ridges | 123,854 | 398,504 | 26,170,752 | 7,382,336 |
+| Basins | 83,232 | 266,360 | 20,369,432 | 6,325,184 |
+
+Each 36-second walking route takes 0.15–0.25 seconds of total CPU walking work
+in the audit, compared with several seconds in the preceding slice. Some
+individual steps still have scheduling outliers, up to 15.4 ms in this run;
+the sweep overlapped compilation, so it does not establish a frame-time bound.
+Preparation now takes 2.4–4.6 seconds. All nine cases remain flagged expensive
+because preparation exceeds the unchanged 1-second threshold. CPU records are
+in `/tmp/procgen-surface-slice3/sweep`, using build `31dec0cb57994b24`.
+
+All 37 tests pass, including a recording-finalization regression, as do Clippy
+with warnings denied and formatting checks.
+Windows/Vulkan validation remains open.
+
+
+Native ridges-42 flight with LOD colors and edges completed 4,048 frames, and
+neutral walking completed 4,251 frames. Both retained all six resident faces,
+exercised all three LODs, installed no obsolete tickets, and recorded no
+collision failures. Walking minimum clearance was 0.035012. Peak managed
+reservation was 242,982,880 bytes across those runs; the largest frame upload
+was 500,448 bytes. Both stay below their limits.
+
+The same-camera comparison uses the two held poses from slice 1. Ground views
+show new local relief and a changed silhouette; wireframe flight shows the
+extra edges within fine faces. Large original triangles and narrow inherited
+triangles remain apparent, so this is a bounded improvement rather than a
+uniform high-resolution surface. Neutral shading and lighting stay fixed.
+The older comparison predates the slice-2 topology repair as well; the slice-2
+wireframe captures provide the closer geometry baseline.
+
+The initial comparison also exposed an exit-frame recording bug: after saving
+the replay, a final redraw tried to save a second replay with only one pose.
+Completed recordings now ignore later frames. A regression verifies that CSV,
+replay, and summary files remain unchanged after completion. The failed first
+comparison is retained for evidence; `comparison-fixed` is the repeated run.
+
+The corrected comparison completed successfully with 4,216 frames and 4,216
+ordered replay poses, all taken from the input's two held views. It retained
+complete coverage with no obsolete installations or collision failures.
+Its peak managed reservation was 262,192,232 bytes (about 250 MiB), below the
+256 MiB limit but with limited headroom; its largest upload was 479,232 bytes.
+Build `1e9c92949d6d0387` includes the recording fix. All native artifacts are in
+`/tmp/procgen-surface-slice3`. Screenshot readbacks were enabled, so these runs
+establish coverage and visual comparisons rather than a frame-pacing bound.

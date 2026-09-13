@@ -8,7 +8,7 @@ mod planet_inspector;
 mod replay;
 #[cfg(feature = "inspector")]
 mod stream_inspector;
-#[cfg(feature = "inspector")]
+#[cfg(any(feature = "inspector", test))]
 mod stream_record;
 #[cfg(feature = "inspector")]
 mod stream_render;

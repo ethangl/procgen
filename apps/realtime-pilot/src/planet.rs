@@ -158,20 +158,25 @@ impl PlanetField {
     /// Outward normal of the final composed density at a mesh position.
     /// A stationary density returns zero; inspection must show it as undefined.
     pub(crate) fn density_normal(&self, position: Vec3) -> Vec3 {
-        let density = |p: Vec3| {
-            let radius = p.length();
-            let column = self.column(p * radius.recip());
-            column.density(self, radius - self.config.radius - column.height)
-        };
         // 0.001 model lengths resolves local detail below the 0.04375 radial
         // sample spacing while avoiding f32 cancellation at the radius-4 surface.
         let h = DENSITY_NORMAL_STEP;
         let gradient = Vec3::new(
-            density(position + Vec3::X * h) - density(position - Vec3::X * h),
-            density(position + Vec3::Y * h) - density(position - Vec3::Y * h),
-            density(position + Vec3::Z * h) - density(position - Vec3::Z * h),
+            self.density_at_position(position + Vec3::X * h)
+                - self.density_at_position(position - Vec3::X * h),
+            self.density_at_position(position + Vec3::Y * h)
+                - self.density_at_position(position - Vec3::Y * h),
+            self.density_at_position(position + Vec3::Z * h)
+                - self.density_at_position(position - Vec3::Z * h),
         );
         -gradient.normalized()
+    }
+
+    /// Final density at a finite, nonzero point near the validated shell.
+    pub(crate) fn density_at_position(&self, position: Vec3) -> f32 {
+        let radius = position.length();
+        let column = self.column(position * radius.recip());
+        column.density(self, radius - self.config.radius - column.height)
     }
 
     pub(crate) fn height(&self, direction: Vec3) -> f32 {

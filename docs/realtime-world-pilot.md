@@ -564,3 +564,12 @@ planet scale, exact noise and derivative composition, voxel-band dimensions,
 mesh boundary construction, and measured runtime budgets. Resolve each in
 the slice that first exercises it. Do not turn missing transcript detail into
 an undocumented claim about the original implementation.
+
+
+Surface-quality slice 3 adds field-guided edge refinement to nearby fine render
+regions, with an unchanged four-cell border and conforming split triangles at
+the transition. A canonical refined CPU surface supplies both collision and
+fine rendering; coarse and medium retain the base contour reductions. This
+bounded version keeps that surface resident and raises managed reservations to
+256 MiB, including 32 MiB for collision and population. The upload cap remains
+512 KiB per frame. See the [implementation and checks](realtime-world-surface-quality.md#slice-3-fine-geometry).

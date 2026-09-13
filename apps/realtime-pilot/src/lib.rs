@@ -13,6 +13,7 @@ mod placement;
 mod planet;
 mod presets;
 mod qef;
+mod refinement;
 mod routes;
 mod scenario;
 mod shell;

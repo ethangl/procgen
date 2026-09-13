@@ -13,7 +13,7 @@ use std::{
 };
 
 pub const SOURCE_WORK_RESERVATION: usize = 1024 * 1024 * 1024;
-pub const MANAGED_MEMORY_LIMIT: usize = 128 * 1024 * 1024;
+pub const MANAGED_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 pub const MAX_ACTIVE_JOBS: usize = 2;
 pub const UPLOAD_BYTES_PER_FRAME: usize = 512 * 1024;
 pub const INSTALL_MILLIS_PER_FRAME: f64 = 2.0;

@@ -102,6 +102,10 @@ impl Recording {
         view: StreamView,
         timing: FrameTiming,
     ) -> std::io::Result<Option<String>> {
+        // Exit processing can deliver another frame after the replay was saved.
+        if self.elapsed >= ROUTE_SECONDS {
+            return Ok(None);
+        }
         if self.poses.len() == MAX_FRAMES {
             return Err(std::io::Error::other("recording reached 16384 poses"));
         }
@@ -194,5 +198,94 @@ impl Recording {
         .map_err(|e| std::io::Error::other(e.to_string()))?;
         std::fs::write(self.config.path.with_extension("summary.txt"), &summary)?;
         Ok(Some(summary))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use procgen_core::Vec3;
+    use procgen_realtime_pilot::{PILOT_PLANET, prepare_detail};
+    use std::sync::{Arc, atomic::AtomicBool};
+    #[test]
+    fn completed_recording_ignores_frames_during_exit() {
+        let directory = std::env::temp_dir().join(format!(
+            "procgen-recording-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join("route.csv");
+        let scenario = Scenario {
+            seed: 42,
+            planet: PILOT_PLANET,
+            route: RecordingRoute::Flight,
+        };
+        let source = prepare_detail(&scenario.validate().unwrap(), &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        let world = StreamingWorld::new(Arc::new(source), 0).unwrap();
+        let mut recording = Recording::new(
+            RecordingConfig {
+                path: path.clone(),
+                screenshots: true,
+                surface_view: Default::default(),
+                replay_build: None,
+            },
+            scenario,
+        )
+        .unwrap();
+        let timing = |seconds| FrameTiming {
+            seconds,
+            install_ms: 0.0,
+            upload_bytes: 0,
+            walking_ms: 0.0,
+            population_ms: 0.0,
+            clearance: None,
+            grounded: false,
+            clamped_frames: 0,
+            collision_failures: 0,
+        };
+        let view = StreamView {
+            position: Vec3::Z * 13.0,
+            forward: -Vec3::Z,
+        };
+        assert!(
+            recording
+                .frame(&world, view, timing(20.0))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(recording.route(), RecordingRoute::Flight);
+        assert_eq!(recording.elapsed(), 20.0);
+        assert!(recording.screenshot().is_some());
+        assert!(
+            recording
+                .frame(&world, view, timing(16.1))
+                .unwrap()
+                .is_some()
+        );
+        let before = ["csv", "replay.json", "summary.txt"]
+            .map(|extension| std::fs::read(path.with_extension(extension)).unwrap());
+        assert!(
+            recording
+                .frame(&world, view, timing(0.016))
+                .unwrap()
+                .is_none()
+        );
+        let after = ["csv", "replay.json", "summary.txt"]
+            .map(|extension| std::fs::read(path.with_extension(extension)).unwrap());
+        assert_eq!(before, after);
+        assert_eq!(
+            Replay::load(&path.with_extension("replay.json"))
+                .unwrap()
+                .poses
+                .len(),
+            2
+        );
+        drop(recording);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
