@@ -83,12 +83,6 @@ fn evolution_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
         );
         stat(
             ui,
-            "Thickness transfers",
-            world.evolution.thickness_transfer_count,
-        );
-
-        stat(
-            ui,
             "Continental thickness",
             format!(
                 "{} to {}",

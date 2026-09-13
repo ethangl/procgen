@@ -89,7 +89,6 @@ pub(crate) struct TransportCounts {
     pub(crate) subducted_particle_count: usize,
     pub(crate) born_particle_count: usize,
     pub(crate) accreted_particle_count: usize,
-    pub(crate) thickness_transfer_count: usize,
 
     pub(crate) collided_cell_count: usize,
     pub(crate) maximum_collision_stack: usize,
@@ -279,11 +278,6 @@ impl EvolvingWorld<'_> {
         };
         self.pick_winners(boundaries, &mut resolution);
         self.merge_accreted(&resolution.accreted);
-        // Before the empty cells are filled, so that every column the flow
-        // reads stands in the cell that reads it: a cell that samples a
-        // neighbour's parcel would otherwise let one column give or take
-        // twice in one pass.
-        resolution.counts.thickness_transfer_count = self.flow_thickness(&resolution.winners);
         self.fill_empty_cells(birth_time, &mut resolution);
 
         self.project_to_cells(&mut resolution);

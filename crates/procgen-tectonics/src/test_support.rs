@@ -259,33 +259,17 @@ pub struct BaseElevationFixture {
     pub mesh: SphereMesh,
     pub age: SeafloorAge,
     pub cell_birth: Vec<Option<f32>>,
-    /// What the run under this fixture left, so the field the fixture derives
-    /// is the one the pipeline derives. The test that isolates the thickness
-    /// term sets its own.
-    pub cell_thickness: Vec<u32>,
-
     pub flow: FlowField,
 }
 
 impl BaseElevationFixture {
     pub fn derive(&self, config: BaseElevationConfig) -> BaseElevation {
-        self.derive_with_thickness(config, &self.cell_thickness)
-    }
-
-    /// The same over a chosen thickness column, for the test that isolates
-    /// what the crust under a cell does to it.
-    pub fn derive_with_thickness(
-        &self,
-        config: BaseElevationConfig,
-        cell_thickness: &[u32],
-    ) -> BaseElevation {
         derive_base_elevation(
             &self.mesh,
             &self.age,
             CellCrust {
                 cell_birth: &self.cell_birth,
             },
-            cell_thickness,
             &self.flow,
             config,
         )
@@ -308,7 +292,6 @@ pub fn base_elevation_fixture_with_crust(
         mesh,
         age,
         cell_birth: evolution.cell_birth,
-        cell_thickness: evolution.cell_thickness,
         flow: reference_flow_field(),
     }
 }
@@ -352,14 +335,10 @@ pub fn reference_base_elevation_config() -> BaseElevationConfig {
 /// and the crustal-thickness uplift — so that a continental cell stands at
 /// the margin taper's answer and nothing else.
 ///
-/// The thickness term belongs here for the same reason the other two do: a
-/// test about the taper is not about what a collision did to the reference
-/// run under it.
 pub fn curve_and_taper_only() -> BaseElevationConfig {
     BaseElevationConfig {
         dynamic_topography_amplitude: 0.0,
         basement_amplitude: 0.0,
-        thickness_uplift: 0.0,
         ..reference_base_elevation_config()
     }
 }

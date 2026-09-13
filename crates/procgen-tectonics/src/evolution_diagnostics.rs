@@ -34,9 +34,6 @@ pub struct PlateEvolutionDiagnostics {
     /// over steps, plus the orphans compaction merged. It is the count of
     /// events; what they made is thickness.
     pub accreted_particle_count: usize,
-    /// Parcels the flow pass moved from a column to a thinner neighbour,
-    /// summed over steps. It is what turns a spike into a plateau.
-    pub thickness_transfer_count: usize,
 
     /// Original parcels of continent before step zero and after the last
     /// step, summed over every column that holds any. The two are equal for
@@ -77,7 +74,6 @@ impl PlateEvolutionDiagnostics {
         self.subducted_particle_count += counts.subducted_particle_count;
         self.born_particle_count += counts.born_particle_count;
         self.accreted_particle_count += counts.accreted_particle_count;
-        self.thickness_transfer_count += counts.thickness_transfer_count;
 
         self.collided_cell_count += counts.collided_cell_count;
         self.maximum_collision_stack = self

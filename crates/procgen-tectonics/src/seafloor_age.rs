@@ -660,7 +660,6 @@ mod tests {
                 &fixture.mesh,
                 age,
                 run.cell_crust(),
-                &run.cell_thickness,
                 &reference_flow_field(),
                 reference_base_elevation_config(),
             )

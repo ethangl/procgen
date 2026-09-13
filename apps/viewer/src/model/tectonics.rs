@@ -184,7 +184,6 @@ impl TectonicsWorld {
                 CellCrust {
                     cell_birth: &cell_birth,
                 },
-                &cell_thickness,
                 // The field the plates were fitted to, rebuilt from the same
                 // config the fit read, so its dynamic topography and their
                 // motion describe one flow.

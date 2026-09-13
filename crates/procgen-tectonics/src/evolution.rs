@@ -257,12 +257,11 @@ mod tests {
         // two parcels into one column rather than losing one.
         assert_eq!(first.diagnostics.starting_continental_thickness, 174);
         assert_eq!(first.diagnostics.final_continental_thickness, 174);
-        assert_eq!(first.diagnostics.maximum_thickness, 3);
-        // Wider than the 27 cells accretion alone thickened: the flow pass
-        // spreads a column into its neighbours, which is the whole point of
-        // it.
-        assert_eq!(first.diagnostics.thickened_cell_count, 67);
-        assert_eq!(first.diagnostics.thickness_transfer_count, 16);
+        assert_eq!(first.diagnostics.maximum_thickness, 4);
+        // The cells accretion doubled, and no more: a merged column stands
+        // where the collision put it rather than spreading into its
+        // neighbours.
+        assert_eq!(first.diagnostics.thickened_cell_count, 47);
 
         // Plates of the reference world clear the minimum continental area a
         // rift needs, and every draw that took one cut it: a faster world

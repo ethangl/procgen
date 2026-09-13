@@ -390,7 +390,7 @@ struct_codec! {
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_length }
     PlateEvolutionConfig { seed, run_duration, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
-    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation, thickness_uplift }
+    BaseElevationConfig { seed, continental_base, ridge_elevation, deep_ocean_elevation, cooling_age, dynamic_topography_amplitude, basement_amplitude, basement_frequency, margin_width, margin_edge_elevation }
 
     BoundaryEffect { offset, depth }
     ContinentalRiftProfile { center_offset, flank_offset, decay_depth }
@@ -425,14 +425,14 @@ struct_codec! {
     CrustClassificationDiagnostics { continental_fraction, component_count }
     PlateKinematics { angular_velocities }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
-    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, accreted_particle_count, thickness_transfer_count, collided_cell_count
+    PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, accreted_particle_count, collided_cell_count
 , maximum_collision_stack, sampled_cell_count, starting_continental_thickness, final_continental_thickness, maximum_thickness, thickened_cell_count, covered_continental_particle_count, foreign_continental_particle_count, rift_count, failed_rift_count, suture_count }
 
     FieldSummary { minimum, maximum, mean }
     CrustBirthPriorDiagnostics { age, oceanic_cell_count, ridge_cell_count, ridge_plate_count, ridge_less_plate_count, fallback_cell_count }
     SeafloorAgeDiagnostics { summary, oceanic_cell_count }
     SeafloorAge { cell_ages, diagnostics }
-    BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, margin_depth, oceanic_cell_count, continental_cell_count, margin_cell_count, thickness_uplift, thickened_cell_count }
+    BaseElevationDiagnostics { summary, oceanic, dynamic_topography, basement, margin_depth, oceanic_cell_count, continental_cell_count, margin_cell_count }
 
     BaseElevation { cell_elevations, diagnostics }
     BoundaryDeformationDiagnostics { summary, source_cell_count, uplifted_cell_count, subsided_cell_count }
