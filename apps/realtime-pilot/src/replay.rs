@@ -102,6 +102,7 @@ impl Replay {
     }
     /// Step playback uses the exact captured pose preceding this elapsed time.
     /// It avoids inventing intermediate rotations during rapid turns.
+    #[cfg(any(feature = "inspector", test))]
     pub fn sample(&self, seconds: f32) -> StreamView {
         let i = self
             .poses

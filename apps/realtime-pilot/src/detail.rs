@@ -1,4 +1,5 @@
 //! Bounded CPU source and region mesh reduction for the streaming experiment.
+use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem::size_of,
@@ -38,7 +39,7 @@ impl DetailLevel {
 }
 
 pub struct DetailSource {
-    pub(crate) radius: f32,
+    pub(crate) field: PlanetField,
     pub(crate) mesh: SurfaceMesh,
     addresses: Vec<usize>,
     normals: Vec<Vec3>,
@@ -88,7 +89,7 @@ pub fn prepare_detail(
     }
     let normals = mesh.vertex_normals();
     Ok(Some(DetailSource {
-        radius: field.config().radius,
+        field: field.clone(),
         mesh,
         addresses,
         normals,
@@ -101,6 +102,7 @@ pub struct RegionMesh {
     /// Source-cell representatives survive remapping and identify shared borders.
     pub(crate) identities: Vec<usize>,
     normals: Vec<Vec3>,
+    density_normals: Vec<Vec3>,
 }
 impl RegionMesh {
     pub fn surface(&self) -> &SurfaceMesh {
@@ -109,11 +111,15 @@ impl RegionMesh {
     pub fn normals(&self) -> &[Vec3] {
         &self.normals
     }
+    pub fn density_normals(&self) -> &[Vec3] {
+        &self.density_normals
+    }
     pub fn allocated_bytes(&self) -> usize {
         self.surface.positions.capacity() * size_of::<Vec3>()
             + self.surface.triangles.capacity() * size_of::<SurfaceTriangle>()
             + self.identities.capacity() * size_of::<usize>()
             + self.normals.capacity() * size_of::<Vec3>()
+            + self.density_normals.capacity() * size_of::<Vec3>()
     }
 }
 
@@ -144,6 +150,7 @@ struct Cluster {
     sum: Vec3,
     count: usize,
 }
+#[derive(Clone, Copy)]
 struct ReducedVertex {
     identity: usize,
     position: Vec3,
@@ -155,9 +162,37 @@ fn reduce_vertices(
     level: DetailLevel,
     cancel: &AtomicBool,
 ) -> Option<Vec<ReducedVertex>> {
+    let fine: Vec<_> = source
+        .addresses
+        .iter()
+        .zip(&source.mesh.positions)
+        .map(|(&identity, &position)| ReducedVertex { identity, position })
+        .collect();
+    if level == DetailLevel::Fine {
+        return Some(fine);
+    }
+    let medium = collapse_clusters(source, face, DetailLevel::Medium, &fine, cancel)?;
+    if level == DetailLevel::Medium {
+        return Some(medium);
+    }
+    collapse_clusters(source, face, DetailLevel::Coarse, &medium, cancel)
+}
+
+/// Coarse clusters contain complete medium clusters. Rejected collapses retain
+/// the preceding level, so a coarser product cannot restore removed triangles.
+fn collapse_clusters(
+    source: &DetailSource,
+    face: CubeFace,
+    level: DetailLevel,
+    previous: &[ReducedVertex],
+    cancel: &AtomicBool,
+) -> Option<Vec<ReducedVertex>> {
     let cells_per_face = STREAM_SHELL.face_quads.pow(2) * STREAM_SHELL.radial_cells;
     let mut groups: BTreeMap<usize, Cluster> = BTreeMap::new();
-    for (&address, &position) in source.addresses.iter().zip(&source.mesh.positions) {
+    // Weight by original vertices at both levels so partition changes do not
+    // alter the weighting of a surviving medium cluster.
+    for (&address, vertex) in source.addresses.iter().zip(previous) {
+        let position = vertex.position;
         if address / cells_per_face == face.index() {
             let cluster = groups.entry(representative(address, level)).or_default();
             cluster.sum = cluster.sum + position;
@@ -172,20 +207,14 @@ fn reduce_vertices(
         let vertices: Vec<_> = source
             .addresses
             .iter()
-            .zip(&source.mesh.positions)
-            .map(|(&address, &position)| {
+            .zip(previous)
+            .map(|(&address, &vertex)| {
                 if address / cells_per_face != face.index() {
-                    return ReducedVertex {
-                        identity: address,
-                        position,
-                    };
+                    return vertex;
                 }
                 let identity = representative(address, level);
                 if rejected.contains(&identity) {
-                    return ReducedVertex {
-                        identity: address,
-                        position,
-                    };
+                    return vertex;
                 }
                 let cluster = &groups[&identity];
                 ReducedVertex {
@@ -209,9 +238,11 @@ fn reduce_vertices(
             }
             let p = original.map(|i| source.mesh.positions[i]);
             let normal = (p[1] - p[0]).cross(p[2] - p[0]);
+            let prior = original.map(|i| previous[i].position);
+            let prior_normal = (prior[1] - prior[0]).cross(prior[2] - prior[0]);
             let new_normal =
                 (next[1].position - next[0].position).cross(next[2].position - next[0].position);
-            if normal.dot(new_normal) <= 0.0 {
+            if normal.dot(new_normal) <= 0.0 || prior_normal.dot(new_normal) <= 0.0 {
                 for i in original {
                     let address = source.addresses[i];
                     let group = representative(address, level);
@@ -230,8 +261,9 @@ fn reduce_vertices(
 }
 
 /// Cluster only tangentially inside each face; radial sheets remain separate.
-/// Clusters that reverse or flatten a surviving triangle retain their fine
-/// vertices. Triangles collapsed to fewer than three identities are removed. This is a
+/// Medium reduces the fine source; coarse reduces medium. Clusters that reverse
+/// or flatten a surviving triangle retain their preceding-level vertices.
+/// Triangles collapsed to fewer than three identities are removed. This is a
 /// render reduction, not a new density sampling backend or a manifold repair.
 pub fn build_region(
     source: &DetailSource,
@@ -284,7 +316,17 @@ pub fn build_region(
                 .expect("fixed border cell")];
         }
     }
+    let sample = |p: &Vec3| source.field.density_normal(*p);
+    let density_normals = if surface.positions.len() >= 1024 {
+        surface.positions.par_iter().map(sample).collect()
+    } else {
+        surface.positions.iter().map(sample).collect()
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     Some(RegionMesh {
+        density_normals,
         surface,
         identities,
         normals,
@@ -322,7 +364,7 @@ pub(crate) fn join_regions<'a>(regions: impl IntoIterator<Item = &'a RegionMesh>
 #[cfg(test)]
 pub(crate) fn test_source(mesh: SurfaceMesh) -> std::sync::Arc<DetailSource> {
     std::sync::Arc::new(DetailSource {
-        radius: 4.0,
+        field: crate::PILOT_PLANET.validate(42).unwrap(),
         mesh,
         addresses: Vec::new(),
         normals: Vec::new(),
@@ -347,6 +389,25 @@ mod tests {
             })
             .collect();
         for (face, levels) in products.iter().enumerate() {
+            let counts = levels.each_ref().map(|p| p.surface.triangles.len());
+            assert!(
+                counts[0] <= counts[1] && counts[1] <= counts[2],
+                "face={face}: coarse, medium, fine triangle counts {counts:?}"
+            );
+            // No medium vertex can split into several coarse vertices. This
+            // checks the local hierarchy as well as the whole-face counts.
+            let medium =
+                reduce_vertices(&source, CubeFace::ALL[face], DetailLevel::Medium, &cancel)
+                    .unwrap();
+            let coarse =
+                reduce_vertices(&source, CubeFace::ALL[face], DetailLevel::Coarse, &cancel)
+                    .unwrap();
+            let mut parents = BTreeMap::new();
+            for (m, c) in medium.iter().zip(&coarse) {
+                if let Some(parent) = parents.insert(m.identity, c.identity) {
+                    assert_eq!(parent, c.identity, "medium vertex split at coarse LOD");
+                }
+            }
             for (level, product) in DetailLevel::ALL.into_iter().zip(levels) {
                 let reduced =
                     reduce_vertices(&source, CubeFace::ALL[face], level, &cancel).unwrap();
@@ -379,16 +440,21 @@ mod tests {
         let mut borders = BTreeMap::new();
         for levels in &products {
             for product in levels {
-                for ((&identity, &p), &normal) in product
+                for (((&identity, &p), &normal), &density_normal) in product
                     .identities
                     .iter()
                     .zip(product.surface.positions())
                     .zip(product.normals())
+                    .zip(product.density_normals())
                 {
+                    assert!(density_normal.is_finite());
+                    let length = density_normal.length();
+                    assert!(length == 0.0 || (length - 1.0).abs() < 0.001);
                     if boundary(identity)
-                        && let Some(previous) = borders.insert(identity, (p, normal))
+                        && let Some(previous) =
+                            borders.insert(identity, (p, normal, density_normal))
                     {
-                        assert_eq!((p, normal), previous);
+                        assert_eq!((p, normal, density_normal), previous);
                     }
                 }
             }

@@ -2,7 +2,8 @@
 
 Status: slices 1–5 are implemented as bounded pilot experiments. Metal and CPU
 measurements are recorded; Windows/Vulkan validation and the full frame-pacing
-objective remain open.
+objective remain open. Neutral surface inspection is implemented as the first
+[surface-quality slice](realtime-world-surface-quality.md).
 
 ## Purpose
 

@@ -32,7 +32,9 @@ pub use volume::{Axis, INSPECTION_GRID, Volume, VolumeGrid, sample_volume};
 pub use contour::{
     MeshTopology, OVERVIEW_FACE_QUADS, SurfaceMesh, SurfaceTriangle, contour_shell, planet_overview,
 };
-pub use planet::{PILOT_PLANET, PlanetConfig, PlanetError, PlanetField, RadialBand};
+pub use planet::{
+    DENSITY_NORMAL_STEP, PILOT_PLANET, PlanetConfig, PlanetError, PlanetField, RadialBand,
+};
 pub use shell::{PILOT_SHELL, RegionAddress, ShellConfig, ShellVolume, sample_shell};
 
 pub use detail::{

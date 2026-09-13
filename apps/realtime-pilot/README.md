@@ -231,7 +231,9 @@ Coarse and medium meshes cluster tangential cell vertices in blocks of four
 and two respectively. Fine meshes retain the original vertices. Clustering
 keeps radial layers separate, selects the mean position of the source vertices,
 and removes triangles collapsed to fewer than three distinct vertices. A cluster
-that reverses or flattens a surviving triangle retains its fine vertices; this
+that reverses or flattens a surviving triangle retains its preceding-level
+vertices. Medium reduces fine; coarse reduces medium, so the coarse mesh cannot
+restore triangles already removed by medium. This
 check repeats until neighboring changes preserve orientation.
 Every face retains a four-cell fine collar. The collar's sample identities,
 positions, and normals are identical at every detail level. Mixed-detail joins
@@ -450,3 +452,23 @@ flight/ground images; the CPU sweep itself does not produce GPU screenshots.
 
 Results and remaining pilot limits are in
 [the variety report](../../docs/realtime-world-variety-results.md).
+
+## Neutral surface inspection
+
+The streaming inspector now starts in neutral gray with fixed lighting. Select
+averaged mesh, triangle-face, or final-density normals without regenerating the
+world. LOD colors remain available, alongside normal-direction and
+mesh/density-agreement overlays. **Triangle edges** can be combined with any
+view. Magenta identifies an undefined normal.
+
+```sh
+cargo run -p procgen-realtime-pilot -- --stream --preset ridges --seed 42 \
+  --normals triangle --wireframe
+```
+
+Use `--normals averaged|triangle|density` and
+`--surface neutral|lod|normals|agreement` with saved camera replays for matched
+comparisons. Recordings save a separate `.view.json`; generation cases and
+camera paths keep their existing formats. See
+[surface quality](../../docs/realtime-world-surface-quality.md) for the normal
+contract, memory cost, comparison procedure, and findings.

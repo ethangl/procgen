@@ -1,6 +1,8 @@
 use crate::replay::Replay;
 use crate::stream_record::{FrameTiming, Recording, RecordingConfig, RecordingRoute};
 use crate::stream_render::{UploadBridge, chunk_mesh, full_visibility};
+use crate::surface_material::{SurfaceMaterial, SurfacePlugin};
+use crate::surface_view::SurfaceViewConfig;
 use crate::usable_inspector::{UsableState, population};
 use bevy::{
     camera::visibility::VisibilityRange,
@@ -50,6 +52,7 @@ struct Inspector {
     status: String,
     record: Option<Recording>,
     scenario: Scenario,
+    surface_view: SurfaceViewConfig,
     replay: Option<Replay>,
     last_install_ms: f64,
     last_upload_bytes: usize,
@@ -85,18 +88,20 @@ struct FlightCamera;
 #[derive(Component)]
 struct Overview;
 #[derive(Resource)]
-struct TerrainMaterial(Handle<StandardMaterial>);
+struct TerrainMaterial(Handle<SurfaceMaterial>);
 
 pub fn run(
     scenario: Scenario,
+    surface_view: SurfaceViewConfig,
     record: Option<RecordingConfig>,
     replay: Option<Replay>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let seed = scenario.seed;
     let field = scenario.validate()?;
     let overview = planet_overview(&field, OVERVIEW_FACE_QUADS)?;
-    let overview_mesh =
+    let mut overview_mesh =
         crate::planet_inspector::render_mesh(&overview, Vec3::ZERO, false, scenario.planet.radius);
+    overview_mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
     let record = record
         .map(|path| Recording::new(path, scenario))
         .transpose()?;
@@ -136,6 +141,7 @@ pub fn run(
         status: "Preparing bounded CPU source…".into(),
         record,
         scenario,
+        surface_view,
         replay,
         last_install_ms: 0.0,
         last_upload_bytes: 0,
@@ -161,12 +167,17 @@ pub fn run(
             }),
             ..default()
         }))
-        .add_plugins((EguiPlugin::default(), UploadBridge::default()))
+        .add_plugins((
+            EguiPlugin::default(),
+            UploadBridge::default(),
+            SurfacePlugin,
+        ))
         .add_systems(
             Startup,
             move |mut commands: Commands,
                   mut meshes: ResMut<Assets<Mesh>>,
                   mut materials: ResMut<Assets<StandardMaterial>>,
+                  mut surface_materials: ResMut<Assets<SurfaceMaterial>>,
                   camera: Res<CameraState>| {
                 commands.spawn((
                     Camera3d::default(),
@@ -187,11 +198,13 @@ pub fn run(
                     Transform::from_xyz(8.0, 12.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
                 ));
                 let material = materials.add(StandardMaterial {
-                    base_color: Color::WHITE,
+                    base_color: Color::srgb(0.55, 0.55, 0.55),
                     perceptual_roughness: 0.9,
                     ..default()
                 });
-                commands.insert_resource(TerrainMaterial(material.clone()));
+                commands.insert_resource(TerrainMaterial(
+                    surface_materials.add(crate::surface_material::material(surface_view)),
+                ));
                 commands.spawn((
                     Mesh3d(meshes.add(overview_mesh.clone())),
                     MeshMaterial3d(material),
@@ -634,10 +647,13 @@ fn record_frame(
 }
 fn ui(
     mut contexts: EguiContexts,
-    state: NonSend<Inspector>,
+    mut state: NonSendMut<Inspector>,
     camera: Res<CameraState>,
     usable: Res<UsableState>,
+    material: Res<TerrainMaterial>,
+    mut materials: ResMut<Assets<SurfaceMaterial>>,
 ) -> Result {
+    let previous = state.surface_view;
     egui::SidePanel::left("stream-controls")
         .exact_width(280.0)
         .show(contexts.ctx_mut()?, |ui| {
@@ -652,9 +668,8 @@ fn ui(
             if let Some(replay)=&state.replay {
                 ui.label(format!("Camera replay · source build {}",replay.case.build));
             }
-            ui.label("Slice 5 · variety and replay");
-            ui.separator();
-            ui.label("Blue: coarse · Green: medium\nGold: fine · Fixed fine borders");
+            let recording = state.record.is_some();
+            crate::surface_material::controls(ui, &mut state.surface_view, recording);
             ui.separator();
             ui.label("Drag: look · Scroll: move\nWASD: fly · Q/E: down/up\nShift: fast flight");
             ui.label(format!(
@@ -685,5 +700,11 @@ fn ui(
             ui.label("CPU source stays resident. Complete uploads start a short dithered replacement. G enables walking on fixed fine collision. Rocks and landmarks are visual only.");
             });
         });
+    if state.surface_view != previous {
+        materials
+            .get_mut(&material.0)
+            .expect("surface material")
+            .extension = state.surface_view.into();
+    }
     Ok(())
 }

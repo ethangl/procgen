@@ -13,6 +13,7 @@ pub use procgen_realtime_pilot::RouteKind as RecordingRoute;
 pub struct RecordingConfig {
     pub path: PathBuf,
     pub screenshots: bool,
+    pub surface_view: crate::surface_view::SurfaceViewConfig,
     pub replay_build: Option<String>,
 }
 pub struct FrameTiming {
@@ -45,6 +46,10 @@ impl Recording {
         Case::new(scenario)
             .save(&config.path.with_extension("case.json"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        std::fs::write(
+            config.path.with_extension("view.json"),
+            serde_json::to_vec_pretty(&config.surface_view).map_err(std::io::Error::other)?,
+        )?;
         let mut writer = BufWriter::new(File::create(&config.path)?);
         writeln!(
             writer,
@@ -165,9 +170,10 @@ impl Recording {
         self.frames.sort_by(f64::total_cmp);
         let percentile = |p: f64| self.frames[((self.frames.len() - 1) as f64 * p) as usize];
         let summary = format!(
-            "build={BUILD_ID}\nreplay_source_build={:?}\ntoolchain={TOOLCHAIN}\nplatform={}\nroute={:?}\nseed={}\nplanet={:#?}\nsource_work_reservation_bytes={SOURCE_WORK_RESERVATION}\nmanaged_limit_bytes={MANAGED_MEMORY_LIMIT}\nviewport=1280x900 logical pixels\nscreenshots={}\nroute_seconds={}\nframes={}\nframe_p50_ms={:.3}\nframe_p95_ms={:.3}\nframe_p99_ms={:.3}\nframe_max_ms={:.3}\nstats={stats:?}\n",
+            "build={BUILD_ID}\nreplay_source_build={:?}\ntoolchain={TOOLCHAIN}\nplatform={}\nsurface_view={:?}\nroute={:?}\nseed={}\nplanet={:#?}\nsource_work_reservation_bytes={SOURCE_WORK_RESERVATION}\nmanaged_limit_bytes={MANAGED_MEMORY_LIMIT}\nviewport=1280x900 logical pixels\nscreenshots={}\nroute_seconds={}\nframes={}\nframe_p50_ms={:.3}\nframe_p95_ms={:.3}\nframe_p99_ms={:.3}\nframe_max_ms={:.3}\nstats={stats:?}\n",
             self.config.replay_build,
             std::env::consts::OS,
+            self.config.surface_view,
             self.scenario.route,
             self.scenario.seed,
             self.scenario.planet,
