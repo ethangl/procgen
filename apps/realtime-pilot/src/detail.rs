@@ -291,6 +291,34 @@ pub fn build_region(
     })
 }
 
+pub(crate) fn join_regions<'a>(regions: impl IntoIterator<Item = &'a RegionMesh>) -> SurfaceMesh {
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    let mut ids = BTreeMap::new();
+    for product in regions {
+        let remap: Vec<_> = product
+            .identities
+            .iter()
+            .zip(product.surface.positions())
+            .map(|(&identity, &p)| {
+                *ids.entry(identity).or_insert_with(|| {
+                    let i = positions.len() as u32;
+                    positions.push(p);
+                    i
+                })
+            })
+            .collect();
+        triangles.extend(product.surface.triangles().iter().map(|t| SurfaceTriangle {
+            vertices: t.vertices.map(|i| remap[i as usize]),
+            region: t.region,
+        }));
+    }
+    SurfaceMesh {
+        positions,
+        triangles,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_source(mesh: SurfaceMesh) -> std::sync::Arc<DetailSource> {
     std::sync::Arc::new(DetailSource {
@@ -366,32 +394,12 @@ mod tests {
             }
         }
         for offset in 0..3 {
-            let mut positions = Vec::new();
-            let mut triangles = Vec::new();
-            let mut ids = BTreeMap::new();
-            for (face, levels) in products.iter().enumerate() {
-                let product = &levels[(face + offset) % 3];
-                let remap: Vec<_> = product
-                    .identities
+            let mixed = join_regions(
+                products
                     .iter()
-                    .zip(product.surface.positions())
-                    .map(|(&identity, &p)| {
-                        *ids.entry(identity).or_insert_with(|| {
-                            let i = positions.len() as u32;
-                            positions.push(p);
-                            i
-                        })
-                    })
-                    .collect();
-                triangles.extend(product.surface.triangles().iter().map(|t| SurfaceTriangle {
-                    vertices: t.vertices.map(|i| remap[i as usize]),
-                    region: t.region,
-                }));
-            }
-            let mixed = SurfaceMesh {
-                positions,
-                triangles,
-            };
+                    .enumerate()
+                    .map(|(face, levels)| &levels[(face + offset) % 3]),
+            );
             mixed.validate().unwrap();
             let topology = mixed.topology();
             assert_eq!(topology.open_edges, 0, "{topology:?}");

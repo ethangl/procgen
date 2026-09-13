@@ -1,6 +1,7 @@
+use crate::replay::{Case, MAX_FRAMES, Pose, Replay};
 use procgen_realtime_pilot::{
-    DetailLevel, MANAGED_MEMORY_LIMIT, PILOT_PLANET, ROUTE_SECONDS, SOURCE_WORK_RESERVATION,
-    StreamView, StreamingWorld, streaming_route,
+    BUILD_ID, DetailLevel, MANAGED_MEMORY_LIMIT, ROUTE_SECONDS, SOURCE_WORK_RESERVATION, Scenario,
+    StreamView, StreamingWorld, TOOLCHAIN, streaming_route,
 };
 use std::{
     fs::File,
@@ -8,15 +9,11 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecordingRoute {
-    Flight,
-    Walk,
-}
+pub use procgen_realtime_pilot::RouteKind as RecordingRoute;
 pub struct RecordingConfig {
-    pub route: RecordingRoute,
     pub path: PathBuf,
     pub screenshots: bool,
+    pub replay_build: Option<String>,
 }
 pub struct FrameTiming {
     pub seconds: f64,
@@ -35,15 +32,19 @@ pub struct Recording {
     elapsed: f32,
     frames: Vec<f64>,
     last_capture: Option<&'static str>,
-    seed: u64,
+    scenario: Scenario,
+    poses: Vec<Pose>,
 }
 impl Recording {
-    pub fn new(config: RecordingConfig, seed: u64) -> std::io::Result<Self> {
+    pub fn new(config: RecordingConfig, scenario: Scenario) -> std::io::Result<Self> {
         if let Some(parent) = config.path.parent()
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent)?;
         }
+        Case::new(scenario)
+            .save(&config.path.with_extension("case.json"))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         let mut writer = BufWriter::new(File::create(&config.path)?);
         writeln!(
             writer,
@@ -55,14 +56,15 @@ impl Recording {
             elapsed: 0.0,
             frames: Vec::new(),
             last_capture: None,
-            seed,
+            scenario,
+            poses: Vec::new(),
         })
     }
     pub fn route(&self) -> RecordingRoute {
-        self.config.route
+        self.scenario.route
     }
     pub fn phase(&self) -> (&'static str, f32) {
-        if self.config.route == RecordingRoute::Flight {
+        if self.scenario.route == RecordingRoute::Flight {
             let r = streaming_route(self.elapsed);
             return (r.phase, r.phase_seconds);
         }
@@ -95,6 +97,10 @@ impl Recording {
         view: StreamView,
         timing: FrameTiming,
     ) -> std::io::Result<Option<String>> {
+        if self.poses.len() == MAX_FRAMES {
+            return Err(std::io::Error::other("recording reached 16384 poses"));
+        }
+        self.poses.push(Pose::new(self.elapsed, view));
         let stats = world.stats();
         let (phase, _) = self.phase();
         let p = view.position;
@@ -159,9 +165,12 @@ impl Recording {
         self.frames.sort_by(f64::total_cmp);
         let percentile = |p: f64| self.frames[((self.frames.len() - 1) as f64 * p) as usize];
         let summary = format!(
-            "route={:?}\nseed={}\nplanet={PILOT_PLANET:#?}\nsource_work_reservation_bytes={SOURCE_WORK_RESERVATION}\nmanaged_limit_bytes={MANAGED_MEMORY_LIMIT}\nviewport=1280x900 logical pixels\nscreenshots={}\nroute_seconds={}\nframes={}\nframe_p50_ms={:.3}\nframe_p95_ms={:.3}\nframe_p99_ms={:.3}\nframe_max_ms={:.3}\nstats={stats:?}\n",
-            self.config.route,
-            self.seed,
+            "build={BUILD_ID}\nreplay_source_build={:?}\ntoolchain={TOOLCHAIN}\nplatform={}\nroute={:?}\nseed={}\nplanet={:#?}\nsource_work_reservation_bytes={SOURCE_WORK_RESERVATION}\nmanaged_limit_bytes={MANAGED_MEMORY_LIMIT}\nviewport=1280x900 logical pixels\nscreenshots={}\nroute_seconds={}\nframes={}\nframe_p50_ms={:.3}\nframe_p95_ms={:.3}\nframe_p99_ms={:.3}\nframe_max_ms={:.3}\nstats={stats:?}\n",
+            self.config.replay_build,
+            std::env::consts::OS,
+            self.scenario.route,
+            self.scenario.seed,
+            self.scenario.planet,
             self.config.screenshots,
             self.elapsed,
             self.frames.len(),
@@ -171,6 +180,12 @@ impl Recording {
             self.frames.last().expect("recorded frame")
         );
         self.writer.flush()?;
+        Replay {
+            case: Case::new(self.scenario),
+            poses: std::mem::take(&mut self.poses),
+        }
+        .save(&self.config.path.with_extension("replay.json"))
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
         std::fs::write(self.config.path.with_extension("summary.txt"), &summary)?;
         Ok(Some(summary))
     }

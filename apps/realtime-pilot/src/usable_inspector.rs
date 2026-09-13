@@ -88,23 +88,11 @@ impl UsableState {
     pub fn recorded_walk(&mut self, seconds: f32, dt: f32) -> Result<(Vec3, Vec3), String> {
         if self.walker.is_none() {
             let terrain = self.terrain.as_ref().ok_or("waiting for collision")?;
-            let walker = terrain
-                .population
-                .placements()
-                .iter()
-                .find_map(|p| Walker::land(&terrain.queries, p.position).ok())
-                .ok_or("no clear route landing")?;
+            let walker =
+                procgen_realtime_pilot::route_walker(terrain).map_err(|e| e.to_string())?;
             self.walker = Some(walker);
         }
-        let input = if seconds < 12.0 {
-            Vec3::X
-        } else if seconds < 18.0 {
-            Vec3::ZERO
-        } else if seconds < 30.0 {
-            -Vec3::X
-        } else {
-            Vec3::ZERO
-        };
+        let input = vector(procgen_realtime_pilot::walking_input(seconds));
         let position = self.walk(input, dt).expect("route walker");
         let up = self.up();
         let tangent = (Vec3::X - up * up.x).normalize();

@@ -4,6 +4,7 @@
 mod collision;
 mod contour;
 mod detail;
+mod evaluation;
 mod field;
 mod noise;
 mod placement;
@@ -11,6 +12,7 @@ mod planet;
 mod presets;
 mod qef;
 mod routes;
+mod scenario;
 mod shell;
 mod streaming;
 mod terrain;
@@ -44,7 +46,10 @@ pub use streaming::{
     UploadPiece,
 };
 
-pub use routes::{FAST_FLIGHT_SPEED, FLIGHT_SPEED, ROUTE_SECONDS, RouteSample, streaming_route};
+pub use routes::{
+    FAST_FLIGHT_SPEED, FLIGHT_SPEED, ROUTE_SECONDS, RouteSample, route_walker, streaming_route,
+    walking_input,
+};
 
 pub use collision::{
     COLLISION_REACH, CONTACT_SKIN, CollisionPatch, ContactError, SurfaceContact, TerrainQueries,
@@ -58,3 +63,10 @@ pub use placement::{
 pub use walking::{EYE_HEIGHT, MAX_WALK_SECONDS, WALK_RADIUS, WALK_SPEED, WALKABLE_COSINE, Walker};
 
 pub use usable::{UsableError, UsableTerrain};
+
+pub use scenario::{BUILD_ID, PLANET_PRESETS, PlanetPreset, RouteKind, Scenario, TOOLCHAIN};
+
+pub use evaluation::{
+    Evaluation, EvaluationError, EvaluationFailure, PREPARATION_LIMIT_MS, WALK_STEP_LIMIT_MS,
+    evaluate,
+};

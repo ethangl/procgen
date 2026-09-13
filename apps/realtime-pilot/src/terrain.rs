@@ -13,7 +13,8 @@ const DETAIL_WAVELENGTH: f32 = 0.16;
 // Truncation makes the influence of distant cave candidates exactly finite.
 pub(crate) const DENSITY_LIMIT: f32 = CAVE_SPACING * 0.25;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TerrainConfig {
     pub noise: NoiseConfig,
     /// Maximum absolute base-surface elevation, in model lengths.

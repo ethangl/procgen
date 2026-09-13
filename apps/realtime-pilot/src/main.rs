@@ -5,12 +5,14 @@ mod display;
 mod inspector;
 #[cfg(feature = "inspector")]
 mod planet_inspector;
+mod replay;
 #[cfg(feature = "inspector")]
 mod stream_inspector;
 #[cfg(feature = "inspector")]
 mod stream_record;
 #[cfg(feature = "inspector")]
 mod stream_render;
+mod stress;
 #[cfg(feature = "inspector")]
 mod usable_inspector;
 
@@ -27,9 +29,51 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut screenshots = false;
     let mut walk_route = false;
     let mut check = false;
+    let mut preset = None;
+    let mut case_path = None;
+    let mut replay_path = None;
+    let mut sweep = None;
+    let mut samples = None;
+    let mut sample_seed = None;
+    let mut seed_explicit = false;
     let mut seed = 42_u64;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--preset" => {
+                preset = Some(
+                    args.next()
+                        .ok_or("--preset needs hills, ridges, or basins")?,
+                )
+            }
+            "--case" => {
+                case_path = Some(PathBuf::from(
+                    args.next().ok_or("--case needs a JSON path")?,
+                ))
+            }
+            "--replay" => {
+                replay_path = Some(PathBuf::from(
+                    args.next().ok_or("--replay needs a JSON path")?,
+                ))
+            }
+            "--sweep" => {
+                sweep = Some(PathBuf::from(
+                    args.next().ok_or("--sweep needs a directory")?,
+                ))
+            }
+            "--samples" => {
+                samples = Some(
+                    args.next()
+                        .ok_or("--samples needs a count")?
+                        .parse::<usize>()?,
+                )
+            }
+            "--sample-seed" => {
+                sample_seed = Some(
+                    args.next()
+                        .ok_or("--sample-seed needs u64")?
+                        .parse::<u64>()?,
+                )
+            }
             "--planet" => planet = true,
             "--stream" => stream = true,
             "--screenshots" => screenshots = true,
@@ -41,6 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--check" => check = true,
             "--seed" => {
+                seed_explicit = true;
                 seed = args
                     .next()
                     .ok_or("--seed needs an unsigned integer")?
@@ -53,12 +98,85 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "procgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
+                    "Spherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if let Some(directory) = sweep {
+        if stream
+            || planet
+            || record.is_some()
+            || capture.is_some()
+            || replay_path.is_some()
+            || preset.is_some()
+            || seed_explicit
+            || walk_route
+            || screenshots
+            || check
+        {
+            return Err("--sweep accepts sampling options or --case FILE".into());
+        }
+        let selection = if let Some(path) = case_path {
+            if samples.is_some() || sample_seed.is_some() {
+                return Err("single-case audits do not accept seed sampling options".into());
+            }
+            stress::SweepSelection::Case(replay::Case::load(&path)?)
+        } else {
+            stress::SweepSelection::Sample {
+                count: samples.unwrap_or(2),
+                seed: sample_seed,
+            }
+        };
+        return stress::run(&directory, selection);
+    }
+    if sample_seed.is_some() || samples.is_some() {
+        return Err("--samples/--sample-seed require --sweep".into());
+    }
+    if (case_path.is_some() || replay_path.is_some())
+        && (preset.is_some() || seed_explicit || walk_route)
+    {
+        return Err(
+            "case/replay inputs cannot be overridden by --preset, --seed or --walk-route".into(),
+        );
+    }
+    if case_path.is_some() && replay_path.is_some() {
+        return Err("choose --case or --replay".into());
+    }
+    let replay = replay_path
+        .as_ref()
+        .map(|p| replay::Replay::load(p))
+        .transpose()?;
+    let case = case_path
+        .as_ref()
+        .map(|p| replay::Case::load(p))
+        .transpose()?;
+    let chosen = procgen_realtime_pilot::PLANET_PRESETS
+        .iter()
+        .find(|p| p.id == preset.as_deref().unwrap_or("hills"))
+        .ok_or("unknown spherical preset")?;
+    let scenario = if let Some(r) = &replay {
+        r.case.scenario
+    } else if let Some(c) = &case {
+        c.scenario
+    } else {
+        procgen_realtime_pilot::Scenario {
+            seed,
+            planet: chosen.planet,
+            route: if walk_route {
+                procgen_realtime_pilot::RouteKind::Walk
+            } else {
+                procgen_realtime_pilot::RouteKind::Flight
+            },
+        }
+    };
+    if (preset.is_some() || case.is_some() || replay.is_some()) && !stream {
+        return Err("--preset, --case and --replay require --stream".into());
+    }
+    if replay.is_some() && record.is_none() {
+        return Err("--replay requires --record for its output capture".into());
     }
     if walk_route && (!stream || record.is_none()) {
         return Err("--walk-route requires --stream and --record".into());
@@ -72,19 +190,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         #[cfg(feature = "inspector")]
         stream_inspector::run(
-            seed,
+            scenario,
             record.map(|path| stream_record::RecordingConfig {
                 path,
                 screenshots,
-                route: if walk_route {
-                    stream_record::RecordingRoute::Walk
-                } else {
-                    stream_record::RecordingRoute::Flight
-                },
+                replay_build: replay.as_ref().map(|r| r.case.build.clone()),
             }),
+            replay,
         )?;
         #[cfg(not(feature = "inspector"))]
-        return Err("--stream requires the inspector feature".into());
+        return Err(format!(
+            "--stream for seed {} requires the inspector feature",
+            scenario.seed
+        )
+        .into());
         #[cfg(feature = "inspector")]
         return Ok(());
     }

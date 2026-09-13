@@ -1,6 +1,6 @@
 # Real-time world pilot
 
-Slices 1–4 of [the pilot design](../../docs/realtime-world-pilot.md). This is a
+Slices 1–5 of [the pilot design](../../docs/realtime-world-pilot.md). This is a
 separate application. It uses `procgen-core` and the CPU gradient-noise primitive
 from `procgen-noise`, plus cube-face geometry from `procgen-cubesphere`.
 It does not use the existing world pipeline or viewer.
@@ -366,3 +366,87 @@ coverage, resting contact through all render levels, walking clearance, seeded
 placement recreation and eviction, accepted integer IDs, and bounded landmark
 searches. Native measurements and platform limits are in
 [the slice 4 report](../../docs/realtime-world-usable-results.md).
+
+## Variety, captures, and seed checks (slice 5)
+
+```sh
+cargo run -p procgen-realtime-pilot -- --stream --preset ridges --seed 42
+cargo run -p procgen-realtime-pilot -- --stream --preset basins --seed 42 \
+  --record /tmp/procgen-variety/basins-walk.csv --walk-route --screenshots
+cargo run -p procgen-realtime-pilot -- --stream \
+  --replay /tmp/procgen-variety/basins-walk.replay.json \
+  --record /tmp/procgen-variety/basins-replay.csv --screenshots
+```
+
+Spherical presets are `hills`, `ridges`, and `basins`. Hills preserves the
+slice-4 defaults. Ridges and basins adapt the corresponding local noise controls
+to this radius-4 shell: height scales 0.7/0.5, detail scales 0.055/0.025, and
+cave densities 2.5/1.5. The grid and radial band remain unchanged. These are
+pilot choices, not claimed source-game parameters. The sidebar identifies the
+preset and expands **Resolved parameters** to show every input and the build ID.
+
+Each recording now saves its resolved `.case.json` before generation, a frame
+CSV, a `.summary.txt`, and a `.replay.json`. Summaries identify the source build,
+Rust toolchain, OS, and any replay's originating build. A build ID hashes the
+pilot source, core/noise/cube-sphere sources, pilot manifest, and workspace lock
+file. It identifies source inputs, not a bit-identical executable across targets.
+
+A case has format version 1, source build, and a scenario containing the full
+`u64` seed, resolved planet configuration, and `flight` or `walk` route. Use
+`--stream --case FILE` to inspect one, or add `--record CSV` to run its route.
+Edit a copy of the case to inspect custom parameters. Unknown JSON fields,
+invalid terrain parameters, and radii other than 4 fail explicitly. Case/replay
+inputs cannot be combined with seed, preset, or route overrides. The local and
+static planet inspectors keep their existing controls and defaults.
+
+Replay uses the actual recorded camera position and forward vector preceding
+each playback time; it does not invent intermediate rotations during rapid
+turns. It preserves the recorded route's walking detail demand and radial up.
+This is **camera replay**, not physics, job-order, upload-timing, or frame-time
+reproduction. Replays can compare source builds; the originating and current
+builds remain visible. A replay starts at zero, has strictly increasing times,
+and contains 2–16,384 finite poses within the 36-second route. Input artifacts
+are limited to 8 MiB. A recording that reaches its pose cap fails explicitly.
+
+### Automated seed sweep
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --sweep /tmp/procgen-variety/sweep --samples 2 --sample-seed 20260913
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --sweep /tmp/procgen-variety/rerun --case /tmp/procgen-variety/sweep/hills-42.case.json
+```
+
+Each preset uses fixed seeds 0, 42, and 4,294,967,338, plus up to 32 sampled
+seeds. The default is two sampled seeds per preset. Omit `--sample-seed` to take
+a fresh host-time seed; the suite records that seed and every resolved world
+seed before evaluation. Supply it again to reproduce the same sample. An output
+directory must be empty so a later run cannot overwrite a prior report.
+
+Cases run sequentially. Each checks parameter validity, fine and three mixed
+mesh arrangements, population recreation, and a 36-second walking route at
+1/120-second simulation steps. Native and headless walking use the same landing
+selection and movement-input function. The CPU audit checks contact clearance
+and stationary support; it records quantized source/route fingerprints, shape
+ranges, triangle/placement counts, source/index bytes, and phase timings. It
+retains only six mixed-detail products at once. It does not emulate GPU jobs
+or prove rendered frame budgets.
+
+A case is **failed** on invalid geometry or contact. Existing nonmanifold edges
+are reported as the known extraction limitation. A valid case is **expensive**
+when source/collision/population preparation exceeds 1,000 ms or a measured
+walking step exceeds 4 ms. These are CPU triage thresholds, not GPU frame-budget
+claims; scheduling noise can produce an outlier. Mesh-audit and whole-route
+costs are also recorded. Re-measure expensive cases before attributing a cause.
+
+The suite writes a case JSON for every seed, flushes one result per case to
+`results.jsonl`, and produces a summary. Contact failures also save a static
+camera replay at the failure location, with stage and simulation tick in the
+result. That view helps inspection; it does not replay the failed physics.
+Failures return a nonzero exit status after the remaining cases finish. Expensive
+cases remain valid and are reported separately. Parameter failures have no
+surface location to capture. Use the saved case with the native inspector for
+flight/ground images; the CPU sweep itself does not produce GPU screenshots.
+
+Results and remaining pilot limits are in
+[the variety report](../../docs/realtime-world-variety-results.md).

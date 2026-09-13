@@ -48,3 +48,24 @@ pub fn streaming_route(seconds: f32) -> RouteSample {
         phase_seconds: seconds - start,
     }
 }
+
+/// Shared fixed walking inputs for native runs and deterministic headless audits.
+pub fn walking_input(seconds: f32) -> Vec3 {
+    if seconds < 12.0 {
+        Vec3::X
+    } else if seconds < 18.0 {
+        Vec3::ZERO
+    } else if seconds < 30.0 {
+        -Vec3::X
+    } else {
+        Vec3::ZERO
+    }
+}
+pub fn route_walker(terrain: &crate::UsableTerrain) -> Result<crate::Walker, crate::ContactError> {
+    terrain
+        .population
+        .placements()
+        .iter()
+        .find_map(|p| crate::Walker::land(&terrain.queries, p.position).ok())
+        .ok_or(crate::ContactError::NoLanding)
+}

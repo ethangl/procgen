@@ -1,7 +1,8 @@
 # Real-time procedural world pilot
 
-Status: slices 1–4 are implemented as bounded pilot experiments. Slice 4 has
-Metal measurements; Windows/Vulkan validation is pending. Slice 5 remains a proposal.
+Status: slices 1–5 are implemented as bounded pilot experiments. Metal and CPU
+measurements are recorded; Windows/Vulkan validation and the full frame-pacing
+objective remain open.
 
 ## Purpose
 
@@ -507,6 +508,16 @@ See [usable terrain](../apps/realtime-pilot/README.md#usable-terrain-slice-4)
 for movement, memory, and topology limits and the
 [runtime report](realtime-world-usable-results.md) for measured evidence.
 The two-platform exit criterion is still pending Windows/Vulkan measurements.
+
+Slice 5 adds three spherical presets, resolved parameter inspection, versioned
+case files, recorded camera replays, and sequential CPU seed sweeps. Fixed seeds
+and recorded fresh samples share the same geometry/contact checks; each result
+retains full inputs, build identity, costs, and any failure stage/location.
+Camera playback and fixed-step collision evaluation are separate contracts.
+See [variety and seed checks](../apps/realtime-pilot/README.md#variety-captures-and-seed-checks-slice-5)
+and the [evaluation report](realtime-world-variety-results.md).
+These tools expose failures and cost outliers; they do not close the outstanding
+manifold, scale, performance, or two-platform validation requirements.
 
 | Slice                     | Deliverable                                                                              | Exit evidence                                                                                                                          |
 | ------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

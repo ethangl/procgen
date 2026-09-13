@@ -8,7 +8,8 @@ use crate::{
     terrain::{CAVE_DEPTH, CAVE_RADIUS, CAVE_SPACING, DENSITY_LIMIT},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RadialBand {
     /// Distance below the broad elevation, in model lengths.
     pub below: f32,
@@ -16,7 +17,8 @@ pub struct RadialBand {
     pub above: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanetConfig {
     pub radius: f32,
     pub terrain: TerrainConfig,
@@ -45,6 +47,7 @@ pub enum PlanetError {
     Samples,
     Topology,
     Mesh,
+    PilotRadius,
 }
 impl From<FieldError> for PlanetError {
     fn from(error: FieldError) -> Self {
@@ -55,6 +58,11 @@ impl fmt::Display for PlanetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Field(error) => error.fmt(f),
+            Self::PilotRadius => write!(
+                f,
+                "streaming scenarios require the pilot radius {}",
+                PILOT_PLANET.radius
+            ),
             Self::Band => write!(
                 f,
                 "band must enclose detail and caves with strictly solid/empty ends, and stay outside the planet center"

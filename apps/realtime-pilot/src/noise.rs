@@ -8,7 +8,8 @@ pub const OCTAVES: usize = 6;
 const LACUNARITY: f32 = 2.0;
 
 /// Dimensionless shape controls, except wavelength (a model length).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NoiseConfig {
     pub wavelength: f32,
     pub sharpness: f32,
