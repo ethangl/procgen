@@ -208,9 +208,9 @@ pub fn evaluate(scenario: Scenario) -> Result<Evaluation, EvaluationFailure> {
     })
 }
 fn check_topology(t: MeshTopology) -> Result<(), EvaluationError> {
-    if t.open_edges != 0 || t.unbalanced_edges != 0 || t.degenerate_triangles != 0 {
+    if !t.is_closed_manifold() {
         return Err(EvaluationError::Invariant(
-            "open, unbalanced, or degenerate triangles",
+            "open, nonmanifold, unbalanced, or degenerate surface",
         ));
     }
     Ok(())

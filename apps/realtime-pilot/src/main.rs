@@ -8,11 +8,14 @@ mod planet_inspector;
 mod replay;
 #[cfg(feature = "inspector")]
 mod stream_inspector;
-#[cfg(feature = "inspector")]
+#[cfg(any(feature = "inspector", test))]
 mod stream_record;
 #[cfg(feature = "inspector")]
 mod stream_render;
 mod stress;
+#[cfg(feature = "inspector")]
+mod surface_material;
+mod surface_view;
 #[cfg(feature = "inspector")]
 mod usable_inspector;
 
@@ -37,8 +40,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sample_seed = None;
     let mut seed_explicit = false;
     let mut seed = 42_u64;
+    let mut surface_view = surface_view::SurfaceViewConfig::default();
+    let mut view_explicit = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--normals" => {
+                surface_view.normals = args.next().ok_or("--normals needs a mode")?.parse()?;
+                view_explicit = true;
+            }
+            "--surface" => {
+                surface_view.overlay = args.next().ok_or("--surface needs an overlay")?.parse()?;
+                view_explicit = true;
+            }
+            "--wireframe" => {
+                surface_view.wireframe = true;
+                view_explicit = true;
+            }
+            "--surface-detail" => {
+                surface_view.detail = args
+                    .next()
+                    .ok_or("--surface-detail needs a mode")?
+                    .parse()?;
+                view_explicit = true;
+            }
             "--preset" => {
                 preset = Some(
                     args.next()
@@ -98,12 +122,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "Spherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
+                    "Surface inspection (--stream): --normals averaged|triangle|density --surface neutral|lod|normals|agreement --surface-detail plain|textured --wireframe.\nSpherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if view_explicit && !stream {
+        return Err("surface inspection options require --stream".into());
     }
     if let Some(directory) = sweep {
         if stream
@@ -191,17 +218,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         #[cfg(feature = "inspector")]
         stream_inspector::run(
             scenario,
+            surface_view,
             record.map(|path| stream_record::RecordingConfig {
                 path,
                 screenshots,
+                surface_view,
                 replay_build: replay.as_ref().map(|r| r.case.build.clone()),
             }),
             replay,
         )?;
         #[cfg(not(feature = "inspector"))]
         return Err(format!(
-            "--stream for seed {} requires the inspector feature",
-            scenario.seed
+            "--stream for seed {} with {:?} normals requires the inspector feature",
+            scenario.seed, surface_view.normals
         )
         .into());
         #[cfg(feature = "inspector")]

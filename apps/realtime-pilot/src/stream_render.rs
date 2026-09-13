@@ -7,10 +7,7 @@ use bevy::{
     render::{Render, RenderApp, RenderSystems, mesh::RenderMesh, render_asset::RenderAssets},
 };
 use procgen_realtime_pilot::{DetailLevel, Ticket, UploadPiece};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub struct Readiness {
@@ -23,7 +20,8 @@ pub struct Readiness {
 pub struct UploadBridge(pub Arc<Mutex<Readiness>>);
 impl Plugin for UploadBridge {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.clone());
+        app.insert_resource(self.clone())
+            .add_systems(PostUpdate, refresh_visibility_indices);
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render
                 .insert_resource(self.clone())
@@ -31,6 +29,22 @@ impl Plugin for UploadBridge {
         }
     }
 }
+// Bevy 0.18 rebuilds the shared visibility-range table when any range changes,
+// but GPU mesh extraction otherwise refreshes only changed entities. Refresh
+// all participating mesh references so unchanged regions cannot retain old indices.
+fn refresh_visibility_indices(
+    ranges: Query<Ref<VisibilityRange>>,
+    mut removed: RemovedComponents<VisibilityRange>,
+    mut meshes: Query<&mut Mesh3d, With<VisibilityRange>>,
+) {
+    let removed = removed.read().count() != 0;
+    if removed || ranges.iter().any(|range| range.is_changed()) {
+        for mut mesh in &mut meshes {
+            mesh.set_changed();
+        }
+    }
+}
+
 fn poll(bridge: Res<UploadBridge>, meshes: Res<RenderAssets<RenderMesh>>, queue: Res<RenderQueue>) {
     let shared = Arc::clone(&bridge.0);
     let mut completed = Vec::new();
@@ -62,37 +76,36 @@ fn poll(bridge: Res<UploadBridge>, meshes: Res<RenderAssets<RenderMesh>>, queue:
 
 pub fn chunk_mesh(piece: &UploadPiece) -> Mesh {
     let surface = piece.mesh.surface();
-    let mut ids = BTreeMap::new();
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut colors = Vec::new();
-    let mut indices = Vec::new();
-    let color = match piece.ticket.detail {
-        DetailLevel::Coarse => [0.16, 0.32, 0.6, 1.0],
-        DetailLevel::Medium => [0.2, 0.55, 0.32, 1.0],
-        DetailLevel::Fine => [0.62, 0.44, 0.15, 1.0],
+    let corners = piece.triangles.len() * 3;
+    let mut positions = Vec::with_capacity(corners);
+    let mut normals = Vec::with_capacity(corners);
+    let mut density_lod = Vec::with_capacity(corners);
+    let mut barycentrics = Vec::with_capacity(corners);
+    let lod = match piece.ticket.detail {
+        DetailLevel::Coarse => 0.0,
+        DetailLevel::Medium => 1.0,
+        DetailLevel::Fine => 2.0,
     };
     for triangle in &surface.triangles()[piece.triangles.clone()] {
-        for id in triangle.vertices {
-            let index = *ids.entry(id).or_insert_with(|| {
-                let p = surface.positions()[id as usize];
-                let n = piece.mesh.normals()[id as usize];
-                let index = positions.len() as u32;
-                positions.push([p.x, p.y, p.z]);
-                normals.push([n.x, n.y, n.z]);
-                colors.push(color);
-                index
-            });
-            indices.push(index);
+        for (corner, id) in triangle.vertices.into_iter().enumerate() {
+            let p = surface.positions()[id as usize];
+            let n = piece.mesh.normals()[id as usize];
+            let d = piece.mesh.density_normals()[id as usize];
+            positions.push([p.x, p.y, p.z]);
+            normals.push([n.x, n.y, n.z]);
+            density_lod.push([d.x, d.y, d.z, lod]);
+            barycentrics.push([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]][corner]);
         }
     }
+    let indices = (0..positions.len() as u32).collect();
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, density_lod)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, barycentrics)
     .with_inserted_indices(Indices::U32(indices))
 }
 

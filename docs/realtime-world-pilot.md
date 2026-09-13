@@ -2,7 +2,8 @@
 
 Status: slices 1–5 are implemented as bounded pilot experiments. Metal and CPU
 measurements are recorded; Windows/Vulkan validation and the full frame-pacing
-objective remain open.
+objective remain open. Neutral surface inspection is implemented as the first
+[surface-quality slice](realtime-world-surface-quality.md).
 
 ## Purpose
 
@@ -481,9 +482,10 @@ Slice 2 adds a six-face spherical shell, validated elevation band, CPU dual
 contouring, and a whole-planet overview in the same application. See the
 [implementation decisions and run commands](../apps/realtime-pilot/README.md#spherical-regions-slice-2).
 Shared samples and polygon ownership cover same-resolution joins and cube
-corners. The initial extractor uses one vertex per cell and reports unresolved
-nonmanifold edges; manifold extraction remains an explicit follow-up before a
-consumer requires it. The inspector can compare overview, region ownership,
+corners. The original one-vertex-per-cell extractor had unresolved nonmanifold
+edges. Surface-quality slice 2 separates contour cycles, resolves shared face
+arcs, and checks manifold edges and vertex neighborhoods in fine and mixed LOD
+meshes; see [the repair record](realtime-world-surface-quality.md#slice-2-extraction-repair). The inspector can compare overview, region ownership,
 and shifted render origins. Its static inspector remains available alongside the slice-3 streaming inspector.
 
 Slice 3 adds bounded render-mesh streaming over the resident slice-2 CPU
@@ -500,9 +502,8 @@ mixed-resolution boundary construction, not claims about the source games.
 Slice 4 adds nearby two-sided queries against the fixed fine source, a radial
 kinematic sphere controller, stable sparse rock/post placement, and bounded
 nearest-landmark queries. The triangle-query approach does not require a closed
-volume; it is an explicit alternative to using the nonmanifold mesh as a solid
-physics body. Manifold extraction remains necessary before any consumer requires
-that volume contract. Render replacement never swaps collision support. The
+volume. The later extraction repair does not change this into a solid physics
+body or add inside/outside classification. Render replacement never swaps collision support. The
 accepted population catalog stays resident while instances are evicted.
 See [usable terrain](../apps/realtime-pilot/README.md#usable-terrain-slice-4)
 for movement, memory, and topology limits and the
@@ -563,3 +564,12 @@ planet scale, exact noise and derivative composition, voxel-band dimensions,
 mesh boundary construction, and measured runtime budgets. Resolve each in
 the slice that first exercises it. Do not turn missing transcript detail into
 an undocumented claim about the original implementation.
+
+
+Surface-quality slice 3 adds field-guided edge refinement to nearby fine render
+regions, with an unchanged four-cell border and conforming split triangles at
+the transition. A canonical refined CPU surface supplies both collision and
+fine rendering; coarse and medium retain the base contour reductions. This
+bounded version keeps that surface resident and raises managed reservations to
+256 MiB, including 32 MiB for collision and population. The upload cap remains
+512 KiB per frame. See the [implementation and checks](realtime-world-surface-quality.md#slice-3-fine-geometry).

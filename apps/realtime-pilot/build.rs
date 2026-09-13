@@ -35,7 +35,9 @@ fn main() {
     for path in [
         "src",
         "../../crates/procgen-core/src",
+        "../../crates/procgen-core/wgsl",
         "../../crates/procgen-noise/src",
+        "../../crates/procgen-noise/wgsl",
         "../../crates/procgen-cubesphere/src",
     ] {
         sources(&root.join(path), &mut files);

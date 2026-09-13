@@ -161,9 +161,10 @@ will need the same canonical border cells and polygon-ownership rule.
 
 ### Contouring choices and limits
 
-The extractor contours a **trilinear reconstruction of sampled final density**,
-not the exact unsampled nonlinear field. Linear interpolation is therefore an
-exact, bounded edge root for this reconstruction. Exactly zero samples are
+The extractor uses edge roots and gradients from a **trilinear reconstruction
+of sampled final density**. Its face-connected cycles choose the interior
+connectivity; they do not solve every trilinear interior saddle. Linear
+interpolation is an exact, bounded root along each sampled edge. Exactly zero samples are
 solid. Normals come from the analytical gradient of this reconstructed final
 density in normalized cell coordinates, where the QEF is also fitted. They are
 not gradients of the broad height field alone.
@@ -183,13 +184,15 @@ radial edges at cube corners have three. The lowest incident face address owns
 the polygon. A triangle fan splits quads. Region color identifies this owner,
 so border polygons can extend slightly into the adjacent face.
 
-**One vertex per active cell does not resolve all surface topology.** Seed 42
-at the initial resolution has no open edges, unbalanced edge winding, or
-zero-area triangles, but has 467 edges with four incident triangles. Those
-edges join unresolved sheets. The inspector reports this count. This is not a
-manifold mesh suitable for collision. Increasing resolution can reveal smaller
-features; it is not a general topology guarantee. Topology-preserving extraction
-needs a separate follow-up before any consumer requires manifold output.
+Surface-quality slice 2 replaces the original one-vertex-per-cell rule with one
+QEF fit per contour cycle. Bilinear face decisions use the same shared samples
+on each side; sample IDs resolve an exact saddle tie. Separate face arcs that
+connect the same two cell vertices receive distinct shared face vertices.
+The hills-42 source now has zero nonmanifold edges or vertices, compared with
+467 nonmanifold edges before the repair. Vertex-link checks also detect pinched
+sheets that edge counts alone miss. See
+[surface quality](../../docs/realtime-world-surface-quality.md#slice-2-extraction-repair)
+for scope and measured evidence.
 
 The pure sphere fixture verifies closed two-triangle edge incidence and outward
 winding at all seams and corners. Other tests cover planar and sharp QEF data,
@@ -198,11 +201,11 @@ band rejection, direct/sample agreement, and one-worker/four-worker equality.
 The render-origin test reconstructs positions within 0.000002 model lengths
 for tested offsets up to 16; it does not claim astronomical f32 precision.
 
-Seed 42 produces 417,826 density samples, 53,056 contour vertices, 106,486
-triangles, and a 3,072-triangle overview. An optimized development build on the
-macOS test host generated these CPU products in about 70–90 ms. This excludes
-topology inspection, render upload, and frame time. Metal was used for native visual inspection;
-this slice has no generation kernel or Vulkan agreement claim.
+The original POC produced 417,826 density samples, 53,056 contour vertices,
+and 106,486 triangles at seed 42. Those counts and its 70–90 ms generation
+measurement predate the topology repair. The updated counts and checks are in
+the surface-quality report. The overview remains 3,072 triangles; extraction
+has no generation kernel or Vulkan agreement claim.
 
 ## Streaming and detail (slice 3)
 
@@ -228,16 +231,22 @@ released after extraction. The cheap overview covers the planet during source
 preparation and remains until all six initial coarse regions are ready.
 
 Coarse and medium meshes cluster tangential cell vertices in blocks of four
-and two respectively. Fine meshes retain the original vertices. Clustering
+and two respectively. Fine meshes use the refined collision surface described
+below. Clustering
 keeps radial layers separate, selects the mean position of the source vertices,
 and removes triangles collapsed to fewer than three distinct vertices. A cluster
-that reverses or flattens a surviving triangle retains its fine vertices; this
-check repeats until neighboring changes preserve orientation.
+that reverses or flattens a surviving triangle retains its preceding-level
+vertices. Medium reduces the base contour; coarse reduces medium, so the coarse mesh cannot
+restore triangles already removed by medium. This
+check repeats until neighboring changes preserve orientation. Blocks that
+contain separate cell parts stay at their preceding level. Complete closed
+vertex-link checks reject participating clusters if a collapse creates a
+nonmanifold neighborhood.
 Every face retains a four-cell fine collar. The collar's sample identities,
 positions, and normals are identical at every detail level. Mixed-detail joins
 therefore use the same polygons as slice 2. This costs more border geometry
 than an adaptive transition mesh, but needs no skirts or overlapping seam
-surfaces. Reduction inherits the extractor's nonmanifold limitation.
+surfaces. Mixed-level audits now require manifold edges and vertex links.
 
 The renderer-independent scheduler admits two region jobs at most. Its queue
 has at most one current request per face. Serial tickets reject late results,
@@ -258,10 +267,10 @@ queue confirms completion of previously submitted work. Further
 replacement of that face waits for retirement.
 
 Managed source, job, staging, resident, and retiring-product reservations are
-capped at 128 MiB. Job reservations cover map scratch and worst-case region
-output from the actual source triangle count. Render accounting allows both
-CPU and GPU copies at 132 bytes per source triangle; indexed chunks normally
-use less. Initial fixed-grid source preparation has a separate conservative
+capped at 256 MiB after surface-quality slice 3. Job reservations cover reduction
+scratch and the larger fine-region output. Render accounting reserves both CPU
+and GPU copies at 156 bytes per expanded triangle per copy. The 512 KiB frame
+upload limit stays fixed. Initial source preparation has a separate conservative
 1 GiB working reservation and runs once with no concurrent region jobs. These
 are application buffer budgets, not a cap on Bevy, the driver, thread stacks,
 window buffers, or diagnostic screenshot readback. Process peak RSS is measured
@@ -298,24 +307,49 @@ remain flight controls. The walker is a sphere of radius 0.035; the camera is
 The sidebar reports the nearest accepted landmark within a chord distance of
 3, or no result. Decorations and posts do not have collision.
 
+### Fine geometry refinement
+
+Surface-quality slice 3 adds one conforming edge split inside fine regions.
+A shared edge is split only when both incident triangles lie outside the fixed
+four-cell collar. Triangles with one or two split edges form the transition to
+the unchanged collar; there are no hanging vertices, skirts, or overlapping
+patches. Each fully refined triangle becomes four triangles.
+
+New edge vertices search for a density root along the averaged endpoint normals,
+within one quarter of the edge length. Ten bisections refine a valid sign
+bracket. An absent bracket or zero normal retains the midpoint. Projections
+that reverse or flatten a child triangle are rejected on all incident triangles.
+The result retains the contour's connectivity; it does not discover new sheets
+below the original sampling resolution.
+
+The canonical refined CPU mesh is prepared once across the bounded planet for
+stable collision and placement. Fine render products copy its triangles only
+on nearby faces. Coarse and medium use the original contour reductions. This
+retains more CPU geometry rather than switching collision underneath the walker;
+it is not demand-paged high-resolution density. See the
+[slice 3 record](../../docs/realtime-world-surface-quality.md#slice-3-fine-geometry)
+for counts, validation, and memory costs.
+
 ### Collision and movement
 
-Collision uses the unchanged fine source triangles. Render reduction, upload,
-dither, and retirement cannot change the collision surface. The source has
-unresolved nonmanifold edges, so this is explicitly a **two-sided triangle
-query surface**, not a solid-volume physics body. The pilot does not classify
-inside/outside or repair topology. It supports a kinematic sphere, not a
+Collision uses the repaired and refined fine source triangles. Render reduction, upload,
+dither, and retirement cannot change the collision surface. The query contract
+remains a **two-sided triangle query surface**. The topology repair adds no
+inside/outside classification or solid-volume physics behavior. It supports a kinematic sphere, not a
 capsule, jumping, stepping, rigid bodies, or guaranteed camera-head clearance
 inside caves. Walking requests fine detail on nearby faces regardless of view direction.
 Before those uploads are ready, coarse render surfaces can differ from the
 fine contact surface; collision remains ready and stable.
 
 A bounding-volume hierarchy indexes canonical source triangles. A nearby patch
-holds at most 8,192 triangle IDs in a cube with half-width 0.6. Patches rebuild
+holds at most 32,768 triangle IDs in a cube with half-width 0.6. Patches rebuild
 before the walker leaves an inner margin. Sphere sweeps require the complete
 start/end swept bounds to fit the patch; missing coverage or an oversized patch
 stops movement and increments a visible failure count. Triangle distances drive
 conservative advancement; density magnitude is never used as a distance bound.
+Nearest-distance queries traverse the existing BVH near-first and prune nodes
+that cannot improve the result, while retaining the patch's exact candidate IDs.
+This avoids scanning the whole refined patch for every sweep iteration.
 Each sweep has at most 64 iterations; exhaustion rejects the sweep, retains
 its safe start, and reports a failure. A substep has at most four slide contacts.
 
@@ -346,10 +380,10 @@ population residency, not world-scale placement paging.
 Preparation sends the fine source to the render scheduler first. Collision
 indexing and population resolution then run on the preparation worker; coarse
 render installation can proceed during that work. Walking waits for collision
-readiness. A separate 8 MiB reservation covers collision indexing, nearby IDs,
-placement data, and population buffers within the existing 128 MiB managed cap.
-The index uses about 1.81 MiB for seed 42. Source preparation retains its separate
-1 GiB working reservation until extraction ends. Engine and driver allocations
+readiness. A 32 MiB reservation covers the larger collision index, nearby IDs,
+placement data, and population buffers within the 256 MiB managed cap.
+Source preparation retains its separate 1 GiB working reservation until contour
+extraction and refinement end. Engine and driver allocations
 remain outside these application buffer reservations.
 
 The walking recording starts at the first accepted candidate with clear
@@ -432,8 +466,8 @@ ranges, triangle/placement counts, source/index bytes, and phase timings. It
 retains only six mixed-detail products at once. It does not emulate GPU jobs
 or prove rendered frame budgets.
 
-A case is **failed** on invalid geometry or contact. Existing nonmanifold edges
-are reported as the known extraction limitation. A valid case is **expensive**
+A case is **failed** on invalid geometry, nonmanifold edges or vertex links,
+or contact. Fine and mixed-level products must pass. A valid case is **expensive**
 when source/collision/population preparation exceeds 1,000 ms or a measured
 walking step exceeds 4 ms. These are CPU triage thresholds, not GPU frame-budget
 claims; scheduling noise can produce an outlier. Mesh-audit and whole-route
@@ -450,3 +484,29 @@ flight/ground images; the CPU sweep itself does not produce GPU screenshots.
 
 Results and remaining pilot limits are in
 [the variety report](../../docs/realtime-world-variety-results.md).
+
+## Neutral surface inspection
+
+The streaming inspector now starts in neutral gray with fixed lighting and
+restrained procedural normal and roughness detail. Select **Plain** under
+**Surface detail** to compare with the untextured material. Select
+averaged mesh, triangle-face, or final-density normals without regenerating the
+world. LOD colors remain available, alongside normal-direction and
+mesh/density-agreement overlays. **Triangle edges** can be combined with any
+view. Magenta identifies an undefined normal.
+
+```sh
+cargo run -p procgen-realtime-pilot -- --stream --preset ridges --seed 42 \
+  --normals triangle --wireframe
+```
+
+Use `--normals averaged|triangle|density` and
+`--surface neutral|lod|normals|agreement`, plus
+`--surface-detail plain|textured` (default `textured`), with saved camera replays
+for matched comparisons. Surface detail applies only to neutral shading;
+diagnostic overlays retain the base surface. The pattern uses planet coordinates
+at fixed scales and fades below pixel size. It adds no geometry or collision.
+Recordings save a separate `.view.json`; generation cases and
+camera paths keep their existing formats. See
+[surface quality](../../docs/realtime-world-surface-quality.md) for the normal
+contract, memory cost, comparison procedure, and findings.

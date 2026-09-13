@@ -13,15 +13,15 @@ use std::{
 };
 
 pub const SOURCE_WORK_RESERVATION: usize = 1024 * 1024 * 1024;
-pub const MANAGED_MEMORY_LIMIT: usize = 128 * 1024 * 1024;
+pub const MANAGED_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 pub const MAX_ACTIVE_JOBS: usize = 2;
 pub const UPLOAD_BYTES_PER_FRAME: usize = 512 * 1024;
 pub const INSTALL_MILLIS_PER_FRAME: f64 = 2.0;
 pub const REPLACEMENT_SECONDS: f32 = 0.15;
 pub const TRIANGLES_PER_PIECE: usize = 1024;
-// Position, normal, RGBA color and one u32 index per expanded corner. Indexed
-// chunks are no larger. Reserve both main-world and render-world copies.
-pub const BYTES_PER_TRIANGLE: usize = 3 * (12 + 12 + 16 + 4);
+// Position, averaged normal, density normal plus LOD, barycentric UV, and
+// one u32 index per expanded corner. Reserve both main-world and render-world copies.
+pub const BYTES_PER_TRIANGLE: usize = 3 * (12 + 12 + 16 + 8 + 4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Ticket {
@@ -197,11 +197,12 @@ impl StreamingWorld {
     }
     pub fn update(&mut self, view: StreamView, focus: DetailFocus) -> Result<(), StreamError> {
         if self.visible {
-            let altitude = view.position.length() - self.source.radius;
+            let altitude = view.position.length() - self.source.field.config().radius;
             let direction = view.position.normalized();
             for face in CubeFace::ALL {
                 let proximity = direction.dot(face.frame().normal);
-                let toward = (face.frame().normal * self.source.radius - view.position)
+                let toward = (face.frame().normal * self.source.field.config().radius
+                    - view.position)
                     .normalized()
                     .dot(view.forward);
                 let current = self.slots[face.index()].request.detail;
@@ -237,7 +238,7 @@ impl StreamingWorld {
                 .filter(|f| self.needed(f.index()))
                 .max_by(|a, b| {
                     let score = |f: CubeFace| {
-                        (f.frame().normal * self.source.radius - view.position)
+                        (f.frame().normal * self.source.field.config().radius - view.position)
                             .normalized()
                             .dot(view.forward)
                     };

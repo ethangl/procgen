@@ -38,6 +38,8 @@ pub const PILOT_PLANET: PlanetConfig = PlanetConfig {
     },
 };
 
+pub const DENSITY_NORMAL_STEP: f32 = 0.001;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlanetError {
     Field(FieldError),
@@ -153,6 +155,30 @@ impl PlanetField {
         Ok(column.density(self, altitude - column.height))
     }
 
+    /// Outward normal of the final composed density at a mesh position.
+    /// A stationary density returns zero; inspection must show it as undefined.
+    pub(crate) fn density_normal(&self, position: Vec3) -> Vec3 {
+        // 0.001 model lengths resolves local detail below the 0.04375 radial
+        // sample spacing while avoiding f32 cancellation at the radius-4 surface.
+        let h = DENSITY_NORMAL_STEP;
+        let gradient = Vec3::new(
+            self.density_at_position(position + Vec3::X * h)
+                - self.density_at_position(position - Vec3::X * h),
+            self.density_at_position(position + Vec3::Y * h)
+                - self.density_at_position(position - Vec3::Y * h),
+            self.density_at_position(position + Vec3::Z * h)
+                - self.density_at_position(position - Vec3::Z * h),
+        );
+        -gradient.normalized()
+    }
+
+    /// Final density at a finite, nonzero point near the validated shell.
+    pub(crate) fn density_at_position(&self, position: Vec3) -> f32 {
+        let radius = position.length();
+        let column = self.column(position * radius.recip());
+        column.density(self, radius - self.config.radius - column.height)
+    }
+
     pub(crate) fn height(&self, direction: Vec3) -> f32 {
         self.terrain.height_at(direction * self.config.radius)
     }
@@ -241,6 +267,26 @@ impl PlanetColumn {
 mod tests {
     use super::*;
     use crate::test_support::positions;
+    #[test]
+    fn density_normals_point_outward_on_an_unmodified_sphere() {
+        let field = PlanetConfig {
+            terrain: TerrainConfig {
+                height_scale: 0.0,
+                detail_scale: 0.0,
+                cave_density: 0.0,
+                ..PILOT_PLANET.terrain
+            },
+            ..PILOT_PLANET
+        }
+        .validate(42)
+        .unwrap();
+        for direction in positions().map(Vec3::normalized) {
+            let normal = field.density_normal(direction * field.config.radius);
+            // Central differences at radius 4 lose a little precision in f32.
+            assert!(normal.distance_squared(direction).sqrt() < 0.001);
+        }
+        assert_eq!(field.density_normal(Vec3::X * 3.0), Vec3::ZERO);
+    }
     #[test]
     fn rejects_clipped_bands_and_preserves_solid_empty_ends() {
         for band in [
