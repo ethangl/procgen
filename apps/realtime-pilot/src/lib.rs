@@ -4,6 +4,7 @@
 mod collision;
 mod contour;
 mod contour_cells;
+mod design_preview;
 mod detail;
 mod evaluation;
 mod field;
@@ -12,6 +13,7 @@ mod mesh;
 mod noise;
 mod placement;
 mod planet;
+mod planet_design;
 mod presets;
 mod qef;
 mod refinement;
@@ -75,4 +77,12 @@ pub use scenario::{BUILD_ID, PLANET_PRESETS, PlanetPreset, RouteKind, Scenario, 
 pub use evaluation::{
     Evaluation, EvaluationError, EvaluationFailure, PREPARATION_LIMIT_MS, WALK_STEP_LIMIT_MS,
     evaluate,
+};
+
+pub use design_preview::{
+    DesignPreview, DesignPreviewConfig, PreviewArea, PreviewBands, PreviewError,
+    generate_design_preview,
+};
+pub use planet_design::{
+    DesignError, MAX_DESIGN_OCTAVES, OctaveConfig, PlanetDesignConfig, PlanetDesignField,
 };

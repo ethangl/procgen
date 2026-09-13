@@ -5,7 +5,27 @@ separate application. It uses `procgen-core` and the CPU gradient-noise primitiv
 from `procgen-noise`, plus cube-face geometry from `procgen-cubesphere`.
 It does not use the existing world pipeline or viewer.
 
-## Run
+## Physical planet and octave editor
+
+```sh
+cargo run -p procgen-realtime-pilot -- --design
+```
+
+This mode uses meters and starts with a 2,000 km radius. Edit the radius and
+individual noise bands, switch between **Planet** and **Local patch**, and use
+**Solo** to inspect a band. **Auto apply** regenerates after edits. The octave
+panel shows which bands the current preview resolution can display.
+
+Use **Save controls** or **Copy JSON** to share exact generation settings. Load a
+saved design with `--design --design-file PATH`. Use `--design --check` for a
+headless report; `--write-design PATH` saves the config. Run `--design --help`
+for patch and solo options. With auto apply disabled, press Generate after Load.
+
+This is a coarse height preview, with no height exaggeration. One-meter voxel
+chunks and octree streaming are the next slice; `--stream` still runs the earlier
+radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
+
+## Run the original experiments
 
 ```sh
 cargo run -p procgen-realtime-pilot -- --seed 42

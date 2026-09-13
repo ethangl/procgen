@@ -94,7 +94,7 @@ pub(crate) fn normalized_noise(key: u32, p: Vec3) -> ScalarFieldSample3 {
 }
 
 /// Exact derivative of the sharpness transform only; abs has derivative zero at its cusp.
-fn shape(sample: ScalarFieldSample3, sharpness: f32) -> ScalarFieldSample3 {
+pub(crate) fn shape(sample: ScalarFieldSample3, sharpness: f32) -> ScalarFieldSample3 {
     let n = sample.value;
     let base = n / BASIS_STD_DEV;
     let base_derivative = BASIS_STD_DEV.recip();

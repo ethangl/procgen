@@ -15,6 +15,10 @@ pub struct HeightDistribution {
 }
 
 pub(crate) fn sample(field: &PlanetField) -> HeightDistribution {
+    sample_heights(|direction| field.height(direction))
+}
+
+pub(crate) fn sample_heights(height: impl Fn(Vec3) -> f32 + Sync) -> HeightDistribution {
     // Equal-area Fibonacci directions; this diagnostic never changes the field.
     let mut heights: Vec<_> = (0..HEIGHT_DISTRIBUTION_SAMPLES)
         .into_par_iter()
@@ -23,7 +27,7 @@ pub(crate) fn sample(field: &PlanetField) -> HeightDistribution {
             let angle = i as f32 * 2.399_963_1;
             let r = (1.0 - z * z).sqrt();
             let direction = Vec3::new(r * angle.cos(), r * angle.sin(), z).normalized();
-            field.height(direction)
+            height(direction)
         })
         .collect();
     heights.sort_unstable_by(f32::total_cmp);

@@ -5,6 +5,10 @@ measurements are recorded; Windows/Vulkan validation and the full frame-pacing
 objective remain open. Neutral surface inspection is implemented as the first
 [surface-quality slice](realtime-world-surface-quality.md).
 
+The next phase is [physical scale and octree LOD](realtime-world-planet-scale.md).
+Its first slice adds a physical terrain field and octave editor; the original
+streaming experiment still uses its bounded radius-4 source.
+
 ## Purpose
 
 Build a small exploration prototype that generates a spherical world as the
