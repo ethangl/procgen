@@ -161,9 +161,10 @@ will need the same canonical border cells and polygon-ownership rule.
 
 ### Contouring choices and limits
 
-The extractor contours a **trilinear reconstruction of sampled final density**,
-not the exact unsampled nonlinear field. Linear interpolation is therefore an
-exact, bounded edge root for this reconstruction. Exactly zero samples are
+The extractor uses edge roots and gradients from a **trilinear reconstruction
+of sampled final density**. Its face-connected cycles choose the interior
+connectivity; they do not solve every trilinear interior saddle. Linear
+interpolation is an exact, bounded root along each sampled edge. Exactly zero samples are
 solid. Normals come from the analytical gradient of this reconstructed final
 density in normalized cell coordinates, where the QEF is also fitted. They are
 not gradients of the broad height field alone.
@@ -183,13 +184,15 @@ radial edges at cube corners have three. The lowest incident face address owns
 the polygon. A triangle fan splits quads. Region color identifies this owner,
 so border polygons can extend slightly into the adjacent face.
 
-**One vertex per active cell does not resolve all surface topology.** Seed 42
-at the initial resolution has no open edges, unbalanced edge winding, or
-zero-area triangles, but has 467 edges with four incident triangles. Those
-edges join unresolved sheets. The inspector reports this count. This is not a
-manifold mesh suitable for collision. Increasing resolution can reveal smaller
-features; it is not a general topology guarantee. Topology-preserving extraction
-needs a separate follow-up before any consumer requires manifold output.
+Surface-quality slice 2 replaces the original one-vertex-per-cell rule with one
+QEF fit per contour cycle. Bilinear face decisions use the same shared samples
+on each side; sample IDs resolve an exact saddle tie. Separate face arcs that
+connect the same two cell vertices receive distinct shared face vertices.
+The hills-42 source now has zero nonmanifold edges or vertices, compared with
+467 nonmanifold edges before the repair. Vertex-link checks also detect pinched
+sheets that edge counts alone miss. See
+[surface quality](../../docs/realtime-world-surface-quality.md#slice-2-extraction-repair)
+for scope and measured evidence.
 
 The pure sphere fixture verifies closed two-triangle edge incidence and outward
 winding at all seams and corners. Other tests cover planar and sharp QEF data,
@@ -198,11 +201,11 @@ band rejection, direct/sample agreement, and one-worker/four-worker equality.
 The render-origin test reconstructs positions within 0.000002 model lengths
 for tested offsets up to 16; it does not claim astronomical f32 precision.
 
-Seed 42 produces 417,826 density samples, 53,056 contour vertices, 106,486
-triangles, and a 3,072-triangle overview. An optimized development build on the
-macOS test host generated these CPU products in about 70–90 ms. This excludes
-topology inspection, render upload, and frame time. Metal was used for native visual inspection;
-this slice has no generation kernel or Vulkan agreement claim.
+The original POC produced 417,826 density samples, 53,056 contour vertices,
+and 106,486 triangles at seed 42. Those counts and its 70–90 ms generation
+measurement predate the topology repair. The updated counts and checks are in
+the surface-quality report. The overview remains 3,072 triangles; extraction
+has no generation kernel or Vulkan agreement claim.
 
 ## Streaming and detail (slice 3)
 
@@ -234,12 +237,15 @@ and removes triangles collapsed to fewer than three distinct vertices. A cluster
 that reverses or flattens a surviving triangle retains its preceding-level
 vertices. Medium reduces fine; coarse reduces medium, so the coarse mesh cannot
 restore triangles already removed by medium. This
-check repeats until neighboring changes preserve orientation.
+check repeats until neighboring changes preserve orientation. Blocks that
+contain separate cell parts stay at their preceding level. Complete closed
+vertex-link checks reject participating clusters if a collapse creates a
+nonmanifold neighborhood.
 Every face retains a four-cell fine collar. The collar's sample identities,
 positions, and normals are identical at every detail level. Mixed-detail joins
 therefore use the same polygons as slice 2. This costs more border geometry
 than an adaptive transition mesh, but needs no skirts or overlapping seam
-surfaces. Reduction inherits the extractor's nonmanifold limitation.
+surfaces. Mixed-level audits now require manifold edges and vertex links.
 
 The renderer-independent scheduler admits two region jobs at most. Its queue
 has at most one current request per face. Serial tickets reject late results,
@@ -302,11 +308,10 @@ The sidebar reports the nearest accepted landmark within a chord distance of
 
 ### Collision and movement
 
-Collision uses the unchanged fine source triangles. Render reduction, upload,
-dither, and retirement cannot change the collision surface. The source has
-unresolved nonmanifold edges, so this is explicitly a **two-sided triangle
-query surface**, not a solid-volume physics body. The pilot does not classify
-inside/outside or repair topology. It supports a kinematic sphere, not a
+Collision uses the repaired fine source triangles. Render reduction, upload,
+dither, and retirement cannot change the collision surface. The query contract
+remains a **two-sided triangle query surface**. The topology repair adds no
+inside/outside classification or solid-volume physics behavior. It supports a kinematic sphere, not a
 capsule, jumping, stepping, rigid bodies, or guaranteed camera-head clearance
 inside caves. Walking requests fine detail on nearby faces regardless of view direction.
 Before those uploads are ready, coarse render surfaces can differ from the
@@ -434,8 +439,8 @@ ranges, triangle/placement counts, source/index bytes, and phase timings. It
 retains only six mixed-detail products at once. It does not emulate GPU jobs
 or prove rendered frame budgets.
 
-A case is **failed** on invalid geometry or contact. Existing nonmanifold edges
-are reported as the known extraction limitation. A valid case is **expensive**
+A case is **failed** on invalid geometry, nonmanifold edges or vertex links,
+or contact. Fine and mixed-level products must pass. A valid case is **expensive**
 when source/collision/population preparation exceeds 1,000 ms or a measured
 walking step exceeds 4 ms. These are CPU triage thresholds, not GPU frame-budget
 claims; scheduling noise can produce an outlier. Mesh-audit and whole-route

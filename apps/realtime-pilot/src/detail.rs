@@ -11,7 +11,8 @@ use procgen_cubesphere::CubeFace;
 
 use crate::{
     PlanetError, PlanetField, RegionAddress, ShellConfig, SurfaceMesh, SurfaceTriangle,
-    contour::contour_source, sample_shell,
+    contour::{VertexAddress, contour_source},
+    sample_shell,
 };
 
 /// Fixed density resolution for this slice. Only mesh detail streams; the CPU
@@ -41,7 +42,7 @@ impl DetailLevel {
 pub struct DetailSource {
     pub(crate) field: PlanetField,
     pub(crate) mesh: SurfaceMesh,
-    addresses: Vec<usize>,
+    addresses: Vec<VertexAddress>,
     normals: Vec<Vec3>,
     regions: [Vec<usize>; 6],
 }
@@ -49,7 +50,7 @@ impl DetailSource {
     pub fn allocated_bytes(&self) -> usize {
         self.mesh.positions.capacity() * size_of::<Vec3>()
             + self.mesh.triangles.capacity() * size_of::<SurfaceTriangle>()
-            + self.addresses.capacity() * size_of::<usize>()
+            + self.addresses.capacity() * size_of::<VertexAddress>()
             + self.normals.capacity() * size_of::<Vec3>()
             + self
                 .regions
@@ -58,7 +59,9 @@ impl DetailSource {
                 .sum::<usize>()
     }
     pub(crate) fn region_work_bytes(&self, face: CubeFace) -> usize {
-        self.regions[face.index()].len() * 512 + self.addresses.len() * 128
+        self.mesh.triangles.len() * 256
+            + self.regions[face.index()].len() * 512
+            + self.addresses.len() * 256
     }
     pub fn triangle_count(&self) -> usize {
         self.mesh.triangles.len()
@@ -99,8 +102,8 @@ pub fn prepare_detail(
 
 pub struct RegionMesh {
     pub(crate) surface: SurfaceMesh,
-    /// Source-cell representatives survive remapping and identify shared borders.
-    pub(crate) identities: Vec<usize>,
+    /// Cell and contour-part representatives identify shared borders after remapping.
+    pub(crate) identities: Vec<VertexAddress>,
     normals: Vec<Vec3>,
     density_normals: Vec<Vec3>,
 }
@@ -117,7 +120,7 @@ impl RegionMesh {
     pub fn allocated_bytes(&self) -> usize {
         self.surface.positions.capacity() * size_of::<Vec3>()
             + self.surface.triangles.capacity() * size_of::<SurfaceTriangle>()
-            + self.identities.capacity() * size_of::<usize>()
+            + self.identities.capacity() * size_of::<VertexAddress>()
             + self.normals.capacity() * size_of::<Vec3>()
             + self.density_normals.capacity() * size_of::<Vec3>()
     }
@@ -125,24 +128,27 @@ impl RegionMesh {
 
 // Keep a full four-cell collar (the largest reduction block) on every face.
 // Its identities, positions, and triangles do not change with the neighbor LOD.
-fn boundary(address: usize) -> bool {
+fn boundary(address: VertexAddress) -> bool {
     let n = STREAM_SHELL.face_quads;
-    let quad = address / STREAM_SHELL.radial_cells;
+    let quad = address.cell / STREAM_SHELL.radial_cells;
     let x = quad % n;
     let y = (quad / n) % n;
     let collar = DetailLevel::Coarse.span();
     x < collar || y < collar || x >= n - collar || y >= n - collar
 }
-fn representative(address: usize, level: DetailLevel) -> usize {
+fn representative(address: VertexAddress, level: DetailLevel) -> VertexAddress {
     let n = STREAM_SHELL.face_quads;
     let layers = STREAM_SHELL.radial_cells;
-    let radial = address % layers;
-    let quad = address / layers;
+    let radial = address.cell % layers;
+    let quad = address.cell / layers;
     let x = quad % n;
     let y = (quad / n) % n;
     let face = quad / (n * n);
     let span = if boundary(address) { 1 } else { level.span() };
-    ((face * n * n + (y / span * span) * n + x / span * span) * layers) + radial
+    VertexAddress {
+        cell: ((face * n * n + (y / span * span) * n + x / span * span) * layers) + radial,
+        part: address.part,
+    }
 }
 
 #[derive(Default)]
@@ -152,7 +158,7 @@ struct Cluster {
 }
 #[derive(Clone, Copy)]
 struct ReducedVertex {
-    identity: usize,
+    identity: VertexAddress,
     position: Vec3,
 }
 
@@ -188,18 +194,32 @@ fn collapse_clusters(
     cancel: &AtomicBool,
 ) -> Option<Vec<ReducedVertex>> {
     let cells_per_face = STREAM_SHELL.face_quads.pow(2) * STREAM_SHELL.radial_cells;
-    let mut groups: BTreeMap<usize, Cluster> = BTreeMap::new();
+    let mut groups: BTreeMap<VertexAddress, Cluster> = BTreeMap::new();
     // Weight by original vertices at both levels so partition changes do not
     // alter the weighting of a surviving medium cluster.
     for (&address, vertex) in source.addresses.iter().zip(previous) {
         let position = vertex.position;
-        if address / cells_per_face == face.index() {
+        if address.cell / cells_per_face == face.index() {
             let cluster = groups.entry(representative(address, level)).or_default();
             cluster.sum = cluster.sum + position;
             cluster.count += 1;
         }
     }
     let mut rejected = BTreeSet::new();
+    // Component numbers are local to a cell, not correspondence across cells.
+    // Keep every reduction block containing a split cell at its preceding level.
+    let protected: BTreeSet<_> = source
+        .addresses
+        .iter()
+        .filter(|a| a.part != 0)
+        .map(|a| representative(*a, level).cell)
+        .collect();
+    rejected.extend(
+        groups
+            .keys()
+            .filter(|k| protected.contains(&k.cell))
+            .copied(),
+    );
     loop {
         if cancel.load(Ordering::Relaxed) {
             return None;
@@ -209,7 +229,7 @@ fn collapse_clusters(
             .iter()
             .zip(previous)
             .map(|(&address, &vertex)| {
-                if address / cells_per_face != face.index() {
+                if address.cell / cells_per_face != face.index() {
                     return vertex;
                 }
                 let identity = representative(address, level);
@@ -246,8 +266,43 @@ fn collapse_clusters(
                 for i in original {
                     let address = source.addresses[i];
                     let group = representative(address, level);
-                    if address / cells_per_face == face.index() && groups[&group].count > 1 {
+                    if address.cell / cells_per_face == face.index() && groups[&group].count > 1 {
                         rejected.insert(group);
+                    }
+                }
+            }
+        }
+        // Check the complete closed mesh so region borders are not mistaken for
+        // holes. Reject the participating clusters around any invalid link.
+        let mut ids = BTreeMap::new();
+        let remap: Vec<_> = vertices
+            .iter()
+            .map(|v| {
+                let next = ids.len() as u32;
+                *ids.entry(v.identity).or_insert(next)
+            })
+            .collect();
+        let mapped: Vec<_> = source
+            .mesh
+            .triangles
+            .iter()
+            .map(|t| t.vertices.map(|i| remap[i as usize]))
+            .collect();
+        let bad = crate::mesh::invalid_vertex_links(
+            mapped
+                .iter()
+                .copied()
+                .filter(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]),
+        );
+        for (triangle, mapped) in source.mesh.triangles.iter().zip(mapped) {
+            if mapped.iter().any(|v| bad.contains(v)) {
+                for i in triangle.vertices {
+                    let address = source.addresses[i as usize];
+                    if address.cell / cells_per_face == face.index() {
+                        let group = representative(address, level);
+                        if groups[&group].count > 1 {
+                            rejected.insert(group);
+                        }
                     }
                 }
             }
@@ -255,6 +310,10 @@ fn collapse_clusters(
         // Each nonterminal pass permanently rejects at least one cluster.
         // Restoring a cluster can affect its neighbors, so recheck until stable.
         if rejected.len() == before {
+            debug_assert!(
+                bad.is_empty(),
+                "rejection must recover the preceding manifold mesh"
+            );
             return Some(vertices);
         }
     }
@@ -264,7 +323,7 @@ fn collapse_clusters(
 /// Medium reduces the fine source; coarse reduces medium. Clusters that reverse
 /// or flatten a surviving triangle retain their preceding-level vertices.
 /// Triangles collapsed to fewer than three identities are removed. This is a
-/// render reduction, not a new density sampling backend or a manifold repair.
+/// render reduction; invalid closed vertex neighborhoods reject their clusters.
 pub fn build_region(
     source: &DetailSource,
     face: CubeFace,
@@ -468,6 +527,9 @@ mod tests {
             );
             mixed.validate().unwrap();
             let topology = mixed.topology();
+            assert_eq!(topology.nonmanifold_edges, 0, "{topology:?}");
+            assert_eq!(topology.nonmanifold_vertices, 0, "{topology:?}");
+            assert_eq!(topology.degenerate_triangles, 0, "{topology:?}");
             assert_eq!(topology.open_edges, 0, "{topology:?}");
             assert_eq!(topology.unbalanced_edges, 0, "{topology:?}");
         }

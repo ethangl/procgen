@@ -4,121 +4,21 @@ use procgen_core::Vec3;
 use rayon::prelude::*;
 
 use crate::{
-    PlanetError, PlanetField, RegionAddress, ShellVolume,
-    qef::{Constraint, fit},
-    shell::{Sample, face_grid},
+    PlanetError, PlanetField, RegionAddress, ShellVolume, SurfaceMesh, SurfaceTriangle,
+    contour_cells::{EDGES, interpolate_positions, sheets},
+    shell::face_grid,
 };
 
-// Cube corners use x + 2*y + 4*z. Each edge is listed once.
 pub const OVERVIEW_FACE_QUADS: usize = 16;
 
-const EDGES: [(usize, usize); 12] = [
-    (0, 1),
-    (2, 3),
-    (4, 5),
-    (6, 7),
-    (0, 2),
-    (1, 3),
-    (4, 6),
-    (5, 7),
-    (0, 4),
-    (1, 5),
-    (2, 6),
-    (3, 7),
-];
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SurfaceTriangle {
-    pub vertices: [u32; 3],
-    /// Lowest-address incident region owns a polygon, including a face seam.
-    pub region: RegionAddress,
-}
-
-/// Derived inspection data; not a promise that arbitrary density topology is manifold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MeshTopology {
-    pub open_edges: usize,
-    pub nonmanifold_edges: usize,
-    pub unbalanced_edges: usize,
-    pub degenerate_triangles: usize,
-}
-
-pub struct SurfaceMesh {
-    pub(crate) positions: Vec<Vec3>,
-    pub(crate) triangles: Vec<SurfaceTriangle>,
-}
-impl SurfaceMesh {
-    pub fn positions(&self) -> &[Vec3] {
-        &self.positions
-    }
-    pub fn triangles(&self) -> &[SurfaceTriangle] {
-        &self.triangles
-    }
-    pub fn validate(&self) -> Result<(), PlanetError> {
-        if self.positions.iter().any(|p| !p.is_finite())
-            || self.triangles.iter().any(|t| {
-                t.vertices
-                    .iter()
-                    .any(|&i| i as usize >= self.positions.len())
-                    || t.vertices[0] == t.vertices[1]
-                    || t.vertices[1] == t.vertices[2]
-                    || t.vertices[2] == t.vertices[0]
-            })
-        {
-            return Err(PlanetError::Mesh);
-        }
-        Ok(())
-    }
-    pub fn vertex_normals(&self) -> Vec<Vec3> {
-        let mut normals = vec![Vec3::ZERO; self.positions.len()];
-        for triangle in &self.triangles {
-            let [a, b, c] = triangle.vertices.map(|i| self.positions[i as usize]);
-            let normal = (b - a).cross(c - a);
-            for id in triangle.vertices {
-                normals[id as usize] = normals[id as usize] + normal;
-            }
-        }
-        normals.into_iter().map(Vec3::normalized).collect()
-    }
-
-    pub fn topology(&self) -> MeshTopology {
-        let mut edges = BTreeMap::<[u32; 2], (usize, i32)>::new();
-        let mut degenerate_triangles = 0;
-        for triangle in &self.triangles {
-            let t = triangle.vertices;
-            let [a, b, c] = t.map(|i| self.positions[i as usize]);
-            if (b - a).cross(c - a).length_squared() == 0.0 {
-                degenerate_triangles += 1;
-            }
-            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
-                let entry = edges.entry([a.min(b), a.max(b)]).or_default();
-                entry.0 += 1;
-                entry.1 += if a < b { 1 } else { -1 };
-            }
-        }
-        MeshTopology {
-            open_edges: edges.values().filter(|&&(count, _)| count == 1).count(),
-            nonmanifold_edges: edges.values().filter(|&&(count, _)| count > 2).count(),
-            unbalanced_edges: edges.values().filter(|&&(_, balance)| balance != 0).count(),
-            degenerate_triangles,
-        }
-    }
-
-    /// Rendering changes coordinates, never field inputs or mesh identities.
-    pub fn relative_positions(&self, origin: Vec3) -> Result<Vec<Vec3>, PlanetError> {
-        if !origin.is_finite() {
-            return Err(PlanetError::Mesh);
-        }
-        let positions: Vec<_> = self.positions.iter().map(|&p| p - origin).collect();
-        if positions.iter().any(|p| !p.is_finite()) {
-            return Err(PlanetError::Mesh);
-        }
-        Ok(positions)
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct VertexAddress {
+    pub cell: usize,
+    pub part: usize,
 }
 
 struct CellVertex {
-    address: usize,
+    address: VertexAddress,
     region: RegionAddress,
     samples: [usize; 8],
     position: Vec3,
@@ -126,41 +26,48 @@ struct CellVertex {
     crossings: Vec<[usize; 2]>,
 }
 
-/// Contour the trilinear reconstruction of the sampled final density. A cell
-/// with several disconnected sheets still has one vertex: thin features need
-/// more samples; manifold topology is not guaranteed for arbitrary fields.
+/// Contour the sampled density with separate vertices for each cell-boundary
+/// cycle. Shared bilinear face decisions keep adjacent sheets connected.
 pub fn contour_shell(volume: &ShellVolume) -> Result<SurfaceMesh, PlanetError> {
     Ok(contour_source(volume)?.0)
 }
 
 pub(crate) fn contour_source(
     volume: &ShellVolume,
-) -> Result<(SurfaceMesh, Vec<usize>), PlanetError> {
+) -> Result<(SurfaceMesh, Vec<VertexAddress>), PlanetError> {
     volume.validate()?;
     let cells: Vec<_> = volume
         .cells()
         .enumerate()
         .map(|(address, (region, ids))| {
             let samples = ids.map(|i| volume.samples[i]);
-            cell_vertex(samples).map(|position| {
-                let crossings = EDGES
-                    .iter()
-                    .filter(|&&(a, b)| crosses(samples[a].density, samples[b].density))
-                    .map(|&(a, b)| {
-                        let mut key = [ids[a], ids[b]];
-                        key.sort();
-                        key
-                    })
-                    .collect();
-                CellVertex {
-                    address,
-                    region,
-                    samples: ids,
-                    position,
-                    center: interpolate_positions(samples, Vec3::new(0.5, 0.5, 0.5)),
-                    crossings,
-                }
-            })
+            sheets(samples, ids)
+                .into_iter()
+                .enumerate()
+                .map(|(sheet, part)| {
+                    let crossings = part
+                        .edges
+                        .iter()
+                        .map(|&e| {
+                            let (a, b) = EDGES[e];
+                            let mut key = [ids[a], ids[b]];
+                            key.sort();
+                            key
+                        })
+                        .collect();
+                    CellVertex {
+                        address: VertexAddress {
+                            cell: address,
+                            part: sheet,
+                        },
+                        region,
+                        samples: ids,
+                        position: part.position,
+                        center: interpolate_positions(samples, Vec3::new(0.5, 0.5, 0.5)),
+                        crossings,
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
     // Indexed collection preserves cell order regardless of the Rayon schedule.
@@ -192,19 +99,134 @@ pub(crate) fn contour_source(
             .min()
             .expect("nonempty ring");
         for i in 1..ring.len() - 1 {
-            triangles.push(SurfaceTriangle {
-                vertices: [ring[0] as u32, ring[i] as u32, ring[i + 1] as u32],
-                region,
+            triangles.push(ContourTriangle {
+                triangle: SurfaceTriangle {
+                    vertices: [ring[0] as u32, ring[i] as u32, ring[i + 1] as u32],
+                    region,
+                },
+                crossing: edge,
             });
         }
     }
-    let addresses = cells.iter().map(|c| c.address).collect();
-    let mesh = SurfaceMesh {
-        positions: cells.into_iter().map(|c| c.position).collect(),
-        triangles,
-    };
+    let (mesh, addresses) = triangulate_sheets(volume, &cells, triangles)?;
     mesh.validate()?;
+    if !mesh.topology().is_closed_manifold() {
+        return Err(PlanetError::Topology);
+    }
     Ok((mesh, addresses))
+}
+
+struct ContourTriangle {
+    triangle: SurfaceTriangle,
+    crossing: [usize; 2],
+}
+
+// Two cell sheets can meet twice across an ambiguous face. Those are distinct
+// arcs, even when their dual edges have the same endpoints. Insert one shared
+// face vertex per arc before assembling an indexed triangle mesh.
+fn triangulate_sheets(
+    volume: &ShellVolume,
+    cells: &[CellVertex],
+    input: Vec<ContourTriangle>,
+) -> Result<(SurfaceMesh, Vec<VertexAddress>), PlanetError> {
+    let mut incidence = BTreeMap::<[u32; 2], usize>::new();
+    for t in &input {
+        let v = t.triangle.vertices;
+        for (a, b) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])] {
+            *incidence.entry([a.min(b), a.max(b)]).or_default() += 1;
+        }
+    }
+    let mut positions: Vec<_> = cells.iter().map(|c| c.position).collect();
+    let mut addresses: Vec<_> = cells.iter().map(|c| c.address).collect();
+    let mut next_part = BTreeMap::<usize, usize>::new();
+    for address in &addresses {
+        next_part
+            .entry(address.cell)
+            .and_modify(|n| *n = (*n).max(address.part + 1))
+            .or_insert(address.part + 1);
+    }
+    let mut arcs = BTreeMap::new();
+    let mut triangles = Vec::new();
+    for t in input {
+        let v = t.triangle.vertices;
+        let mut parts = vec![v];
+        for (a, b) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])] {
+            if incidence[&[a.min(b), a.max(b)]] <= 2 {
+                continue;
+            }
+            let left = &cells[a as usize];
+            let right = &cells[b as usize];
+            let face: Vec<_> = left
+                .samples
+                .iter()
+                .copied()
+                .filter(|i| right.samples.contains(i))
+                .collect();
+            if face.len() != 4 {
+                return Err(PlanetError::Topology);
+            }
+            let index = left
+                .crossings
+                .iter()
+                .position(|e| *e == t.crossing)
+                .ok_or(PlanetError::Topology)?;
+            let n = left.crossings.len();
+            let other = [
+                left.crossings[(index + 1) % n],
+                left.crossings[(index + n - 1) % n],
+            ]
+            .into_iter()
+            .find(|edge| edge.iter().all(|i| face.contains(i)))
+            .ok_or(PlanetError::Topology)?;
+            let mut key = [t.crossing, other];
+            key.sort();
+            let midpoint = *arcs.entry(key).or_insert_with(|| {
+                let root = |edge: [usize; 2]| {
+                    let [a, b] = edge.map(|i| volume.samples[i]);
+                    a.position + (b.position - a.position) * (a.density / (a.density - b.density))
+                };
+                let id = positions.len() as u32;
+                positions.push((root(key[0]) + root(key[1])) * 0.5);
+                let cell = left.address.cell.min(right.address.cell);
+                let part = next_part.get_mut(&cell).unwrap();
+                addresses.push(VertexAddress { cell, part: *part });
+                *part += 1;
+                id
+            });
+            let i = parts
+                .iter()
+                .position(|p| p.contains(&a) && p.contains(&b))
+                .ok_or(PlanetError::Topology)?;
+            let p = parts.remove(i);
+            let j = (0..3)
+                .find(|&j| p[j] == a && p[(j + 1) % 3] == b)
+                .ok_or(PlanetError::Topology)?;
+            let c = p[(j + 2) % 3];
+            parts.push([a, midpoint, c]);
+            parts.push([midpoint, b, c]);
+        }
+        triangles.extend(parts.into_iter().map(|vertices| SurfaceTriangle {
+            vertices,
+            region: t.triangle.region,
+        }));
+    }
+    // Keep canonical address order for stable border lookup and fingerprints.
+    let mut order: Vec<_> = (0..addresses.len()).collect();
+    order.sort_by_key(|&i| addresses[i]);
+    let mut remap = vec![0; order.len()];
+    for (new, &old) in order.iter().enumerate() {
+        remap[old] = new as u32;
+    }
+    for triangle in &mut triangles {
+        triangle.vertices = triangle.vertices.map(|i| remap[i as usize]);
+    }
+    Ok((
+        SurfaceMesh {
+            positions: order.iter().map(|&i| positions[i]).collect(),
+            triangles,
+        },
+        order.iter().map(|&i| addresses[i]).collect(),
+    ))
 }
 
 // Walk cell-face adjacency, not a floating-point angle sort. This handles the
@@ -235,67 +257,6 @@ fn cell_ring(cells: &[CellVertex], incident: &[usize]) -> Result<Vec<usize>, Pla
         return Err(PlanetError::Topology);
     }
     Ok(ring)
-}
-
-fn crosses(a: f32, b: f32) -> bool {
-    (a >= 0.0) != (b >= 0.0)
-}
-fn corner(i: usize) -> Vec3 {
-    Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32)
-}
-fn cell_vertex(samples: [Sample; 8]) -> Option<Vec3> {
-    let constraints: Vec<_> = EDGES
-        .iter()
-        .filter_map(|&(a, b)| {
-            let da = samples[a].density;
-            let db = samples[b].density;
-            if !crosses(da, db) {
-                return None;
-            }
-            // Exact root of the reconstructed field along this edge; zero is solid.
-            let t = da / (da - db);
-            let position = corner(a) + (corner(b) - corner(a)) * t;
-            let normal = density_gradient(samples, position).normalized();
-            // A zero gradient contributes no plane but still contributes to the mass point.
-            Some(Constraint { position, normal })
-        })
-        .collect();
-    if constraints.is_empty() {
-        None
-    } else {
-        Some(interpolate_positions(samples, fit(&constraints)))
-    }
-}
-fn weights(p: Vec3) -> [f32; 8] {
-    std::array::from_fn(|i| {
-        (if i & 1 == 0 { 1.0 - p.x } else { p.x })
-            * (if i & 2 == 0 { 1.0 - p.y } else { p.y })
-            * (if i & 4 == 0 { 1.0 - p.z } else { p.z })
-    })
-}
-fn interpolate_positions(samples: [Sample; 8], p: Vec3) -> Vec3 {
-    samples
-        .iter()
-        .zip(weights(p))
-        .fold(Vec3::ZERO, |sum, (s, w)| sum + s.position * w)
-}
-fn density_gradient(samples: [Sample; 8], p: Vec3) -> Vec3 {
-    let mut gradient = Vec3::ZERO;
-    for (i, sample) in samples.iter().enumerate() {
-        let c = corner(i);
-        let w = Vec3::new(
-            if c.x == 0.0 { 1.0 - p.x } else { p.x },
-            if c.y == 0.0 { 1.0 - p.y } else { p.y },
-            if c.z == 0.0 { 1.0 - p.z } else { p.z },
-        );
-        gradient = gradient
-            + Vec3::new(
-                (2.0 * c.x - 1.0) * w.y * w.z,
-                w.x * (2.0 * c.y - 1.0) * w.z,
-                w.x * w.y * (2.0 * c.z - 1.0),
-            ) * sample.density;
-    }
-    gradient
 }
 
 /// Cheap closed height mesh from the identical broad elevation function.
@@ -330,6 +291,7 @@ pub fn planet_overview(field: &PlanetField, face_quads: usize) -> Result<Surface
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MeshTopology;
     use crate::{
         PILOT_PLANET, PILOT_SHELL, PlanetConfig, ShellConfig, TerrainConfig, sample_shell,
     };
@@ -339,6 +301,7 @@ mod tests {
             MeshTopology {
                 open_edges: 0,
                 nonmanifold_edges: 0,
+                nonmanifold_vertices: 0,
                 unbalanced_edges: 0,
                 degenerate_triangles: 0
             }
@@ -404,8 +367,8 @@ mod tests {
         assert_eq!(topology.open_edges, 0);
         assert_eq!(topology.unbalanced_edges, 0);
         assert_eq!(topology.degenerate_triangles, 0);
-        // One vertex per cell can join unresolved sheets; record this known limit.
-        assert_eq!(topology.nonmanifold_edges, 467);
+        assert_eq!(topology.nonmanifold_edges, 0);
+        assert_eq!(topology.nonmanifold_vertices, 0);
         assert_eq!(a.positions, b.positions);
         assert_eq!(a.triangles, b.triangles);
         let unique: std::collections::BTreeSet<_> = a
@@ -424,21 +387,30 @@ mod tests {
                 .into_iter()
                 .chain([t.region.face.index() as u64])
         }));
-        assert_eq!(fingerprint, 10_149_191_386_720_561_003);
+        // Sheet separation and explicit face arcs change canonical triangle identities.
+        assert_eq!(fingerprint, 15_074_258_157_278_690_721);
     }
     #[test]
-    fn planar_and_exact_zero_samples_use_consistent_roots() {
-        for offset in [0.0, 0.25, 1.0] {
-            let samples = std::array::from_fn(|i| Sample {
-                position: corner(i),
-                density: offset - corner(i).x,
-            });
-            let vertex = cell_vertex(samples);
-            if offset == 1.0 {
-                assert!(vertex.is_none());
-            } else {
-                assert_eq!(vertex.unwrap(), Vec3::new(offset, 0.5, 0.5));
+    fn ambiguous_shells_remain_manifold_across_cube_seams() {
+        for seed in 0..32 {
+            let field = PILOT_PLANET.validate(seed).unwrap();
+            let mut volume = sample_shell(
+                &field,
+                ShellConfig {
+                    face_quads: 4,
+                    radial_cells: 4,
+                },
+            )
+            .unwrap();
+            for (i, sample) in volume.samples.iter_mut().enumerate() {
+                if i % 5 != 0 && i % 5 != 4 {
+                    let hash = procgen_core::hash_u32(seed as u32, i as u32, 0, 0);
+                    sample.density = if hash & 1 == 0 { -1.0 } else { 1.0 }
+                        * (0.1 + (hash % 1000) as f32 / 1000.0);
+                }
             }
+            let mesh = contour_shell(&volume).unwrap();
+            closed(&mesh);
         }
     }
 }

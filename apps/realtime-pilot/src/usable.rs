@@ -122,7 +122,8 @@ mod tests {
                     },
             )
         });
-        assert_eq!(fingerprint, 0x015f_2282); // Accepted stable candidate IDs, not float bits.
+        // Separate contour sheets change accepted support triangles and candidate IDs.
+        assert_eq!(fingerprint, 3_736_725_638);
         for p in recreated.placements() {
             let nearby: Vec<_> = recreated.nearby(p.position).copied().collect();
             assert!(nearby.contains(p));

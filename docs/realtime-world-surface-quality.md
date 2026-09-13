@@ -1,4 +1,4 @@
-# Surface quality: neutral inspection
+# Surface quality
 
 This follows the five-slice real-time world proof of concept. The visual target
 is neutral terrain with better geometry and surface quality. This work does not
@@ -76,9 +76,9 @@ cost, not a claim of free rendering detail.
 
 ## Following slices
 
-1. Neutral surface inspection and normal comparison: this change.
-2. Investigate and repair demonstrated extraction defects, including ambiguous
-   cells and nonmanifold surfaces.
+1. Neutral surface inspection and normal comparison: complete.
+2. Repair demonstrated extraction defects, including ambiguous cells and
+   nonmanifold surfaces: complete; see the repair record below.
 3. Generate finer nearby geometry with valid joins and collision support.
 4. Add restrained surface roughness and normal detail with stable mapping.
 
@@ -171,3 +171,99 @@ no missing resident faces, obsolete installations, or logged errors. Peak
 managed memory was 89,800,720 bytes, and the largest frame upload was 498,264
 bytes, both within the existing limits. Screenshot capture was enabled, so this
 run is a coverage check rather than a frame-pacing benchmark.
+
+
+## Slice 2: extraction repair
+
+The original extractor joined all edge crossings in a cell at one QEF vertex.
+That joined separate sheets and gave hills, seed 42, 467 edges with more than
+two incident triangles. Surface-quality slice 2 fits each closed contour cycle
+separately. Each sampled face connects its two crossings directly. A face with
+four crossings uses its bilinear saddle determinant to select the pairing;
+an exact tie selects the diagonal with the lower shared sample IDs. Adjacent
+cells therefore make the same decision, including across cube faces.
+
+Separate cell vertices remove 463 of the 467 bad edges. The remaining four
+join the same two sheets twice across an ambiguous face. They are distinct
+face segments, but would share one indexed dual edge. Each segment now gets
+its own shared midpoint between its two edge roots, and the incident triangles
+split at that point. This retains both connections without joining them into
+one edge. Cell and part addresses keep these vertices distinct during region
+assembly and border welding.
+
+The cycle approach follows the uniform-grid discussion in
+[Schaefer, Ju, and Warren, *Manifold Dual Contouring*, section III](https://people.engr.tamu.edu/schaefer/research/dualsimp_tvcg.pdf).
+This pilot uses explicit bilinear face decisions and retains its fixed shell;
+it does not implement that paper's adaptive octree algorithm.
+
+Extraction now checks closed edge incidence, balanced winding, nonzero triangle
+area, and one circular triangle neighborhood per vertex. It returns a topology
+error if the result fails. Vertex checks catch pinched sheets that edge counts
+alone can miss. The seed sweep reports these vertex defects and treats them as
+failures in both fine and mixed-level meshes.
+
+Medium still reduces fine, and coarse reduces medium. Blocks containing
+multiple cell parts remain at the preceding level. Candidate reductions also
+check the complete mesh's vertex neighborhoods; clusters around a failed link
+are rejected, along with the existing orientation checks. Rejection repeats
+until the candidate is valid. The fixed four-cell border and LOD density
+ordering remain intact. Working-memory reservations now include the complete
+mesh used for these checks; the 128 MiB managed limit and 512 KiB frame upload
+limit remain unchanged.
+
+This repairs demonstrated connectivity defects. It does not add samples or
+recover features below the 64-by-64-by-16 shell resolution. Cell-boundary cycles
+are the chosen interior reconstruction; this is not an exact solution of all
+trilinear interior saddle cases. Manifold checks do not detect geometric
+self-intersections or establish solid-body physics. Collision keeps its existing
+two-sided fine-triangle contract, now using the repaired source. Changed support
+triangles can change accepted placements and walking paths; those fingerprints
+are expected to change. The field, presets, normal controls, and lighting stay
+the same.
+
+### Validation
+
+The CPU suite covers all 256 corner-sign cases with equal and varied magnitudes,
+all 48 cube rotations/reflections, planar and exact-zero cases, separate corner
+sheets, and 32 ambiguous shell fixtures spanning cube seams and corners. A
+pair of tetrahedra touching at one vertex verifies that closed edge counts
+cannot hide a pinched vertex. Existing tests cover schedule invariance, LOD
+ordering, orientation, exact border positions and normals, mixed-level joins,
+contact, placement recreation, and replay serialization. All 33 tests pass.
+
+The fixed CPU sweep uses hills, ridges, and basins with seeds 0, 42, and
+4,294,967,338. All nine cases pass fine and mixed topology, the 36-second walking
+route, contact clearance, and stationary support. Each has zero nonmanifold
+edges and vertices and zero rest drift. Source build `5c7d6b2ae6ef176f` produced
+this sweep; the later extraction-time topology gate repeats checks already
+required by that audit. Records are in `/tmp/procgen-surface-slice2/sweep`.
+
+| Preset, seed 42 | Previous fine triangles | Repaired fine triangles | Nonmanifold edges | Nonmanifold vertices |
+| --- | ---: | ---: | ---: | ---: |
+| Hills | 106,486 | 106,502 | 0 | 0 |
+| Ridges | 123,834 | 123,854 | 0 | 0 |
+| Basins | 83,220 | 83,232 | 0 | 0 |
+
+Hills-42 now has quantized position fingerprint `8d28732d9c56f3b0` and 224
+placements. Its pinned integer triangle fingerprint changes because cell parts
+and added face vertices change canonical indices. Source and collision
+preparation in the sweep took 574–995 ms; mixed-mesh audits took about
+1.2–2.3 seconds. All nine cases remain marked expensive because at least one
+walking step exceeded 4 ms. These runs establish geometry and contact checks,
+not frame pacing. Windows/Vulkan validation remains open.
+
+Native Metal checks on the same Mac completed a 36-second ridges-42 flight
+with LOD colors and triangle edges (3,974 frames), then a neutral walking route
+(4,280 frames), using build `548ecc3ee02e7593`. Both retained all six resident
+faces, exercised all three LODs, installed no obsolete tickets, and logged no
+errors or collision failures. Walking minimum recorded clearance was 0.035012.
+The flight wireframe and ground screenshots show continuous terrain; large
+facets remain visible at ground scale, as expected at the unchanged resolution.
+
+Peak managed reservation was 130,071,816 bytes (about 124 MiB) in both runs,
+with a maximum frame upload of 486,408 bytes. Both remain below their limits,
+but the additional topology work leaves less memory headroom and can delay
+replacement jobs. Screenshot readbacks were enabled; these runs do not establish
+frame pacing. CSVs, summaries, view settings, replays, and screenshots are in
+`/tmp/procgen-surface-slice2`. Formatting, the full headless test suite, and
+Clippy with warnings denied pass.
