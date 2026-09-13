@@ -35,6 +35,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             "--check" => mode.set(DesignMode::PreviewAudit)?,
             "--check-chunks" => mode.set(DesignMode::ChunkAudit)?,
             "--check-residency" => mode.set(DesignMode::ResidencyAudit)?,
+            "--check-surfaces" => mode.set(DesignMode::SurfaceAudit)?,
             "--chunk-lod" => {
                 chunk_lod = Some(args.next().ok_or("--chunk-lod needs an integer")?.parse()?)
             }
@@ -78,7 +79,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nWithout an audit flag, opens the physical planet and octave editor. --write-design saves the full config."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nWithout an audit flag, opens the physical planet and octave editor. --write-design saves the full config."
                 );
                 return Ok(());
             }
@@ -89,8 +90,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-    if matches!(mode, DesignMode::ChunkAudit | DesignMode::ResidencyAudit) && preview_explicit {
-        return Err("chunk/residency audits do not accept height-preview options".into());
+    if matches!(
+        mode,
+        DesignMode::ChunkAudit | DesignMode::ResidencyAudit | DesignMode::SurfaceAudit
+    ) && preview_explicit
+    {
+        return Err("voxel audits do not accept height-preview options".into());
     }
     if mode != DesignMode::ChunkAudit && (chunk_lod.is_some() || chunk_point.is_some()) {
         return Err("--chunk-lod/--chunk-point require --check-chunks".into());
@@ -103,6 +108,19 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         None => PlanetDesignConfig::starter(seed.unwrap_or(42)),
     };
     let field = config.validate()?;
+    if mode == DesignMode::SurfaceAudit {
+        let result = procgen_realtime_pilot::audit_voxel_surfaces(std::sync::Arc::new(field))?;
+        if let Some(p) = &output {
+            crate::design_file::save(p, &config)?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({"build":BUILD_ID,"seed":config.seed,"radius_m":config.radius_m,"surface":result})
+            )?
+        );
+        return Ok(());
+    }
     if mode == DesignMode::ResidencyAudit {
         let result = procgen_realtime_pilot::audit_voxel_travel(
             std::sync::Arc::new(field),
@@ -184,6 +202,7 @@ enum DesignMode {
     PreviewAudit,
     ChunkAudit,
     ResidencyAudit,
+    SurfaceAudit,
 }
 impl DesignMode {
     fn set(&mut self, mode: Self) -> Result<(), Box<dyn Error>> {

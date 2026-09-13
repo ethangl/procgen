@@ -3,8 +3,8 @@
 Status: slice 1 implements physical broad terrain, an octave editor, and bounded
 CPU height previews. Slice 2a adds octree addresses and canonical density chunks
 with one-meter finest spacing. Slice 2b adds bounded camera-driven density
-residency and a headless travel audit. Voxel meshing and meter-scale collision
-remain in slice 2c. This phase belongs only to the independent real-time pilot.
+residency and a headless travel audit. Slice 2c adds conforming chunk meshes
+and independent one-meter collision support. The integrated viewer is next. This phase belongs only to the independent real-time pilot.
 
 ## Requirements and source evidence
 
@@ -151,17 +151,19 @@ the root minimum; world sample positions are signed integer meters. Half-open
 chunk ownership handles negative coordinates and zero without ambiguous cells.
 
 Each volume includes 33 endpoint samples plus one halo sample on each side:
-35³ = 42,875 f32 densities, or **171,500 bytes of density payload**. Halo samples
+35³ = 42,875 f32 potentials, or **171,500 bytes of density payload**. Halo samples
 are addressed before any float conversion. Neighboring chunks and parent/child
 chunks therefore query the same world position at coincident nodes. Relative
 positions subtract integer origins before conversion to render coordinates.
 Integer addressing has a pinned fingerprint across LODs and negative positions.
 
 `sample_voxel_chunk` is a bounded, parallel CPU job. It samples the existing saved
-design's **complete** octave stack, independent of chunk LOD. Density is broad
+design's **complete** octave stack, independent of chunk LOD. The public density view is broad
 surface elevation minus radial altitude, clamped to +/-4 m, positive for solid.
-It is not a signed-distance function. The sampler can skip noise outside the
-configured global height envelope, where the clamped sign is already known.
+It is not a signed-distance function. Since slice 2c, the same buffer retains
+the unsaturated potential for mesh interpolation; public density queries still
+clamp to +/-4 m. Sampling now evaluates the full height function outside the
+relief envelope too, because coarse edge roots need the potential magnitudes.
 This establishes height-derived density; local caves and overhangs are not yet
 part of the physical design contract.
 
@@ -174,8 +176,8 @@ The existing f32 noise function and its precision limits remain unchanged.
 
 Full-stack density keeps identical values at coincident samples across LODs.
 The preview's octave fading is not silently applied to collision/source density.
-Filtering for rendered coarse meshes and transitions must be resolved explicitly
-when those meshes are implemented.
+Slice 2c keeps this full-band policy for mesh potentials and interpolates derived
+face/cell centers from the finest incident source grid. It adds no octave fade.
 
 Run a bounded headless audit with a saved design:
 
@@ -264,17 +266,98 @@ the audit took about 15 seconds including canonical rechecks, and the slowest
 CPU residency update was 1.17 ms. These are local measurements, not frame-time
 guarantees or Windows/Vulkan results.
 
-Leaves are not yet balanced to a 2:1 neighbor ratio. Mesh transition rules,
-render replacement continuity, and collision support belong to slice 2c. This
-slice establishes bounded density residency, not a rendered seamless octree or
-measured planet-to-ground frame performance.
+Leaves are not balanced to a 2:1 neighbor ratio. Slice 2c accepts arbitrary
+dyadic ratios through shared face subdivisions. Slice 2b establishes density
+residency; its measurements do not include meshing, collision, or frame time.
 
-### Slice 2c: voxel meshes and nearby collision
+### Slice 2c: voxel meshes and nearby collision (implemented)
 
-Extract chunk surfaces, settle coarse/fine transitions and density filtering,
-and connect canonical nearby collision. Validate shared boundaries before
-replacing the fixed source used by the earlier streaming experiment. The final
-acceptance criteria for slice 2 still apply; 2a alone does not satisfy them.
+The physical voxel path now uses **conforming tetrahedral extraction**. This is
+an explicit change from the original pilot's dual-contouring candidate. Shared
+face triangles provide a direct boundary contract for arbitrary chunk LOD ratios
+and a canonical surface for collision. The original shell/QEF experiment remains
+available for comparison; this new path does not fit feature vertices with QEFs.
+
+Each source voxel is decomposed around its center and face centers. At a mixed
+boundary, the coarse face subdivides to the incident fine grid. All face corners
+also split incident edge lines, so face seams, edge seams, and chunk corners use
+the same triangles. Half-meter integer node identities represent derived centers;
+source voxel corners still use their exact one-meter-or-coarser lattice. Centers
+interpolate the finest incident source volume. They do not introduce extra noise
+samples or a half-meter source LOD. Shared edge-root identities weld the output,
+and triangle ownership records its source chunk. A coarse cell is included when
+fine boundary samples cross it even if its own eight corners have one sign.
+
+The volume stores one unsaturated potential per sample and derives its existing
++/-4 m density view. Clamping before interpolation would move a coarse edge's root
+toward its midpoint; the mesh now preserves the magnitude information it needs.
+Every LOD uses the full octave stack. This preserves coincident field values and
+is the explicit filtering policy for this slice. It does not claim to eliminate
+coarse-grid aliasing. Mesh roots interpolate from the endpoint nearest zero to
+retain small radial curvature at large radii. Exact-zero roots share node IDs;
+there is no arbitrary density epsilon or position quantization.
+
+`build_voxel_surface` consumes the actual resident volumes, with a local integer
+origin inside the octree root. It rejects overlapping/duplicate input chunks,
+invalid volumes, exceeded capacities, and invalid topology. Each open edge must
+be on an intentional outer support boundary; shared chunk edges must have two
+oppositely oriented incident triangles. Interior vertex links and zero-area
+triangles are checked too. Cancellation discards the complete batch result.
+The later renderer must install complete replacements and retain prior visual
+coverage while a job runs; this headless slice does not add GPU upload handling.
+
+Generation has explicit caps: 256 source chunks, 262,144 active cells, 1,572,864
+shared faces, 2,097,152 surface vertices, and 4,194,304 triangles. These bound
+geometry and scratch data independently of world size. They are count limits,
+not a claim that the density-only 42.2 MiB reservation includes mesh storage.
+The audit reports allocated mesh vector payload separately; tree-node allocation,
+thread stacks, allocator overhead, and temporary construction data are excluded.
+A replay audit briefly holds both complete mesh outputs for exact comparison.
+
+`VoxelCollision` builds a separate 3x3x3 set of finest chunks around the local
+origin: a 96 m support box, with 1 m source cells. Its 27 source payloads total
+4,630,500 bytes during construction and are released after extraction. The
+collision owner retains the resulting surface independently of render residency.
+It supplies finite-segment queries and swept spheres in local meters. Sweeps use
+exact triangle distance, a 1 mm contact skin, and bounded conservative advancement;
+density magnitude is never used as a distance bound. Missing coverage, overlap,
+and iteration exhaustion return errors. Queries are two-sided and do not classify
+the solid interior. Player locomotion and collision-support replacement remain
+part of the integrated viewer work.
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-surfaces
+```
+
+This meshes the saved design's resident set, leaves for orbit to evict it, then
+regenerates the original location with reversed source order. Both positions and
+triangle identities must match exactly. It also builds fine collision, checks
+the landing ray against the mixed mesh within 1 mm, and stops a 0.4 m-radius
+sphere on that surface. General coarse render geometry can differ from fine
+collision; the audit's landing probe is at nearby fine support.
+
+Validation used the saved seed-42, 4,900 km preset and copies at 100 km/seed 0
+and 8,000 km/seed u64::MAX. All three passed topology, exact eviction/revisit,
+reversed-order, landing-ray, and sphere-sweep checks. The saved preset used 128
+resident chunks and produced 632,495 vertices and 1,263,460 triangles, with
+1,528 intentional outer boundary edges and no invalid interior topology. Its
+allocated mesh vector/boundary-key payload was 71,315,392 bytes (68.0 MiB), plus
+21,952,000 bytes of source density. Fine collision used 186,308 triangles and
+8,922,160 bytes of mesh payload. Local CPU construction took about 3.1 seconds
+for the mixed mesh and 0.9 seconds for collision, excluding resident generation.
+This is a relatively dense, serial extraction baseline; neither these times nor
+the mesh counts are a real-time frame-rate claim. Windows/Vulkan is unmeasured.
+
+All 68 tests pass with inspector features (67 without), along with the build,
+both Clippy configurations, formatting, and invalid CLI-option checks.
+Tests cover closed surfaces across mixed faces, edges, and corners, a small fine
+feature whose coarse corners miss the crossing, 32:1 transitions, exact-zero
+planes, coarse-plane altitude, large-origin curvature, reversed input order,
+cancellation, source validation, and two-sided collision/coverage failures.
+This slice provides the CPU surface and query contracts. Continuous visible
+planet-to-ground travel, walking, render replacement, and measured frame/upload
+budgets still require slice 3.
 
 ## Slice 3: integrated planet-to-ground viewer
 

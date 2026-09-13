@@ -22,13 +22,20 @@ mod scenario;
 mod shell;
 mod streaming;
 mod terrain;
+mod triangle_query;
 mod usable;
 mod volume;
 mod voxel_address;
 mod voxel_audit;
+mod voxel_collision;
 mod voxel_density;
 mod voxel_residency;
 mod voxel_selection;
+mod voxel_surface;
+mod voxel_surface_audit;
+mod voxel_surface_extract;
+mod voxel_surface_faces;
+mod voxel_surface_grid;
 mod voxel_travel_audit;
 mod walking;
 
@@ -111,3 +118,14 @@ pub use voxel_residency::{
 pub use voxel_travel_audit::{
     VoxelTravelAudit, VoxelTravelError, VoxelTravelStop, audit_voxel_travel,
 };
+
+pub use voxel_surface::{
+    MAX_SURFACE_CHUNKS, VoxelSurface, VoxelSurfaceError, VoxelSurfaceTopology, VoxelTriangle,
+};
+pub use voxel_surface_extract::build_voxel_surface;
+
+pub use voxel_collision::{
+    VOXEL_CONTACT_SKIN_M, VoxelCollision, VoxelCollisionError, VoxelContact, VoxelSweep,
+};
+
+pub use voxel_surface_audit::{VoxelSurfaceAudit, VoxelSurfaceAuditError, audit_voxel_surfaces};

@@ -20,7 +20,7 @@ impl fmt::Display for VoxelVolumeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "voxel volume must contain {VOXEL_SAMPLE_COUNT} finite densities within +/-{VOXEL_DENSITY_LIMIT_M} meters"
+            "voxel volume must contain {VOXEL_SAMPLE_COUNT} finite potentials (density access clamps to +/-{VOXEL_DENSITY_LIMIT_M} meters)"
         )
     }
 }
@@ -28,35 +28,50 @@ impl Error for VoxelVolumeError {}
 
 pub struct VoxelVolume {
     address: VoxelChunkAddress,
-    densities: Vec<f32>,
+    potentials: Vec<f32>,
 }
 impl VoxelVolume {
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        address: VoxelChunkAddress,
+        potential: impl Fn(VoxelPosition) -> f32,
+    ) -> Self {
+        Self {
+            address,
+            potentials: (0..VOXEL_SAMPLE_COUNT)
+                .map(|i| potential(address.sample_position(VoxelSampleIndex::from_linear(i))))
+                .collect(),
+        }
+    }
+
     pub fn address(&self) -> VoxelChunkAddress {
         self.address
     }
     pub fn allocated_bytes(&self) -> usize {
-        self.densities.capacity() * std::mem::size_of::<f32>()
+        self.potentials.capacity() * std::mem::size_of::<f32>()
     }
     pub fn validate(&self) -> Result<(), VoxelVolumeError> {
-        if self.densities.len() != VOXEL_SAMPLE_COUNT
-            || self
-                .densities
-                .iter()
-                .any(|d| !d.is_finite() || d.abs() > VOXEL_DENSITY_LIMIT_M)
+        if self.potentials.len() != VOXEL_SAMPLE_COUNT
+            || self.potentials.iter().any(|d| !d.is_finite())
         {
             return Err(VoxelVolumeError);
         }
         Ok(())
     }
     pub fn density(&self, index: VoxelSampleIndex) -> f32 {
-        self.densities[index.linear()]
+        self.potential(index)
+            .clamp(-VOXEL_DENSITY_LIMIT_M, VOXEL_DENSITY_LIMIT_M)
+    }
+    /// Unsaturated potential preserves edge interpolation at coarse spacing.
+    pub(crate) fn potential(&self, index: VoxelSampleIndex) -> f32 {
+        self.potentials[index.linear()]
     }
     pub fn samples(&self) -> impl Iterator<Item = (VoxelPosition, f32)> + '_ {
-        self.densities.iter().enumerate().map(|(i, &density)| {
+        self.potentials.iter().enumerate().map(|(i, &density)| {
             (
                 self.address
                     .sample_position(VoxelSampleIndex::from_linear(i)),
-                density,
+                density.clamp(-VOXEL_DENSITY_LIMIT_M, VOXEL_DENSITY_LIMIT_M),
             )
         })
     }
@@ -82,15 +97,15 @@ pub(crate) fn sample_voxel_chunk_cancellable(
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
-    let mut densities = vec![0.0; VOXEL_SAMPLE_COUNT];
-    densities
+    let mut potentials = vec![0.0; VOXEL_SAMPLE_COUNT];
+    potentials
         .par_chunks_mut(crate::VOXEL_SAMPLE_SIDE)
         .enumerate()
         .for_each(|(row, samples)| {
             if !cancel.load(Ordering::Relaxed) {
                 for (column, sample) in samples.iter_mut().enumerate() {
                     let i = row * crate::VOXEL_SAMPLE_SIDE + column;
-                    *sample = density_at(
+                    *sample = potential_at(
                         field,
                         address.sample_position(VoxelSampleIndex::from_linear(i)),
                     );
@@ -100,27 +115,27 @@ pub(crate) fn sample_voxel_chunk_cancellable(
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
-    let result = VoxelVolume { address, densities };
+    let result = VoxelVolume {
+        address,
+        potentials,
+    };
     result.validate()?;
     Ok(Some(result))
 }
 
-fn density_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {
+fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {
     // All root and halo coordinates fit exactly in f32 at their LOD spacing.
     let p = position.as_vec3();
     let radius = field.config().radius_m;
     let altitude = radial_altitude(p, radius);
-    let bound = field.config().height_limit_m;
-    // Outside the global elevation envelope the clamped density is known,
-    // including the planet center where a surface direction is undefined.
-    if altitude <= -bound - VOXEL_DENSITY_LIMIT_M {
-        return VOXEL_DENSITY_LIMIT_M;
-    }
-    if altitude >= bound + VOXEL_DENSITY_LIMIT_M {
-        return -VOXEL_DENSITY_LIMIT_M;
-    }
-    let height = field.height(p.normalized(), 0.0);
-    (height - altitude).clamp(-VOXEL_DENSITY_LIMIT_M, VOXEL_DENSITY_LIMIT_M)
+    // The center is strictly interior and has no surface direction. Everywhere
+    // else retain the unsaturated potential for coarse edge interpolation.
+    let height = if p == Vec3::ZERO {
+        0.0
+    } else {
+        field.height(p.normalized(), 0.0)
+    };
+    height - altitude
 }
 
 /// Avoid subtracting two rounded planet radii. Compensated squared products
@@ -203,7 +218,7 @@ mod tests {
         let field = config.validate().unwrap();
         for offset in -3..=3 {
             assert_eq!(
-                density_at(
+                potential_at(
                     &field,
                     VoxelPosition {
                         x_m: 8_000_000 + offset,
@@ -283,11 +298,11 @@ mod tests {
                 .install(|| sample_voxel_chunk(&field, address).unwrap())
         };
         let mut a = run(1);
-        assert_eq!(a.densities, run(4).densities);
+        assert_eq!(a.potentials, run(4).potentials);
         assert_eq!(a.allocated_bytes(), VOXEL_DENSITY_BYTES);
-        a.densities[5] = f32::NAN;
+        a.potentials[5] = f32::NAN;
         assert!(a.validate().is_err());
-        a.densities.clear();
+        a.potentials.clear();
         assert!(a.validate().is_err());
     }
 }

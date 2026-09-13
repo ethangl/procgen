@@ -54,9 +54,28 @@ Defaults allow 256 leaf addresses and two workers, with density allocated within
 cap is 42.2 MiB, excluding metadata, worker runtime, and the audit's one reference
 volume. Every checked density must match canonical CPU sampling exactly.
 
-This completes slice 2b's residency owner. The current editor still shows height
-previews; voxel meshes, transitions, and nearby collision are next in slice 2c.
+This exercises slice 2b's residency owner. The current editor still shows height
+previews; the surface audit below exercises slice 2c.
 See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2b-camera-driven-residency-implemented).
+
+## Voxel surface and collision audit
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-surfaces
+```
+
+This builds conforming tetrahedral meshes from the resident chunks, verifies
+internal seams, evicts/recreates the location, and checks fine collision. The
+report includes geometry counts, intentional outer boundaries, memory payloads,
+generation times, and a swept-sphere contact. Mesh potentials retain the full
+terrain band stack and unsaturated values; the existing density view still clamps
+to +/-4 m. Collision owns a separate 96 m support box with one-meter source cells.
+
+This is a CPU/headless surface baseline. It uses more triangles than the original
+QEF mesh and reports mesh storage separately from density residency. The editor
+and old `--stream` mode are unchanged; the integrated physical viewer is slice 3.
+See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2c-voxel-meshes-and-nearby-collision-implemented).
 
 ## Run the original experiments
 
