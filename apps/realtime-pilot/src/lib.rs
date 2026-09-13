@@ -27,6 +27,9 @@ mod volume;
 mod voxel_address;
 mod voxel_audit;
 mod voxel_density;
+mod voxel_residency;
+mod voxel_selection;
+mod voxel_travel_audit;
 mod walking;
 
 #[cfg(test)]
@@ -100,3 +103,11 @@ pub use voxel_density::{
 };
 
 pub use voxel_audit::{VoxelAuditConfig, VoxelAuditError, VoxelChunkAudit, audit_voxel_chunk};
+
+pub use voxel_residency::{
+    VoxelResidency, VoxelResidencyConfig, VoxelResidencyError, VoxelResidencyStats,
+};
+
+pub use voxel_travel_audit::{
+    VoxelTravelAudit, VoxelTravelError, VoxelTravelStop, audit_voxel_travel,
+};

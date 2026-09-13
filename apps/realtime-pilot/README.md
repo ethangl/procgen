@@ -22,7 +22,8 @@ headless report; `--write-design PATH` saves the config. Run `--design --help`
 for patch and solo options. With auto apply disabled, press Generate after Load.
 
 This is a coarse height preview, with no height exaggeration. The headless chunk
-audit below samples one-meter voxels. Live octree streaming follows; `--stream`
+audit below samples one-meter voxels. A headless travel audit also exercises
+bounded density residency. Viewer integration follows; `--stream`
 still runs the earlier radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
 
 ## Octree chunk audit
@@ -38,9 +39,24 @@ cells at one-meter spacing. `--chunk-lod 1` selects two-meter spacing, and
 checks shared face/halo samples and coincident parent samples, and measures live
 density payloads. Without a point it samples near the +X surface.
 
-This is slice 2a's addressing and density foundation. Camera-driven residency,
-chunk meshes, and physical walking follow in 2b/2c. See the
-[phase document](../../docs/realtime-world-planet-scale.md#slice-2a-integer-addresses-and-density-chunks-implemented).
+## Octree residency audit
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-residency
+```
+
+This runs orbit/ground travel, pending-job cancellation, eviction, and revisit
+against the saved design. The JSON reports leaf addresses as integer fingerprints,
+spacing, job counts, live/peak density payload, and canonical sample agreement.
+Defaults allow 256 leaf addresses and two workers, with density allocated within
+4 km of the camera. Distant coverage stays as metadata. The density reservation
+cap is 42.2 MiB, excluding metadata, worker runtime, and the audit's one reference
+volume. Every checked density must match canonical CPU sampling exactly.
+
+This completes slice 2b's residency owner. The current editor still shows height
+previews; voxel meshes, transitions, and nearby collision are next in slice 2c.
+See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2b-camera-driven-residency-implemented).
 
 ## Run the original experiments
 

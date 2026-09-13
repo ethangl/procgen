@@ -4,7 +4,11 @@ use crate::{
 };
 use procgen_core::Vec3;
 use rayon::prelude::*;
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 /// Positive solid, negative air. This is a clamped density, not a signed distance.
 pub const VOXEL_DENSITY_LIMIT_M: f32 = 4.0;
@@ -62,18 +66,43 @@ pub fn sample_voxel_chunk(
     field: &PlanetDesignField,
     address: VoxelChunkAddress,
 ) -> Result<VoxelVolume, VoxelVolumeError> {
-    let densities = (0..VOXEL_SAMPLE_COUNT)
-        .into_par_iter()
-        .map(|i| {
-            density_at(
-                field,
-                address.sample_position(VoxelSampleIndex::from_linear(i)),
-            )
-        })
-        .collect();
+    Ok(
+        sample_voxel_chunk_cancellable(field, address, &AtomicBool::new(false))?
+            .expect("uncancelled sample"),
+    )
+}
+
+/// Each parallel row checks cancellation before evaluating more noise. Allocate
+/// the final buffer once so the worker reservation includes all density storage.
+pub(crate) fn sample_voxel_chunk_cancellable(
+    field: &PlanetDesignField,
+    address: VoxelChunkAddress,
+    cancel: &AtomicBool,
+) -> Result<Option<VoxelVolume>, VoxelVolumeError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    let mut densities = vec![0.0; VOXEL_SAMPLE_COUNT];
+    densities
+        .par_chunks_mut(crate::VOXEL_SAMPLE_SIDE)
+        .enumerate()
+        .for_each(|(row, samples)| {
+            if !cancel.load(Ordering::Relaxed) {
+                for (column, sample) in samples.iter_mut().enumerate() {
+                    let i = row * crate::VOXEL_SAMPLE_SIDE + column;
+                    *sample = density_at(
+                        field,
+                        address.sample_position(VoxelSampleIndex::from_linear(i)),
+                    );
+                }
+            }
+        });
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
     let result = VoxelVolume { address, densities };
     result.validate()?;
-    Ok(result)
+    Ok(Some(result))
 }
 
 fn density_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {

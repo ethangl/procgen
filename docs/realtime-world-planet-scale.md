@@ -2,8 +2,9 @@
 
 Status: slice 1 implements physical broad terrain, an octave editor, and bounded
 CPU height previews. Slice 2a adds octree addresses and canonical density chunks
-with one-meter finest spacing. Camera-driven residency, voxel meshing, and
-meter-scale collision remain in the following parts of slice 2. This phase belongs only to the independent real-time pilot.
+with one-meter finest spacing. Slice 2b adds bounded camera-driven density
+residency and a headless travel audit. Voxel meshing and meter-scale collision
+remain in slice 2c. This phase belongs only to the independent real-time pilot.
 
 ## Requirements and source evidence
 
@@ -203,12 +204,70 @@ invalid inputs. Every checked coincident density matches exactly on the CPU;
 the largest paired density payload is 343,000 bytes. No GPU density mirror or
 new rendered mesh is claimed by these checks.
 
-### Slice 2b: camera-driven residency (next)
+### Slice 2b: camera-driven residency (implemented)
 
-Select octree leaves around the camera, retain cheap distant coverage, and cull
-interior/empty regions conservatively. Add bounded scheduling, cancellation,
-eviction, and stale-result rejection. Verify repeated travel and different job
-orders against the canonical chunk addresses and density samples from 2a.
+`VoxelResidency` owns an immutable design field, a camera-selected octree, and
+asynchronous CPU density jobs. Selection refines the nearest boxes first within
+two chunk spans of the camera, down to LOD zero. Address order breaks distance
+ties. A hard leaf cap stops refinement while retaining the parent, so distant
+surface coverage remains present. The default cap is 256 leaves; this is a
+bounded pilot working set, not a promise of uniform detail throughout the reach.
+Selection reruns only when the integer camera position changes.
+
+Culling uses the box's nearest/farthest radius against the global relief bound,
+including the density clamp, sample halos, and a 16 m float-rounding margin.
+It removes only proven interior or exterior boxes. Corner density signs alone
+cannot prove emptiness with unresolved noise. Distant leaves remain cheap address
+metadata; only leaves within a 4,096 m camera reach allocate density. The existing
+height globe remains the distant visual source for the later viewer integration.
+
+The default owner admits at most two workers, and each update processes at most
+two completions and two admissions. Each worker allocates its final density
+buffer once and evaluates parallel rows. It checks cancellation before each row.
+Eviction releases obsolete resident chunks immediately. Cancelled workers retain
+their slot and reservation until completion. Request serials reject obsolete
+results, including a leave-and-return to the same address. Replacing/dropping the
+owner cancels and joins workers before releasing their reservations; its field
+cannot change beneath a running job.
+
+The worst-case density payload reservation is `(max_leaves + max_jobs) * 171500`:
+**44,247,000 bytes (42.2 MiB)** with the defaults. This includes completed results
+waiting in worker channels and cancelled jobs. It excludes leaf metadata, the
+shared field, thread stacks, Rayon, allocator overhead, and process memory.
+The travel audit adds one canonical reference volume at a time (171,500 bytes).
+No GPU upload or mesh storage is included in this density-only budget.
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-residency
+```
+
+The audit visits orbit, the +X surface, rapid travel positions, the opposite
+hemisphere, the original surface, and orbit again. It reports leaf fingerprints,
+spacing, live/peak reservations, scheduling counters, and CPU update time. Every
+settled density sample is checked against a fresh canonical chunk. A changed
+revisit address set or density mismatch fails the audit. This is a headless
+consumer of the residency owner; the editor and old `--stream` renderer have not
+yet been connected to these chunks.
+
+Validation with the saved seed-42, 4,900 km preset reached 1 m spacing on both
+hemispheres, retained 256 leaves, and installed 128 nearby chunks at each ground
+stop. Peak density payload was 21,952,000 bytes (20.9 MiB), with at most two jobs.
+All 16,464,000 checked samples matched exactly; the revisited leaf fingerprint
+matched, and returning to orbit released every density chunk. Cancellation and
+rejection counts depend on worker timing. Tests also force completion order and
+leave/return races, compare one-worker and four-worker results, check conservative
+shell coverage through 8,000 km, and verify eviction/recreation at bounded memory.
+All 63 tests pass with inspector features (62 without); the build, both Clippy
+configurations, formatting, and CLI rejection checks pass. On this macOS run,
+the audit took about 15 seconds including canonical rechecks, and the slowest
+CPU residency update was 1.17 ms. These are local measurements, not frame-time
+guarantees or Windows/Vulkan results.
+
+Leaves are not yet balanced to a 2:1 neighbor ratio. Mesh transition rules,
+render replacement continuity, and collision support belong to slice 2c. This
+slice establishes bounded density residency, not a rendered seamless octree or
+measured planet-to-ground frame performance.
 
 ### Slice 2c: voxel meshes and nearby collision
 
