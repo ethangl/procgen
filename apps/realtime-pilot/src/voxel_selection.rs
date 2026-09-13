@@ -26,6 +26,9 @@ impl Ord for Candidate {
         other
             .distance_squared
             .total_cmp(&self.distance_squared)
+            // At a shared boundary, refine all touching coarse boxes before
+            // spending the leaf budget down just one octant.
+            .then_with(|| self.address.lod().cmp(&other.address.lod()))
             .then_with(|| other.address.cmp(&self.address))
     }
 }
@@ -181,6 +184,48 @@ mod tests {
             );
             assert_eq!(distant, vec![VoxelChunkAddress::root()]);
             assert_eq!(leaves, select_leaves(&field, camera, 256));
+        }
+    }
+
+    #[test]
+    fn ground_at_octant_boundaries_has_meter_spacing_on_every_side() {
+        for radius in [100_000.0, 4_900_000.0, 8_000_000.0] {
+            let mut config = PlanetDesignConfig::starter(42);
+            config.radius_m = radius;
+            let field = config.validate().unwrap();
+            let limit = crate::VoxelResidencyConfig::default().max_leaves;
+            for axis in 0..3 {
+                for sign in [-1.0, 1.0] {
+                    let coordinates = |normal: f32, u: i32, v: i32| {
+                        let mut p = [0; 3];
+                        p[axis] = normal.round() as i32;
+                        p[(axis + 1) % 3] = u;
+                        p[(axis + 2) % 3] = v;
+                        VoxelPosition {
+                            x_m: p[0],
+                            y_m: p[1],
+                            z_m: p[2],
+                        }
+                    };
+                    let direction = coordinates(sign * radius, 0, 0).as_vec3().normalized();
+                    let height = field.elevation_m(direction, 0.0).unwrap();
+                    let camera = coordinates(sign * (radius + height + 2.0), 0, 0);
+                    let leaves = select_leaves(&field, camera, limit);
+                    assert!(leaves.len() <= limit);
+                    for u in [-16, -4, 0, 4, 16] {
+                        for v in [-16, -4, 0, 4, 16] {
+                            let direction = coordinates(sign * radius, u, v).as_vec3().normalized();
+                            let height = field.elevation_m(direction, 0.0).unwrap();
+                            let ground = coordinates(sign * (radius + height), u, v);
+                            let address = VoxelChunkAddress::containing(ground, 0).unwrap();
+                            assert!(
+                                leaves.contains(&address),
+                                "missing meter support at {ground:?} for camera {camera:?}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

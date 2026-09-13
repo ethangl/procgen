@@ -360,7 +360,7 @@ fn ui(mut contexts: EguiContexts, mut state: NonSendMut<Inspector>, mut scene: S
                     }
                 }
                 ui.separator();
-                ui.label("Coarse height preview only. One-meter voxel chunks, caves, and walking belong to the octree streaming slice.");
+                ui.label("Coarse height preview only. Save this design and use --design --explore --design-file PATH for voxel terrain and walking.");
             }
         });
     });

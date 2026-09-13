@@ -23,7 +23,7 @@ for patch and solo options. With auto apply disabled, press Generate after Load.
 
 This is a coarse height preview, with no height exaggeration. The headless chunk
 audit below samples one-meter voxels. A headless travel audit also exercises
-bounded density residency. Viewer integration follows; `--stream`
+bounded density residency. The exploration mode below connects these stages; `--stream`
 still runs the earlier radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
 
 ## Octree chunk audit
@@ -49,9 +49,9 @@ cargo run -p procgen-realtime-pilot --no-default-features -- \
 This runs orbit/ground travel, pending-job cancellation, eviction, and revisit
 against the saved design. The JSON reports leaf addresses as integer fingerprints,
 spacing, job counts, live/peak density payload, and canonical sample agreement.
-Defaults allow 256 leaf addresses and two workers, with density allocated within
+Defaults allow 512 leaf addresses and two workers, with density allocated within
 4 km of the camera. Distant coverage stays as metadata. The density reservation
-cap is 42.2 MiB, excluding metadata, worker runtime, and the audit's one reference
+cap is 84.1 MiB, excluding metadata, worker runtime, and the audit's one reference
 volume. Every checked density must match canonical CPU sampling exactly.
 
 This exercises slice 2b's residency owner. The current editor still shows height
@@ -74,8 +74,40 @@ to +/-4 m. Collision owns a separate 96 m support box with one-meter source cell
 
 This is a CPU/headless surface baseline. It uses more triangles than the original
 QEF mesh and reports mesh storage separately from density residency. The editor
-and old `--stream` mode are unchanged; the integrated physical viewer is slice 3.
+and old `--stream` mode are unchanged; the exploration mode implements slice 3.
 See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2c-voxel-meshes-and-nearby-collision-implemented).
+
+## Physical exploration
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json
+```
+
+Use **Descend continuously** to travel from orbit or **Go to ground** for a direct
+shortcut. **Walk** lands on independent one-meter collision support. W/A/S/D
+move, right drag looks around, and E/Q move up/down in flight. Scroll changes
+orbit distance or flight speed. The player has a 1.7 m eye height and walks at
+4 m/s. The panel distinguishes reference altitude, measured ground clearance,
+and the height-field estimate.
+
+The viewer loads your saved octave settings. Edit and save in the existing
+`--design` editor, then launch exploration again. Neutral, LOD-color, and normal
+views are available. A complete old mesh stays visible until a replacement is
+fully uploaded. Upload admission is capped at 512 KiB per frame; collision
+builds and replaces independently. Selection shares refinement across octants
+at camera boundaries. The retuned 4,900 km preset builds about 5.5 million ground
+triangles in 37 seconds on the tested M1 Max, with 83.7 MiB of source density and
+320 MiB of allocated CPU mesh payload. Visual LOD can lag travel. The leaf cap
+does not guarantee one-meter visual spacing everywhere in the collision cube. Replacement pops and further
+geometry filtering remain open; Windows/Vulkan validation is pending.
+
+Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-explore
+```
 
 ## Run the original experiments
 

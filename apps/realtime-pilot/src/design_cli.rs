@@ -32,6 +32,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                     args.next().ok_or("--write-design needs a path")?,
                 ))
             }
+            "--check-explore" => mode.set(DesignMode::ExplorationAudit)?,
+            "--explore" => mode.set(DesignMode::Explore)?,
             "--check" => mode.set(DesignMode::PreviewAudit)?,
             "--check-chunks" => mode.set(DesignMode::ChunkAudit)?,
             "--check-residency" => mode.set(DesignMode::ResidencyAudit)?,
@@ -79,7 +81,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nWithout an audit flag, opens the physical planet and octave editor. --write-design saves the full config."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore (orbit, flight, and walking); --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens the physical planet and octave editor. --write-design saves the full config."
                 );
                 return Ok(());
             }
@@ -92,10 +94,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     }
     if matches!(
         mode,
-        DesignMode::ChunkAudit | DesignMode::ResidencyAudit | DesignMode::SurfaceAudit
+        DesignMode::Explore
+            | DesignMode::ExplorationAudit
+            | DesignMode::ChunkAudit
+            | DesignMode::ResidencyAudit
+            | DesignMode::SurfaceAudit
     ) && preview_explicit
     {
-        return Err("voxel audits do not accept height-preview options".into());
+        return Err("voxel modes do not accept height-preview options".into());
     }
     if mode != DesignMode::ChunkAudit && (chunk_lod.is_some() || chunk_point.is_some()) {
         return Err("--chunk-lod/--chunk-point require --check-chunks".into());
@@ -108,6 +114,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         None => PlanetDesignConfig::starter(seed.unwrap_or(42)),
     };
     let field = config.validate()?;
+    if mode == DesignMode::ExplorationAudit {
+        let result =
+            procgen_realtime_pilot::audit_physical_exploration(std::sync::Arc::new(field))?;
+        if let Some(p) = &output {
+            crate::design_file::save(p, &config)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     if mode == DesignMode::SurfaceAudit {
         let result = procgen_realtime_pilot::audit_voxel_surfaces(std::sync::Arc::new(field))?;
         if let Some(p) = &output {
@@ -189,7 +204,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         if let Some(p) = &output {
             crate::design_file::save(p, &config)?;
         }
-        crate::design_inspector::run(config, preview, output.or(path));
+        if mode == DesignMode::Explore {
+            crate::physical_inspector::run(config, path);
+        } else {
+            crate::design_inspector::run(config, preview, output.or(path));
+        }
         Ok(())
     }
     #[cfg(not(feature = "inspector"))]
@@ -199,6 +218,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DesignMode {
     Editor,
+    Explore,
+    ExplorationAudit,
     PreviewAudit,
     ChunkAudit,
     ResidencyAudit,
@@ -207,7 +228,7 @@ enum DesignMode {
 impl DesignMode {
     fn set(&mut self, mode: Self) -> Result<(), Box<dyn Error>> {
         if *self != Self::Editor {
-            return Err("select only one design audit flag".into());
+            return Err("select only one design mode".into());
         }
         *self = mode;
         Ok(())

@@ -1,5 +1,5 @@
 //! Conforming tetrahedral extraction over Cartesian chunks of different sizes.
-use crate::{VoxelAddressError, VoxelChunkAddress, VoxelPosition, VoxelVolumeError};
+use crate::{MeterPosition, VoxelAddressError, VoxelChunkAddress, VoxelPosition, VoxelVolumeError};
 use procgen_core::Vec3;
 use serde::Serialize;
 use std::{
@@ -8,11 +8,11 @@ use std::{
     fmt,
 };
 
-pub const MAX_SURFACE_CHUNKS: usize = 256;
-pub(crate) const MAX_ACTIVE_CELLS: usize = 262_144;
-pub(crate) const MAX_SURFACE_FACES: usize = 1_572_864;
-pub(crate) const MAX_SURFACE_VERTICES: usize = 2_097_152;
-pub(crate) const MAX_SURFACE_TRIANGLES: usize = 4_194_304;
+pub const MAX_SURFACE_CHUNKS: usize = 512;
+pub(crate) const MAX_ACTIVE_CELLS: usize = 524_288;
+pub(crate) const MAX_SURFACE_FACES: usize = 3_145_728;
+pub(crate) const MAX_SURFACE_VERTICES: usize = 4_194_304;
+pub(crate) const MAX_SURFACE_TRIANGLES: usize = 8_388_608;
 
 #[derive(Debug)]
 pub enum VoxelSurfaceError {
@@ -71,7 +71,7 @@ pub struct VoxelTriangle {
 
 pub struct VoxelSurface {
     pub(crate) origin_m: VoxelPosition,
-    pub(crate) positions: Vec<Vec3>,
+    pub(crate) positions: Vec<MeterPosition>,
     pub(crate) triangles: Vec<VoxelTriangle>,
     pub(crate) boundary: BTreeSet<[u32; 2]>,
 }
@@ -86,9 +86,16 @@ impl VoxelSurface {
     pub fn origin_m(&self) -> VoxelPosition {
         self.origin_m
     }
-    /// Positions in meters relative to origin_m.
-    pub fn positions(&self) -> &[Vec3] {
+    /// Physical points retain integer anchors until the consumer chooses a local origin.
+    pub fn positions(&self) -> &[MeterPosition] {
         &self.positions
+    }
+    /// Triangle-local coordinates preserve tiny intersections on distant coarse cells.
+    pub fn triangle_positions(&self, triangle: &VoxelTriangle) -> [Vec3; 3] {
+        let origin = self.positions[triangle.vertices[0] as usize].anchor();
+        triangle
+            .vertices
+            .map(|i| self.positions[i as usize].relative_to(origin))
     }
     pub fn triangles(&self) -> &[VoxelTriangle] {
         &self.triangles
@@ -96,18 +103,16 @@ impl VoxelSurface {
     /// Geometry vectors and boundary keys; tree-node and allocator overhead
     /// are not included.
     pub fn payload_bytes(&self) -> usize {
-        self.positions.capacity() * std::mem::size_of::<Vec3>()
+        self.positions.capacity() * std::mem::size_of::<MeterPosition>()
             + self.triangles.capacity() * std::mem::size_of::<VoxelTriangle>()
             + self.boundary.len() * std::mem::size_of::<[u32; 2]>()
     }
     pub fn validate(&self) -> Result<(), VoxelSurfaceError> {
-        if self.positions.iter().any(|p| !p.is_finite())
-            || self.triangles.iter().any(|t| {
-                t.vertices
-                    .iter()
-                    .any(|&v| v as usize >= self.positions.len())
-            })
-        {
+        if self.triangles.iter().any(|t| {
+            t.vertices
+                .iter()
+                .any(|&v| v as usize >= self.positions.len())
+        }) {
             return Err(VoxelSurfaceError::Topology);
         }
         let t = self.topology();
@@ -120,7 +125,7 @@ impl VoxelSurface {
         let mut edges = BTreeMap::<[u32; 2], (usize, i32)>::new();
         let mut degenerate_triangles = 0;
         for t in &self.triangles {
-            let [a, b, c] = t.vertices.map(|i| self.positions[i as usize]);
+            let [a, b, c] = self.triangle_positions(t);
             if (b - a).cross(c - a).length_squared() == 0.0 {
                 degenerate_triangles += 1;
             }

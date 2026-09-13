@@ -2,7 +2,9 @@
 use crate::voxel_surface::{MAX_SURFACE_TRIANGLES, MAX_SURFACE_VERTICES};
 use crate::voxel_surface_faces::Faces;
 use crate::voxel_surface_grid::{Cell, Grid, Node, check_cancel};
-use crate::{VoxelPosition, VoxelSurface, VoxelSurfaceError, VoxelTriangle, VoxelVolume};
+use crate::{
+    MeterPosition, VoxelPosition, VoxelSurface, VoxelSurfaceError, VoxelTriangle, VoxelVolume,
+};
 use procgen_core::Vec3;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -61,7 +63,12 @@ impl Builder<'_> {
         } else {
             (b, a)
         };
-        let p = near.node.relative(self.surface.origin_m);
+        let anchor = VoxelPosition {
+            x_m: near.node.0[0].div_euclid(2),
+            y_m: near.node.0[1].div_euclid(2),
+            z_m: near.node.0[2].div_euclid(2),
+        };
+        let p = near.node.relative(anchor);
         let position = if near.node == far.node {
             p
         } else {
@@ -73,7 +80,9 @@ impl Builder<'_> {
             p + delta * (near.value / (near.value - far.value))
         };
         let id = self.surface.positions.len() as u32;
-        self.surface.positions.push(position);
+        self.surface
+            .positions
+            .push(MeterPosition::new(anchor, position));
         self.vertices.insert(r, id);
         Ok(id)
     }
@@ -105,13 +114,20 @@ impl Builder<'_> {
             .into_iter()
             .map(|r| self.vertex(r))
             .collect::<Result<Vec<_>, _>>()?;
+        let local = VoxelPosition {
+            x_m: nodes[0].0[0].div_euclid(2),
+            y_m: nodes[0].0[1].div_euclid(2),
+            z_m: nodes[0].0[2].div_euclid(2),
+        };
         let centroid = |set: &[Sample]| {
-            set.iter().fold(Vec3::ZERO, |sum, s| {
-                sum + s.node.relative(self.surface.origin_m)
-            }) * (set.len() as f32).recip()
+            set.iter()
+                .fold(Vec3::ZERO, |sum, s| sum + s.node.relative(local))
+                * (set.len() as f32).recip()
         };
         let outward = centroid(&air) - centroid(&solid);
-        let [a, b, c] = [ids[0], ids[1], ids[2]].map(|i| self.surface.positions[i as usize]);
+        let anchor = self.surface.positions[ids[0] as usize].anchor();
+        let [a, b, c] = [ids[0], ids[1], ids[2]]
+            .map(|i| self.surface.positions[i as usize].relative_to(anchor));
         if (b - a).cross(c - a).dot(outward) < 0.0 {
             ids[1..].reverse();
         }
@@ -204,6 +220,30 @@ pub fn build_voxel_surface(
 mod tests {
     use super::*;
     use crate::{ChunkIndex, VoxelChunkAddress};
+    #[test]
+    fn sub_centimeter_intersections_survive_a_distant_mesh_origin() {
+        let origin = VoxelPosition {
+            x_m: 0,
+            y_m: 0,
+            z_m: 0,
+        };
+        let address = VoxelChunkAddress::containing(origin, 12).unwrap();
+        let volume = VoxelVolume::fixture(address, |p| (p.x_m - p.y_m) as f32 - 0.001);
+        let local = build_voxel_surface(&[&volume], origin, &AtomicBool::new(false)).unwrap();
+        let distant = build_voxel_surface(
+            &[&volume],
+            VoxelPosition {
+                x_m: 8_000_000,
+                ..origin
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(!local.triangles().is_empty());
+        assert_eq!(local.positions(), distant.positions());
+        assert_eq!(local.triangles(), distant.triangles());
+        assert_eq!(distant.topology().degenerate_triangles, 0);
+    }
     fn mixed() -> Vec<VoxelChunkAddress> {
         let root = VoxelChunkAddress::containing(
             VoxelPosition {
@@ -305,7 +345,11 @@ mod tests {
             z_m: 0,
         };
         let mesh = build_voxel_surface(&[&volume], origin, &AtomicBool::new(false)).unwrap();
-        assert!(mesh.positions().iter().all(|p| p.x == 10.25));
+        assert!(
+            mesh.positions()
+                .iter()
+                .all(|p| p.relative_to(mesh.origin_m()).x == 10.25)
+        );
         assert!(matches!(
             build_voxel_surface(&[&volume, &volume], origin, &AtomicBool::new(false)),
             Err(VoxelSurfaceError::Overlap)
@@ -357,9 +401,14 @@ mod tests {
             )
             .unwrap();
             assert!(surface.topology().boundary_edges > 0);
-            assert!(surface.positions().iter().all(|p| p.y == 16.0));
+            assert!(
+                surface
+                    .positions()
+                    .iter()
+                    .all(|p| p.relative_to(surface.origin_m()).y == 16.0)
+            );
             for t in surface.triangles() {
-                let [a, b, c] = t.vertices.map(|i| surface.positions()[i as usize]);
+                let [a, b, c] = surface.triangle_positions(t);
                 assert!((b - a).cross(c - a).y > 0.0);
             }
         }

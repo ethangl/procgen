@@ -54,7 +54,7 @@ impl VoxelResidencyConfig {
 impl Default for VoxelResidencyConfig {
     fn default() -> Self {
         Self {
-            max_leaves: 256,
+            max_leaves: 512,
             max_jobs: 2,
             density_reach_m: 4096.0,
         }
@@ -182,6 +182,31 @@ impl VoxelResidency {
                 + self.jobs.len() * VOXEL_DENSITY_BYTES,
             ..self.history
         }
+    }
+    /// Assemble closed planetary coverage from a settled selection. Nearby
+    /// densities are reused; distant leaves are sampled only for this build.
+    /// Source payload is bounded by max_leaves plus active job reservations.
+    pub fn build_complete_surface(
+        &self,
+        origin: VoxelPosition,
+        cancel: &AtomicBool,
+    ) -> Result<crate::VoxelSurface, crate::VoxelSurfaceError> {
+        assert!(
+            self.settled(),
+            "surface assembly requires settled residency"
+        );
+        let mut distant = Vec::new();
+        for &address in &self.leaves {
+            if !self.residents.contains_key(&address) {
+                let Some(volume) = sample_voxel_chunk_cancellable(&self.field, address, cancel)?
+                else {
+                    return Err(crate::VoxelSurfaceError::Cancelled);
+                };
+                distant.push(volume);
+            }
+        }
+        let volumes: Vec<_> = self.residents.values().chain(distant.iter()).collect();
+        crate::build_voxel_surface(&volumes, origin, cancel)
     }
     fn needed(&self, address: VoxelChunkAddress) -> bool {
         !self.residents.contains_key(&address)

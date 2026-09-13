@@ -4,7 +4,10 @@ Status: slice 1 implements physical broad terrain, an octave editor, and bounded
 CPU height previews. Slice 2a adds octree addresses and canonical density chunks
 with one-meter finest spacing. Slice 2b adds bounded camera-driven density
 residency and a headless travel audit. Slice 2c adds conforming chunk meshes
-and independent one-meter collision support. The integrated viewer is next. This phase belongs only to the independent real-time pilot.
+and independent one-meter collision support. Slice 3 adds the integrated native
+viewer, precise physical points, bounded complete mesh replacement, and walking.
+Generation latency and Windows/Vulkan validation remain open. This phase belongs
+only to the independent real-time pilot.
 
 ## Requirements and source evidence
 
@@ -210,9 +213,9 @@ new rendered mesh is claimed by these checks.
 
 `VoxelResidency` owns an immutable design field, a camera-selected octree, and
 asynchronous CPU density jobs. Selection refines the nearest boxes first within
-two chunk spans of the camera, down to LOD zero. Address order breaks distance
-ties. A hard leaf cap stops refinement while retaining the parent, so distant
-surface coverage remains present. The default cap is 256 leaves; this is a
+two chunk spans of the camera, down to LOD zero. Coarser boxes win equal-distance
+ties, followed by address order. A hard leaf cap stops refinement while retaining
+the parent, so distant surface coverage remains present. The default cap is 512 leaves; this is a
 bounded pilot working set, not a promise of uniform detail throughout the reach.
 Selection reruns only when the integer camera position changes.
 
@@ -233,7 +236,7 @@ owner cancels and joins workers before releasing their reservations; its field
 cannot change beneath a running job.
 
 The worst-case density payload reservation is `(max_leaves + max_jobs) * 171500`:
-**44,247,000 bytes (42.2 MiB)** with the defaults. This includes completed results
+**88,151,000 bytes (84.1 MiB)** with the defaults. This includes completed results
 waiting in worker channels and cancelled jobs. It excludes leaf metadata, the
 shared field, thread stacks, Rayon, allocator overhead, and process memory.
 The travel audit adds one canonical reference volume at a time (171,500 bytes).
@@ -306,10 +309,10 @@ triangles are checked too. Cancellation discards the complete batch result.
 The later renderer must install complete replacements and retain prior visual
 coverage while a job runs; this headless slice does not add GPU upload handling.
 
-Generation has explicit caps: 256 source chunks, 262,144 active cells, 1,572,864
-shared faces, 2,097,152 surface vertices, and 4,194,304 triangles. These bound
+Generation has explicit caps: 512 source chunks, 524,288 active cells, 3,145,728
+shared faces, 4,194,304 surface vertices, and 8,388,608 triangles. These bound
 geometry and scratch data independently of world size. They are count limits,
-not a claim that the density-only 42.2 MiB reservation includes mesh storage.
+not a claim that the density-only 84.1 MiB reservation includes mesh storage.
 The audit reports allocated mesh vector payload separately; tree-node allocation,
 thread stacks, allocator overhead, and temporary construction data are excluded.
 A replay audit briefly holds both complete mesh outputs for exact comparison.
@@ -371,6 +374,221 @@ Acceptance: continuous orbit-to-ground travel, stable walking, no exposed LOD
 seams, deterministic revisits, and measured memory, upload, generation, and frame
 budgets on macOS/Metal and Windows/Vulkan. This does not add climate, tectonics,
 biomes, or dependencies on the older world pipeline.
+
+### Slice 3 implementation and use
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-explore
+```
+
+The exploration mode loads the same saved design as the editor. It does not
+change the file. Edit and save with `--design`, then start exploration with that
+file. The editor's stable widget IDs and input-focus regression test remain in
+place. The original `--stream` experiment remains separate.
+
+**Orbit** resets to three reference radii from the center. Left drag rotates the
+view; scroll changes clearance. **Descend continuously** follows the current
+radial direction toward the ground without a teleport, then switches to flight.
+**Go to ground** is a direct shortcut to about five meters above the same radial
+terrain location. In flight, W/A/S/D move along the view, E/Q move radially, right
+mouse drag changes direction, and scroll adjusts the speed factor. Speed reduces
+near the ground; outward flight stays within the orbit control's six-radius
+clearance envelope. **Walk** lands on nearby collision support; W/A/S/D then move a
+0.4 m-radius sphere at 4 m/s with a 1.7 m eye height. Movement stops when collision
+support is missing. There is no jump, step-climbing, or capsule controller.
+
+Reference altitude is distance above the configured reference sphere. Ground
+clearance is a ray against the independent collision mesh and is unavailable
+outside that support. The separate field-clearance estimate uses the analytic
+height function; it is not a collision measurement. Zero elevation still does
+not imply water.
+
+`MeterPosition` stores integer meters and a centered sub-meter offset. Camera
+translation rebases before adding the next step. Surface vertices also retain
+this representation until a consumer chooses its local origin. Triangle winding,
+area, and normals use triangle-local differences. Complete distant coverage
+exposed sub-centimeter intersections that collapsed when stored relative to one
+large camera origin; keeping the integer anchor fixes that failure without
+changing density, dropping triangles, or relaxing topology checks. The renderer
+converts shared vertices relative to one generation origin and translates that
+origin relative to the current camera anchor. GPU positions remain f32; tiny
+remote triangles can become subpixel or collapse in the display representation.
+The CPU surface retains their geometry.
+
+`PhysicalTerrain` uses the 512-leaf residency selection and reuses its
+nearby density chunks. For each complete surface, it also samples distant leaves
+on the terrain worker, then releases those temporary densities. This deliberately
+closes the entire planet instead of placing a separate height surface across an
+open voxel boundary. Initial coverage is a cheap 64-quad cube-sphere height
+preview with spacing-filtered octaves. Subsequent complete voxel replacements
+retain the canonical full-band potentials from slice 2c. Neutral shading adds no
+material noise; LOD colors and averaged normals are available for inspection.
+Geometric octave filtering for mixed voxel levels remains future work.
+
+One terrain worker builds a complete replacement at a time. Camera movement
+coalesces into the next request; the previous complete surface stays visible.
+The viewer requests new geometry after movement exceeds a clearance-dependent
+threshold, with a 16 m minimum. Worker-side packing produces indexed pieces of
+at most 3,584 triangles. Main-thread admission is limited to 512 KiB per frame
+and a 2 ms admission window; one piece can exceed that time window. Every piece
+must be prepared in Bevy's render world before the new mesh is revealed. The
+old mesh is then removed, and the renderer acknowledges GPU retirement before
+another terrain build starts. Replacement is atomic and can visibly pop; there
+is no morph or dither transition in this mode.
+
+Collision has its own worker and retains the previous 96 m support cube during
+replacement. Results that no longer cover the camera are discarded. A static
+triangle BVH replaces the full scan in rays and swept-sphere queries, with
+canonical triangle-order tie-breaking. Walking uses radial gravity, bounded
+substeps, sliding, and short support sweeps. Missing support leaves the prior
+movement state unchanged. The collision mesh is independent of visual source,
+mesh upload, and retirement.
+
+Density payload during a complete build is bounded by 512 chunks (83.7 MiB),
+plus the existing density worker reservations while they run. Mesh extraction
+retains its cell, face, vertex, and triangle caps. At most one displayed mesh and
+one replacement are held by the renderer. Collision owns one retained patch and
+at most one replacement. The panel reports source, mesh, collision, and displayed
+buffer payloads, CPU generation and upload time, walking update time, and frame
+time. These counters exclude allocator, extraction tree, driver, and process
+memory overhead; the 512 KiB admission limit is not a GPU execution-time limit.
+
+The headless exploration audit builds closed orbit and ground surfaces, releases
+visual residency, walks on independent collision, replaces that collision patch,
+and compares motion with the retained patch. It also checks idle stability.
+The 100 km/seed 0, saved 4,900 km/seed 42, and 8,000 km/u64::MAX presets exercise
+small and large coordinate scales. Focused tests cover centimeter translation,
+40 m of walking across chunk boundaries, missing support, indexed versus complete
+ray queries, closed distant coverage, and tiny intersections at an 8,000 km
+mesh origin. Existing deterministic revisit and input-focus tests still run.
+
+This is the first integrated CPU baseline. With corrected octant allocation, a
+complete ground mesh before the relief retune had 4,396,166 triangles, 83.7 MiB
+of source density, and 320 MiB of allocated CPU mesh payload with anchored
+vertices. Complete builds take seconds, not frames;
+nearby visual updates can lag travel. The leaf cap does not promise uniform
+one-meter detail throughout the collision cube, and coarse geometry can differ
+from fine collision. Those limits, visible replacement pops, geometric filtering,
+and the Windows/Vulkan run remain open against the slice's acceptance targets.
+
+Initial validation before the allocation correction: 73 tests passed with
+inspector features and 72 without. Both Clippy
+configurations, the native build, formatting, and CLI mode checks pass. All three
+exploration presets pass closed coverage, walking, collision handoff, and zero
+idle drift. The saved preset also passes the original exact eviction/revisit and
+reversed-source audit, with zero landing-ray difference. The 100 km and 8,000 km
+complete ground builds used 2,527,034 and 3,407,596 triangles respectively. Measured
+CPU build times were roughly 13–19 seconds across these runs; these are local
+observations, not hard timing bounds. Collision used about 14.4 MiB including its
+BVH. Handoff differences stayed below 0.12 mm and idle drift was zero.
+
+Native Apple M1 Max/Metal checks exercised the initial preview, complete voxel
+replacement, orbit, ground travel, diagnostics, and landing with 1.70 m clearance.
+Observed steady frames were about 8–11 ms and CPU upload admission stayed below
+0.4 ms in that check; startup and generation can produce larger frame spikes.
+Continuous descent was started on the final geometry build, but the Mac locked
+before its final near-ground state could be inspected. Windows/Vulkan remains
+unmeasured. The commands above provide the same audit and viewer on that host.
+
+### Ground relief and octant allocation correction
+
+The saved 4,900 km preset exposed an allocation defect at the +X landing point.
+Several octants had zero distance to the camera. Address-only tie-breaking spent
+the leaf budget refining one octant while another touching octant retained
+262,144 m source spacing. Selection now refines coarser boxes first at equal
+distance. The default cap increased from 256 to 512 leaves because the balanced
+256-leaf set stopped at 32 m spacing there. Surface capacities increased in
+proportion. The corrected selection gives 1 m source spacing across the landing
+point, including offsets through 32 m in the measured tangent direction.
+
+A regression checks all six axis landings at radii 100 km, 4,900 km, and 8,000 km,
+including samples on each side of both octant boundaries. The saved-preset full
+exploration audit passes closed coverage and collision handoff with zero idle
+drift. Its complete ground build took 29.7 seconds on the M1 Max; orbit took
+2.0 seconds. These measurements replace the earlier 256-leaf performance figures
+above for this preset. Source and mesh payloads exclude extraction scratch,
+allocator, driver, and renderer replacement storage.
+
+The corrected saved-preset seam/revisit audit reproduces the mesh exactly with
+reversed source order and zero collision-ray difference. The 8,000 km/u64::MAX
+exploration audit also passes, with 4,997,724 ground triangles, one-meter finest
+source spacing, a 0.033 mm collision-handoff difference, and zero idle drift.
+After the correction, 74 tests pass with inspector features and 73 without.
+
+The allocation correction left the saved noise settings unchanged. Before the
+subsequent relief retune, their amplitude-to-wavelength ratio was 1/256 in every band: 4 m at 1,024 m wavelength and 0.5 m at 128 m wavelength.
+A 65-by-65 full-field probe over 128 m around +X measured 4.44 m of total elevation
+range, a fitted grade of 2.52%, and 1.75 m of remaining range after subtracting the
+best-fit plane. This is gentle terrain even at correct visual spacing. The global
+height sample spans approximately -9.0 to +11.2 km; at 4,900 km radius, the maximum
+sampled elevation is only 0.23% of the radius. Orbital silhouette smoothness is
+therefore expected. Stronger local relief requires tuning middle and fine bands,
+separately from this allocation correction.
+
+### Saved preset relief retune
+
+The first retune of `planet-design.json` (seed 42, radius 4,900 km, height limit
+12 km) gave middle and fine bands more amplitude. Bands 0–3 retain their continental
+contributions. Band 4 (131,072 m wavelength) increases from 512 to 1,024 m;
+band 5 (65,536 m) increases from 256 to 1,024 m. Bands 6–17 increase eightfold,
+from 1,024 m amplitude at 32,768 m wavelength down to 0.5 m at 16 m wavelength.
+This ramp adds hills and local relief without changing the broadest bands,
+noise shaping, erosion controls, or the physical scale. It changes this saved
+preset only; the editor's starter preset retains its existing settings.
+
+A 65-by-65 full-field probe around the +X landing point measures:
+
+| Patch span | Previous elevation range | Retuned elevation range |
+| --- | --- | --- |
+| 32 m | 0.85 m | 3.77 m |
+| 128 m | 4.44 m | 20.17 m |
+| 1,024 m | 21.89 m | 97.34 m |
+| 8,192 m | 314.52 m | 1,771.15 m |
+
+Over 128 m, the fitted grade rises from 2.52% to 8.71%. The remaining range after
+subtracting the best-fit plane rises from 1.75 m to 13.91 m, confirming increased
+local variation rather than just a larger regional slope. The global sample
+range changes from approximately -9.0/+11.2 km to -9.6/+11.2 km. Amplitudes are
+coefficients before feedback damping and the soft height bound; they are not
+promised peak-to-valley ranges. These measurements describe this landing area,
+not a global slope guarantee.
+
+The retuned preset passes the complete orbit/ground mesh and walking audit.
+The ground surface has 5,027,708 triangles, one-meter finest source spacing,
+and 320 MiB of allocated CPU mesh payload; it built in 32.2 seconds on the M1
+Max. Collision handoff differs by 0.016 mm and idle drift is zero.
+
+### Stronger saved-preset relief
+
+After visual inspection, bands 4–17 received another fourfold amplitude increase.
+The four broadest band coefficients, seed, radius, height limit, and shaping
+controls remain unchanged. Current amplitudes are 4,096 m at wavelengths
+131,072/65,536/32,768 m, then halve with each wavelength down to 2 m amplitude
+at 16 m wavelength. For example, the 1,024 m band now has 128 m amplitude and
+the 128 m band has 16 m amplitude. The 12 km soft height bound still compresses
+the combined elevation, so fourfold coefficients do not guarantee fourfold relief.
+
+The same 65-by-65 +X probes measure the stronger result:
+
+| Patch span | First retune elevation range | Stronger elevation range |
+| --- | --- | --- |
+| 32 m | 3.77 m | 13.33 m |
+| 128 m | 20.17 m | 69.08 m |
+| 1,024 m | 97.34 m | 413.05 m |
+| 8,192 m | 1,771.15 m | 6,426.48 m |
+
+Over 128 m, the fitted grade is 28.68% and the range after removing that plane
+is 51.83 m. The global sample spans approximately -11.2/+11.5 km. This is a
+substantial increase in local and regional relief; orbital silhouette changes
+remain small at the physical planet radius.
+
+The stronger preset passes the complete orbit/ground mesh and walking audit.
+The ground mesh has 5,510,386 triangles, one-meter finest source spacing, and
+320 MiB of allocated CPU mesh payload; it built in 37.2 seconds on the M1 Max.
+Collision handoff differs by 0.079 mm and idle drift is zero.
 
 ## Slice 1 validation
 

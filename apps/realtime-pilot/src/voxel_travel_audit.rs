@@ -174,9 +174,8 @@ mod tests {
         let report = audit_voxel_travel(
             Arc::new(design.validate().unwrap()),
             VoxelResidencyConfig {
-                max_leaves: 160,
-                max_jobs: 2,
                 density_reach_m: 32.0,
+                ..VoxelResidencyConfig::default()
             },
         )
         .unwrap();

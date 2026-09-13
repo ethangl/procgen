@@ -10,7 +10,11 @@ mod evaluation;
 mod field;
 mod height_distribution;
 mod mesh;
+mod meter_position;
 mod noise;
+mod physical_audit;
+mod physical_motion;
+mod physical_terrain;
 mod placement;
 mod planet;
 mod planet_design;
@@ -28,6 +32,7 @@ mod volume;
 mod voxel_address;
 mod voxel_audit;
 mod voxel_collision;
+mod voxel_collision_index;
 mod voxel_density;
 mod voxel_residency;
 mod voxel_selection;
@@ -129,3 +134,13 @@ pub use voxel_collision::{
 };
 
 pub use voxel_surface_audit::{VoxelSurfaceAudit, VoxelSurfaceAuditError, audit_voxel_surfaces};
+
+pub use physical_motion::{PLAYER_EYE_M, PLAYER_RADIUS_M, PLAYER_SPEED_MPS, PhysicalWalker};
+
+pub use physical_terrain::{PhysicalTerrain, PhysicalTerrainError, PhysicalTerrainFrame};
+
+pub use physical_audit::{
+    PhysicalAudit, PhysicalAuditError, PhysicalStop, audit_physical_exploration,
+};
+
+pub use meter_position::MeterPosition;
