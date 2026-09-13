@@ -21,9 +21,26 @@ saved design with `--design --design-file PATH`. Use `--design --check` for a
 headless report; `--write-design PATH` saves the config. Run `--design --help`
 for patch and solo options. With auto apply disabled, press Generate after Load.
 
-This is a coarse height preview, with no height exaggeration. One-meter voxel
-chunks and octree streaming are the next slice; `--stream` still runs the earlier
-radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
+This is a coarse height preview, with no height exaggeration. The headless chunk
+audit below samples one-meter voxels. Live octree streaming follows; `--stream`
+still runs the earlier radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
+
+## Octree chunk audit
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --check-chunks
+```
+
+Add `--design-file PATH` to sample your saved settings. Finest chunks have 32³
+cells at one-meter spacing. `--chunk-lod 1` selects two-meter spacing, and
+`--chunk-point X,Y,Z` selects an integer world position in meters. The report
+checks shared face/halo samples and coincident parent samples, and measures live
+density payloads. Without a point it samples near the +X surface.
+
+This is slice 2a's addressing and density foundation. Camera-driven residency,
+chunk meshes, and physical walking follow in 2b/2c. See the
+[phase document](../../docs/realtime-world-planet-scale.md#slice-2a-integer-addresses-and-density-chunks-implemented).
 
 ## Run the original experiments
 

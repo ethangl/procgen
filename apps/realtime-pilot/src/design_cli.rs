@@ -1,5 +1,5 @@
 use procgen_realtime_pilot::{
-    BUILD_ID, DesignPreviewConfig, PlanetDesignConfig, PreviewArea, PreviewBands,
+    BUILD_ID, DesignPreviewConfig, PlanetDesignConfig, PreviewArea, PreviewBands, VOXEL_ROOT_LOD,
     generate_design_preview,
 };
 use std::{error::Error, path::PathBuf};
@@ -10,6 +10,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let mut path = None;
     let mut output = None;
     let mut check = false;
+    let mut check_chunks = false;
+    let mut chunk_lod = None;
+    let mut chunk_point = None;
+    let mut preview_explicit = false;
     let mut preview = DesignPreviewConfig {
         area: PreviewArea::Planet,
         bands: PreviewBands::Combined,
@@ -30,7 +34,27 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 ))
             }
             "--check" => check = true,
+            "--check-chunks" => check_chunks = true,
+            "--chunk-lod" => {
+                chunk_lod = Some(args.next().ok_or("--chunk-lod needs an integer")?.parse()?)
+            }
+            "--chunk-point" => {
+                let input = args
+                    .next()
+                    .ok_or("--chunk-point needs integer x,y,z meters")?;
+                let values: Vec<i32> =
+                    input.split(',').map(str::parse).collect::<Result<_, _>>()?;
+                let [x_m, y_m, z_m] = values.as_slice() else {
+                    return Err("--chunk-point needs three comma-separated integers".into());
+                };
+                chunk_point = Some(procgen_realtime_pilot::VoxelPosition {
+                    x_m: *x_m,
+                    y_m: *y_m,
+                    z_m: *z_m,
+                });
+            }
             "--patch-span" => {
+                preview_explicit = true;
                 preview.area = PreviewArea::Patch {
                     latitude_deg: 0.0,
                     longitude_deg: 0.0,
@@ -38,6 +62,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 }
             }
             "--solo" => {
+                preview_explicit = true;
                 preview.bands = PreviewBands::Only(
                     args.next()
                         .ok_or("--solo needs a zero-based index")?
@@ -45,6 +70,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 )
             }
             "--preview-quads" => {
+                preview_explicit = true;
                 preview.quads = args
                     .next()
                     .ok_or("--preview-quads needs a count")?
@@ -52,7 +78,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nWithout --check, opens the physical planet and octave editor. --write-design saves the full config."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nWithout --check or --check-chunks, opens the physical planet and octave editor. --write-design saves the full config."
                 );
                 return Ok(());
             }
@@ -63,6 +89,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+    if check_chunks && (check || preview_explicit) {
+        return Err("--check-chunks does not accept height-preview options".into());
+    }
+    if !check_chunks && (chunk_lod.is_some() || chunk_point.is_some()) {
+        return Err("--chunk-lod/--chunk-point require --check-chunks".into());
+    }
     if path.is_some() && seed.is_some() {
         return Err("--design-file includes its seed; do not also pass --seed".into());
     }
@@ -70,7 +102,38 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Some(p) => crate::design_file::load(p)?,
         None => PlanetDesignConfig::starter(seed.unwrap_or(42)),
     };
-    config.validate()?;
+    let field = config.validate()?;
+    if check_chunks {
+        use procgen_realtime_pilot::{VoxelAuditConfig, VoxelPosition, audit_voxel_chunk};
+        // Quantize this headless probe once on the host. Chunk addresses and
+        // shared samples thereafter use integer arithmetic only.
+        let point = match chunk_point {
+            Some(point) => point,
+            None => VoxelPosition {
+                x_m: (config.radius_m + field.elevation_m(procgen_core::Vec3::X, 0.0)?).round()
+                    as i32,
+                y_m: 0,
+                z_m: 0,
+            },
+        };
+        let result = audit_voxel_chunk(
+            &field,
+            VoxelAuditConfig {
+                point,
+                lod: chunk_lod.unwrap_or(0),
+            },
+        )?;
+        if let Some(p) = &output {
+            crate::design_file::save(p, &config)?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "build": BUILD_ID, "seed":config.seed,"radius_m":config.radius_m,"anchor_m":point,"chunk":result,
+            }))?
+        );
+        return Ok(());
+    }
     if check {
         let result = generate_design_preview(&config, preview)?;
         if let Some(p) = &output {

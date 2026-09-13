@@ -6,8 +6,9 @@ objective remain open. Neutral surface inspection is implemented as the first
 [surface-quality slice](realtime-world-surface-quality.md).
 
 The next phase is [physical scale and octree LOD](realtime-world-planet-scale.md).
-Its first slice adds a physical terrain field and octave editor; the original
-streaming experiment still uses its bounded radius-4 source.
+It adds a physical terrain field, an octave editor, and meter-scale octree
+addressing/density samples. The original streaming experiment still uses its
+bounded radius-4 source while camera-driven chunk residency and meshes are built.
 
 ## Purpose
 

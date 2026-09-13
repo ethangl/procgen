@@ -24,6 +24,9 @@ mod streaming;
 mod terrain;
 mod usable;
 mod volume;
+mod voxel_address;
+mod voxel_audit;
+mod voxel_density;
 mod walking;
 
 #[cfg(test)]
@@ -86,3 +89,14 @@ pub use design_preview::{
 pub use planet_design::{
     DesignError, MAX_DESIGN_OCTAVES, OctaveConfig, PlanetDesignConfig, PlanetDesignField,
 };
+
+pub use voxel_address::{
+    ChunkIndex, VOXEL_CHUNK_CELLS, VOXEL_HALO, VOXEL_ROOT_LOD, VOXEL_SAMPLE_COUNT,
+    VOXEL_SAMPLE_SIDE, VOXEL_WORLD_HALF_EXTENT_M, VoxelAddressError, VoxelChunkAddress,
+    VoxelPosition, VoxelSampleIndex,
+};
+pub use voxel_density::{
+    VOXEL_DENSITY_BYTES, VOXEL_DENSITY_LIMIT_M, VoxelVolume, VoxelVolumeError, sample_voxel_chunk,
+};
+
+pub use voxel_audit::{VoxelAuditConfig, VoxelAuditError, VoxelChunkAudit, audit_voxel_chunk};
