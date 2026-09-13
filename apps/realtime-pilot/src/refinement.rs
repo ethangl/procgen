@@ -36,6 +36,9 @@ pub(crate) fn refine_surface(
                 .or_insert(eligible);
         }
     }
+    // A valid but very thin triangle can have no representable f32 midpoint
+    // subdivision. Remove those shared splits before projecting any vertices.
+    retain_representable_splits(source, &mut edges);
     let edges: Vec<_> = edges
         .into_iter()
         .filter_map(|(edge, eligible)| eligible.then_some(edge))
@@ -120,6 +123,36 @@ pub(crate) fn refine_surface(
     })
 }
 
+fn retain_representable_splits(source: &SurfaceMesh, edges: &mut BTreeMap<[u32; 2], bool>) {
+    loop {
+        let mut changed = false;
+        for triangle in &source.triangles {
+            let keys = triangle_edges(triangle.vertices);
+            let mids = std::array::from_fn(|i| edges[&keys[i]].then_some(3 + i as u32));
+            if mids.iter().all(Option::is_none) {
+                continue;
+            }
+            let [a, b, c] = triangle.vertices.map(|i| source.positions[i as usize]);
+            let points = [a, b, c, (a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5];
+            let normal = (b - a).cross(c - a);
+            let valid = split_triangle([0, 1, 2], mids).into_iter().all(|t| {
+                let [a, b, c] = t.map(|i| points[i as usize]);
+                (b - a).cross(c - a).dot(normal) > 0.0
+            });
+            if !valid {
+                for key in keys {
+                    let split = edges.get_mut(&key).unwrap();
+                    changed |= *split;
+                    *split = false;
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
 fn triangle_edges([a, b, c]: [u32; 3]) -> [[u32; 2]; 3] {
     [
         [a.min(b), a.max(b)],
@@ -192,6 +225,44 @@ fn split_triangle(v: [u32; 3], m: [Option<u32>; 3]) -> Vec<[u32; 3]> {
 mod tests {
     use super::*;
     use crate::{PILOT_PLANET, PlanetConfig, TerrainConfig, planet_overview};
+    #[test]
+    fn unrepresentable_midpoints_retain_conforming_original_edges() {
+        // The midpoint of adjacent f32 values rounds back onto an endpoint.
+        let source = SurfaceMesh {
+            positions: vec![
+                Vec3::X,
+                Vec3::new(1.0 + f32::EPSILON, 0.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 1.0),
+            ],
+            triangles: [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]]
+                .into_iter()
+                .map(|vertices| SurfaceTriangle {
+                    vertices,
+                    region: crate::RegionAddress {
+                        face: procgen_cubesphere::CubeFace::PositiveX,
+                    },
+                })
+                .collect(),
+        };
+        assert!(source.topology().is_closed_manifold());
+        let output = refine_surface(
+            &PILOT_PLANET.validate(42).unwrap(),
+            &source,
+            &[true; 4],
+            &source.vertex_normals(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(!output.edges.contains(&[0, 1]));
+        assert!(!output.edges.is_empty());
+        assert!(output.mesh.topology().is_closed_manifold());
+        assert_eq!(
+            output.mesh.positions[..source.positions.len()],
+            source.positions
+        );
+    }
+
     #[test]
     fn every_split_pattern_preserves_area_winding_and_boundary() {
         let p = [

@@ -122,8 +122,8 @@ mod tests {
                     },
             )
         });
-        // Separate contour sheets change accepted support triangles and candidate IDs.
-        assert_eq!(fingerprint, 3_736_725_638);
+        // Calibrated relief changes support slopes and accepted placement IDs.
+        assert_eq!(fingerprint, 3_086_742_973);
         for p in recreated.placements() {
             let nearby: Vec<_> = recreated.nearby(p.position).copied().collect();
             assert!(nearby.contains(p));

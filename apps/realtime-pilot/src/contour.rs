@@ -387,8 +387,8 @@ mod tests {
                 .into_iter()
                 .chain([t.region.face.index() as u64])
         }));
-        // Sheet separation and explicit face arcs change canonical triangle identities.
-        assert_eq!(fingerprint, 15_074_258_157_278_690_721);
+        // Calibrated broad relief changes crossings and canonical triangle identities.
+        assert_eq!(fingerprint, 12_440_919_048_807_366_295);
     }
     #[test]
     fn ambiguous_shells_remain_manifold_across_cube_seams() {

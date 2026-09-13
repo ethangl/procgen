@@ -473,6 +473,11 @@ box is Cartesian and uses local model lengths. It is not spherical storage or
 a surface mesher. Density feedback vectors are shaping signals; only the
 basis and sharpness transform currently claim analytical gradients.
 
+The [relief calibration](realtime-world-relief.md) follow-up centers and scales
+the pilot's shape signals against fixed noise statistics, then bounds the final
+height smoothly. This replaces the low-contrast slice-1 composition. It is a
+pilot extension to the displayed equations, not an additional transcription claim.
+
 Keep two test sets: fixed seeds and routes for comparison, and a changing
 sample of seeds to find unexpected terrain and expensive cases. Save failing
 parameters, location, camera route, backend, generator version, timing, and

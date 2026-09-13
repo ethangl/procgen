@@ -78,12 +78,14 @@ pub struct Evaluation {
     pub triangles: usize,
     pub topology: MeshTopology,
     pub radius_range: [f32; 2],
+    pub broad_height: crate::HeightDistribution,
     pub mesh_fingerprint: u64,
     pub route_fingerprint: u64,
     pub placements: usize,
     pub min_clearance: f32,
     pub walk_displacement: f32,
     pub rest_drift: f32,
+    pub grounded_rest_steps: usize,
     pub source_bytes: usize,
     pub collision_index_bytes: usize,
 }
@@ -132,17 +134,45 @@ pub fn evaluate(scenario: Scenario) -> Result<Evaluation, EvaluationFailure> {
         ));
     }
     let mesh_checks_ms = checks.elapsed().as_secs_f64() * 1000.0;
+    let broad_height = crate::height_distribution::sample(&field);
+    // Prove stationary support independently of where the arbitrary route ends.
+    // An idle phase can end on an unwalkable slope and continue sliding.
+    let mut probe = route_walker(&usable).map_err(|e| failure("landing", e))?;
+    for _ in 0..120 {
+        probe
+            .advance(&usable.queries, Vec3::ZERO, 1.0 / 120.0)
+            .map_err(|e| failure("rest", e))?;
+    }
+    let anchor = probe.center();
+    let mut rest_drift = 0.0_f32;
+    let mut grounded_rest_steps = 0;
+    for _ in 0..120 {
+        probe
+            .advance(&usable.queries, Vec3::ZERO, 1.0 / 120.0)
+            .map_err(|e| failure("rest", e))?;
+        rest_drift = rest_drift.max(probe.center().distance_squared(anchor).sqrt());
+        if !probe.grounded() || rest_drift > 0.001 {
+            return Err(EvaluationFailure {
+                stage: "rest",
+                error: EvaluationError::Invariant("unstable walkable support at landing site"),
+                location: Some(probe.eye()),
+                tick: None,
+            });
+        }
+        grounded_rest_steps += 1;
+    }
     let mut walker = route_walker(&usable).map_err(|e| failure("landing", e))?;
     let origin = walker.center();
     let mut outward = origin;
-    let mut rest = origin;
+    let mut rest = None;
     let mut path = Vec::with_capacity(4320 * 3);
     let mut min_clearance = f32::INFINITY;
     let mut step_max = 0.0_f64;
-    let mut rest_drift = 0.0_f32;
     let walk_start = Instant::now();
     for tick in 0..4320_u32 {
         let now = tick as f32 / 120.0;
+        let was_grounded = walker.grounded();
+        let previous = walker.center();
         let before = Instant::now();
         if let Err(error) = walker.advance(&usable.queries, walking_input(now), 1.0 / 120.0) {
             return Err(EvaluationFailure {
@@ -172,13 +202,18 @@ pub fn evaluate(scenario: Scenario) -> Result<Evaluation, EvaluationFailure> {
         min_clearance = min_clearance.min(clearance);
         if tick == 1439 {
             outward = p;
-            rest = p;
-        }
-        if tick == 3599 {
-            rest = p;
         }
         if (1440..2160).contains(&tick) || tick >= 3600 {
-            rest_drift = rest_drift.max(p.distance_squared(rest).sqrt());
+            // Stopping input in midair must not freeze gravity. Measure static
+            // friction only during continuous walkable support, including its
+            // first step. Landing-site support is checked separately above.
+            if was_grounded && walker.grounded() {
+                let anchor = *rest.get_or_insert(previous);
+                rest_drift = rest_drift.max(p.distance_squared(anchor).sqrt());
+                grounded_rest_steps += 1;
+            } else {
+                rest = None;
+            }
             if rest_drift > 0.001 {
                 return Err(EvaluationFailure {
                     stage: "rest",
@@ -187,6 +222,8 @@ pub fn evaluate(scenario: Scenario) -> Result<Evaluation, EvaluationFailure> {
                     tick: Some(tick),
                 });
             }
+        } else {
+            rest = None;
         }
     }
     Ok(Evaluation {
@@ -197,12 +234,14 @@ pub fn evaluate(scenario: Scenario) -> Result<Evaluation, EvaluationFailure> {
         triangles: source.triangle_count(),
         topology,
         radius_range,
+        broad_height,
         mesh_fingerprint,
         route_fingerprint: quantized_fingerprint(path),
         placements: usable.population.placements().len(),
         min_clearance,
         walk_displacement: outward.distance_squared(origin).sqrt(),
         rest_drift,
+        grounded_rest_steps,
         source_bytes: source.allocated_bytes(),
         collision_index_bytes: usable.queries.allocated_bytes(),
     })
@@ -222,7 +261,9 @@ mod tests {
     #[test]
     fn resolved_presets_repeat_and_invalid_cases_have_stage_context() {
         let scenario = Scenario {
-            seed: 42,
+            // This route is airborne when input stops at 12 seconds, then lands.
+            // Falling is valid; drift while grounded must still be rejected.
+            seed: 0,
             planet: PLANET_PRESETS[0].planet,
             route: RouteKind::Walk,
         };
@@ -230,6 +271,7 @@ mod tests {
         let b = evaluate(scenario).unwrap();
         assert_eq!(a.mesh_fingerprint, b.mesh_fingerprint);
         assert_eq!(a.route_fingerprint, b.route_fingerprint);
+        assert!(a.grounded_rest_steps > 0);
         let bad = Scenario {
             planet: crate::PlanetConfig {
                 radius: 8.0,

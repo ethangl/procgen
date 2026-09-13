@@ -7,6 +7,7 @@ mod contour_cells;
 mod detail;
 mod evaluation;
 mod field;
+mod height_distribution;
 mod mesh;
 mod noise;
 mod placement;
@@ -27,6 +28,7 @@ mod walking;
 mod test_support;
 
 pub use field::{FieldError, MAX_COORDINATE};
+pub use height_distribution::{HEIGHT_DISTRIBUTION_SAMPLES, HeightDistribution};
 pub use noise::{NoiseConfig, OCTAVES};
 pub use presets::{PRESETS, Preset};
 pub use terrain::{TerrainConfig, TerrainField};

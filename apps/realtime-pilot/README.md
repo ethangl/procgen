@@ -52,7 +52,9 @@ The equations in Murray's slides are the reference. Missing parts are completed
 as follows for this experiment:
 
 - Use cubic gradient noise divided by its exported conservative bound. The
-  basis and its derivative therefore share the same normalization.
+  basis and its derivative therefore share the same normalization. Broad relief
+  then centers and scales each shape using fixed reference moments; the safety
+  bound is not treated as the useful contrast range.
 - Use six octaves, frequency `1 / wavelength`, lacunarity 2, and one key across
   octaves. Begin with unit amplitude and damped amplitude; all sums begin at zero.
 - Use the unshaped basis derivative in octave coordinates for slope, ridge,
@@ -62,13 +64,16 @@ as follows for this experiment:
   altitude amplitude and ridge damping, perturbation, and frequency.
 - Store the resolved gain once. The displayed `gain + amplification` is one
   value here; the supplied fragments do not establish separate effects.
-- Divide the sum by the undamped geometric amplitude envelope. This gives a
-  conservative [-1, 1] bound without normalizing away position-dependent damping.
+- Divide the sum by the undamped geometric amplitude envelope, then apply
+  `x / sqrt(1 + x*x)` to bound the standardized relief within [-1, 1] without
+  hard clipping or normalizing away position-dependent damping.
 - Claim analytical derivatives only for the normalized basis and sharpness
   transform. The composed surface and density return scalar values. Their
   feedback vectors are not final gradients.
 
-The surface is the shape function times the height scale. A separate 3D noise
+The surface is the bounded shape function times the height scale. The
+[relief calibration report](../../docs/realtime-world-relief.md) describes the
+fixed shape moments and the changed terrain. A separate 3D noise
 field perturbs the solid boundary. Cave candidates use a 0.5-unit horizontal
 grid, a 0.11-unit chamber radius, and a 0.2-unit depth below their own surface
 query. Each chamber connects to an inclined capsule that reaches above the
@@ -481,6 +486,9 @@ Failures return a nonzero exit status after the remaining cases finish. Expensiv
 cases remain valid and are reported separately. Parameter failures have no
 surface location to capture. Use the saved case with the native inspector for
 flight/ground images; the CPU sweep itself does not produce GPU screenshots.
+Each successful result also records `broad_height` (minimum, 5th percentile,
+median, 95th percentile, maximum) over 65,536 area-distributed directions,
+before caves and local detail. This distinguishes broad relief from mesh extrema.
 
 Results and remaining pilot limits are in
 [the variety report](../../docs/realtime-world-variety-results.md).
