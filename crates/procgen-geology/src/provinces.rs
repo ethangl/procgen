@@ -287,8 +287,8 @@ mod tests {
             })
             .chain(covered);
 
-        assert_eq!(fingerprint(values), 17_700_700_707_790_126_781);
-        assert_eq!(field.diagnostics.province_count, 3);
-        assert_eq!(field.diagnostics.province_cell_count, 22);
+        assert_eq!(fingerprint(values), 16_845_656_208_985_457_545);
+        assert_eq!(field.diagnostics.province_count, 7);
+        assert_eq!(field.diagnostics.province_cell_count, 95);
     }
 }

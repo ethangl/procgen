@@ -233,54 +233,53 @@ mod tests {
         assert_eq!(first, fixture.evolve(config));
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count());
-        // Every count here rose when slab pull went: it was a multiplier
-        // below one for every plate short of saturation, and no plate of this
-        // world is half trench, so dropping it speeds the whole world up and
-        // the run moves about half again the material it did.
-        assert_eq!(first.diagnostics.owner_change_count, 383);
-        assert_eq!(first.diagnostics.subducted_particle_count, 188);
-        assert_eq!(first.diagnostics.born_particle_count, 30);
+        // Every count here was re-pinned for the clustered nuclei, which put
+        // the reference world's three continents elsewhere: the same 174
+        // continental cells, but under other plates and against other
+        // boundaries, so the run subducts, births, and accretes different
+        // material.
+        assert_eq!(first.diagnostics.owner_change_count, 346);
+        assert_eq!(first.diagnostics.subducted_particle_count, 159);
+        assert_eq!(first.diagnostics.born_particle_count, 33);
         // Every foreign continental stack this world holds is a merge, which
         // is why the two collision counts read zero: the stacks they counted
         // were continental to a parcel. What is left for them to count is a
         // parcel of another plate that crossed a transform or a ridge by
         // lattice jitter, and this world has none.
-        assert_eq!(first.diagnostics.accreted_particle_count, 36);
+        assert_eq!(first.diagnostics.accreted_particle_count, 51);
         assert_eq!(first.diagnostics.collided_cell_count, 0);
         assert_eq!(first.diagnostics.maximum_collision_stack, 0);
         // A merged parcel is one fewer parcel standing in the world, so a cell
         // it would have been near is now a gap that samples its neighbour
         // instead.
-        assert_eq!(first.diagnostics.sampled_cell_count, 997);
+        assert_eq!(first.diagnostics.sampled_cell_count, 957);
 
         // Exact, and the whole of the conservation rule: a collision merges
         // two parcels into one column rather than losing one.
         assert_eq!(first.diagnostics.starting_continental_thickness, 174);
         assert_eq!(first.diagnostics.final_continental_thickness, 174);
-        assert_eq!(first.diagnostics.maximum_thickness, 4);
-        // The cells accretion doubled, and no more: a merged column stands
-        // where the collision put it rather than spreading into its
-        // neighbours.
-        assert_eq!(first.diagnostics.thickened_cell_count, 47);
+        assert_eq!(first.diagnostics.maximum_thickness, 7);
+        // A merged column stands where the collision put it rather than
+        // spreading into its neighbours.
+        assert_eq!(first.diagnostics.thickened_cell_count, 39);
 
-        // Plates of the reference world clear the minimum continental area a
-        // rift needs, and every draw that took one cut it: a faster world
-        // breaks itself into more pieces, so an arc has plate enough to cut
-        // through where a slower one ran out of it.
-        assert_eq!(first.diagnostics.rift_count, 3);
-        assert_eq!(first.diagnostics.failed_rift_count, 0);
+        // The clustered continents leave this world one rift draw in five
+        // steps, and its arc fails to cut the plate; the earlier world of
+        // eight small continents rifted three times.
+        assert_eq!(first.diagnostics.rift_count, 0);
+        assert_eq!(first.diagnostics.failed_rift_count, 1);
         assert_eq!(first.diagnostics.suture_count, 4);
-        assert_eq!(first.partition.plate_count, 26);
+        assert_eq!(first.partition.plate_count, 23);
         // Both moved with crustal thickness, and the reason is worth stating
         // because it is not obvious: within one step accretion only removes a
         // parcel that already lost its cell, so that step's owners and births
         // are untouched. Across steps it is not neutral. The parcel is gone
         // from every later step, so a cell it would have won in step three is
         // won by something else, and the run's floor is made in other places.
-        assert_eq!(ownership_fingerprint(&first), 1_855_260_980_066_599_162);
+        assert_eq!(ownership_fingerprint(&first), 15_070_517_549_185_776_263);
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            17_664_711_403_482_833_826
+            15_623_273_618_226_003_741
         );
 
         // Float, so it is never pinned; equality above already covers the whole
@@ -375,13 +374,17 @@ mod tests {
         assert_eq!(ownership_fingerprint(&evolution), 1_312_040_099_017_365_644);
         assert_eq!(
             birth_fingerprint(&evolution.cell_birth),
-            13_907_807_829_833_123_813
+            13_898_464_439_355_083_791
         );
     }
 
     /// The speed no plate may pass, which is what
     /// [`crate::maximum_step_duration`] bounds a step against: the fastest
-    /// plate the run starts from, widened by the drift band.
+    /// plate the run starts from, widened by the drift band, plus the rift
+    /// opening. The opening is not spare: a rift half restarts its drift
+    /// band from the speed it parted with, which is the parent's plus the
+    /// opening, so a run that rifts its fastest plate can pass the band
+    /// alone. This world rifts three times in thirteen steps and does.
     #[test]
     fn no_step_leaves_a_plate_faster_than_the_step_bound_assumes() {
         let fixture = evolution_fixture();
@@ -394,7 +397,9 @@ mod tests {
             .fold(0.0, f32::max);
         // The drift realizes a speed by scaling the rotation vector by a
         // ratio, so it lands a few ulps either side of the value.
-        let ceiling = fastest * (1.0 + config.pole_drift.speed_drift_limit) + 1.0e-6;
+        let ceiling = fastest * (1.0 + config.pole_drift.speed_drift_limit)
+            + config.lifecycle.rift_opening_speed
+            + 1.0e-6;
 
         for step_count in [1, 2, 5, 13] {
             let evolution = fixture.evolve(config.with_steps(step_count, config.step_duration));

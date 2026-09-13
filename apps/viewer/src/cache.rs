@@ -383,7 +383,7 @@ struct_codec! {
     Orbit { semi_major_axis_meters, eccentricity, obliquity_radians, stellar_longitude_at_periapsis_radians }
     Planet { star, orbit, radius_meters, sidereal_rotation_period_seconds, atmospheric_specific_gas_constant_joules_per_kilogram_kelvin, maximum_land_elevation_meters }
     PlatePartitionConfig { arc_count, curvature, subdivided_fraction, piece_fraction, growth_roughness, seed }
-    CrustClassificationConfig { continental_fraction, nucleus_count, growth_roughness, seed }
+    CrustClassificationConfig { continental_fraction, nucleus_count, core_count, cluster_spread, growth_roughness, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor }
     MaterialTransportConfig { gap_radius }
     PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
@@ -422,7 +422,7 @@ struct_codec! {
     CellCorner { vertex, neighbor, edge }
     SphereMesh { radius, cell_centers, cell_offsets, corners, cell_areas, vertices, vertex_cells, vertex_neighbors, edges }
     PlatePartition { cell_plates, plate_count }
-    CrustClassificationDiagnostics { continental_fraction, component_count }
+    CrustClassificationDiagnostics { continental_fraction, component_count, largest_component_fraction }
     PlateKinematics { angular_velocities }
     BoundaryClassification { edge_classes, edge_normal_speeds, edge_shear }
     PlateEvolutionDiagnostics { active_step_count, owner_change_count, subducted_particle_count, born_particle_count, accreted_particle_count, collided_cell_count

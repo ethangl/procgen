@@ -74,7 +74,7 @@ Completed foundations:
   direction and scaled by each plate's continental area fraction, local
   spherical tangent motion, static convergent, divergent, and transform
   boundary classification, and per-cell continental crust grown from
-  farthest-first nuclei by integer-cost growth to a target continental area,
+  clustered nuclei by integer-cost growth to a target continental area,
   ignoring plate boundaries so that most of the coastline is a passive margin.
   Those velocities are only where a run starts. Evolution drifts its own copy
   of them: every step turns each plate's axis through a fixed angle toward a

@@ -24,7 +24,10 @@ real one.
   continental. Plates have no crust class: `plate_classes`, `plate_count`, and
   `ocean_fraction` are gone, and the readers that want a plate-level number
   take the derived `plate_continental_fraction`. That was the second slice of
-  this work; the measurements are below.
+  this work; the measurements are below. The nuclei are clustered: `core_count`
+  cores and satellites scattered around them, each nucleus growing at its own
+  pace, so the continents differ in size and shape and lean toward one
+  hemisphere. That was the fourth slice.
 - Since the displacement-migration slice, a cell's crust during and after
   evolution is read from its birth time: `Some` is oceanic, `None` is original
   continental crust. The classification is now purely the initial condition
@@ -74,10 +77,14 @@ it.
 Replace the per-plate classification with a per-cell one, produced before
 kinematics and independent of plate boundaries.
 
-**Nuclei.** `nucleus_count` continental nuclei (default around 8, the order
-of Earth's cratonic assemblies) are seeded farthest-first from a hashed first
-cell, using the same farthest-first helper the partition uses. They ignore
-plates entirely.
+**Nuclei.** `nucleus_count` continental nuclei (24 as of slice 4, the order
+of Earth's cratons; 8 farthest-first nuclei when this slice landed) are
+placed without reference to plates. Slice 4 made them clustered: `core_count`
+cores (5) are hashed onto the sphere at least a 0.78 chord apart, and every
+other nucleus is a satellite that joins core `r` with weight `1 / (r + 1)`
+and lands `cluster_spread` (0.35 radians on average, the sum of two uniform
+draws) from it in a hashed tangent direction. The first core gathers the most
+satellites and grows the largest continent.
 
 **Growth.** The nuclei grow by the partition's shortest-arrival growth with
 per-edge integer costs and the configured roughness, with no face mask, until
@@ -86,9 +93,14 @@ this slice landed, matching the ocean fraction of 0.7 it replaced; slice 3
 retuned it to 0.347 to pay for the shelf it floods). Growth stops at the
 first settled cell that carries the total past the target, so the achieved
 area overshoots by at most one cell. Cells the growth never reached are
-oceanic. This gives blobby continents with rough coasts whose edges fall
-wherever they fall relative to plate boundaries, which is what produces
-passive margins.
+oceanic. Since slice 4 the costs are scaled three ways: each nucleus by a
+hashed ratio between one and three, so nuclei grow at different paces; each
+cell by a three-octave field at lattice frequency one, between a quarter and
+one and three quarters, so outlines bend at continent scale; and satellites
+start five default hops of cost late, so they add lobes to a core rather than
+meeting it as equals. A cluster grows together into one lobed continent whose
+edges fall wherever they fall relative to plate boundaries, which is what
+produces passive margins.
 
 **Output.** `CrustClassification` becomes `cell_classes: Vec<CrustClass>`
 with `validate(mesh)`, `class(cell)`, and a derived
@@ -143,9 +155,12 @@ shelf under a convergent boundary still gets its collision profile.
 
 ## Determinism
 
-Nuclei seeding, growth, hop distances, and area sums are integer or exact,
-so the continental mask is bit-identical across machines and is pinned by
-fingerprint. The margin taper is a rational of two integers. Kinematics stays
+Nuclei seeding, growth, hop distances, and area sums are integer or exact:
+the nuclei are hashes, half-angle rotations, and point location on the same
+floats, and the cost scales are hashed integers and a polynomial noise field
+quantized to integers once. So the continental mask is bit-identical across
+machines and is pinned by fingerprint. The margin taper is a rational of two
+integers. Kinematics stays
 a float output, never pinned; every integer downstream of it is decided by
 comparisons on values the previous slices already made exact. Fingerprints of
 ownership, birth, seafloor age, and the geology fields will change at the new
@@ -317,3 +332,37 @@ rather than 24 — and the hotspot fixture now draws three provinces over 22
 cells rather than two over 13. Base elevation's own fingerprint did not move:
 it is pinned at width zero and the pre-slice `continental_fraction`, which is
 the test that proves the taper is the only change to the field.
+
+### Clustered nuclei. (landed)
+
+Eight farthest-first nuclei grew eight discs of equal area on a lattice: with
+equal starts, independent per-edge costs, and maximin placement every nucleus
+grows the same disc, and roughness only jitters the coast. Slice 4 replaced
+the placement with cores and satellites, scaled the growth costs per nucleus
+and per cell, and started satellites late; the growth engine gained
+`GrowthScales` and a start cost per seed, and the partition passes unit
+scales and zero starts, so its fingerprint did not move. The reference
+fixture keeps three nuclei on its 512-cell mesh, two of them cores. The
+viewer gained `Cores` and `Cluster spread` controls and a largest-continent
+stat. Every fingerprint downstream of crust was re-pinned once.
+
+**Measured** on the viewer's default mesh at its `continental_fraction` of
+0.297, before evolution. Before: eight continents of about 3.7% of the sphere
+each, or fewer when two met. After, for the default crust seed 7 and seeds 1
+to 5:
+
+| Crust seed | Continents | Sizes, % of sphere       |
+| ---------- | ---------- | ------------------------ |
+| 7          | 4          | 12.5, 7.8, 6.2, 3.2      |
+| 1          | 4          | 11.2, 9.2, 7.3, 2.0      |
+| 2          | 4          | 13.1, 9.0, 4.4, 3.2      |
+| 3          | 2          | 26.7, 3.0                |
+| 4          | 5          | 16.2, 4.0, 3.4, 3.3, 2.7 |
+| 5          | 4          | 20.0, 4.5, 3.1, 2.1      |
+
+The prototype that chose these constants also tried the pieces alone.
+Per-nucleus pace on its own spread the sizes but left the lattice and the
+discs; preferential attachment between nuclei, with no fixed cores, collapsed
+most seeds into one supercontinent, which is why the cores are explicit and
+their weights fixed; and a satellite start of thirty hops left the satellites
+unborn at this area budget, where five adds lobes.

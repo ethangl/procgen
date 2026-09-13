@@ -29,7 +29,13 @@ fn crust_summary(ui: &mut egui::Ui, world: &TectonicsWorld) {
             format!("{:.2}%", world.crust.continental_fraction * 100.0),
         );
         stat(ui, "Nuclei", world.config.crust.nucleus_count);
+        stat(ui, "Cores", world.config.crust.core_count);
         stat(ui, "Continents", world.crust.component_count);
+        stat(
+            ui,
+            "Largest continent",
+            format!("{:.2}%", world.crust.largest_component_fraction * 100.0),
+        );
         let [oceanic_cells, continental_cells] = world.cell_crust().cell_counts();
         stat(ui, "Oceanic cells", oceanic_cells);
         stat(ui, "Continental cells", continental_cells);

@@ -328,34 +328,32 @@ mod tests {
         );
         assert_eq!(first.cell_birth.len(), mesh.cell_count());
         // The prior reads the fixture's boundaries, which the crust factor
-        // alone now scales the motion behind: every plate keeps a ridge of its
-        // own where one used to have none.
-        // The world the prior describes is unchanged: the walk still reaches
-        // nine hops and averages 1.7781065 of them over the same 338 cells.
-        // What moved is the unit. The summary is in model time now, because
-        // the fallback age is a time and no longer a hop count, so every value
-        // is what it was times this mesh's hop duration.
+        // alone scales the motion behind. The summary is in model time,
+        // because the fallback age is a time and no longer a hop count, so
+        // every value is a hop count times this mesh's hop duration. Last
+        // moved by the clustered nuclei: the three continents sit elsewhere,
+        // so the ridges are other edges and the walk reaches eight hops.
         assert_eq!(
             first.diagnostics,
             CrustBirthPriorDiagnostics {
                 age: FieldSummary {
                     minimum: 0.0,
-                    maximum: 9.0 * unit_hop(&mesh),
-                    mean: 0.278_565_76,
+                    maximum: 8.0 * unit_hop(&mesh),
+                    mean: 0.207_649_68,
                 },
                 oceanic_cell_count: 338,
-                ridge_cell_count: 102,
-                ridge_plate_count: 30,
+                ridge_cell_count: 118,
+                ridge_plate_count: 25,
                 ridge_less_plate_count: 0,
                 // A plate can hold a ridge and still leave cells the walk
                 // never reaches, in a piece of itself the ridge is not on.
                 // Those take the fallback age too.
-                fallback_cell_count: 6,
+                fallback_cell_count: 12,
             }
         );
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            13_907_807_829_833_123_813
+            13_898_464_439_355_083_791
         );
         assert!(
             first.cell_birth.iter().flatten().all(|&birth| birth <= 0.0),
@@ -581,7 +579,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_ages),
-            16_892_226_167_731_275_492
+            10_013_844_209_097_882_057
         );
     }
 

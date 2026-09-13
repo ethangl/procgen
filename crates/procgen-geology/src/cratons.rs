@@ -326,7 +326,7 @@ mod tests {
         );
         assert_eq!(
             fingerprint(steps.iter().copied()),
-            7_493_909_529_293_082_038
+            6_227_783_703_527_036_064
         );
     }
 

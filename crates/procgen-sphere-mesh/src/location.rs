@@ -18,6 +18,22 @@ pub struct DelaunayLocation {
     pub weights: [f32; 3],
 }
 
+impl DelaunayLocation {
+    /// The located triangle's corner cell whose center is nearest `direction`:
+    /// the cell the direction is in, since a Delaunay triangle's corners are
+    /// the three nearest centers. Ties go to the last corner in triangle order.
+    pub fn nearest_cell(self, mesh: &SphereMesh, direction: Vec3) -> usize {
+        self.cells
+            .into_iter()
+            .max_by(|&left, &right| {
+                direction
+                    .dot(mesh.cell_centers[left])
+                    .total_cmp(&direction.dot(mesh.cell_centers[right]))
+            })
+            .expect("a Delaunay triangle has three corners")
+    }
+}
+
 #[derive(Clone, Copy)]
 struct EdgeSides {
     /// Scalar triple products in directed triangle-edge order.
