@@ -1,0 +1,535 @@
+00:00 [Music] Hey so okay when Mike's working great
+00:06 good morning everyone thanks so much for showing up so early and welcome to day
+00:12 one of the main conference if you've been to the summit's over the past couple of days I hope you enjoyed them and welcome to those of us those of you
+00:19 just joining us today before we start I've got a couple of messages to pass on from the CAS so the first thing is that
+00:26 if you can check all your phones or tablets or whatever are set to silent or are turned off the second thing is that
+00:33 about 15 minutes into this session you'll be emailed a link to an assessment form if you can really try
+00:39 and give any feedback on that it is super useful the speaker's get to see it and it's just incredibly appreciated if
+00:45 you could fill that out okay so let's get on with the top I'm in it's
+00:51 Mackendrick and I'm a programmer at a little UK indie game company called hello games I've been there for about
+00:59 five years now and so I joined just before we released Joe Danger to the movie and then have been working on
+01:06 sci-fi exploration game no man's sky for about four years since then so I started
+01:11 on that project really near the beginning when just four of us went and shot ourselves away in a little room in the office right through to shipping and
+01:18 now we're continuing to work on updates because we're quite a small company and and just because it suits me as well I'm
+01:25 a bit of a generalist as a programmer so I've worked on a number of areas across
+01:31 the project so early on I worked on a bunch of engine related stuff I've touched a whole load of the prop gen
+01:38 content so things to do with foliage placement some texturing some model
+01:43 composition I've also done some work on the visuals for example the atmospherics the water rendering and I've been
+01:51 involved with a whole bunch of gameplay related programming as well so this talk is going to kind of reflect that it's
+01:57 going to cover quite a lot of content across the board of the game so this talk is about continuous world
+02:03 generation in no man's sky and what I mean by that the technical architecture of the game
+02:09 is the code that lets us generate and simulate this world in real-time as the game is running but
+02:16 what it really means is here's our story through a bunch of the really interesting and exciting problems that
+02:23 we got to solve while working on the game and some of the aspects that make it a bit different to a lot of other
+02:29 games that are out there in terms of the the technical problems we got to work on so to give a brief summary of what I'm
+02:37 going to talk through first I'm going to go over how we structure the world how geometrically we build our planets on
+02:43 spheres and how we transforms about how we work with voxels then I'm going to talk through our generation pipeline I'm
+02:50 going to go through step by step the process of how we create world in real
+02:55 time what's involved in taking an area of terrain and creating that through
+03:00 from being an empty space to something that we can render and play on the threading the parallelism and ordering
+03:07 issues to do with that and finally I'm going to talk about our simulation itself the special considerations that
+03:13 we have to take because we're working on a game that's generated in real time and occupies a space bigger than we can know
+03:21 a lot of information about I think to understand the reason behind a lot of
+03:27 the technical decisions that we made on the project you have to know a bit of background to it and to the team that
+03:34 I'm working as part of so people probably know no man sky is a sci-fi
+03:39 exploration game but for those of you who aren't super familiar with it it involves the players all starting on
+03:45 planets spread out across a vast galaxy and you can take off from those planets
+03:53 and fly continuously and land on another piece of terrain and the simulation continues throughout that
+03:58 so so much of the tech is focused on that core design decision hello games
+04:04 itself is a small team as I said we started off with just four of us working on the project the three programmers and
+04:10 an artist and we've we've grown and changed sides a little bit and know we're affected at around 20 people for
+04:16 the time being and that's about 10 programmers code heavy and five artists
+04:22 and on our team that size I mean everything is hard and everything has to
+04:27 cut you know shipping a game shipping a dick disk-based game with 20 people is was a
+04:32 real challenge I think it was a real achievement but I'm super proud of but also it means when it comes to the work
+04:38 our artists are doing the work our coders are doing we have to be really careful about what we take on every
+04:43 asset that the artists produce has to count for so much more than the work they're doing it has to have a real
+04:49 meaning in game and every technical decision that we take on as programmers has to be really pragmatic we can't read
+04:55 of an R&D team to to go off and play with a lot of things for a long time so
+05:00 we had to be really careful about our progress through the project in terms of our philosophy as a company we're fairly
+05:08 fast and iterative and that's one of the benefits of being a small team I guess is that we can do that and it's a really
+05:13 enjoyable way to work but it meant we could come across problems find our way through them and then see if there were
+05:19 other design approaches and other technical approaches that we could lead off from that so we had fairly flexible
+05:24 design goals as well we'd be really driven by people playing the game rather than by some solid design document laid
+05:33 out for years before the project as I noted we have to make the most of our
+05:38 artists but that doesn't just mean making the most of the content they produce it also means generating content
+05:46 in a way that they have real control over and that's something that is sometimes missing when people talk about
+05:51 prop gen they talk about replacing artists and hopefully through this talk you see that that's not our philosophy
+05:57 at all we want to to be able to enable our artists to produce more rather than
+06:02 replacing them with an algorithm that doesn't quite do the same job to give a
+06:08 bit more detail on our text so we work on our own engine and that's written in
+06:13 C++ which is kind of inconsequential probably but it's the first question in rumson to ask so I put it on there if we
+06:20 had to make the decision of what engine to use now I think that's a way less clear-cut thing so you have to remember
+06:25 that we made the choice four years ago to work on our own engine at the time when there weren't really major voxel-based projects that has a lot of
+06:32 visibility that we could see in unreal in unity so the sort of taking on an existing engine and having to optimizing
+06:39 that and having to work with walk so thin that when we probably wouldn't have source code access we wouldn't have a lot of support
+06:45 with a really daunting task whereas our own tech we know what's going on there you know we know we have a lightweight renderer we know what we can do to it we
+06:53 know the sort of time might the might be involved in expanding and improving that so I'm not necessarily saying it's the
+06:58 right route for everyone to go down for there it was the right choice for us at the time for sure we ship simultaneously
+07:05 on PC and ps4 and we just worked simultaneously on both platforms throughout development which again as a
+07:11 small team is a tricky thing to do just getting test coverage on those kind of things is an interesting problem as the
+07:19 focus of the talk implies we use run time generation but that has a number of really interesting consequences for the
+07:25 problem for the game and for tech problem solving within the game so any
+07:31 generation that we do because we're producing this vast amount of content it's more than we can store offline is
+07:37 more than we can load into the game so we're generating at runtime and that gives us performance constraints on all
+07:43 of the generation work that we do that we might not face if we were able to bake out a load of textures rather than
+07:49 generating them as you warp into a system or bake a set of terrain rather
+07:54 than generating it in regions as you move around that's really you know the significant bulk of the work that I'm
+08:00 going to talk about today the other thing that comes from that is that we have to be able to simulate gameplay
+08:06 with only a small knowledge of the world so if we're generating this whole planet and that's a bigger space than we can
+08:13 really get much information about at all you know we can maybe know a few points of interest but beyond that any kind of
+08:20 data we have about it is too much data for us to keep in memory and for us to argue about all the time so any work
+08:27 that we do have to be able to work just in its own local space without knowledge of whether there's a lake over that
+08:34 mountain whether you're at the highest mountain that the planet or just a mountain and that's a really significant
+08:40 thing to keep in mind I think as I'm talking through this a final note is
+08:45 that our engine is really agnostic to procedural content I think people sometimes talk about Nolan Skye is the
+08:51 procedural game and I'm not sure that's the right way to look at things for us our engine doesn't really care whether we generate the content online
+08:58 or whether we loaded it or where it comes from at all to be honest you know a texture is a texture and does that's a
+09:05 really significant and useful thing to say and it's a useful thing to say about the game as well the players shouldn't
+09:10 necessarily know whether your texture was generated or whether an artist created it the sheer size of space that
+09:17 we're working with implies we have to generate content but I guess one of the the end goals for a lot of proxy on work
+09:24 at the moment would be that you can generate this massive space that you can create a load of content that would be
+09:29 indistinguishable from something that an artist is also directly so like I said
+09:36 to start with I'm going to talk about structuring our worlds working with our spherical planet so to understand our
+09:44 simulation process you kind of have to know how everything is laid out in this way and also it's just an interesting
+09:49 problem that we work through is one of those things where I say we're dealing with planets in space we want you to be
+09:55 able to take off and land on them and everyone has an opinion about how we should have done this and we have a lot
+09:60 of opinions too but we work through a number of different things and I think it's probably interesting to talk through the different approaches that
+10:06 did and didn't work for us so our driving design goal is that ability to fly off the planet fly to
+10:13 another planet fly back but it's also that we have distances that have meaning to the player that we're simulating a
+10:19 large enough space for some of those to be significant to them so we need to
+10:25 simulate a space where someone walking around the planet if they want to walk to the other side that should feel like a really weighty and significant thing
+10:31 for them to do or if they want to fly around the planet or ship even that should take a significant amount of time
+10:37 and again that changes the way that we work with things we want our players to explore to feel alone and that that
+10:44 needs those distances to be suitably large so like I said we went through a
+10:50 few iterations and here's the first one so our first driving goals we
+10:55 essentially thought of this problem like you being a sphere which is an annoying problem you know if you've had to UV
+11:02 spheres then there are a bunch of issues there with poles and things like that but our our first consideration was that we
+11:09 wanted to have a flat plane for the terrain to exist on we wanted to simulate on the next airplane and the
+11:16 way that you typically typically were then again have that flap have the y-axis always be up because that makes
+11:22 things a lot simpler not just for simulation but also for generating our terrain there's no complications about
+11:27 distortion because you're just generating it in a really continuous exed space so what we did was we took
+11:36 this plane while you're on the planet and we let you explore it infinitely so if you walk along in the x-direction
+11:41 forever we'll just keep making terrain over there and in same if you walk in the Zed
+11:47 but the moment that you leave that planet will take whatever space and terrain you have and we'll just wrap it around a sphere and we'll wrap it around
+11:54 with poles that are placed as far away from the player as possible so that the
+11:60 the kind of pinching that you'd expect to see on the poles when you wrap a flat texture to it would at least be as far
+12:06 away as possible and we handled that in the shader so those spheres in space are all actually entirely implicit but of
+12:15 course there are some problems with that so you can kind of see the pinching as a bottomless screen shot this must be one
+12:21 of the oldest screenshots that we have of the game is pretty early on you can kind of see the pinching at the bottom
+12:27 some distortion there and that's not that bad but the thing that makes that really bad is that you're moving around
+12:32 continuously so you get some swimming coordinates on the sphere and a really
+12:37 the really significant problem for us was that you end up with some impossible places on your flat terrain that you
+12:43 can't possibly map in a useful way to the sphere so if you have these points of interest maybe you want to share them
+12:48 with other players you know because we have some networks aspects that use that then they can't possibly have the same
+12:54 point because the way your sphere looks depends for you takeoff drama or where you come into it also our infinite
+13:03 generation has precision issues and all you can fix that by wrapping all of your generation functions you know we could
+13:09 have interpolation between noise or come up with a new noise function that handles it that tends to be more expensive than the generation we were
+13:15 already doing and cost was a major factor so I'd consider this a kind naive approach but at the same time it
+13:23 would have been workable I think you could take something like this and probably ship a game using it but it
+13:29 wasn't the right one for us so the next thing we thought about was like well a
+13:35 lot of people have been thinking about mapping terrain to spheres and to flat
+13:40 planes for a really long time so we should look at cartographers and what they're doing so I went through the
+13:46 Wikipedia list of all the good map projections and tried to find the ones with the least distortion because if if
+13:52 you've ever experienced you know the cartography community you've probably heard people complain about market or projection which is fair for you know if
+13:58 you came from Greenland you probably know why that's bad so we tried to look
+14:03 for ones that would be more appropriate but generally there weren't solutions there that were useful to us a lot of
+14:09 the transforms were either expensive or really expensive to invert so we need to transform from our flat plane to our
+14:15 sphere and back very often for like loads of vertices or loads of points so
+14:21 that wasn't really an option and some other are some other techniques that looks promising are really designed for
+14:27 the planet Earth so that image on your left yep had to check what was left I think is a pure
+14:34 screen conceal projection I don't know how that's pronounced because I've only seen it written done but that really
+14:40 only works if you have oceans in kind of the places that Earth has oceans and becomes pretty useless when you
+14:46 generalize that to arbitrary planets that we were generating so we gave up on
+14:51 this one as well and moved on to the scary approach that we have been trying
+14:57 to avoid and in some ways this is the simplest approach but it's the one with a wide ranging number of consequences
+15:04 for us so that approach is just to run our simulation on the sphere so other
+15:10 coordinates are nice and consistent within our solar system you can be standing on the planet you can be standing on space and you just have this
+15:16 3d continuous court coordinate system so that's that's nice in terms of gameplay but on the other hand this complicates
+15:24 all of our gameplay coding because know whenever you stand on the sphere you don't know which way up is you have to
+15:30 do that calculation all the time and if anyone is like a programmer in the room you're probably thinking us and my gravity is always
+15:37 going towards the center of the sphere or if you're a graphics programmer in your shaders you can never simplify
+15:43 anything to be 2d around your world you're always working on this curved plane so it has knock on and just about
+15:50 every area of code that you could think about it makes it more difficult to integrate other people's libraries
+15:55 because they're going to assume that you have an axis that's consistently up I will be really excited to one day work
+16:01 on a project where I always know what up is and it's the same thing but it is it
+16:07 is workable though because you know it's a simple calculation to do you know calculating your your up vector from
+16:14 your position on a planet is is just considering your position relative to the center so it is cheap and simple but
+16:21 there's a second problem that makes that gets in the way just about all the time when you do things and that is the hairy
+16:27 ball problem so this is a really intuitive theory and that's that if you if you take a sphere and you imagine
+16:34 it's really hairy and you try to comb it you can't have continuous hair around that without having singularities about
+16:40 having little licks you know picture that so you can't have continuous
+16:45 tangents around your sphere so that causes problems with lighting with normal mapping all the time and various
+16:51 other places for you don't really think about the fact that you need to use tangents that are in a continuous space
+16:56 but suddenly when you don't have them then it's really obvious where we can mostly counter that by using projection
+17:04 onto your sphere from three planes but try planar projection in some places or a long single plane in other places or
+17:10 we can use local mapping where maybe our tangents won't be deterministic but they
+17:15 will be continuous we can just calculate them from the first point we reach the planet and then move them continuously from there so it's definitely workable
+17:24 and it's you know what we stuck with it's just interesting for new people joining the project the thing about the
+17:31 other thing but spheres is they're not a really great way for us to store data generally if we have something like voxels or any other data structure we
+17:40 want to store that in contiguous and cube based system so we do store data on
+17:46 a cube we do a projection from her sphere to a cube so we simulate everything on that
+17:52 sphere when it comes to to store a box or data we're mapping that onto a cube and you can kind of see in the sphere in
+17:58 a diagram how it just about maps to the face of the cube you can see where the vertices match up there hopefully you'd
+18:07 think that would cause a lot of distortion so if you imagine that we're generating terrain on one of these when
+18:13 we project to the other then we're having some distortion in the size of the the polygons were generating or the
+18:20 space of the voxels take up and but it's generally not a huge problem because if we generate all our terrain and do most
+18:25 of our work in simulation space and then only map it to a coupon restoring it then it's just that the density of
+18:31 voxels or the space that that data is able to take up that's lost so for
+18:36 example it means in some areas we'll have a mountain that's composed of a
+18:41 lower density of voxels and another one they'll maybe be slightly lower poly but that's probably not noticeable but we want to have mountains that become half
+18:48 the size or something a question I get sometimes is why we didn't just stimulate on a cube but having edge
+18:55 cases at corners literal edge cases in your world seems like a nightmare to
+19:00 deal with you know having testers come back with problems that only occur in very specific places on your terrain so
+19:07 simulating on the sphere seemed like the right way for us and that sphere to cube
+19:12 transform that's really super simple so we can we can do it just by calculating
+19:19 our high offset above the planet projecting that down onto the sphere just by normalizing that direction and
+19:26 multiplying it by radius and we can calculate which cube face were on just by taking the absolute value of the
+19:31 largest direction so this is a really simple bit of code to write and it's really cheap and we can do it all the
+19:37 time without having a load of concerns about the fact we're working in two spaces at once and our result is it's
+19:44 not on the face of a cube that's the other thing to note is we're when I say we're working on the sphere we're not
+19:50 working directly on the sphere surface we're working on you know a height map or some terrain offset from the sphere so we end up with some space offset from
+19:57 our cube at the other end and going along those lines that means
+20:03 we're only mapping a limited space offset from the sphere because the further out you get from the surface of
+20:09 the sphere intuitively the more distortion you're going to see so if you imagine the point to the center of the
+20:14 sphere versus the point to the center of a cube that's going to be infinitely small and spyro's you can make it up of
+20:20 a number of regular voxels in the tube and if you progress along that you can see the distortion gets worse and worse
+20:26 as you go inwards or outwards from your sphere so we can only simulate a limited space and we choose about 128 meters of
+20:34 height for the sort of voxel data that we store there which isn't enough
+20:41 I mean 128 meters gives you some little hillocks maybe is not it's not particularly interesting it doesn't give
+20:47 us the kind of deep oceans that we want or the high mountains so what we do instead is we add this elevation data we
+20:54 add it into our transform so rather than considering considering the radius of our sphere to be consistent we choose it
+21:01 we consider it to be varying based on noise over the surface of the sphere so
+21:07 we have an offset of about 600 meters to a kilometer which allows us to get
+21:12 really high mountains and deep oceans up to that and then still have our 128 meters of voxel data offset from that
+21:18 that's really cheap and we can also cache the results for the local area or in so the one where we're doing those
+21:25 transforms then it doesn't cause a problem either and that's kind of how it
+21:30 fits in with our transforms so really all we're doing is calculating a single point of noise every time we call this
+21:35 transform and then at the other end we're projecting that down still onto our non elevated surface of our cube so
+21:45 working with voxels I've mentioned voxels a few times let's go into some details on how we use them so we
+21:53 consider our voxels in chunks we have regions and some time being I'm just talking about the nearest Lodge where
+21:60 Oliver voxels are one meter cubed so we take all these regions and we process them individually and each one comes out
+22:06 to be a single single area of terrain our regions are 32 by 32 by 32 meters in
+22:13 games but we need some additional voxel data there so we need one row of voxels around the edge that we can polygon eyes
+22:19 safely because we're creating vertices in between eight of our voxels so we
+22:24 need that extra space to get to Philly fully cover the area but in addition to that we want two polygons eyes a little
+22:32 bit outside each region and have some overlap and that discovery as far as seams between the terrain due to precision issues so in the end we end up
+22:39 polygons izing an area that's about 36 by 36 by 36 voxels and their individual box voxels are about six bytes so we
+22:47 have two bytes of density data applied for by each for two different materials that are made up of soar voxels tell you
+22:54 that they're made of grass or rock or mountain or sand which we need in texturing and placing things on them
+23:00 later and we have two bytes that tells us the extent to which something is rock
+23:05 or grass versus the other materials that it's made up of so we retain these in
+23:12 memory right throughout running the game so there's definitely limited quantities that we can store that's just to let us
+23:17 do really quick terrain edits and we do height tests and other tests against the voxels fairly often so if you're
+23:24 supposed to keep around but it would be possible to discard it and load it again similarly it would probably be possible
+23:29 to compress it and we just haven't done that because it's an expense and also because compression is a lot less
+23:36 effective than if we have something like Minecraft where your voxels are binary 1 or 0 because we have varying density
+23:42 data and we we want any compression that we do to be lossless so it's probably something that we'll look at in future
+23:47 as we try and regain more memory from the game to put in new features and fill
+23:53 it with other stuff but for the time being is just uncompressed in memory of
+23:58 course our 36 by 36 by 36 meter regions we can only have a limited number of
+24:04 those they're taking 4 amount of memory so it's pretty obvious that we're going to need to deal with mods especially
+24:09 since we're flying off to space and back so we want to have a bunch of these
+24:14 that'll be quicker to generate and what we do is simply subdivide our regions done so we deal with 6 logs each one
+24:22 being twice the size of the left and again we still have that overlap of the edges so
+24:27 our lower log terrain has half the densities so it's going to be lower poly is going to be less interesting but we
+24:36 tend to match up at the edges just by polygons izing a little bit over and we tend not to get holes between between
+24:41 loads and is far enough from the player that you can't notice that you're going from a lower density to to a higher one
+24:48 directly in most cases the other thing
+24:53 is that we reduce density within those regions so again just as a memory saving thing and based on you know a visual
+24:59 decision of what looks acceptable to us we we reduce the density within that so our lower logs are actually 36 by 36 by
+25:07 36 voxels we might have that reporter that and we tend to do it in the height a lot more than in the X and said just
+25:15 because that looks okay we can get away with reducing the data there the other thing is we're splitting these boxes
+25:21 done and these regions done by half but we only have this 128 meter just area to
+25:27 fill so we have four regions two stacked on top of each other you know at 32 meters in the nearest logs but quickly
+25:33 we start having to do that and when we get to lower logs so the point there is that really quickly we end up with lower
+25:40 logs that are incredibly cheap which means we can have close to a high density voxel data and far away from us
+25:45 really low poly data that fills in up to the horizon and we store those in an
+25:53 octree where you know binary subdividing things it kind of makes sense in maps
+25:58 well it lets us keep up to date with where our reagent are as we move around the cube and it's really quick to find
+26:06 lots of regions when we're within one of them or want to look up one of them the
+26:12 thing to note there is that our cube is actually around the surface of a cube so we have our octet the region's though
+26:18 exist our ones around outside the surface so when was projected to from
+26:23 our sphere to our cube and we have the data existing outside the edge of the cube that also for exists in the octree
+26:34 those get even low resolutions those get pretty expensive and we can't cover
+26:40 one of our large planets with even our lowest lava voxel data so we also have a much cheaper low voxel odds they
+26:46 dispersed on it we have a high octrees that exists one for the whole solar system and we just swap it between the
+26:52 planets transfer cancel creating regions as we need to as we move around but we also create just as you fly into the
+26:58 system these low density voxel spheres they're just two voxels high so there's
+27:04 really very little data there at all they're they're pretty cheap and we just generate six separate polygons Ice Cube
+27:10 faces that map onto our sphere and that gives us those planets in a much cheaper
+27:15 way from any point in system all of the time okay so next I'm going to talk
+27:24 through our generation pipelines to how we fill in that voxel data what we do with it once we've got a whole load of voxels and we need to render it and turn
+27:31 it into a game we we play so we do some generation at load time well there's
+27:38 kind of a hierarchy of where you want to do your generation so ideally if we could do everything offline that would be super cheap in the game but we can't
+27:44 so we do as much as we can a load time and then we do what we have to as the player is moving around so the kind of
+27:51 thing that we can do at load time sort of rendering some procedural textures loading any vertex data that we need in
+27:56 order to create models but creating the terrain itself because there's so much of it we can't generate a whole planet
+28:02 we have to do that continuously as we're moving around as the player is playing the game so we just do it in in the
+28:09 background along with things like texture streaming so here are stages
+28:16 that we go through so we have our voxel region and we want to take that through to something that's playable we go
+28:22 through the following stages so first we generated that's filling in the voxel data from noise until we have our
+28:28 completed density data for that region we polygons eyes it so we have a vertex mesh we then spherify it so we've done
+28:35 those two stages just in as a voxel cube and we then stare five at vertex data so
+28:42 that will fit on our sphere planet we then construct a physics mesh we construct like a nav mesh for creatures
+28:47 and then we finish off by covering that region in plants and creatures and buildings gameplay
+28:54 and thing that we need to make a playable so of course if we're going to
+28:59 do all the stuff is we're moving around we have to do it using a we have to do
+29:05 it off the main thread and we do it using a job system so threading in our game is relatively simple we have a main
+29:10 update thread and a main graphics threads and we have a sync point each frame for those and we try to make the
+29:16 terrain interfere with that as little as possible as we're going around on PC all
+29:21 these jobs are handled on the CPU but on ps4 we do some of them in compute shaders are so to see how our threading
+29:29 kind of works in terms of all the other numbers points we can do in jobs and
+29:35 then all of the other points are a point where we have to interfere with the world so at some point we have to get
+29:41 hold of a vertex data buffer to fill in at some point we have to add our physics to the main physics of the world we have
+29:46 to add all our creatures and position models and things like that but almost everything else we can split off and
+29:51 just run as a job and of course what that means is we have all these voxel regions round about us and we need a
+29:58 tactic for ordering those jobs I can kind of show that filling in here so
+30:05 this is this gif is pretty much real-time run on my laptop before and I think it's loud loud too so maybe the
+30:12 second farthest away mod from the player so you can see we're dealing with a lot of regions each one of those little squares is a region that we're creating
+30:19 and you can see it filling in in real-time so when it goes again you'll see each of those regions flipping really quickly through a number of
+30:24 colors and that's them going through their generation polygons ization all of those stages the way that we order those
+30:31 is based really highly on visuals there's no real driving factor aside from what the player experiences and
+30:38 what they see so when those regions are going blacks that's them being filled in by a mirror log so we're able to fill in
+30:45 this low LOD real quick and then we start to bring in more detailed terrain over the top because that's the most
+30:51 beneficial to our player we generate using a point based system so the stuff
+30:56 in front of us we go now generates first and then the stuff around about us
+31:02 spreading out from the camera
+31:07 so now we've seen how our region's progress through the steps I'm going to
+31:13 talk about the steps in a little bit more detail starting with our terrain generation I'm not going to go into loads of detail on all our noise based
+31:19 techniques but Shaun Murray is giving a talk tomorrow at half five and that does just focus on terrain generation and the
+31:28 specific mass and noise techniques of that so you should go to the pond so it
+31:36 helps hear when we're going to talk about generation to have a bit of an understanding of how we look at
+31:41 generation in no man's sky in general so we see generation as this top-down approach always you're always feeding
+31:48 data through one generator coming up with some more data feeding that into the next generator and just doing that
+31:53 continuously until you end up with what you want so in the case of terrain we're starting by knowing which solar system
+31:59 we're in and we know that by a positional seed we feed that through and generate some info about the solar system how close the planets are to the
+32:06 Sun what kind of sky it has for the atmosphere is like and then we can feed
+32:11 that data through to each planet along with the planets position basic seed generate some information about whether
+32:17 it should be rocky or cliffy or cliffy I don't think of the word but it has cliffs you know or have mountains or
+32:24 oceans and we can feed that through into our terrain generator which will then
+32:30 come out with the voxel data that we have and this is this might seem like a really trivial thing and it is it is
+32:36 simple but it is really important because the significant part here is that any point in between those
+32:41 generators we have a piece of data we actually have it mostly as XML data that we can write out and store so when it
+32:48 comes to debugging these processes that's usually useful because anytime that we see a bug or something we can
+32:54 step into this generator at as many different levels as possible to see what might have gone wrong we can load up
+32:59 future data to check that we can we can see the same things again we replicate
+33:06 the same problems and we can store past planets and load them again to check for
+33:14 you know performance degradation things like sorry alright so with that in mind when
+33:24 it come came to writing this particular generator the generator that would output our terrain which is you know one
+33:29 of a number of generators long with our texture generator and model generator so I'll just independent things that are
+33:34 taking data as input and then putting something that we can use in the game or something we can use in another
+33:40 generator so we have a number of requirements that we've set up for writing that the first is that it has to
+33:46 be direct and consistent and that comes back to what I was talking about at the very beginning that our artists or a
+33:52 designer needs to have control over the output and they need to be able to to work that out from the parameters that
+33:57 they're going into it actually in the case of the terrain is largely shaunt of the person that wrote a lot of the
+34:03 generation techniques that's actually set up the parameters but he still needs to be able to sit separate to being a programmer and fill in those values and
+34:10 get some meaning from what he's writing there it needs to be real time of course we need to generate this as the game is
+34:16 running all the time it needs to be varied so the output space should be large so we want a load of different
+34:22 terrains and we want them to work you know and not have holes in them but to look different to the player we want to
+34:28 create things that are both real-world and abstract shapes we want our whole system to be adaptable modular easy to
+34:35 add to and then there's a final point we
+34:40 want our generation to be data local and that's the kind of interesting and tough point in all of this so if we're
+34:47 generating a single voxel it can't know anything about any of the other voxels round about it is stateless so it can't
+34:53 know whether it's halfway up a mountain or at the top of the mountain aside from that it is a mountain that has you know
+34:60 maybe 50% of a mountain and that becomes a real problem when you want to to
+35:05 mattify like water flowing and things like that so that means we have to look at generation techniques that look as
+35:10 though they've evolved over time that look as though they know information about next to them we have to model erosion but you don't model erosion as
+35:17 the process of eroding you model it as the end state of all those things you model something that looks like it has
+35:22 eroded over time so to break that down to how we actually do it let's start
+35:28 with 2d terrain generation and so our first stage as an optimization more than anything else but
+35:34 also because it simplifies things conceptually is to block out some shapes in 2d so we'll split areas into
+35:41 mountains into maybe some smoother planes down there there's a river on there and and this doesn't come out as
+35:48 voxel data this is just a series of values that are saying the extent to which this this voxel is a mountain or
+35:55 is smooth or as a river so it's a much larger amount of data but only retaining
+36:00 it for a short period of time until we go on to 3d generation and we do this essentially for each voxel column so if
+36:07 you imagine we were generating on flat plane it would be across the exed but because we're generating on the sphere
+36:12 then it's across the the surface of our sphere but without any height so what what comes out of this is like
+36:19 generating a height map you know without any overhangs or caves we have the height of hills things like that so to
+36:27 step through how that looks so we have our terrain there's no noise it's probably a real boring game and
+36:34 then we generate our elevation so that generated this noise like I said in the same way as anything else
+36:40 so what you can really see here is that our elevation data is really low in
+36:46 interesting points it's just some really smooth noise which is why it's really cheap and we store that at this point into a 2d array so that'll be cheap to
+36:54 look up later as well and then we can start to add some 2d features so this is
+36:59 our height map that I was talking about with our overhangs or caves but with some points of interest there's some rubble in there there's some noise this
+37:06 is generating without thinking too much about materials at this point I'll talk about that later which is why it's all
+37:11 flat and Sandy and brown but we've got pretty far just talking about our distorted height map but we want more
+37:19 interesting terrain we need those 3d shapes that's why they come on to next so our 3d terrain generation works in a
+37:27 really similar way to our 2d you know in that we're layering purlins or simplex noise or other direct techniques like
+37:34 some Voronoi noise or cellular noise and but in 3d and we're having some
+37:40 turbulence on there in positions and that creates nice like pinching shapes and things like that and the the the significant
+37:47 thing is that if you generate a 3d noise field and polygon eyes it what you'll tend to see is like blob data in 3d
+37:54 you'll have big floating islands there won't be any meaningful shapes like
+37:59 hills or mountains so we have to we have to fade through that and try and cut off the floating islands which we do just by
+38:06 reducing the density by height as you move away from the surface of the planet and that keeps us with nice mountains
+38:12 and Hills that can't possibly have a high density when you go up high if we didn't have one lower done and like I
+38:20 said we just write this out into our our cube space for the moment but we're generating as though we're on a sphere
+38:27 so each of those voxel positions I'm showing it as a cube but then we're we're mapping it here we're generating
+38:33 as though we're on the sphere and that avoids our distortion so here are some some 3d shapes that we've created we've
+38:39 got some purlins worms going on there and those are just some Perlin noise that was threshold on it so we can take
+38:45 a slice through that noise and get some cool-looking 3d shapes the blue thing
+38:51 that you can maybe see there is some good noise so a nice technique that we do is we consider a grid over the
+38:58 surface of our terrain and we just pick some of those points to put some shapes in we can put in cubes or more distorted
+39:05 and more natural-looking spaces just spaced out periodically and that's really useful for something like terrain
+39:11 resources we let the player in mine resources from it and we have real control over how often they show up so
+39:17 this was really useful but we don't just do additive techniques we also do subtractive so we can generate caves and
+39:24 things by again taking those purlins worms but subtracting them from the terrain and considering the mouths of
+39:30 caves to be big open spheres and things like that just to try and build up our toolbox of techniques that we can apply
+39:37 to try and make a diverse range of terrains so all right after going
+39:43 through those steps that leaves us with our our region that's made up of boxes and it's just a load of essentially
+39:49 density data it has some information on materials as well but the density data is a significant thing from which we
+39:55 have to generate our colligan grids we use that using dual contouring we started out with marching
+40:02 cubes and probably on the left note the right your left your right as a yellow
+40:09 diagram and you see the typical marching cubes sort of diagram so when we polygon
+40:15 eyes in this way the significant point of this is that if you imagine you have your eight bottles you're creating
+40:20 polygons between them marching cubes will only create polygons that lie on the edges of those so it's really bad
+40:26 for creating corners it loses a lot of data to do with shapes when you have really sharp angles so that's why we
+40:32 moved to using your contouring and there's some really good information on that not just on the technique but on
+40:37 other isosurface techniques as well just in the bottom link there which is where that leftmost diagrams from and that
+40:44 shows how we retain the corner data we do have to do a little bit more work on that to avoid corners that lie way
+40:51 outside of our cube we have to consider mass points and things but is it's basically pretty simple to work through
+40:56 some of the code and gets us away nicer results and that's what gets us for
+41:02 example the hills in this image but the thing we do with our voxel data is we don't just polygons eyes at once we
+41:07 polygons eyes it through different polygons eyes errs to get different sets of data so looking at the cubes in this
+41:13 image we also do a cube based polygon Iser to get these nice terrain resource indicators and that's more similar to
+41:19 the way in which something like minecraft polygons eise's so it tends to be vertex heavy but it's quite cheap so
+41:25 we're just considering any point considering the faces around it we consider if there's a fine difference so
+41:31 if you have a dense region with a non dental on next-door through mountain with air next to it then we just create
+41:38 a flat plane there and we can build up that cube data fairly easily but like I
+41:43 said is quite vertex intensive so we only do that in near logs words will generate the actual terrain as far as
+41:48 you can see and finally we have our third super cheap polygon Iser which is
+41:54 just a flat plain polygon Iser for the water surface the point to note on this is because we use elevation then
+42:00 sometimes we're generating water planes that are way above where our voxel data exists so we're not just generating
+42:06 within those regions we have two polygons eyes across the in sort of a planet to see whether we
+42:11 should be putting water there I think in future we'll probably move away from polygons izing water will probably do it
+42:17 entirely implicitly in a shader but for the time being we've still got there running all right so moving on from that
+42:25 to how we actually get our terrain looking like an interesting terrain that's not all flat brown and sandy like
+42:31 the one you saw before so when we polygons eyes we don't just create our vertex positions we also output normals
+42:37 and we choose to retain two normals a smooth normal and a face normal and they're the only reason to do that is
+42:44 visual is just a visual decision that we've made the smooth normal we use for
+42:49 texturing or it's the face normal we used for lighting and that gives us a slightly low poly look but lets us get
+42:54 continuous blends across the surface and we just store that octahedron encoded so we can stick it in effect for and we
+43:01 also store our two materials so before I was saying that in our voxel data we
+43:06 have two materials and when we polygons eyes we're not just considering a single voxel or polygon our vertex comes from
+43:14 the eight box was round about it so we're losing some data there is it would
+43:19 be really nice if we could afford to store a whole array of different materials that are voxels could be made up of in the vertex data and use that to
+43:26 texture but it just wouldn't be performing so instead we have two materials and the blend value between
+43:31 them so the voxel will be whatever it's made up of most of so grass and rock for
+43:37 example might lose some data that also we would like to blend a mountain texture in there but generally look okay
+43:43 and then we can use that to try planar texture or sphere so basically if you
+43:51 haven't encountered try planar texturing that means taking our texture and projecting it along three accesses with
+43:57 a lens own as is incredibly badly circled on that diagram so the thing to
+44:05 know about that is we are in fact projecting across the whole sphere so we're not projecting on an axis that's
+44:12 local to a bit of terrain it's across our entire planet what you would think would have really bad artifacts in some
+44:17 areas you think that blend zone would be across an entire region of the planet surface and we'd have an area where
+44:22 we're blend in between two textures in a really ugly way but actually we find that wasn't the case just because of how our terrain is
+44:28 shaped we tend to distribute those blend zones across the whole planet fairly fairly easily we tend to come up
+44:34 everywhere but not be overwhelmingly ugly to look at anywhere and in terms of
+44:44 the texturing what we're passing in is basically a height map there so I said that our vertex data had those materials in the blend value what that actually
+44:51 means is that we have an atlas of textures that relate to those different materials and we choose those and blend
+44:56 between them based on a height texture and and that's just an artist created thing we recolor it in the game but it's
+45:05 an area where our artists creating something really carefully really outweighed trying to synthesize these
+45:11 textures the other thing to note is that we apply these textures at two different scales so we have a lower detail texture
+45:18 and mapped over a much larger scaled higher detail a higher size texture and
+45:24 we just continuously replace those as you fly away from or towards the terrain so far from the planet you'll see the
+45:31 same texture but at a much larger scale and when you zoom in close then we'll continuously replace and half those
+45:37 sizes and replace them done until we have our two scales of texture still and that helps us with our terrain blend as
+45:42 we fly into the planet all right so we have our terrain we have a textured off
+45:49 in our shader is polygons eyes we can we can render it but it's not very interesting we have to do stuff to it
+45:54 for it to be useful in the game so a real important point is that when you're
+46:00 generating your terrain and gain your work isn't just generating that terrain things that you'd normally baked offline
+46:06 for example physics or navigation meshes you also have to calculate as jobs in
+46:12 real time and that takes up a way more significant chunk of our times and actually generating or apologizing the
+46:18 terrain and the the first step in that
+46:24 is placing a bunch of objects and again that can end up to be quite a
+46:29 significant cost is something that we do in compute shaders on ps4 and the basic approach is really similar to the noise
+46:34 that we're using for generating the so this is kind of a top-down of view so hopefully you can see the kind of green
+46:40 bits or graphs and there are some rocks and plants in there and you can kind of picture quite quickly that that might
+46:45 have come from some simplex noise something like that and we're just placing objects at with cutoff at the
+46:52 highest point and we're also using applying an additional layer of noise that just cuts down on the density to kind of really quickly give us control
+46:59 over the spacing that we want the driving factors here are artistic and this is something that Kate Compton
+47:05 talked about before is that if you ask an artist then if you if you have a tree
+47:13 that's kind of nice you can have a tree on the terrain if you have a tree with a small rock next to it or a small bush that's much nicer and if you can work
+47:19 all the way down in scale recursively continuously the more stuff you adds a nicer kind of get so let's have a tree with some bushes with some small plants
+47:26 with some pebbles at the bottom and we start to build up our terrain in a nice way so there's noise based technique is
+47:31 our way of doing that we additionally use an offset grid and that's just
+47:37 similar to the terrain based techniques that I was talking about before so that we can place gameplay objects when we
+47:43 really need control over how far apart those are so we just split our terrain into grid cells and choose how many of
+47:48 those should be active so stepping through we also play Sur terrain our
+47:53 object separately on a terrain across the log so we can place much larger objects on our lower log terrain
+47:60 so here's not too large one we're starting to add in some bushes and
+48:05 things and Bob one we have our full set of objects and we have our grass that's
+48:10 only appearing up close where with that large comes in and that presents a problem because we're placing our trees
+48:17 for example on that lower lot of terrain where we're replacing that that whole terrain with something higher detailed
+48:23 as you get closer so we need to reposition them onto the surface and we do it something like this so there you
+48:31 can see them fading between impostors two real models and also readjusting to the surface so it's kind of cheesy that
+48:37 they interpolate like that but it's as far better than than popping into position and generally it tends to be
+48:43 much further off from the camera this is me flying really quickly in flight onto an area and it's just slightly more subtle than
+48:50 Dundas poppin building placement we use our really similar techniques so these
+48:55 are buildings are kind of the one thing that we need to see from space we need to know about our points before we get
+49:01 to the planet which means we need a technique we're easily we can take any point on their sphere and determine the
+49:06 nearest building so we use an offset grid technique so if we split our terrain down into regions and we can
+49:13 consider each of these points is offset from the center of that and we can quickly recalculate that from any
+49:18 position you can generate or on a diagram of this real easily you can see your nearest building from any point
+49:26 okay so now quickly I'll go through actually simulating on this world that
+49:32 was just generated and covered in plants and physics and things the first thing
+49:37 to talk about is our creature routines they're the one of the things that deter that very most based on how our terrain
+49:43 is generated and not knowing where they can go as a significant thing so as you
+49:48 can see in this gift we generate these paths for them to follow but we don't actually add the creatures till you get
+49:54 in really close to them so we know ahead of time where there potentially will be a creature of where that creature is going to be and whether the camera is
+50:01 going to reach that point and and but we don't bring it in until you there's actually an intersection to go through
+50:08 that again so there's a gray path pink needs to become active so we know
+50:14 there's creature in that area and then we get close enough for them to actually come in which means we can go away and come back and have those creatures
+50:20 remain in their same positions and we do a really similar thing with all of our
+50:26 objects we fade them in as you fly away and come back and we use this dither base technique just in a shader we pass
+50:32 in a zero to one value for all of our terrain and our object so we can just use to make sure it comes in appropriately as you're flying around so
+50:38 again we've got some gifts of that so here you can see the terrain generating around you and again this is me flying
+50:45 really quickly to a point and bringing all of the terrain in so it's really noticeable that we're doing this that we're starting with really low res
+50:52 terrain and bringing in some slightly nicer terrain over the top but this a
+50:59 little bit more subtle as we're flying around so you can definitely still notice it but it's not
+51:05 quite as in-your-face as as when I showed you before so this there you can see that blue Rocklin existed in the
+51:10 nearer Vlad so it it faded in there so
+51:15 this is all all time based we kicks up fading off as that region is ready to come in we fade it in and then we're
+51:22 able to see it but we also do a difference based fade for things like grass so this is just thinning out grass
+51:29 and that's just a cut down on the quantity of grass that we're rendering you can see that the grass is slightly different to the terrain underneath it
+51:34 and thins out as we move away I would
+51:41 really like to look move a lot more of our fading to be distance based I think it's much more subtle you don't notice
+51:46 it so much as you're flying around so that's definitely something that we'll look at in the future but it needs you to have generated enough terrain far
+51:52 enough away from you that that you can afford to do it based on distance whereas if your terrain comes in quite
+51:58 late then you really need to fade it in as quickly as possible alright and
+52:04 finally I want to talk about evaluation and evaluating our content and our world and evaluation of procedural content in
+52:10 general so I've spoken about different things on the land sky a bunch of times and I kind of like to to finish on the
+52:16 importance of this because it's really meaningful to us it's meaningful to the artist when they're generating content
+52:22 that they don't just see their content in context they don't just create a model and look at it in the game they
+52:28 see vast quantities all the assets that come from that model and that's true for our planets as well we need to not just
+52:33 create a planet and look at one of them we need to be able to really quickly go
+52:39 through loads of planets and say where all my planets read is valid that one time it would be read but there's clearly a bug going on there that's
+52:45 caused all of them to look like this or there's this whole space that we haven't explored in terms of generation and we could maybe look into that in future
+52:52 that's a really big one for the artist to go back and back to especially but it's true for us looking at generation
+52:58 techniques for a terrain things as well but it's also an important thing for a performance that were we're not just
+53:04 looking at one time it that we're looking at a vast quantity and that we're looking at it regularly so this is
+53:09 Simon smoke test tool which is really fundamental to us while we're working on
+53:14 the game so we can see performance degradation and things over time we just every time
+53:20 we run a build than we see all these these screenshots would get these captures and we know how we're doing in
+53:25 terms of performance and it's important that we're doing that on the same planet because we're generating loads of
+53:30 different planets and some of them will be way more performant another some will be filled with foliage in life and will
+53:36 be really pushing us and some will be really cheap and they're not a problem at all so we need a way of keeping track
+53:43 of that throughout the project and I think if you're doing any generation stuff at all focusing on these tools is a really
+53:49 significant thing to do so to summarize this talk I've just got a few important
+53:56 takeaways I don't know if all have said today in terms of the specific techniques is useful to you maybe it's
+54:02 interesting to you and I'm happened happy to talk some more into more technical detail to those of you that are interested but I hope the way that
+54:09 we're making this game is interesting I hope that people will consider it for games in future I hope they'll think
+54:15 about the fact that we can make interesting spaces in games we don't have to work on a flat plane we can work
+54:21 on on spheres are on a torus and we can achieve loads of interesting gameplay that we haven't looked up through that
+54:26 we can make deformable voxel worlds we can do that in a large-scale game we can do it on current hardware and again
+54:33 people think about voxels and look at like Minecraft but there's so much more that we can do and we can keep doing
+54:38 with that we can have procedural based games where artists remain in control of
+54:43 the content that's coming up we don't have to look at procedural generation as a way to replace our artists we can look
+54:48 at it as a way to augment them and to create more content and finally we can
+54:54 create generative worlds and we can create them in real time as the game is running and we can do that today again
+55:01 on current hardware you know if we can do that and ship a game as our tiny team there are so many more options for
+55:06 people with more resources out there I think it's a really valid Avenue for us to be pursuing as game developers I
+55:11 think is hugely exciting all right so thank you all again for coming today if
+55:17 you want to ask me questions I'm going to head over to one the wrap-up rooms but also feel free to shout me online and standard plugs for my company I love
+55:25 it very much you should come work with me it's great and thanks [Applause]
+55:39 you

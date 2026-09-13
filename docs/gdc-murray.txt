@@ -1,0 +1,566 @@
+00:00 [Music] so I'm going to be talking about maths
+00:06 um and it's maths the like you know you do your GDC talk and you put it in and I
+00:11 had one piece of feedback and that piece of feedback was that I had a typo that
+00:17 it's math and it's like it's not math there are multiple types of math
+00:23 it's math you know um so what I want to talk about is this thing that I worked
+00:29 on uh a you ified method of noise generation right so uh
+00:36 firstly I'm going to talk about some of the problems that we had to solve making no man sky so I'm going
+00:43 to give you a little bit of History first um and that's because we were a super small team and we had this problem
+00:51 to solve which is that we made kind of one of the most played games of last year um with just this really tiny team
+01:00 and so that brought this whole set of weird problems right um secondly I'm
+01:06 going to talk about one of our solutions to that problem like just kind of one specific small part of that um which is
+01:14 a way a new way of kind of generating noise uh that I worked on um and the
+01:19 reason that I've flown in because I want to talk about it is cuz I hope that other people build on it and I hope you
+01:26 know uh I hope that that is useful to people and I would love to see more in
+01:33 terms of procedural generation more in games um and that's the third thing I want to talk about is I've got thoughts
+01:40 on where I think procedural generation could go with the future and where we at Hell games would love to go with
+01:48 it but first some history so I started out at Criterion uh which is now EA like
+01:55 got bought by EA um and and I sat down to write this and I realized like to
+02:02 write a little bit of history about me I realized I'm really old I'm so old now
+02:08 like I don't know what happens to Old programmers like as in you don't generally see them but I'm I I presume
+02:14 I'm about to find out right like I think I think they come for you in the night I
+02:19 don't know something happens you get disappeared but I'm near that time now
+02:25 right because I started digging out some of this so I worked at Criterion and Criterion
+02:30 maybe not so much maybe not as much now but at the time was kind of becoming known for for engine and kind of Cutting
+02:37 Edge Tech and stuff like that and there's a reason why I want to explain this um so like I started out there at
+02:44 21 um as like a junior programmer and I left when I was 25 and I had done stuff
+02:50 like engine coding engine leads Tech director stuff like that uh various different places on various different
+02:56 games um and the reason I discovered that I'm old is
+03:02 because the first quote about renderware when they say next Generation Graphics they're talking about PS2 so that's how
+03:10 old I am I'm like they're coming for me soon um and where they talk about black
+03:17 a Next Generation uh engine on current generation Hardware uh that was an
+03:22 engine that I was engine lead on and something I worked on a lot um and that was PS3 like was Next Generation then
+03:31 just you know I'm like one of those old fights that talks about the Spectrum all the time um so uh so I worked there I
+03:40 actually worked on a whole load of math stuff so I didn't work on renderware but I ended up writing like this math
+03:46 library that ended up getting used in renderware which was in like games that you might have played like GTA and Call
+03:53 of Duty in Battlefield and stuff like that and you'll know this because I did the I optimized the animation code and
+04:00 it's got a bug in it and I saw it in so many games and it was horrible you would see arms pop inside out and if you saw
+04:08 that then you would you know that was me that's my mark
+04:14 right um so the reason I'm explaining this is cu I think
+04:20 engines really dictate design decisions and that's almost your first decision
+04:26 your first design decision on any game is what engine you're using and that loads of things Cascade from that right
+04:33 and like I said there before somebody lynches me like it's totally fine if you use unreal or Unity or whatever it's
+04:39 just not something I have ever done really um like I think they're great and
+04:45 stuff but before starting no man Sky
+04:50 when I sat down to write the first lines of code the previous seven years every
+04:56 single year of those seven years I had been part of writing a new engine from scratch so I had done that like seven
+05:03 times across seven different games um and like uh it begins to get a bit boring um
+05:12 and you're solving the same problems all the time um and so I guess I wanted to
+05:20 do something a bit new right um so no man Sky started as a hobby it
+05:27 was like a hobby project it sort of still is for me um I had I love riding
+05:34 engines and I think it's a real craft and I would hate to see it die out and I would hate to see us all use unreal um
+05:40 you know because I think like almost every new genre when you think of any new genre it was
+05:47 created in a new engine right like when you think of Doom and things like that you know um I we need the zombie
+05:55 apocalypse is going to come and then who is going to ride our engines right somebody needs to remember had to do
+06:00 that so I think it's a really cool thing and I could never not see doing that but
+06:06 it was starting to get boring and we have gravitated towards a certain place
+06:12 in games where things are are quite iterative you know like you
+06:17 look at if anyone watches like looks at digital Foundry or something like that and they zoom in on images you know
+06:23 comparing two games and they're comparing literally pixels and between one engine and another you know terms of
+06:30 like the anti-aliasing method so I just wanted to sit down and write something
+06:35 completely different um mainly selfishly because I just thought of the things
+06:40 that I wanted to learn about and then I started to ride an engine that had those things in I guess um and that was fun
+06:48 like that was really fun um and really fun period of my life where every
+06:54 evening and weekend I was coming home from coding all day and I would go and I would write my little engine and that was really fun um
+07:02 then then we showed it um we showed the first trailer and from then on it was
+07:08 like it was like we were building a rocket ship on the way up like to the sun being fired into the sun with like
+07:16 the skin burning from our faces right it was like it was a bit of a roller coaster ride from then on but at the
+07:22 start it was it was genuinely just a hobby and and something was super enjoyable
+07:31 and so it was something new right and that's a thing that's easy to forget when you're playing it is
+07:38 that if you are playing no man's Sky then you're getting an experience you
+07:43 kind of can't have anywhere else right like don't get me wrong I'm super excited that this area is being explored
+07:50 now and that you have Star Citizen and Elite and Astron I help loads of other games who are doing things in this area
+07:57 and solving similar types of problems but at the time as we were going through it we were going through it reasonably
+08:03 on our own without a a reference point um and it was super technically
+08:09 challenging and that makes it super interesting um you know and I
+08:14 think that's like selfishly as an engine programmer that's fun like there's
+08:20 interesting problems there and I had kind of lost that a
+08:26 bit so actually if I just take some examples of what I mean by
+08:33 that or just even one little example right um like when you're working in no
+08:38 man's Sky when you're working in the engine uh like one you were never within
+08:44 floating Point accuracy right you were always outside the bounds what the the computer is actually able to compute
+08:50 compute and understand your Y is no longer up which is way more is way more
+08:58 difficult than what you realize and I'll try and get into that um nothing can be pre-baked nothing can
+09:03 be pre-calculated like every solution to even the smallest problems is really
+09:09 unique uh and I find that quite interesting like really simple example okay if you are in any normal game any
+09:16 normal game um and you want to put like a little marker over the top of a
+09:22 building um then that's really simple you just get the building get its position and put the marker there right
+09:27 like that is an easy problem uh in no man's Sky you go to get the building um
+09:34 and let's say the building is on the same Planet as you uh which is one problem but let's say the buildings are
+09:40 the same Planet as you it you have to account for the curvature of that planet that building might be directly
+09:45 underneath you or it might be you know on the other side of the planet so now you're going to have to cast that marker
+09:53 up onto the Horizon of where you stood uh so to do that you remember that your
+09:60 y isn't up anymore so you're going to have to calculate the tangent and B tangent you're going to have to think about how close you are to the pole um
+10:08 you're going to have to bring that marker up so that's okay that's not too bad but maybe it's on another planet
+10:14 right and maybe it's on the back of that planet so now you've got to cast that round to the side of that planet um so
+10:22 that's little bit tricky but then there could be another planet between you and that planet so you got to bring it
+10:28 around the side of that one but then both of those planets might be underneath you because there's planets
+10:35 underneath you so you've got to take that marker Bring It Around bring it around onto the Horizon and then as you fly towards it it's got to move to the
+10:41 right place so that's okay that's not too bad except none of those buildings
+10:47 exist right now because they're all being generated and they're quite expensive to
+10:53 generate so now you're going to say find me the nearest building of this type and to do that you going to have to start
+10:59 generating where buildings are uh and that's really expensive so now you've got to multi-thread it um and
+11:06 you've got to run it over like a longer period um and you're going to have to start generating plan you know actual
+11:12 terrain of planets and working out where buildings are and getting the nearest one so you're going to that's too
+11:17 expensive to do so you need a bunch of horis STS to do that um and now you've
+11:23 got the building but you have to take into account is it perhaps unable to
+11:28 exist there because it is under water because it's on too sleep steep a slope something like that so these really
+11:33 complex like expensive things to work out and then even then when you finally
+11:38 get the position of that building it's not in floating Point
+11:44 accuracy so you're going to have to move between multiple different spaces in order to get it then you can place the
+11:49 marker and then the player can fly towards it and I I love that like that
+11:55 is fun it means everything takes way longer than what you expect and it's a whole bunch of different problems
+12:02 but it's cool you you know at some point any game developer here must have hit
+12:08 that point where it's a bit like falling off a log every game that you make you're kind of just doing the same
+12:14 things over and over again and this was new and different and exciting and now that we've done it like it gives us a
+12:22 great kind of power and capability going forward for other things that we can do
+12:28 you know if you're a company and can generate an entire planet in like the Press of a button in in you know moments
+12:34 then it's so freeing in terms of what kind of games you can make and what kind of problems you can explore and
+12:42 stuff so I'm just going to click through some images um people have taken from
+12:47 the game I just kind of want to get across the the diversity in the game at
+12:53 the moment
+13:00 these are all just from people who've played or taken screenshots so what's interesting about
+13:06 that which I think there was a really diverse worlds is that no man sky is
+13:11 really big but it's also really small um it was a 2
+13:17 GB steam download but actually most of that was audio another 200 Megs was like
+13:24 prebate UI so everything that you saw there in those screenshots cuz they don't show UI in audio like that was
+13:30 generated in about 300 Megs right and that's super fun like I find that super cool H and like by contrast when we
+13:38 uploaded for steam we had to upload our our like you know XE and that's 2 gigs
+13:44 and our goddamn 4 gig Banner PSD you know um so I think like in terms of
+13:52 there's a bunch of different unexplored areas or areas that are that are super cool right now in terms of procedural
+13:58 generation like web games or things that you download I think is super
+14:04 interesting um so it's it's
+14:09 small um but it's also a game that was that was played quite a
+14:16 lot um so if you take I'm just going to talk about some of the games that I've worked
+14:22 on so if you take Joe Danger uh of which there were like four
+14:27 Joe dangers right you take all the Joe dangers and you put them all together we
+14:32 sold about a million copies of Joe danger um and it was played a lot it was really well liked and well reviewed and
+14:38 stuff like that um but the total number of hours is like this okay uh and then
+14:44 this makes me a bit sad uh so there was a game I worked on black which sold really well like exceptionally well and
+14:51 this is the total number of hours that black was played for by comparison to Joe Danger which is kind of annoying um
+14:57 you know having just come from there um so before that and just a bunch of
+15:04 time in between some of the team that I work with we worked on burnout um so burnout in particular I'm
+15:12 taking Burnout 3 here which was like probably the most played burnout um
+15:19 really highly reviewed sold incredibly well um that's what that looks like and
+15:24 in terms of total number of hours played and you're talking about roughly similar
+15:29 numbers of copies sold between black and burnout and uh things like that um black
+15:36 was a shorter game uh so this is this is sort of depressing
+15:43 for Joe Danger uh but no man sky like dwarfs them in terms of uh hours played
+15:51 and in fact if you look you look at Steam and things like that um you know
+15:57 compared to uh a lot of the big releases of the year like DSX or Far Cry or
+16:03 something like that um you know no man's sky is like to my surprise significantly
+16:11 above those you know um and he's like I said one of the most played games of the year and that I think and the reason I'm
+16:18 bringing that up is not some boast or something it's because I think it is down to the diversity of the worlds and
+16:26 it's really interesting to me that the sheer amount of time that people compl play for like we have a kind of scary
+16:34 number of people who have played for 100 hours or more um like so far beyond any
+16:40 other game that I've worked on um and loads of people like I'm not sure how to
+16:45 feel about this they've played for a th000 hours which is like the game has been out 6 months it's like 5 hours a
+16:51 day every day or something like that except presumably it's like three solid weeks of not eating and not sleeping or
+16:58 something like that instead um and we were a super small team I I
+17:05 probably har on about this a lot but I do it to give credit to the team that
+17:10 worked on it like actually if you average it out there was only about six people working on the game uh you know
+17:16 like as in average uh it was an incredibly small
+17:22 team and that you know we are publisher and things like that so that includes
+17:29 production publishing marketing and all that not that we're you know very good with that kind of thing
+17:36 um so that gives you a little bit of an overview of like the history of the game and my
+17:43 history and stuff like that um so I wanted to get into the kind
+17:48 of uh like how we created that diversity um and I'm going to pick one thing in
+17:55 particular so I wanted to talk about uh actually noise generation so
+18:01 this is a a gross simplification but basically we generate a whole bunch of
+18:06 noise which is like the terrain and a bunch of other stuff clouds and populations of stuff and things like
+18:13 that uh that all goes into some voxels then we polygonize it uh then that goes
+18:20 to render physics population that kind of thing um inis did a good talk earlier
+18:28 and it's way more complicated than that but you know I don't understand it all
+18:33 um no it's it's just just because I'm going to talk about the noise Generation Um so I'm going to talk about
+18:41 a bunch of different ways that I tried to solve this problem and the problem was creating diverse worlds that would
+18:48 surprise me when I'm playing um and would kind of surprise anyone who played
+18:55 uh and keep them interested and meant that they could play for hundreds of hours and see something new but also
+19:01 remained playable and also remained like predictable in a way in that I needed to
+19:06 know how much memory they were going to take and what kind of performance they would have and stuff like that um so my
+19:14 first attempt this is like way back 5 years ago I just copied Minecraft like
+19:19 it was you know that was quite popular at the time to clone Minecraft um so by that I mean the same
+19:27 method as as Minecraft uses which which is Trine near filtered kind of low
+19:33 density pearlin noise feels stacked on top of each other um so I was actually
+19:41 like Notch has has talked about this a bit but at the time what I did was I got Minecraft and I disassembled it and then
+19:48 I named all the variables and I worked out how it was working um which is probably bad but we didn't use it so
+19:54 it's fine and I can't be sued right I hope I think hope right um but
+20:01 yeah it was really interesting and the reason I did that is because no one talks about this but Minecraft is
+20:07 amazing like in terms of the worlds like they I think that is the secret and
+20:12 anyone who clones Minecraft they always forget that and they end up with way less interesting worlds and I think it
+20:17 is the like the core of why Minecraft is so compelling right um and why it's been
+20:24 such a phenomenon uh now the problem is we were
+20:29 polygonize these worlds and we were making something that was more realistic and the thing that makes Minecraft
+20:34 really interesting is all this kind of terorist shape and makes it play really
+20:40 well and the reality is that when you put something realistic over that it's like draping a cloth over that um and
+20:49 these are low density points on a a pearing noise field field and then TR
+20:54 linear filtered off so effectively what you have is just a load of Mound and pyramids when you put that cloth
+21:02 over the top and actually it doesn't it doesn't work in a realistic sense um so
+21:08 it didn't play particularly well for us and actually you expect to see way you know instantly you want crevices you
+21:16 want erosion you want you know you want this kind of thing which is actually built in Minecraft um but you want this
+21:22 kind of detail there more realistic shapes and Mountain shapes and things like that right so I abandoned
+21:29 that and then I just tried something simpler so just high density rather than
+21:35 low density high density noise Fields right straight kind of pearing noise
+21:40 this is what space engine uses if you're used to that um it's the classic image
+21:46 of a Terrain Sim right like I'll show you what I mean okay this is a render from teren um and this is pearling noise and
+21:55 like uh I go through like people's CVS and demos and stuff like that when they
+22:02 apply and like this is the classic thing that you see which is just unaltered pearing noise and it sort of looks like
+22:08 mountains but it also sort of doesn't um I used to apply loads of image
+22:14 processing to this to pick out features highlights add more contrast things like that layer loads of things on top of
+22:20 each other and in some of our earlier like videos and demos and stuff like that we were using some of these
+22:27 methods but the worlds aren't that interesting and actually the real world isn't like this right the features are
+22:35 extremely repetitive in pearling noise um and they also are unrealistic in that
+22:41 the slope the gradient is reasonably constant and that's not what you see in the real world in the real world you see
+22:48 Sharp Cliffs you see way more distribution of noise which brings me on
+22:53 to the next thing that I tried so uh demm data is digital
+23:01 elevation map data um and you can just download it online and it's the real
+23:06 world if you know um real world data
+23:12 just uh like captured it's kind of what Google Maps and things like that it's Contour data from The Real World
+23:19 captured at various points um and I thought it would be cool
+23:24 and somebody else had already done it in parbury and way better than me and um
+23:29 but download this and actually extract data from it so pars like just take utor
+23:36 or something like that right and then pars all the data from it and work out
+23:42 how what's the rate of change of slopes and shapes and try and get some of that data out and then feed that back into
+23:49 noise generation right work out the distribution of shape change because I
+23:54 decided that the distribution of shape change and Par noise isn't very realistic
+23:59 um so and these are taken these shots are taken from uh that uh paper in
+24:06 parberry which really good paper um and his conclusion and I was mine's the same
+24:13 that noise in the real world is exponentially distributed um and you'll see what I
+24:19 mean okay so this is normal pein noise and then this is when you train PE noise
+24:25 basically on DM data so you get something that's much more realistic
+24:30 right um and this like if I had my time over like I would love to put more time
+24:37 into this this is such a rich area for investigation
+24:43 um it is however unfortunate the real world is super
+24:49 boring um so we would put this into our game and I don't know if anyone's ever
+24:55 been for a walk but it turns out walking in the real world is super boring I
+25:01 hadn't been but I realized that playing the game right like you walk for ages
+25:07 and nothing happens and so that's what was going on um like and I said that I
+25:13 uh that I'd used Utah and I said it to my friend who lives in Utah and he said like uh you can like Utah is so flat
+25:21 sometimes that you can see the back of your own head right
+25:27 um so so but this this is a video from that uh talk and you see it looks it looks
+25:34 awesome it looks real and this is what this is what you want but you just want it at a different scale these are the
+25:41 kinds of shapes that we want right but you can see that is pretty
+25:51 boring okay so I went from there to a thing called Uber noise I call it Uber
+25:58 noise um and that's this kind of unifying method of noise
+26:06 generation so the reality is all that experimentation before and that happened
+26:12 over the course of about like three or four years um informed what we needed
+26:19 and what we didn't what we wanted from this and what was possible and what was
+26:24 what makes something fun to play what doesn't what controlability we want and things like that
+26:29 okay so and I say over the course of four years like I can't explain this enough but no
+26:38 man sky was such a small team in the majority of the time there's only a few programmers on it um that any one
+26:44 programmer like myself we were doing a million different things so this would be like every once in a while we I would
+26:51 get a week to work on this or I would work on in my spare time or something
+26:57 um so let me take you through some of the
+27:02 things that I'd used previously and then I'm going to talk about how I kind of brought all those things together and
+27:08 and what that leads to um okay so here are the current noise methods that you
+27:14 see really commonly used lots of different places use this uh so pearlin
+27:20 Simplex Billow Ridge whirly analytical derivatives domain warping and I'm just
+27:25 going to take you through a couple of those so pearlin this is what you've seen
+27:33 everywhere this is that like and I don't mean to sound bad about it pein's super
+27:38 amazing right um and like Ken pearlin one is like Oscar for this and stuff
+27:43 like that uh and everyone still uses it and it's cool um what's going on is
+27:50 basically that you are taking random noise which looks like your TV when it's
+27:55 tuned to static and it's just completely random noise and then you're kind of
+28:01 creating gradients from that and creating something that is more cohesive and ultimately has this kind of shape
+28:09 right almost like a sine wave um
+28:14 but it is kind of cohesive and it is fractal right so if you take fractional
+28:21 Brown in motion you put multiple layers of this like noise on top top of each
+28:29 other at different amplitudes and different frequencies and so you can imagine if you did that here you would
+28:35 start to get something that looked much more mountainous but I'm just going to go with like one octave of noise
+28:42 right but obviously you would use multiple multiple octaves uh so below so like
+28:49 this this like embarrass this but this this is this graph and then you just put
+28:56 in an ABS okay so you just ABS everything that's underneath and you get
+29:01 something that looks more like rounded Hills so we want sometimes as we're walking around the terrain so when I
+29:07 talk about Uber noise sometimes you want it to look like this and sometimes you want these nice round
+29:13 Hills um and kind of create Rolling Hills and uh like sharp creases and
+29:19 stuff like that so that's really simple so you just ABS it as you
+29:26 go and then taking the complement of that so just one minus you start to get
+29:34 like like these really sharp ridges um so you get Ridge noise which
+29:40 people talk about and and use and actually like this does dis this obviously looks really simple or it
+29:46 looks like kind of like Bart Simpson's hair or something like that um but in
+29:52 real terms if you do this in 3D and you do enough octaves like it looks super realistic and it's the kind of ter brain
+29:58 Sim noise that you've seen before normally this would look like like genuinely like Alpine mountains so if
+30:04 you use teren or something like that you or World Builder you see that kind of thing um this though this is the good
+30:12 stuff right um so this is really important anyone who's doing noise and
+30:18 who's not using this like you absolutely should right uh
+30:23 so what we want is to
+30:29 have our features change in relation to different octaves
+30:35 of noise like that's what happens in the real world so I'm going to explain a
+30:40 thing but it's probably really obvious we have this massive array of voxels like billions of them and we are
+30:48 going to generate one voxal so we're just going to pick an XYZ position somewhere in the universe and we are
+30:54 going to say fill in this boxel um and when you do that you cannot
+31:02 as part of that equation you can never query the voxal round about you because
+31:08 if you had to do that if to generate this boxal here like in this world to
+31:13 generate this one you needed to ask this one what was in it then that Cascades
+31:18 cuz to generate that one you need to ask that one to generate that one and it goes on and on and on and it's an intractable problem right uh so because
+31:26 of that it's really hard to have a ro iion which is what you really want cuz in order it would be simple to have
+31:32 erosion if you knew that when you were generating a voxel that it was on a mountain or it was high up or low down
+31:38 or that it was perhaps at the bottom of like a lake or something like that but you can't find that out because you can't ask any of the voxels around
+31:45 you and it seems like this almost unsolvable problem and it's a real
+31:50 problem if you're generating caves or you're generating erosion or you're generating uh Rivers because one feature
+31:57 needs to flow into another and it needs context and you can't get that context but what you can get is the derivative
+32:06 if you had that then you would know the rate of change of noise at that point
+32:12 when you have that you know that you were on a slope or you're on a flat or you're trending upwards or downwards and
+32:18 if you have that knowledge and you can return from pearling noise the
+32:24 analytical derivative then you're going to be able to have certain
+32:30 features much more prominent on slopes so you can make them much more noisy or
+32:35 much less noisy you know if you were in a desert then slopes are very smooth if you were you know in the Alps or
+32:42 something like that then slopes are very very craggy and noisy um and that's exactly what we need
+32:49 and it's kind it's it's an awesome trick and once you have that then there are so many things that you're unable to do we
+32:56 also from this Uber noise function we need the analytical derivative returned
+33:02 for mover noise so even after it's calculated all this Billow and stuff at that Ridge we need to know that
+33:09 analytical derivative so that we can feed it in further to other
+33:14 things um and I'm just going to shout these out because uh these sites IQ who
+33:20 probably everyone knows who works in he works at noise he used to work at Pixar and is now at Oculus I think and runs a
+33:27 patrion which everyone sponsor um these sites explain this far better than than
+33:33 I do right um and I actually am about to steal some images from those sites so
+33:41 you know don't sue me from that uh cuz they laid out really well so here's an
+33:46 example this is what like kind of normal boring repetitive pein noise looks like
+33:52 but then if we feed in the derivative uh we can start smoothing out
+33:59 some of the slopes having little pockets of detail in there and this looks I hope
+34:05 that's obvious but it's really obvious when you're down in amongst this playing
+34:11 the game is way more interesting and way more realistic and gives way more variety and this is the kind of thing we
+34:17 want when I'm talking about this by the way I'm going to talk about it as if we were generating one layer of noise but
+34:25 like in no man's Sky we generate so many layers of noise like layers upon layers
+34:30 and each one feeds into the next into the next into the next so the other thing I'm going to
+34:37 talk about and I'm going to steal some images here as well uh is domain warping
+34:42 this is super cool and this is basically distorting the domain of the noise that we're generating with another function
+34:49 and often feeding noise into itself in in kind of uh successive octaves so this
+34:56 is a little snippet this is what normal pearing noise looks
+35:01 like so let's feed it in another function warp it and you start to get
+35:07 something that looks a bit more realistic I don't know if that's like I'm I've looked at this for so long that
+35:14 that's really obvious to me um but I'll try and show you so let's do that
+35:19 again and now hopefully you can see that looks a little bit more like an aerial
+35:25 photograph of some Terrain right and in case that's not obvious here it is blown
+35:31 up right and you can start to see things that look maybe like rivers and things like that we actually use this to create
+35:37 our coastlines our Rivers um and also if you look really closely you can kind of
+35:43 see shapes look like they're flowing into one another it's kind of like you can see why it's called warping you're
+35:49 just warping the image um IQ has an awesome image on his side where he has
+35:55 colorized these and I I think I could easily be looking at an aerial photograph of some
+36:02 terrain right like like if I just flick to some real
+36:07 terrain like this is real terrain real terrain is really fractally right like
+36:12 it's so you know it's awesome um but just going back and forth between them
+36:18 you can see really similar kind of shapes evolving and like with this if you were to start filling this with
+36:24 water if you imagine water coming up from this um that you would see all those little
+36:30 cracks start to fill in and you would get little Rivers you can see some of them up in the kind of top right and stuff that that looks really nice and
+36:37 starts to not look like you know kind of a classic terrain Sim at
+36:46 all so uh what we want from our Uber noise
+36:51 is we want domain warping like I just explained we want erosion on our slopes
+36:57 we want control over altitude erosion we want ridges plateaus Terraces Rolling
+37:02 Hills we want non-re repeating features and we want an analytical derivative returned at the end of it so we can go
+37:08 and feed that into more layers of uber noise um and this is kind of how this is
+37:14 a function for how terrains are generated in no man
+37:21 sky so this is the function that we want right we want each of these to be a
+37:27 little indiv idual control and in case it's not obvious you would take yet more
+37:33 noise over the top and generate these floating Point values right so you're
+37:39 going to vary the warp over time or the sharpness or the amplification of
+37:45 features or whatever um which gives really kind of varied features as you walk
+37:53 around um so sharpness is really easy uh that's just like I explained before just
+37:60 getting your Ridge and your bow noise and then just kind of blending between them so now instead of just being binary
+38:06 we can just blend between them slope erosion just like we were
+38:12 talking about before again this is where you're going to be able to control the amount of noise and kind of detail on
+38:21 your slopes you also have altitude damping so things that you want to do sometimes is
+38:27 you want to have like a basin that flattens out or maybe some uh you know
+38:32 kind of like you would guess in uh I guess erosion that comes like CU
+38:39 you have various different types of erosion and a lot of these can be used to mimic that so you can have tetonic
+38:46 erosion or glacial erosion you get these more smooth shapes coming in sometimes
+38:51 and what you're doing is you you're varying the amplitude based on the derivative
+38:58 uh we're going to perturb The Domain so like domain warping those are going to create our nice little um flows of
+39:04 rivers and things and amplifying something simp
+39:09 some features and this is really this is really simple it drives me crazy that I
+39:15 didn't think of this earlier and that I didn't work on it more um as you go between octaves the lesson that I
+39:22 learned from um the exponentially distributed noise a really nice trick is
+39:29 to have different emphasis on different octaves of your noise and to have certain features really stand out and
+39:36 damp down certain features um it creates so like really nice trick is to have
+39:43 your first octave not actually be that prominent because that's what's giving you these really repetitive sequences of
+39:50 mountains and varying that makes a huge difference having some of the lower
+39:55 octaves have more impact now that's an area where we could have and we didn't where we could have taken
+40:03 the learning from exponential distributed noise take some DM data and start feeding it into this and have
+40:09 every octave have a different kind of emphasis as we go through the terrain um so I'm going to show you some
+40:18 images um and these are just I just screenshotted these a minute ago um but
+40:23 just booted up on a planet and flew around and took some pictures okay so you can start start to see some of the
+40:28 features that you're getting involving so when you have 3D noise um you're also getting at the
+40:36 sides you can see sheer Cliffs sometimes and other times not really round shaped
+40:43 sometimes so that's coming from our amplification of features
+40:48 sometimes um and also I'm talking about noise as if it's being generated in 2D
+40:53 the reality is we mix 2D and 3D a lot
+40:59 so that's why you get these kind of overhangs and that's something that a lot of
+41:05 um kind of demos that you see uh like of Planet generation and
+41:11 things like that they're in 2D um and two-dimensional Generations a
+41:17 generation of hey Fields is so much easier because literally like you go from having to generate millions of
+41:24 voxal to having to generate billions of voxal but it's worth it to get caves and overhangs and we needed that because
+41:31 otherwise the terrains aren't interesting enough and this real core part of exploration is to have those
+41:37 shapes to have these non-s smooth shapes and to have things like Cliff edges and
+41:42 stuff like that so here you're seeing that domain warping you're seeing that kind of snake
+41:49 through um and a huge differentiation in in noises there where you're not seeing
+41:54 those repeating Hills right you're seeing massive Hills sometimes times other times not and we have you know
+42:00 kilometer 2 km high mountains sometimes each with like little caves inside in
+42:07 them and things these overhangs again are super cool I haven't really talked about caves
+42:14 but caves is super difficult problem much like the erosion was because you
+42:19 need to know when you generate the cave how are you going to break through so that it actually has a hole that comes
+42:25 out and when you generate that hole because remember remember that when you're generating any voxal you cannot
+42:30 know about the voxels around it to to generate that cave and to generate it breaking through the terrain is a
+42:37 difficult problem um this is a nice image so this is just
+42:45 actually I happen to know is one layer of noise so this is just one layer of uber noise and you're seeing so many
+42:50 different things going on there so down in the bottom that's domain warping
+42:56 that's giving you those nice shapes if you were to fill that in with water you would get really nice little rivers and things going through um you're seeing
+43:03 steep Cliffs and then a Time round edges um you're seeing in the far
+43:09 distance a real change in terms of like heights of
+43:15 mountains and things like that and actually their shapes are changing I don't know if that's obvious if you can make that out they're going between
+43:21 quite round to starting to be quite sheer and this is one of the things that I think really work Works in no man's
+43:28 Sky what one of the reasons why people play it for so long is because we get it all the time we get people saying I
+43:34 played for 100 hours and then I landed on this planet and it looked like something I hadn't seen before um and so
+43:40 I think that's that's cool that's interesting and people know because they know they haven't seen it before that
+43:46 that it's different it gives a real sense of exploration it's important to the game um okay there's loads of stuff
+43:53 that I haven't talked about that if I didn't hate talking to you all uh that I would love to talk about sometime in the
+43:59 future so if people want to ask me about they can so creating sdfs maintaining that that's a difficult problem caves
+44:06 features Terraces uh erosion flowing into RI rivers and the really difficult one is noise is is very unpredictable
+44:15 and non evenly distributed um okay so let's go through
+44:22 this real quickly I'm probably running out of time uh so I want to talk about
+44:28 how difficult was to build this and to test this so we're talking about testing
+44:33 the untestable right an infinite number of planets and permutations you can't possibly test them all you've got
+44:39 limited memory and performance every player I mean think about what a nightmare this is every player is going
+44:44 to boot up into different star system and have different memory requirements and we can't know like we cannot know we
+44:52 can guess we can use H horis sixs what we did in the end was flying
+44:58 little drones out you know effectively we had a smoke test and that would run and it would return how the overall
+45:04 performance of the game was doing after every check-in and it would also like send back info right and we could just
+45:11 do it by numbers but we can't possibly test every single permutation so we
+45:17 tried to generally fire out about as many and run as much tests and stuff
+45:22 test as much as we could to the kinds of numbers of players that we thought we were going to have
+45:29 so we were trying to guess how many players that we would have so we kind of looked at what was out there at the
+45:35 moment so we were looking at like the two previous games that had come out on Steam right this is we we had no better
+45:43 way of doing it right so inside was an indie game we're an indie game it felt like everyone was playing it when it
+45:49 came out it is awesome game they beat us at every Awards they deserve us it's
+45:55 beautiful um so they had had about 3,000 players concurrently that's kind of
+46:00 where I thought we would be um but Sony would occasionally say to it's like oh
+46:06 well this is kind of a AAA type product and so we were looking at things like Far Cry so this was like the game that
+46:12 had just come out it's a huge game obviously I love Far Cry so they had had like 14,000 players Max concurrent and
+46:20 we kind of that made us feel a little bit nervous in terms of our servers and the amount of people sheer number of
+46:26 people booting up day one you know like 14,000 people are going to play are we testing it to that
+46:32 degree um we had more players than we expected um so we had around
+46:40 250,000 uh when it launched on PC but the other problem which is a lot and the
+46:47 other problem was that uh people were still playing on PS4 when we launched so
+46:52 at the time of launch PC there was around 500,000 people
+46:57 playing um which is difficult when they are all booting up on planets that you
+47:04 haven't been to um and is extremely nerve-wracking and when like the
+47:09 networking team who is handling like the uploads and that connection to the server is like one guy and it's only one
+47:16 of his jobs um and we had like half a billion discoveries uploaded right um it
+47:23 was like insane numbers that we were dealing with uh but it was super
+47:28 fun like and it's a super interesting thing to do when
+47:33 we launched um we
+47:40 had about 1% of players on PC having crashes in terms of crash dumps that we
+47:47 were getting and stuff like that uh most of those were people operating out of Min speec but there was a bunch of
+47:53 things in terms of like as you would guess memory and stuff like that it was pretty much on par with games that I've
+47:59 released before so games like burnout and stuff like that but we were just operating at a different scale um it was
+48:05 far beyond what I had experienced before in terms of people playing a game kind
+48:10 of thing um by the time Foundation came out which was our update um we had far
+48:19 far fewer so it was about 1% and we had about a million people playing on the
+48:25 day that Foundation released and a really small number of kind of crash dumps from that and again most of that
+48:32 was just playing outside of Min speec and things like that um but we've kind of learned that
+48:38 lesson a thing that uh that is a little bit crazy
+48:44 is to to fix some of the bugs um but also because we wanted to
+48:49 really embellish the worlds that we had um we rebuilt the universe which meant
+48:57 just doing it all over again um so rebuilding the universe resetting all
+49:02 the players so no matter what you're doing in the game we've got to take you and place you somewhere safe maybe
+49:08 you're just repairing your ship um maybe you're just about to you know get to
+49:13 crash ship or you're in the middle of a battle or whatever and you've saved your game we have to sort you out even though
+49:18 the entire universe has changed and that's a fun thing um when you know that
+49:24 people are going to update and just go through a million different edge cases
+49:29 um but it's a really unique game and there's like I said unique problems that come with it um but that's something
+49:35 that we're going to keep on doing is actually continuing to work on this terrain and it's something that people
+49:41 can't quite put their finger on so with the foundation update something we kept hearing was that the game feels a little
+49:47 bit more epic or that there's a different feel to it and that is the terrain um I know because when our
+49:54 changes went in everyone on the team started saying it and it's hard to put your finger on exactly why but you know
+49:60 that you're visiting more interesting places and things you haven't seen before and that's something that we're going to keep doing uh which is fun and
+50:08 scary and a very unique problem most people don't update their game and have every level change entirely in construct
+50:16 kind of thing weird um so
+50:21 yeah thing I wanted to say is that we're hiring um this
+50:30 is I guess I know that procedural generation will be a small part of games
+50:37 in the future right like I mean loads of the talks at GDC whether it was horizon or
+50:44 wildlands we're talking about procedural generation components to their games that's super cool for us it is it is a
+50:53 big part of our future and making really unique weird engine decisions and then
+51:00 allowing that to dictate a a Cascade of problems it's cool for me to be able to
+51:06 stand up and say to talented people like yourselves that you know we're looking for that kind of thing um and we want to
+51:13 continue going forward making new impactful technology we know how hard it is to make games I personally you know
+51:23 had to break into the industry and that was hard then I worked on some AAA games
+51:28 and that was really hard that was like the hardest thing I've done in my life and so stressful something that you care about so creatively to work on it and to
+51:36 finish it it's a really intense experience then I started a company and
+51:42 had the additional bonus of you know running out of money and having to fish
+51:48 under those kind of horrible constraints and making sometimes bad decisions sometimes good decisions because you
+51:54 have you have to because of money constraints and funds and things like that and then I know what it's like on
+52:00 top of that with no man's Sky to do something new and weird and experimental on top of you know also running out of
+52:09 money and also uh trying to finish something you care about really creatively um so if you
+52:17 are like interested in working on stuff like that then great but let's say
+52:23 you're you're interested in working on that kind of thing but you also want to start up and do your own thing then
+52:28 we're going to try and help with that a little bit as well um so we're starting this thing it's super lowkey at the
+52:34 moment but it's hello Labs um and we're going to try and fund and support a couple of projects we've one already in
+52:41 development um and the focus is going to be on procedural generation and kind of experimental games games research that
+52:49 kind of thing uh more details will follow but if you were there and this is the kind of area that you're interested
+52:55 in like we would love to help people avoid some of the pains that we went
+53:03 through ourselves kind of thing it's something I care really passionately about
+53:09 uh so that's my talk if you're interested
+53:16 come and mail me I flew in I now go run and fly out um I'm not like doing
+53:23 questions and stuff like that but you've got the email address and I will hopefully try and be out in
+53:30 one of the break rooms later if people have questions and stuff and I'll let everyone leave finish up their GDC day
+53:38 I'm sure you're sick of people talking thank you
+53:44 [Applause]
+
+Uber Noise
+
+• Domain warping
+• Slope erosion
+• Altitude erosion
+• Ridges
+• Plateaus
+• Terraces
+• Rolling hills
+• Non-repeating features
+• Analytical Derivative
+
+// 37:24 "this is the function"
+
+float
+UberNoise (
+  vec3 lPosition,
+  int liOctaves,
+  float lfPerturbFeatures,
+  float lfSharpness,
+  float lfAmplifyFeatures,
+  float lfAltitudeErosion,
+  float lfRidgeErosion,
+  float lfSlopeErosion,
+  float lfLacunarity,
+  float lfGain)
+
+// 37:55 "sharpness is really easy"
+
+float lfRidgedNoise = ( 1.0f - abs ( 1fFeatureNoise ) );
+
+float lfBillowNoise = lfFeatureNoise * 1lFeatureNoise;
+
+lfFeatureNoise = lerp( lfFeatureNoise, lfBillowNoise, max( 0.0, lfSharpness ) ) ;
+
+lfFeatureNoise = lerp( lfFeatureNoise, lfRidgedNoise, abs ( min ( 0.0, lfSharpness ) ) );
+
+// 38:11 "slope erosion"
+
+lSlopeErosionDerivativeSum += lDerivative * lfSlopeErosion;
+
+lfSum += lfAmplitude * lfFeatureNoise * ( 1.0f / ( 1.0f + dot( lSlopeErosionDerivativeSum, lSlopeErosionDerivativeSum ) ) );
+
+// 38:25 "altitude damping"
+
+lfSum += lfDampedAmplitude * lfFeatureNoise * ( 1.0f / ( 1.0f + dot( lSlopeErosionDerivativeSum, lSlopeErosionDerivativeSum ) ) );
+
+lfAmplitude *= lerp( lfCurrentGain, lfCurrentGain * smoothstep( 0.0f, 1.Of, lfSum ), lfAltitudeErosion );
+
+lfDampedAmplitude = lfAmplitude * ( 1.0f - ( lfRidgeErosion / ( 1.0f + dot( lRidgeErosionDerivativeSum, lRidgeErosionDerivativeSum ) ) ) );
+
+// 39:00 "perturb the domain"
+
+lOctavePosition = ( lPosition * lfFrequency ) + lPerturbDerivativeSum;
+
+lPerturbDerivativeSum += lDerivative * lfPerturbFeatures;
+
+// 39:11 "amplify some features"
+
+float lfCurrentGain = lfGain + lfAmplifyFeatures;
