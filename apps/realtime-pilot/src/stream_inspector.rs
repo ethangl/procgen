@@ -1,5 +1,6 @@
-use crate::stream_record::{FrameTiming, Recording, RecordingConfig};
-use crate::stream_render::{UploadBridge, chunk_mesh};
+use crate::stream_record::{FrameTiming, Recording, RecordingConfig, RecordingRoute};
+use crate::stream_render::{UploadBridge, chunk_mesh, full_visibility};
+use crate::usable_inspector::{UsableState, population};
 use bevy::{
     camera::visibility::VisibilityRange,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
@@ -11,8 +12,9 @@ use procgen_core::Vec3 as Point;
 use procgen_realtime_pilot::REPLACEMENT_SECONDS;
 use procgen_realtime_pilot::{
     DetailSource, FAST_FLIGHT_SPEED, FLIGHT_SPEED, INSTALL_MILLIS_PER_FRAME, OVERVIEW_FACE_QUADS,
-    PILOT_PLANET, PlanetError, ROUTE_SECONDS, StreamEvent, StreamView, StreamingWorld, Ticket,
-    UPLOAD_BYTES_PER_FRAME, planet_overview, prepare_detail, streaming_route,
+    PILOT_PLANET, ROUTE_SECONDS, StreamEvent, StreamView, StreamingWorld, Ticket,
+    UPLOAD_BYTES_PER_FRAME, USABLE_MEMORY_RESERVATION, UsableError, UsableTerrain, planet_overview,
+    prepare_detail, streaming_route,
 };
 use std::{
     collections::BTreeMap,
@@ -24,7 +26,11 @@ use std::{
     time::Instant,
 };
 
-type SourceResult = Result<Option<DetailSource>, PlanetError>;
+enum PreparedStage {
+    Surface(Arc<DetailSource>),
+    Usable(UsableTerrain),
+}
+type SourceResult = Result<PreparedStage, UsableError>;
 enum Fade {
     In(f32),
     Out(f32),
@@ -36,7 +42,7 @@ struct Region {
     fade: Option<Fade>,
 }
 struct Inspector {
-    receiver: Receiver<SourceResult>,
+    receiver: Option<Receiver<SourceResult>>,
     cancel: Arc<AtomicBool>,
     world: Option<StreamingWorld>,
     regions: BTreeMap<Ticket, Region>,
@@ -51,8 +57,8 @@ impl Drop for Inspector {
     }
 }
 #[derive(Resource)]
-struct CameraState {
-    position: Vec3,
+pub(crate) struct CameraState {
+    pub(crate) position: Vec3,
     forward: Vec3,
 }
 impl CameraState {
@@ -62,8 +68,13 @@ impl CameraState {
             forward: Point::new(self.forward.x, self.forward.y, self.forward.z),
         }
     }
-    fn transform(&self) -> Transform {
-        Transform::from_translation(self.position).looking_to(self.forward, Vec3::Y)
+    fn transform(&self, up: Vec3) -> Transform {
+        let camera_up = if self.forward.dot(up).abs() > 0.999 {
+            self.forward.any_orthonormal_vector()
+        } else {
+            up
+        };
+        Transform::from_translation(self.position).looking_to(self.forward, camera_up)
     }
 }
 #[derive(Component)]
@@ -79,15 +90,36 @@ pub fn run(seed: u64, record: Option<RecordingConfig>) -> Result<(), Box<dyn std
     let overview_mesh =
         crate::planet_inspector::render_mesh(&overview, Vec3::ZERO, false, PILOT_PLANET.radius);
     let record = record.map(|path| Recording::new(path, seed)).transpose()?;
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let (sender, receiver) = mpsc::sync_channel(2);
     let cancel = Arc::new(AtomicBool::new(false));
     let worker_cancel = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let result = prepare_detail(&field, &worker_cancel);
-        let _ = sender.send(result);
+        let result = (|| -> Result<(), UsableError> {
+            let Some(source) = prepare_detail(&field, &worker_cancel)? else {
+                return Ok(());
+            };
+            let source = Arc::new(source);
+            if sender
+                .send(Ok(PreparedStage::Surface(Arc::clone(&source))))
+                .is_err()
+            {
+                return Ok(());
+            }
+            if worker_cancel.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let terrain = UsableTerrain::prepare(source, seed)?;
+            if !worker_cancel.load(Ordering::Relaxed) {
+                let _ = sender.send(Ok(PreparedStage::Usable(terrain)));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = sender.send(Err(error));
+        }
     });
     let state = Inspector {
-        receiver,
+        receiver: Some(receiver),
         cancel,
         world: None,
         regions: BTreeMap::new(),
@@ -98,6 +130,7 @@ pub fn run(seed: u64, record: Option<RecordingConfig>) -> Result<(), Box<dyn std
     };
     App::new()
         .insert_non_send_resource(state)
+        .init_resource::<UsableState>()
         .insert_resource(CameraState {
             position: Vec3::Z * 13.0,
             forward: -Vec3::Z,
@@ -131,7 +164,7 @@ pub fn run(seed: u64, record: Option<RecordingConfig>) -> Result<(), Box<dyn std
                         far: 200.0,
                         ..default()
                     }),
-                    camera.transform(),
+                    camera.transform(Vec3::Y),
                     FlightCamera,
                 ));
                 commands.spawn((
@@ -155,7 +188,10 @@ pub fn run(seed: u64, record: Option<RecordingConfig>) -> Result<(), Box<dyn std
                 ));
             },
         )
-        .add_systems(Update, (camera_input, advance).chain())
+        .add_systems(
+            Update,
+            (camera_input, advance, population, record_frame).chain(),
+        )
         .add_systems(EguiPrimaryContextPass, ui)
         .run();
     Ok(())
@@ -173,6 +209,7 @@ fn camera_input(
     input: FlightInput,
     mut camera: ResMut<CameraState>,
     state: NonSend<Inspector>,
+    mut usable: ResMut<UsableState>,
     mut contexts: EguiContexts,
 ) {
     if state.record.is_some() {
@@ -184,12 +221,25 @@ fn camera_input(
     {
         return;
     }
+    if input.keys.just_pressed(KeyCode::KeyG) {
+        if let Some(eye) = usable.toggle(camera.position) {
+            camera.position = eye;
+        }
+        let up = usable.up();
+        let tangent = camera.forward - up * camera.forward.dot(up);
+        camera.forward = if tangent.length_squared() > 0.001 {
+            tangent.normalize()
+        } else {
+            up.any_orthonormal_vector()
+        };
+    }
+    let up = usable.up();
     if input.buttons.pressed(MouseButton::Left) {
-        let yaw = Quat::from_rotation_y(-input.motion.delta.x * 0.004);
-        let right = camera.forward.cross(Vec3::Y).normalize();
+        let yaw = Quat::from_axis_angle(up, -input.motion.delta.x * 0.004);
+        let right = camera.forward.cross(up).normalize();
         let pitch = Quat::from_axis_angle(right, -input.motion.delta.y * 0.004);
         let forward = yaw * pitch * camera.forward;
-        if forward.dot(Vec3::Y).abs() < 0.99 {
+        if forward.dot(up).abs() < 0.99 {
             camera.forward = forward.normalize();
         }
     }
@@ -199,7 +249,7 @@ fn camera_input(
         FLIGHT_SPEED
     };
     let mut movement = Vec3::ZERO;
-    let right = camera.forward.cross(Vec3::Y).normalize();
+    let right = camera.forward.cross(up).normalize();
     for (key, direction) in [
         (KeyCode::KeyW, camera.forward),
         (KeyCode::KeyS, -camera.forward),
@@ -208,9 +258,17 @@ fn camera_input(
         (KeyCode::KeyE, Vec3::Y),
         (KeyCode::KeyQ, -Vec3::Y),
     ] {
-        if input.keys.pressed(key) {
+        if input.keys.pressed(key)
+            && (usable.walker.is_none() || !matches!(key, KeyCode::KeyQ | KeyCode::KeyE))
+        {
             movement += direction;
         }
+    }
+    if usable.walker.is_some() {
+        if let Some(eye) = usable.walk(movement.normalize_or_zero(), input.time.delta_secs()) {
+            camera.position = eye;
+        }
+        return;
     }
     camera.position += movement.normalize_or_zero() * speed * input.time.delta_secs();
     let zoom = match input.scroll.unit {
@@ -236,47 +294,72 @@ fn advance(
     mut camera: ResMut<CameraState>,
     time: Res<Time<Real>>,
     mut scene: Scene,
+    mut usable: ResMut<UsableState>,
 ) {
-    if state.world.is_none() {
-        match state.receiver.try_recv() {
-            Ok(Ok(Some(source))) => match StreamingWorld::new(Arc::new(source)) {
-                Ok(world) => {
-                    state.world = Some(world);
-                    state.status = "Installing initial coarse coverage…".into();
+    while let Some(receiver) = &state.receiver {
+        match receiver.try_recv() {
+            Ok(Ok(PreparedStage::Surface(source))) => {
+                match StreamingWorld::new(source, USABLE_MEMORY_RESERVATION) {
+                    Ok(world) => {
+                        state.world = Some(world);
+                        state.status = "Installing coarse coverage…".into();
+                    }
+                    Err(error) => {
+                        state.status = error.to_string();
+                        state.receiver = None;
+                        return;
+                    }
                 }
-                Err(error) => {
-                    state.status = error.to_string();
-                    return;
-                }
-            },
-            Ok(Ok(None)) => {
-                state.status = "Source generation cancelled.".into();
-                return;
+            }
+            Ok(Ok(PreparedStage::Usable(terrain))) => {
+                usable.terrain = Some(terrain);
+                usable.status = "Collision ready · G to land".into();
+                state.receiver = None;
             }
             Ok(Err(error)) => {
-                state.status = error.to_string();
-                return;
+                usable.status = error.to_string();
+                state.receiver = None;
             }
-            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => {
-                state.status = "Source worker stopped.".into();
-                return;
+                usable.status = "Preparation worker stopped".into();
+                state.receiver = None;
             }
         }
     }
+    if state.world.is_none() {
+        return;
+    }
     let is_visible = state.world.as_ref().expect("initialized world").visible();
     if is_visible && let Some(record) = &mut state.record {
-        let route = streaming_route(record.elapsed());
-        camera.position = Vec3::new(
-            route.view.position.x,
-            route.view.position.y,
-            route.view.position.z,
-        );
-        camera.forward = Vec3::new(
-            route.view.forward.x,
-            route.view.forward.y,
-            route.view.forward.z,
-        );
+        if record.route() == RecordingRoute::Walk {
+            if usable.terrain.is_none() {
+                return;
+            }
+            match usable.recorded_walk(record.elapsed(), time.delta_secs()) {
+                Ok((position, forward)) => {
+                    camera.position = position;
+                    camera.forward = forward;
+                }
+                Err(error) => {
+                    state.status = error;
+                    scene.exit.write(AppExit::error());
+                    return;
+                }
+            }
+        } else {
+            let route = streaming_route(record.elapsed());
+            camera.position = Vec3::new(
+                route.view.position.x,
+                route.view.position.y,
+                route.view.position.z,
+            );
+            camera.forward = Vec3::new(
+                route.view.forward.x,
+                route.view.forward.y,
+                route.view.forward.z,
+            );
+        }
         if let Some(path) = record.screenshot() {
             scene
                 .commands
@@ -285,7 +368,7 @@ fn advance(
         }
     }
     for mut transform in &mut scene.cameras {
-        *transform = camera.transform();
+        *transform = camera.transform(usable.up());
     }
     let (ready, retired) = {
         let mut bridge = scene.bridge.0.lock().expect("upload bridge");
@@ -296,7 +379,14 @@ fn advance(
     };
     let world = state.world.as_mut().expect("initialized world");
     // Update requests before processing readiness from the previous render frame.
-    if let Err(error) = world.update(camera.view()) {
+    if let Err(error) = world.update(
+        camera.view(),
+        if usable.walker.is_some() {
+            procgen_realtime_pilot::DetailFocus::NearbyCollision
+        } else {
+            procgen_realtime_pilot::DetailFocus::View
+        },
+    ) {
         state.status = error.to_string();
         return;
     }
@@ -431,19 +521,8 @@ fn advance(
         stats.rejected_results,
         stats.installations
     );
-    if is_visible {
-        record_frame(&mut state, &camera, time.delta_secs_f64(), &mut scene);
-    }
 }
 
-// Keep the same dither shader variant warm on overview, resident, and staged meshes.
-fn full_visibility() -> VisibilityRange {
-    VisibilityRange {
-        start_margin: -2.0..-1.0,
-        end_margin: f32::MAX..f32::MAX,
-        use_aabb: false,
-    }
-}
 fn retire_region(state: &mut Inspector, ticket: Ticket, scene: &mut Scene) {
     let ids = if let Some(region) = state.regions.remove(&ticket) {
         for entity in region.entities {
@@ -458,33 +537,62 @@ fn retire_region(state: &mut Inspector, ticket: Ticket, scene: &mut Scene) {
     bridge.retiring.push((ticket, ids));
 }
 
-fn record_frame(state: &mut Inspector, camera: &CameraState, dt: f64, scene: &mut Scene) {
-    let Some(record) = &mut state.record else {
+fn record_frame(
+    mut state: NonSendMut<Inspector>,
+    camera: Res<CameraState>,
+    time: Res<Time<Real>>,
+    usable: Res<UsableState>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !state.world.as_ref().is_some_and(|w| w.visible()) {
         return;
-    };
+    }
+    if state
+        .record
+        .as_ref()
+        .is_some_and(|r| r.route() == RecordingRoute::Walk)
+        && usable.walker.is_none()
+    {
+        return;
+    }
     let timing = FrameTiming {
-        seconds: dt,
+        seconds: time.delta_secs_f64(),
         install_ms: state.last_install_ms,
         upload_bytes: state.last_upload_bytes,
+        walking_ms: usable.walking_ms,
+        population_ms: usable.population_ms,
+        clearance: usable.clearance(),
+        grounded: usable.walker.as_ref().is_some_and(|w| w.grounded()),
+        clamped_frames: usable.clamped_frames,
+        collision_failures: usable.collision_failures,
+    };
+    let state = &mut *state;
+    let Some(record) = &mut state.record else {
+        return;
     };
     match record.frame(state.world.as_ref().expect("world"), camera.view(), timing) {
         Ok(Some(summary)) => {
             eprintln!("{summary}");
-            scene.exit.write(AppExit::Success);
+            exit.write(AppExit::Success);
         }
         Ok(None) => {}
         Err(error) => {
             state.status = error.to_string();
-            scene.exit.write(AppExit::error());
+            exit.write(AppExit::error());
         }
     }
 }
-fn ui(mut contexts: EguiContexts, state: NonSend<Inspector>, camera: Res<CameraState>) -> Result {
+fn ui(
+    mut contexts: EguiContexts,
+    state: NonSend<Inspector>,
+    camera: Res<CameraState>,
+    usable: Res<UsableState>,
+) -> Result {
     egui::SidePanel::left("stream-controls")
         .exact_width(280.0)
         .show(contexts.ctx_mut()?, |ui| {
             ui.heading("Streaming terrain");
-            ui.label("Slice 3 · six face regions");
+            ui.label("Slice 4 · usable terrain");
             ui.separator();
             ui.label("Blue: coarse · Green: medium\nGold: fine · Fixed fine borders");
             ui.separator();
@@ -507,12 +615,14 @@ fn ui(mut contexts: EguiContexts, state: NonSend<Inspector>, camera: Res<CameraS
                 ui.separator();
                 ui.label(format!(
                     "Recording: {}\n{:.1} / {ROUTE_SECONDS} seconds",
-                    streaming_route(record.elapsed()).phase,
+                    record.phase().0,
                     record.elapsed()
                 ));
             }
             ui.separator();
-            ui.label("CPU source stays resident. Complete uploads start a short dithered replacement. No collision; flying inside terrain is possible.");
+            ui.label(usable.description(camera.position));
+            ui.separator();
+            ui.label("CPU source stays resident. Complete uploads start a short dithered replacement. G enables walking on fixed fine collision. Rocks and landmarks are visual only.");
         });
     Ok(())
 }

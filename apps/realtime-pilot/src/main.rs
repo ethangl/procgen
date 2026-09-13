@@ -11,6 +11,8 @@ mod stream_inspector;
 mod stream_record;
 #[cfg(feature = "inspector")]
 mod stream_render;
+#[cfg(feature = "inspector")]
+mod usable_inspector;
 
 use std::{error::Error, fs, path::PathBuf, time::Instant};
 
@@ -23,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut stream = false;
     let mut record = None;
     let mut screenshots = false;
+    let mut walk_route = false;
     let mut check = false;
     let mut seed = 42_u64;
     while let Some(arg) = args.next() {
@@ -30,6 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--planet" => planet = true,
             "--stream" => stream = true,
             "--screenshots" => screenshots = true,
+            "--walk-route" => walk_route = true,
             "--record" => {
                 record = Some(PathBuf::from(
                     args.next().ok_or("--record requires a path")?,
@@ -49,12 +53,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "procgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
+                    "procgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if walk_route && (!stream || record.is_none()) {
+        return Err("--walk-route requires --stream and --record".into());
     }
     if screenshots && (!stream || record.is_none()) {
         return Err("--screenshots requires --stream and --record".into());
@@ -66,7 +73,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         #[cfg(feature = "inspector")]
         stream_inspector::run(
             seed,
-            record.map(|path| stream_record::RecordingConfig { path, screenshots }),
+            record.map(|path| stream_record::RecordingConfig {
+                path,
+                screenshots,
+                route: if walk_route {
+                    stream_record::RecordingRoute::Walk
+                } else {
+                    stream_record::RecordingRoute::Flight
+                },
+            }),
         )?;
         #[cfg(not(feature = "inspector"))]
         return Err("--stream requires the inspector feature".into());

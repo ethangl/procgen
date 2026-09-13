@@ -1,3 +1,4 @@
+use bevy::camera::visibility::VisibilityRange;
 use bevy::render::renderer::RenderQueue;
 use bevy::{
     asset::RenderAssetUsages,
@@ -93,4 +94,13 @@ pub fn chunk_mesh(piece: &UploadPiece) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
     .with_inserted_indices(Indices::U32(indices))
+}
+
+// Keep the same dither shader variant warm on overview, resident, and staged meshes.
+pub fn full_visibility() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: -2.0..-1.0,
+        end_margin: f32::MAX..f32::MAX,
+        use_aabb: false,
+    }
 }

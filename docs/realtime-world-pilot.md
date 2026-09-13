@@ -1,6 +1,7 @@
 # Real-time procedural world pilot
 
-Status: slices 1–3 are implemented as bounded pilot experiments. Slices 4–5 remain proposals.
+Status: slices 1–4 are implemented as bounded pilot experiments. Slice 4 has
+Metal measurements; Windows/Vulkan validation is pending. Slice 5 remains a proposal.
 
 ## Purpose
 
@@ -494,6 +495,18 @@ and the [recorded route results](realtime-world-streaming-results.md).
 Density paging and arbitrary planet scale remain outside this bounded version.
 The resident source and fixed fine borders are explicit costs of the selected
 mixed-resolution boundary construction, not claims about the source games.
+
+Slice 4 adds nearby two-sided queries against the fixed fine source, a radial
+kinematic sphere controller, stable sparse rock/post placement, and bounded
+nearest-landmark queries. The triangle-query approach does not require a closed
+volume; it is an explicit alternative to using the nonmanifold mesh as a solid
+physics body. Manifold extraction remains necessary before any consumer requires
+that volume contract. Render replacement never swaps collision support. The
+accepted population catalog stays resident while instances are evicted.
+See [usable terrain](../apps/realtime-pilot/README.md#usable-terrain-slice-4)
+for movement, memory, and topology limits and the
+[runtime report](realtime-world-usable-results.md) for measured evidence.
+The two-platform exit criterion is still pending Windows/Vulkan measurements.
 
 | Slice                     | Deliverable                                                                              | Exit evidence                                                                                                                          |
 | ------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

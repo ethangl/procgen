@@ -39,7 +39,7 @@ impl DetailLevel {
 
 pub struct DetailSource {
     pub(crate) radius: f32,
-    mesh: SurfaceMesh,
+    pub(crate) mesh: SurfaceMesh,
     addresses: Vec<usize>,
     normals: Vec<Vec3>,
     regions: [Vec<usize>; 6],
@@ -288,6 +288,17 @@ pub fn build_region(
         surface,
         identities,
         normals,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_source(mesh: SurfaceMesh) -> std::sync::Arc<DetailSource> {
+    std::sync::Arc::new(DetailSource {
+        radius: 4.0,
+        mesh,
+        addresses: Vec::new(),
+        normals: Vec::new(),
+        regions: std::array::from_fn(|_| Vec::new()),
     })
 }
 

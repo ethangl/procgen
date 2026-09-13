@@ -1,10 +1,12 @@
 //! CPU field experiment for the independent real-time world pilot.
 //! Rendering is confined to the binary; these modules use no engine types.
 
+mod collision;
 mod contour;
 mod detail;
 mod field;
 mod noise;
+mod placement;
 mod planet;
 mod presets;
 mod qef;
@@ -12,7 +14,9 @@ mod routes;
 mod shell;
 mod streaming;
 mod terrain;
+mod usable;
 mod volume;
+mod walking;
 
 #[cfg(test)]
 mod test_support;
@@ -34,9 +38,23 @@ pub use detail::{
 };
 
 pub use streaming::{
-    BYTES_PER_TRIANGLE, INSTALL_MILLIS_PER_FRAME, MANAGED_MEMORY_LIMIT, MAX_ACTIVE_JOBS,
-    REPLACEMENT_SECONDS, SOURCE_WORK_RESERVATION, StreamError, StreamEvent, StreamStats,
-    StreamView, StreamingWorld, TRIANGLES_PER_PIECE, Ticket, UPLOAD_BYTES_PER_FRAME, UploadPiece,
+    BYTES_PER_TRIANGLE, DetailFocus, INSTALL_MILLIS_PER_FRAME, MANAGED_MEMORY_LIMIT,
+    MAX_ACTIVE_JOBS, REPLACEMENT_SECONDS, SOURCE_WORK_RESERVATION, StreamError, StreamEvent,
+    StreamStats, StreamView, StreamingWorld, TRIANGLES_PER_PIECE, Ticket, UPLOAD_BYTES_PER_FRAME,
+    UploadPiece,
 };
 
 pub use routes::{FAST_FLIGHT_SPEED, FLIGHT_SPEED, ROUTE_SECONDS, RouteSample, streaming_route};
+
+pub use collision::{
+    COLLISION_REACH, CONTACT_SKIN, CollisionPatch, ContactError, SurfaceContact, TerrainQueries,
+    USABLE_MEMORY_RESERVATION,
+};
+
+pub use placement::{
+    LANDMARK_SEARCH_REACH, MAX_POPULATION, POPULATION_REACH, Placement, PlacementId, PlacementKind,
+    Population,
+};
+pub use walking::{EYE_HEIGHT, MAX_WALK_SECONDS, WALK_RADIUS, WALK_SPEED, WALKABLE_COSINE, Walker};
+
+pub use usable::{UsableError, UsableTerrain};

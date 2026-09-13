@@ -34,6 +34,12 @@ pub struct StreamView {
     pub position: Vec3,
     pub forward: Vec3,
 }
+/// Walking keeps nearby visual support fine regardless of viewing direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailFocus {
+    View,
+    NearbyCollision,
+}
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StreamStats {
     pub managed_bytes: usize,
@@ -110,6 +116,7 @@ struct Job {
 
 pub struct StreamingWorld {
     source: Arc<DetailSource>,
+    reserved_bytes: usize,
     slots: [Slot; 6],
     jobs: Vec<Job>,
     retired: Vec<Resident>,
@@ -119,12 +126,17 @@ pub struct StreamingWorld {
     stats: StreamStats,
 }
 impl StreamingWorld {
-    pub fn new(source: Arc<DetailSource>) -> Result<Self, StreamError> {
-        if source.allocated_bytes() > MANAGED_MEMORY_LIMIT {
+    /// Reserve non-streaming products before admitting region work. The caller
+    /// owns their lifetime; this reservation lasts for the entire world.
+    pub fn new(source: Arc<DetailSource>, reserved_bytes: usize) -> Result<Self, StreamError> {
+        if reserved_bytes > MANAGED_MEMORY_LIMIT
+            || source.allocated_bytes() > MANAGED_MEMORY_LIMIT - reserved_bytes
+        {
             return Err(StreamError::Budget);
         }
         Ok(Self {
             source,
+            reserved_bytes,
             slots: std::array::from_fn(|i| Slot {
                 request: Ticket {
                     serial: i as u64,
@@ -161,7 +173,8 @@ impl StreamingWorld {
         std::mem::take(&mut self.events)
     }
     fn bytes(&self) -> usize {
-        self.source.allocated_bytes()
+        self.reserved_bytes
+            + self.source.allocated_bytes()
             + self.jobs.iter().map(|j| j.reservation).sum::<usize>()
             + self
                 .slots
@@ -182,7 +195,7 @@ impl StreamingWorld {
             && slot.upload.is_none()
             && !self.jobs.iter().any(|j| j.ticket.face.index() == face)
     }
-    pub fn update(&mut self, view: StreamView) -> Result<(), StreamError> {
+    pub fn update(&mut self, view: StreamView, focus: DetailFocus) -> Result<(), StreamError> {
         if self.visible {
             let altitude = view.position.length() - self.source.radius;
             let direction = view.position.normalized();
@@ -204,7 +217,10 @@ impl StreamingWorld {
                 } else {
                     8.0
                 };
-                let detail = if altitude < fine_limit && proximity > 0.35 && toward > 0.0 {
+                let detail = if altitude < fine_limit
+                    && proximity > 0.35
+                    && (toward > 0.0 || focus == DetailFocus::NearbyCollision)
+                {
                     DetailLevel::Fine
                 } else if altitude < medium_limit && proximity > -0.25 {
                     DetailLevel::Medium
@@ -231,7 +247,9 @@ impl StreamingWorld {
                 break;
             };
             let reservation = self.source.region_work_bytes(face);
-            if reservation > MANAGED_MEMORY_LIMIT - self.source.allocated_bytes() {
+            if reservation
+                > MANAGED_MEMORY_LIMIT - self.source.allocated_bytes() - self.reserved_bytes
+            {
                 return Err(StreamError::Budget);
             }
             if self.bytes() + reservation > MANAGED_MEMORY_LIMIT {
@@ -426,7 +444,7 @@ mod tests {
                 .unwrap()
                 .unwrap(),
         );
-        let mut world = StreamingWorld::new(source).unwrap();
+        let mut world = StreamingWorld::new(source, 0).unwrap();
         let view = StreamView {
             position: Vec3::X * 13.0,
             forward: -Vec3::X,
@@ -434,7 +452,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !world.visible() {
             assert!(std::time::Instant::now() < deadline);
-            world.update(view).unwrap();
+            world.update(view, DetailFocus::View).unwrap();
             if let Some(piece) = world.next_upload(UPLOAD_BYTES_PER_FRAME) {
                 assert_eq!(world.resident_levels()[piece.ticket.face.index()], None);
                 assert!(world.acknowledge_upload(piece.ticket, piece.index));
@@ -520,5 +538,21 @@ mod tests {
         assert!(world.stats().peak_managed_bytes <= MANAGED_MEMORY_LIMIT);
         assert!(world.stats().peak_active_jobs <= MAX_ACTIVE_JOBS);
         assert!(world.stats().peak_queued_jobs <= 6);
+        let looking_away = StreamView {
+            position: Vec3::X * 4.2,
+            forward: Vec3::X,
+        };
+        world
+            .update(looking_away, DetailFocus::NearbyCollision)
+            .unwrap();
+        assert_eq!(
+            world.requested_tickets()[face.index()].detail,
+            DetailLevel::Fine
+        );
+        world.update(looking_away, DetailFocus::View).unwrap();
+        assert_eq!(
+            world.requested_tickets()[face.index()].detail,
+            DetailLevel::Medium
+        );
     }
 }

@@ -1,6 +1,6 @@
 # Real-time world pilot
 
-Slices 1–3 of [the pilot design](../../docs/realtime-world-pilot.md). This is a
+Slices 1–4 of [the pilot design](../../docs/realtime-world-pilot.md). This is a
 separate application. It uses `procgen-core` and the CPU gradient-noise primitive
 from `procgen-noise`, plus cube-face geometry from `procgen-cubesphere`.
 It does not use the existing world pipeline or viewer.
@@ -99,8 +99,9 @@ agreement, field envelopes, finite values at control extremes, cave entrances,
 agreement with a wider cave search, control effects, analytical gradient checks, invalid inputs, and quantized
 initial fingerprints. Exact float bits are not pinned.
 
-Slice 3 adds mixed-detail render meshes and streaming below. Collision, GPU
-generation, and precision across large distances remain for later slices. No
+Slice 3 adds mixed-detail render meshes and streaming below; slice 4 adds
+kinematic contact and population. GPU generation and precision across large
+distances remain for later slices. No
 planet-scale performance claim follows from these bounded CPU experiments.
 
 ## Spherical regions (slice 2)
@@ -217,7 +218,7 @@ The recording command runs a 36-second descent, rapid turns, fast flight,
 and retreat, then exits. It writes frame data and a summary. Add `--screenshots` to write
 one PNG per phase beside the CSV in a separate visual run; image readback
 adds frame stalls. Recording begins after initial coarse GPU coverage is
-ready. The route has no grounded movement or collision.
+ready. This flight route bypasses walking; slice 4 adds a separate walking route.
 
 This slice keeps the bounded CPU contour source resident and streams **render
 meshes**, not density pages. The source uses the slice-2 64-by-64 face grid and
@@ -280,3 +281,88 @@ for open edges, unbalanced winding, and reversed surviving triangles. They also 
 upload piece, rejected obsolete results, request reversal, memory admission,
 and delayed retirement. GPU visual and timing evidence is recorded separately;
 headless scheduler tests do not establish GPU performance.
+
+## Usable terrain (slice 4)
+
+```sh
+cargo run -p procgen-realtime-pilot -- --stream --seed 42
+cargo run -p procgen-realtime-pilot -- --stream --seed 42 \
+  --record /tmp/procgen-usable/walk.csv --walk-route
+```
+
+Press **G** to land on the exterior surface below the camera direction, or to
+return to flight. Landing rejects steep or obstructed support. WASD walks at
+0.18 model lengths/s; drag looks around with radial up. Q/E, scroll, and Shift
+remain flight controls. The walker is a sphere of radius 0.035; the camera is
+0.12 above its radial foot datum. Rocks are brown and landmarks are red posts.
+The sidebar reports the nearest accepted landmark within a chord distance of
+3, or no result. Decorations and posts do not have collision.
+
+### Collision and movement
+
+Collision uses the unchanged fine source triangles. Render reduction, upload,
+dither, and retirement cannot change the collision surface. The source has
+unresolved nonmanifold edges, so this is explicitly a **two-sided triangle
+query surface**, not a solid-volume physics body. The pilot does not classify
+inside/outside or repair topology. It supports a kinematic sphere, not a
+capsule, jumping, stepping, rigid bodies, or guaranteed camera-head clearance
+inside caves. Walking requests fine detail on nearby faces regardless of view direction.
+Before those uploads are ready, coarse render surfaces can differ from the
+fine contact surface; collision remains ready and stable.
+
+A bounding-volume hierarchy indexes canonical source triangles. A nearby patch
+holds at most 8,192 triangle IDs in a cube with half-width 0.6. Patches rebuild
+before the walker leaves an inner margin. Sphere sweeps require the complete
+start/end swept bounds to fit the patch; missing coverage or an oversized patch
+stops movement and increments a visible failure count. Triangle distances drive
+conservative advancement; density magnitude is never used as a distance bound.
+Each sweep has at most 64 iterations; exhaustion rejects the sweep, retains
+its safe start, and reports a failure. A substep has at most four slide contacts.
+
+The contact skin is 0.0001 model lengths. A 0.005 downward support query keeps
+contact at triangle joins. A support normal must have dot product at least 0.65
+with radial up; walkable support has static friction. Gravity is 1.5 model
+lengths/s². Simulation substeps are at most 1/120 second, with at most 0.1 second
+simulated per rendered frame. Longer frames discard excess simulation time and
+increment the delayed-frame count; they are not claimed as uninterrupted travel.
+
+### Population and readiness
+
+Rocks use an 8-by-8 candidate grid per face; landmarks use 2-by-2. Candidate
+identities are kind, face, x, and y. Independent seed streams jitter candidates
+within the middle half of each cell. Noise selects clustered rock candidates.
+Fine-triangle exterior queries supply position and slope; both kinds reject
+support below the walkable slope threshold. There is no water or material field
+in this pilot, so those eligibility rules are not claimed.
+
+The fixed six-face experiment has at most 408 candidates. Its accepted catalog
+stays on the CPU, while render instances enter and leave a radius of 1.8 around
+the camera. At most eight new instances install in a frame; all use two shared
+meshes and materials. Seed 42 accepts 199 rocks and 24 landmarks. The local
+instances and bounded landmark search read the same accepted catalog. Revisit
+and eviction change neither identities nor contact positions. This is bounded
+population residency, not world-scale placement paging.
+
+Preparation sends the fine source to the render scheduler first. Collision
+indexing and population resolution then run on the preparation worker; coarse
+render installation can proceed during that work. Walking waits for collision
+readiness. A separate 8 MiB reservation covers collision indexing, nearby IDs,
+placement data, and population buffers within the existing 128 MiB managed cap.
+The index uses about 1.81 MiB for seed 42. Source preparation retains its separate
+1 GiB working reservation until extraction ends. Engine and driver allocations
+remain outside these application buffer reservations.
+
+The walking recording starts at the first accepted candidate with clear
+walkable support. It walks toward projected world X for 12 seconds, turns in
+place for six seconds, walks toward projected -X for 12 seconds, then rests for
+six seconds. This is a repeatable input route, not a promise to retrace an exact
+path around obstacles. CSV output adds walking/population time, nearest triangle
+clearance, grounded state, delayed frames, and collision failures. Add
+`--screenshots` for a separate image run. The original flight recording remains
+available without `--walk-route` and now includes population work.
+
+Tests cover two-sided fast sweeps, triangle face/edge/vertex distances, missing
+coverage, resting contact through all render levels, walking clearance, seeded
+placement recreation and eviction, accepted integer IDs, and bounded landmark
+searches. Native measurements and platform limits are in
+[the slice 4 report](../../docs/realtime-world-usable-results.md).
