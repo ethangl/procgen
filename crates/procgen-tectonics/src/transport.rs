@@ -861,7 +861,6 @@ mod tests {
         };
         let kinematics = PlateKinematics {
             angular_velocities: vec![Vec3::Z],
-            base_speeds: vec![1.0],
         };
         let boundaries = classify_boundaries(&mesh, &partition, &kinematics).unwrap();
         let birth_prior = derive_crust_birth_prior(
@@ -880,17 +879,6 @@ mod tests {
             PlateEvolutionInputs {
                 partition: &partition,
                 kinematics: &kinematics,
-                // Every speed factor at one, so each step's respeed hands the
-                // plate back the unit speed it was given and the cap crosses
-                // the forty cells this fixture is built around. What the slab
-                // rule does to a speed is `motion.rs`'s to state; this is
-                // about what a pure rotation conserves.
-                kinematics_config: PlateKinematicsConfig {
-                    oceanic_speed_factor: 1.0,
-                    continental_speed_factor: 1.0,
-                    trenchless_speed_factor: 1.0,
-                    ..PlateKinematicsConfig::new(0)
-                },
                 boundaries: &boundaries,
                 birth_prior: &birth_prior,
             },

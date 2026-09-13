@@ -207,13 +207,11 @@ impl EvolvingWorld<'_> {
         self.kinematics
             .angular_velocities
             .push(rotations[1 - keeps]);
-        // A half is the parent's own crust on the parent's own base speed,
-        // carrying the drift the parent had walked to. The opening sets its
-        // direction and the respeed that ends this step sets its length, so
-        // what the two halves keep of the opening is the way they part.
-        let base = self.kinematics.base_speeds[plate];
-        self.kinematics.base_speeds.push(base);
-        self.drift_factors.push(self.drift_factors[plate]);
+        // Each half is a plate that has just come into being, so the drift
+        // band that follows is around the speed it parted with rather than
+        // around the parent's.
+        self.starting_speeds[plate] = rotations[keeps].length();
+        self.starting_speeds.push(rotations[1 - keeps].length());
         true
     }
 }
@@ -476,20 +474,29 @@ mod tests {
         );
     }
 
+    /// A half is a new plate, so the band that bounds its drift is around the
+    /// speed it parted with and not around the speed the parent began on.
     #[test]
-    fn a_rift_gives_both_halves_the_parents_base_speed_and_drift() {
+    fn a_rift_starts_both_halves_from_the_speed_they_parted_with() {
         let (fixture, config) = forced_rift_fixture();
         let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
-        world.kinematics.base_speeds = vec![0.6, 0.3];
-        world.drift_factors = vec![1.1, 0.7];
+        world.starting_speeds = vec![0.6, 0.3];
 
         let events = world.lifecycle(&empty_boundaries(&fixture.mesh), 0);
 
         assert_eq!(events.rift_count, 1);
         assert_eq!(world.partition.plate_count, 3);
-        // The parent keeps its id and the new half takes the next one.
-        assert_eq!(world.kinematics.base_speeds, vec![0.6, 0.3, 0.6]);
-        assert_eq!(world.drift_factors, vec![1.1, 0.7, 1.1]);
+        // The parent keeps its id and the new half takes the next one, and
+        // each reads the length of the rotation vector the opening left it.
+        for half in [0, 2] {
+            assert_eq!(
+                world.starting_speeds[half],
+                world.kinematics.angular_velocities[half].length(),
+                "half {half} did not start from the speed it parted with"
+            );
+        }
+        // The plate that did not rift keeps the speed it began the run with.
+        assert_eq!(world.starting_speeds[1], 0.3);
     }
 
     #[test]

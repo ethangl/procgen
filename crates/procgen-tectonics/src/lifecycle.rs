@@ -230,9 +230,8 @@ impl EvolvingWorld<'_> {
 
     /// Absorbs the smaller of a colliding pair into the larger: every cell of
     /// the absorbed plate takes the absorber's id, the absorber's rotation
-    /// vector, base speed, and drift factor each become the area-weighted mean
-    /// of the pair's, and the absorbed id is left owning nothing until
-    /// [`Self::compact`] removes it.
+    /// vector becomes the area-weighted mean of the pair's, and the absorbed
+    /// id is left owning nothing until [`Self::compact`] removes it.
     fn merge_plates(&mut self, pair: (usize, usize)) {
         // Both plates own the cells of a shared boundary edge, so neither
         // area is zero and the weights are well defined.
@@ -248,12 +247,10 @@ impl EvolvingWorld<'_> {
         let rotations = [absorber, absorbed].map(|plate| self.kinematics.angular_velocities[plate]);
         self.kinematics.angular_velocities[absorber] =
             rotations[0] * weights[0] + rotations[1] * weights[1];
-        // The merged plate is one plate, so it has one base speed and one
-        // drift factor. Left at the absorber's own, the smaller plate would
-        // bring nothing to the motion the next respeed derives.
-        let mean = |values: &[f32]| values[absorber] * weights[0] + values[absorbed] * weights[1];
-        self.kinematics.base_speeds[absorber] = mean(&self.kinematics.base_speeds);
-        self.drift_factors[absorber] = mean(&self.drift_factors);
+        // The merged plate starts again from the motion the merge gave it.
+        // Left at the absorber's original speed, the drift band would snap
+        // the mean straight back and undo the merge.
+        self.starting_speeds[absorber] = self.kinematics.angular_velocities[absorber].length();
         for plate in self.partition.cell_plates.iter_mut() {
             if *plate == absorbed {
                 *plate = absorber;
@@ -297,13 +294,9 @@ impl EvolvingWorld<'_> {
             .iter()
             .map(|&plate| self.kinematics.angular_velocities[plate])
             .collect();
-        self.kinematics.base_speeds = live
+        self.starting_speeds = live
             .iter()
-            .map(|&plate| self.kinematics.base_speeds[plate])
-            .collect();
-        self.drift_factors = live
-            .iter()
-            .map(|&plate| self.drift_factors[plate])
+            .map(|&plate| self.starting_speeds[plate])
             .collect();
         self.partition.plate_count = live.len();
         accreted
@@ -352,36 +345,32 @@ mod tests {
         );
     }
 
-    /// The base speed and the drift a merged plate keeps, which its every
-    /// later respeed reads. Driven a substep at a time, because a whole run
-    /// gives both plates the same base and could not tell a mean from either.
+    /// A merged plate starts its drift band again from the motion the merge
+    /// gave it. Left at the absorber's original speed, the band would snap the
+    /// mean straight back and undo the merge. Driven a substep at a time,
+    /// because a whole run could not tell the merged speed from the
+    /// absorber's own.
     #[test]
-    fn a_suture_takes_the_area_weighted_mean_of_base_speed_and_drift() {
+    fn a_suture_restarts_the_band_from_the_merged_motion() {
         let fixture = two_plate_fixture(-1.0, vec![CrustClass::Continental; 2]);
         let (_, config, steps) = forced_suture_fixture();
         let colliding = fixture.boundaries.clone();
         let mut world = EvolvingWorld::new(&fixture.mesh, fixture.inputs(), config);
-        world.kinematics.base_speeds = vec![0.4, 0.9];
-        world.drift_factors = vec![0.8, 1.2];
+        world.starting_speeds = vec![0.4, 0.9];
 
         for step in 0..steps {
             world.lifecycle(&colliding, step as i32);
         }
 
         // The one-cell plate is the smaller, so the plate around it absorbs.
-        let areas = fixture.partition.plate_areas(&fixture.mesh);
-        let weights = [
-            areas[0] / (areas[0] + areas[1]),
-            areas[1] / (areas[0] + areas[1]),
-        ];
-        let mean = |values: [f32; 2]| values[0] * weights[0] as f32 + values[1] * weights[1] as f32;
-        assert_eq!(world.kinematics.base_speeds[0], mean([0.4, 0.9]));
-        assert_eq!(world.drift_factors[0], mean([0.8, 1.2]));
+        assert_eq!(
+            world.starting_speeds[0],
+            world.kinematics.angular_velocities[0].length()
+        );
     }
 
-    /// Both halves of a rift are the parent's crust on the parent's base speed
-    /// and the drift it had walked to, so the opening decides which way each
-    /// goes and the respeed decides how fast.
+    /// Both halves of a rift are the parent's crust, so the opening decides
+    /// which way each goes and the band each drifts in follows.
     #[test]
     fn a_pair_that_stops_colliding_starts_its_collision_over() {
         // Driven a substep at a time with boundaries chosen per step, which a
@@ -446,17 +435,14 @@ mod tests {
         }
         let plate_count = world.partition.plate_count;
         let motions = world.kinematics.angular_velocities.clone();
-        let bases = world.kinematics.base_speeds.clone();
-        // Distinct per plate, so a factor that moved to the wrong id shows.
-        world.drift_factors = (0..plate_count).map(|plate| plate as f32).collect();
+        // Distinct per plate, so a speed that moved to the wrong id shows.
+        world.starting_speeds = (0..plate_count).map(|plate| plate as f32).collect();
 
         world.compact();
 
         assert_eq!(world.partition.plate_count, plate_count - 1);
         world.partition.validate(&fixture.mesh).unwrap();
         let survivors: Vec<usize> = (0..plate_count).filter(|&p| p != ABSORBED).collect();
-        let kept =
-            |values: &[f32]| -> Vec<f32> { survivors.iter().map(|&plate| values[plate]).collect() };
         assert_eq!(
             world.kinematics.angular_velocities,
             survivors
@@ -464,9 +450,8 @@ mod tests {
                 .map(|&plate| motions[plate])
                 .collect::<Vec<_>>()
         );
-        assert_eq!(world.kinematics.base_speeds, kept(&bases));
         assert_eq!(
-            world.drift_factors,
+            world.starting_speeds,
             survivors
                 .iter()
                 .map(|&plate| plate as f32)

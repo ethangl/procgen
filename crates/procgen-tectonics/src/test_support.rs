@@ -72,12 +72,6 @@ pub const REFERENCE_STEP_DURATION: f32 = 0.15;
 /// Kinematics seed of the reference fixtures, and so of their flow field.
 const REFERENCE_MOTION_SEED: u64 = 7;
 
-/// Base speed of the fixtures that build their kinematics by hand. It is the
-/// reference motion config's maximum, which is the unit speed those fixtures
-/// turn their plates at, so a respeed can only slow a plate down and never
-/// carry one past the step bound the config states.
-const HAND_BUILT_BASE_SPEED: f32 = 1.0;
-
 /// The motion config the reference fixtures fit against, and the one the crust
 /// birth prior scales a hop by. The fixtures that build their kinematics by
 /// hand turn their plates at unit speed, which is this config's maximum, so
@@ -206,7 +200,6 @@ impl EvolutionFixture {
         PlateEvolutionInputs {
             partition: &self.partition,
             kinematics: &self.kinematics,
-            kinematics_config: reference_motion_config(),
             boundaries: &self.boundaries,
             birth_prior: &self.birth_prior,
         }
@@ -383,7 +376,6 @@ pub fn still_world_fixture() -> EvolutionFixture {
     let mut fixture = evolution_fixture();
     fixture.kinematics = PlateKinematics {
         angular_velocities: vec![Vec3::ZERO; fixture.partition.plate_count],
-        base_speeds: vec![0.0; fixture.partition.plate_count],
     };
     fixture.boundaries =
         classify_boundaries(&fixture.mesh, &fixture.partition, &fixture.kinematics).unwrap();
@@ -399,7 +391,6 @@ pub fn opposed_kinematics(mesh: &SphereMesh, edge: usize, outward: f32) -> Plate
     let apart = (second - first).normalized() * outward;
     PlateKinematics {
         angular_velocities: vec![first.cross(-apart), second.cross(apart)],
-        base_speeds: vec![HAND_BUILT_BASE_SPEED; 2],
     }
 }
 
@@ -626,7 +617,6 @@ fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
 fn at_rest(plate_count: usize) -> PlateKinematics {
     PlateKinematics {
         angular_velocities: vec![Vec3::ZERO; plate_count],
-        base_speeds: vec![HAND_BUILT_BASE_SPEED; plate_count],
     }
 }
 
