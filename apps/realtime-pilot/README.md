@@ -5,7 +5,111 @@ separate application. It uses `procgen-core` and the CPU gradient-noise primitiv
 from `procgen-noise`, plus cube-face geometry from `procgen-cubesphere`.
 It does not use the existing world pipeline or viewer.
 
-## Run
+## Physical planet and octave editor
+
+```sh
+cargo run -p procgen-realtime-pilot -- --design
+```
+
+This mode uses meters and starts with a 2,000 km radius. Edit the radius and
+individual noise bands, switch between **Planet** and **Local patch**, and use
+**Solo** to inspect a band. **Auto apply** regenerates after edits. The octave
+panel shows which bands the current preview resolution can display.
+
+Use **Save controls** or **Copy JSON** to share exact generation settings. Load a
+saved design with `--design --design-file PATH`. Use `--design --check` for a
+headless report; `--write-design PATH` saves the config. Run `--design --help`
+for patch and solo options. With auto apply disabled, press Generate after Load.
+
+This is a coarse height preview, with no height exaggeration. The headless chunk
+audit below samples one-meter voxels. A headless travel audit also exercises
+bounded density residency. The exploration mode below connects these stages; `--stream`
+still runs the earlier radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
+
+## Octree chunk audit
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --check-chunks
+```
+
+Add `--design-file PATH` to sample your saved settings. Finest chunks have 32³
+cells at one-meter spacing. `--chunk-lod 1` selects two-meter spacing, and
+`--chunk-point X,Y,Z` selects an integer world position in meters. The report
+checks shared face/halo samples and coincident parent samples, and measures live
+density payloads. Without a point it samples near the +X surface.
+
+## Octree residency audit
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-residency
+```
+
+This runs orbit/ground travel, pending-job cancellation, eviction, and revisit
+against the saved design. The JSON reports leaf addresses as integer fingerprints,
+spacing, job counts, live/peak density payload, and canonical sample agreement.
+Defaults allow 512 leaf addresses and two workers, with density allocated within
+4 km of the camera. Distant coverage stays as metadata. The density reservation
+cap is 84.1 MiB, excluding metadata, worker runtime, and the audit's one reference
+volume. Every checked density must match canonical CPU sampling exactly.
+
+This exercises slice 2b's residency owner. The current editor still shows height
+previews; the surface audit below exercises slice 2c.
+See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2b-camera-driven-residency-implemented).
+
+## Voxel surface and collision audit
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-surfaces
+```
+
+This builds conforming tetrahedral meshes from the resident chunks, verifies
+internal seams, evicts/recreates the location, and checks fine collision. The
+report includes geometry counts, intentional outer boundaries, memory payloads,
+generation times, and a swept-sphere contact. Mesh potentials retain the full
+terrain band stack and unsaturated values; the existing density view still clamps
+to +/-4 m. Collision owns a separate 96 m support box with one-meter source cells.
+
+This is a CPU/headless surface baseline. It uses more triangles than the original
+QEF mesh and reports mesh storage separately from density residency. The editor
+and old `--stream` mode are unchanged; the exploration mode implements slice 3.
+See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2c-voxel-meshes-and-nearby-collision-implemented).
+
+## Physical exploration
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json
+```
+
+Use **Descend continuously** to travel from orbit or **Go to ground** for a direct
+shortcut. **Walk** lands on independent one-meter collision support. W/A/S/D
+move, right drag looks around, and E/Q move up/down in flight. Scroll changes
+orbit distance or flight speed. The player has a 1.7 m eye height and walks at
+4 m/s. The panel distinguishes reference altitude, measured ground clearance,
+and the height-field estimate.
+
+The viewer loads your saved octave settings. Edit and save in the existing
+`--design` editor, then launch exploration again. Neutral, LOD-color, and normal
+views are available. A complete old mesh stays visible until a replacement is
+fully uploaded. Upload admission is capped at 512 KiB per frame; collision
+builds and replaces independently. Selection shares refinement across octants
+at camera boundaries. The retuned 4,900 km preset builds about 5.5 million ground
+triangles in 37 seconds on the tested M1 Max, with 83.7 MiB of source density and
+320 MiB of allocated CPU mesh payload. Visual LOD can lag travel. The leaf cap
+does not guarantee one-meter visual spacing everywhere in the collision cube. Replacement pops and further
+geometry filtering remain open; Windows/Vulkan validation is pending.
+
+Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
+
+```sh
+cargo run -p procgen-realtime-pilot --no-default-features -- \
+  --design --design-file planet-design.json --check-explore
+```
+
+## Run the original experiments
 
 ```sh
 cargo run -p procgen-realtime-pilot -- --seed 42
@@ -52,7 +156,9 @@ The equations in Murray's slides are the reference. Missing parts are completed
 as follows for this experiment:
 
 - Use cubic gradient noise divided by its exported conservative bound. The
-  basis and its derivative therefore share the same normalization.
+  basis and its derivative therefore share the same normalization. Broad relief
+  then centers and scales each shape using fixed reference moments; the safety
+  bound is not treated as the useful contrast range.
 - Use six octaves, frequency `1 / wavelength`, lacunarity 2, and one key across
   octaves. Begin with unit amplitude and damped amplitude; all sums begin at zero.
 - Use the unshaped basis derivative in octave coordinates for slope, ridge,
@@ -62,13 +168,16 @@ as follows for this experiment:
   altitude amplitude and ridge damping, perturbation, and frequency.
 - Store the resolved gain once. The displayed `gain + amplification` is one
   value here; the supplied fragments do not establish separate effects.
-- Divide the sum by the undamped geometric amplitude envelope. This gives a
-  conservative [-1, 1] bound without normalizing away position-dependent damping.
+- Divide the sum by the undamped geometric amplitude envelope, then apply
+  `x / sqrt(1 + x*x)` to bound the standardized relief within [-1, 1] without
+  hard clipping or normalizing away position-dependent damping.
 - Claim analytical derivatives only for the normalized basis and sharpness
   transform. The composed surface and density return scalar values. Their
   feedback vectors are not final gradients.
 
-The surface is the shape function times the height scale. A separate 3D noise
+The surface is the bounded shape function times the height scale. The
+[relief calibration report](../../docs/realtime-world-relief.md) describes the
+fixed shape moments and the changed terrain. A separate 3D noise
 field perturbs the solid boundary. Cave candidates use a 0.5-unit horizontal
 grid, a 0.11-unit chamber radius, and a 0.2-unit depth below their own surface
 query. Each chamber connects to an inclined capsule that reaches above the
@@ -481,6 +590,9 @@ Failures return a nonzero exit status after the remaining cases finish. Expensiv
 cases remain valid and are reported separately. Parameter failures have no
 surface location to capture. Use the saved case with the native inspector for
 flight/ground images; the CPU sweep itself does not produce GPU screenshots.
+Each successful result also records `broad_height` (minimum, 5th percentile,
+median, 95th percentile, maximum) over 65,536 area-distributed directions,
+before caves and local detail. This distinguishes broad relief from mesh extrema.
 
 Results and remaining pilot limits are in
 [the variety report](../../docs/realtime-world-variety-results.md).

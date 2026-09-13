@@ -3,9 +3,17 @@ use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, gradient_noise_3d};
 
 use crate::field::{FieldError, validate_range};
 
-/// Fixed work per surface query in slice 1.
+/// Fixed work per broad-surface query.
 pub const OCTAVES: usize = 6;
 const LACUNARITY: f32 = 2.0;
+
+// Fixed moments of the normalized basis, measured over a spatial reference
+// distribution (see the relief report). Never fit these to a generated world.
+const BASIS_STD_DEV: f32 = 0.135;
+const ABS_MEAN: f32 = 0.110;
+const ABS_STD_DEV: f32 = 0.078;
+const SQUARE_MEAN: f32 = 0.0182;
+const SQUARE_STD_DEV: f32 = 0.0226;
 
 /// Dimensionless shape controls, except wavelength (a model length).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -74,7 +82,11 @@ pub(crate) fn uber_noise(key: u32, p: Vec3, config: NoiseConfig) -> f32 {
         envelope += envelope_amplitude;
         envelope_amplitude *= config.gain;
     }
-    sum / envelope
+    // Standardized features have comparable contrast, not a [-1, 1] bound.
+    // A smooth transfer bounds elevation without clipping peaks or canceling
+    // the position-dependent erosion weights with a local normalization.
+    let relief = sum / envelope;
+    relief / (1.0 + relief * relief).sqrt()
 }
 
 pub(crate) fn normalized_noise(key: u32, p: Vec3) -> ScalarFieldSample3 {
@@ -82,26 +94,64 @@ pub(crate) fn normalized_noise(key: u32, p: Vec3) -> ScalarFieldSample3 {
 }
 
 /// Exact derivative of the sharpness transform only; abs has derivative zero at its cusp.
-fn shape(sample: ScalarFieldSample3, sharpness: f32) -> ScalarFieldSample3 {
+pub(crate) fn shape(sample: ScalarFieldSample3, sharpness: f32) -> ScalarFieldSample3 {
     let n = sample.value;
+    let base = n / BASIS_STD_DEV;
+    let base_derivative = BASIS_STD_DEV.recip();
     let (target, derivative) = if sharpness >= 0.0 {
-        (n * n, 2.0 * n)
+        (
+            (n * n - SQUARE_MEAN) / SQUARE_STD_DEV,
+            2.0 * n / SQUARE_STD_DEV,
+        )
     } else {
         let sign = if n == 0.0 { 0.0 } else { n.signum() };
-        (1.0 - n.abs(), -sign)
+        ((ABS_MEAN - n.abs()) / ABS_STD_DEV, -sign / ABS_STD_DEV)
     };
     let weight = sharpness.abs();
     ScalarFieldSample3 {
-        value: n + (target - n) * weight,
-        derivative: sample.derivative * (1.0 + (derivative - 1.0) * weight),
+        value: base + (target - base) * weight,
+        derivative: sample.derivative * (base_derivative + (derivative - base_derivative) * weight),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PRESETS, test_support::positions};
+    use crate::{
+        PRESETS,
+        test_support::{positions, reference_noise_positions},
+    };
     use procgen_noise::fold_seed_u64_to_u32;
+
+    #[test]
+    fn calibrated_shapes_have_centered_comparable_spread() {
+        // Different spatial samples and keys from the calibration measurement.
+        for key in [7, 19, u32::MAX] {
+            for sharpness in [-1.0, 0.0, 1.0] {
+                let mut sum = 0.0_f64;
+                let mut squares = 0.0_f64;
+                let mut count = 0;
+                for p in reference_noise_positions() {
+                    let value = shape(normalized_noise(key, p), sharpness).value as f64;
+                    sum += value;
+                    squares += value * value;
+                    count += 1;
+                }
+                let mean = sum / count as f64;
+                let deviation = (squares / count as f64 - mean * mean).sqrt();
+                // Statistical margins across independent finite spatial samples,
+                // not floating-point agreement tolerances or exact moments.
+                assert!(
+                    mean.abs() < 0.05,
+                    "key={key} sharpness={sharpness} mean={mean}"
+                );
+                assert!(
+                    (0.9..1.1).contains(&deviation),
+                    "key={key} sharpness={sharpness} deviation={deviation}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn shaped_basis_gradient_matches_independent_central_difference() {

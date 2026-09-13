@@ -89,7 +89,7 @@ pub fn run(directory: &Path, selection: SweepSelection) -> Result<(), Box<dyn st
                     expensive += 1;
                 }
                 row["status"] = serde_json::json!(if slow { "expensive" } else { "passed" });
-                row["metrics"] = serde_json::json!({"preparation_ms":r.preparation_ms,"mesh_checks_ms":r.mesh_checks_ms,"walk_ms":r.walk_ms,"walk_step_max_ms":r.walk_step_max_ms,"triangles":r.triangles,"nonmanifold_edges":r.topology.nonmanifold_edges,"nonmanifold_vertices":r.topology.nonmanifold_vertices,"radius_range":r.radius_range,"mesh_fingerprint":format!("{:016x}",r.mesh_fingerprint),"route_fingerprint":format!("{:016x}",r.route_fingerprint),"placements":r.placements,"min_clearance":r.min_clearance,"walk_displacement":r.walk_displacement,"rest_drift":r.rest_drift,"source_bytes":r.source_bytes,"collision_index_bytes":r.collision_index_bytes});
+                row["metrics"] = serde_json::json!({"preparation_ms":r.preparation_ms,"mesh_checks_ms":r.mesh_checks_ms,"walk_ms":r.walk_ms,"walk_step_max_ms":r.walk_step_max_ms,"triangles":r.triangles,"nonmanifold_edges":r.topology.nonmanifold_edges,"nonmanifold_vertices":r.topology.nonmanifold_vertices,"radius_range":r.radius_range,"broad_height":r.broad_height,"broad_height_samples":procgen_realtime_pilot::HEIGHT_DISTRIBUTION_SAMPLES,"mesh_fingerprint":format!("{:016x}",r.mesh_fingerprint),"route_fingerprint":format!("{:016x}",r.route_fingerprint),"placements":r.placements,"min_clearance":r.min_clearance,"walk_displacement":r.walk_displacement,"rest_drift":r.rest_drift,"grounded_rest_steps":r.grounded_rest_steps,"source_bytes":r.source_bytes,"collision_index_bytes":r.collision_index_bytes});
             }
             Err(e) => {
                 failed += 1;

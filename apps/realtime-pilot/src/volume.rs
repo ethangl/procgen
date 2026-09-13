@@ -203,13 +203,14 @@ mod tests {
                 quantized_fingerprint(volume.densities)
             })
             .collect();
-        // Initial slice-1 CPU fields, quantized on the shared 1/1024 grid.
+        // Centered, calibrated relief changes all three density fields.
+        // Quantization remains on the shared 1/1024 grid.
         assert_eq!(
             actual,
             vec![
-                3_284_531_776_164_537_981,
-                5_992_316_526_205_022_298,
-                12_776_664_651_359_129_979
+                4_248_963_800_652_678_221,
+                11_091_178_909_971_863_561,
+                11_722_257_729_342_324_426
             ]
         );
     }

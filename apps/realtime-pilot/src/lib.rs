@@ -4,13 +4,20 @@
 mod collision;
 mod contour;
 mod contour_cells;
+mod design_preview;
 mod detail;
 mod evaluation;
 mod field;
+mod height_distribution;
 mod mesh;
+mod meter_position;
 mod noise;
+mod physical_audit;
+mod physical_motion;
+mod physical_terrain;
 mod placement;
 mod planet;
+mod planet_design;
 mod presets;
 mod qef;
 mod refinement;
@@ -19,14 +26,29 @@ mod scenario;
 mod shell;
 mod streaming;
 mod terrain;
+mod triangle_query;
 mod usable;
 mod volume;
+mod voxel_address;
+mod voxel_audit;
+mod voxel_collision;
+mod voxel_collision_index;
+mod voxel_density;
+mod voxel_residency;
+mod voxel_selection;
+mod voxel_surface;
+mod voxel_surface_audit;
+mod voxel_surface_extract;
+mod voxel_surface_faces;
+mod voxel_surface_grid;
+mod voxel_travel_audit;
 mod walking;
 
 #[cfg(test)]
 mod test_support;
 
 pub use field::{FieldError, MAX_COORDINATE};
+pub use height_distribution::{HEIGHT_DISTRIBUTION_SAMPLES, HeightDistribution};
 pub use noise::{NoiseConfig, OCTAVES};
 pub use presets::{PRESETS, Preset};
 pub use terrain::{TerrainConfig, TerrainField};
@@ -74,3 +96,51 @@ pub use evaluation::{
     Evaluation, EvaluationError, EvaluationFailure, PREPARATION_LIMIT_MS, WALK_STEP_LIMIT_MS,
     evaluate,
 };
+
+pub use design_preview::{
+    DesignPreview, DesignPreviewConfig, PreviewArea, PreviewBands, PreviewError,
+    generate_design_preview,
+};
+pub use planet_design::{
+    DesignError, MAX_DESIGN_OCTAVES, OctaveConfig, PlanetDesignConfig, PlanetDesignField,
+};
+
+pub use voxel_address::{
+    ChunkIndex, VOXEL_CHUNK_CELLS, VOXEL_HALO, VOXEL_ROOT_LOD, VOXEL_SAMPLE_COUNT,
+    VOXEL_SAMPLE_SIDE, VOXEL_WORLD_HALF_EXTENT_M, VoxelAddressError, VoxelChunkAddress,
+    VoxelPosition, VoxelSampleIndex,
+};
+pub use voxel_density::{
+    VOXEL_DENSITY_BYTES, VOXEL_DENSITY_LIMIT_M, VoxelVolume, VoxelVolumeError, sample_voxel_chunk,
+};
+
+pub use voxel_audit::{VoxelAuditConfig, VoxelAuditError, VoxelChunkAudit, audit_voxel_chunk};
+
+pub use voxel_residency::{
+    VoxelResidency, VoxelResidencyConfig, VoxelResidencyError, VoxelResidencyStats,
+};
+
+pub use voxel_travel_audit::{
+    VoxelTravelAudit, VoxelTravelError, VoxelTravelStop, audit_voxel_travel,
+};
+
+pub use voxel_surface::{
+    MAX_SURFACE_CHUNKS, VoxelSurface, VoxelSurfaceError, VoxelSurfaceTopology, VoxelTriangle,
+};
+pub use voxel_surface_extract::build_voxel_surface;
+
+pub use voxel_collision::{
+    VOXEL_CONTACT_SKIN_M, VoxelCollision, VoxelCollisionError, VoxelContact, VoxelSweep,
+};
+
+pub use voxel_surface_audit::{VoxelSurfaceAudit, VoxelSurfaceAuditError, audit_voxel_surfaces};
+
+pub use physical_motion::{PLAYER_EYE_M, PLAYER_RADIUS_M, PLAYER_SPEED_MPS, PhysicalWalker};
+
+pub use physical_terrain::{PhysicalTerrain, PhysicalTerrainError, PhysicalTerrainFrame};
+
+pub use physical_audit::{
+    PhysicalAudit, PhysicalAuditError, PhysicalStop, audit_physical_exploration,
+};
+
+pub use meter_position::MeterPosition;
