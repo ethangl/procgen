@@ -3197,6 +3197,17 @@ name = "procgen-planet"
 version = "0.1.0"
 
 [[package]]
+name = "procgen-realtime-pilot"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "procgen-core",
+ "procgen-noise",
+ "rayon",
+]
+
+[[package]]
 name = "procgen-sphere"
 version = "0.1.0"
 dependencies = [

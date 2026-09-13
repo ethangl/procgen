@@ -1,6 +1,6 @@
 # Real-time procedural world pilot
 
-Status: design proposal. No implementation is implied by this document.
+Status: slice 1 is implemented. Slices 2–5 remain proposals.
 
 ## Purpose
 
@@ -457,6 +457,18 @@ continuity test. A visual fade does not make a sudden support-height change
 safe for a grounded controller.
 
 ## Evaluation and delivery slices
+
+Slice 1 lives in [apps/realtime-pilot](../apps/realtime-pilot/README.md). It
+provides a CPU surface function, bounded density queries, three presets, and a
+64³ volume inspector with movable cross-sections. The app also has a headless
+capture command. Its generation library uses the existing hash and gradient
+noise primitives; it has no dependency on the other world-generation stages.
+
+The [implementation notes](../apps/realtime-pilot/README.md#field-decisions)
+record the pilot's choices for the missing octave-loop details. The inspection
+box is Cartesian and uses local model lengths. It is not spherical storage or
+a surface mesher. Density feedback vectors are shaping signals; only the
+basis and sharpness transform currently claim analytical gradients.
 
 Keep two test sets: fixed seeds and routes for comparison, and a changing
 sample of seeds to find unexpected terrain and expensive cases. Save failing
