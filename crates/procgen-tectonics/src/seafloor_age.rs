@@ -581,7 +581,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_ages),
-            3_586_369_796_527_355_012
+            1_962_671_684_258_877_357
         );
     }
 

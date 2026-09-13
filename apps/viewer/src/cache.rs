@@ -386,7 +386,7 @@ struct_codec! {
     CrustClassificationConfig { continental_fraction, nucleus_count, growth_roughness, seed }
     PlateKinematicsConfig { seed, minimum_angular_speed, maximum_angular_speed, flow_frequency, coherence, oceanic_speed_factor, continental_speed_factor, trenchless_speed_factor, slab_saturation_fraction }
     MaterialTransportConfig { gap_radius }
-    PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit, reversion_time }
+    PoleDriftConfig { axis_drift_rate, speed_drift_rate, speed_drift_limit }
     PlateLifecycleConfig { rift_rate, rift_minimum_area_fraction, rift_curvature, rift_opening_speed, suture_time, suture_minimum_shared_length }
     PlateEvolutionConfig { seed, run_duration, step_duration, transport, deformation, pole_drift, lifecycle }
     CrustBirthPriorConfig { ridge_less_age }
@@ -399,7 +399,7 @@ struct_codec! {
     CoarseElevationConfig { smoothing_radius, smoothing_weight, sea_level }
     HotspotFieldConfig { hotspot_count, maximum_trail_length, province_fraction, province_radius, province_rim, seed }
     OceanicPeakFieldConfig { maximum_young_age, seamount_density_scale, abyssal_hill_density_scale, maximum_position_offset, maximum_seamount_height, maximum_abyssal_hill_height, seed }
-    VolcanicArcFieldConfig { minimum_boundary_length, inland_offset, peak_density, strength_saturation, maximum_position_offset, seed }
+    VolcanicArcFieldConfig { minimum_boundary_length, inland_offset, peak_density, strength_saturation }
     CratonFieldConfig { minimum_boundary_distance, ramp_width }
     SedimentaryBasinFieldConfig { maximum_elevation, minimum_area_fraction, maximum_ocean_perimeter_fraction }
     GeologicalElevationConfig { hotspot_uplift, plateau_uplift, volcanic_arc_uplift, craton_flattening, basin_flattening }
@@ -446,14 +446,13 @@ struct_codec! {
     OceanicPeakDiagnostics { oceanic_cell_count, hotspot_candidate_cell_count, young_seafloor_candidate_cell_count, overlap_cell_count, density, peak_count, seamount_peak_count, abyssal_hill_peak_count, height }
     OceanicPeakField { cell_densities, cell_kinds, peaks, diagnostics }
     VolcanicArcCell { cell, strength }
-    VolcanicArcPeak { cell, position }
     VolcanicArcSegment { overriding_plate, kind, boundary_edges, boundary_cells, arc_cells, peaks, inland_depth }
     VolcanicArcDiagnostics { qualifying_edge_count, boundary_cell_count, discarded_short_segment_count, discarded_landlocked_segment_count, arc_cell_count, island_segment_count, island_arc_cell_count, affected_cell_count, overlap_cell_count, peak_count }
     VolcanicArcField { segments, cell_strengths, cell_segments, diagnostics }
     CratonDiagnostics { boundary_cell_count, continental_land_cell_count, craton_cell_count, full_strength_cell_count, maximum_boundary_distance, strength }
     CratonField { cell_strengths, diagnostics }
     SedimentaryBasin { root_cell, cell_count, area, ocean_perimeter_fraction, minimum_elevation }
-    SedimentaryBasinDiagnostics { candidate_cell_count, component_count, basin_count, basin_cell_count, basin_area_fraction, rejected_small_component_count, rejected_ocean_exposed_component_count, basin_cell_count_range }
+    SedimentaryBasinDiagnostics { candidate_cell_count, component_count, basin_count, basin_cell_count, rejected_small_component_count, rejected_ocean_exposed_component_count, basin_cell_count_range }
     SedimentaryBasinField { cell_basins, basins, diagnostics }
     ElevationEffectDiagnostics { affected_cell_count, total_delta, maximum_absolute_delta }
     SignedEffectDiagnostics { rise, sink }

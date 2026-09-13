@@ -7,10 +7,9 @@
 //! moving parts, and the upstream errors arrive through `From` rather than as
 //! copied strings.
 //!
-//! Three variants are about how the step sits against a time the run reads
+//! Two variants are about how the step sits against a time the run reads
 //! rather than about either value on its own: a step may outrun neither what
-//! transport can see, nor the sink that takes relief away, nor the pull back
-//! toward the motion the run started from.
+//! transport can see nor the sink that takes relief away.
 
 use crate::{
     BoundaryClassificationError, BoundaryDeformationError, MAX_GAP_RADIUS, PlateKinematicsError,
@@ -26,8 +25,6 @@ pub enum PlateEvolutionError {
     InvalidGapRadius,
     InvalidPoleDriftRate,
     InvalidSpeedDriftLimit,
-    InvalidReversionTime,
-    StepOutrunsReversion,
     InvalidRiftRate,
     InvalidRiftAreaFraction,
     InvalidRiftCurvature,
@@ -62,13 +59,6 @@ impl fmt::Display for PlateEvolutionError {
             Self::InvalidSpeedDriftLimit => {
                 formatter.write_str("speed drift limit must be finite and between 0 and 1")
             }
-            Self::InvalidReversionTime => formatter.write_str(
-                "pole drift reversion time must be positive; infinity disables the reversion",
-            ),
-            Self::StepOutrunsReversion => formatter.write_str(
-                "step duration must be shorter than the pole drift reversion time, so that \
-                 a step approaches the motion the run started from rather than crossing it",
-            ),
             Self::InvalidRiftRate => {
                 formatter.write_str("rift rate must be finite and non-negative")
             }
