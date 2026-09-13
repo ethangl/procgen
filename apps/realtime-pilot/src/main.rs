@@ -1,6 +1,10 @@
+#[cfg(feature = "inspector")]
+mod controls;
 mod display;
 #[cfg(feature = "inspector")]
 mod inspector;
+#[cfg(feature = "inspector")]
+mod planet_inspector;
 
 use std::{error::Error, fs, path::PathBuf, time::Instant};
 
@@ -9,9 +13,13 @@ use procgen_realtime_pilot::{INSPECTION_GRID, PRESETS, sample_volume};
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut capture = None;
+    let mut planet = false;
+    let mut check = false;
     let mut seed = 42_u64;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--planet" => planet = true,
+            "--check" => check = true,
             "--seed" => {
                 seed = args
                     .next()
@@ -25,12 +33,46 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "procgen-realtime-pilot [--seed U64] [--capture DIRECTORY]\nWithout --capture, open the interactive volume inspector."
+                    "procgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY]\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
+    }
+    if planet {
+        if capture.is_some() {
+            return Err("--capture is for the local volume inspector".into());
+        }
+        if check {
+            use procgen_realtime_pilot::{
+                PILOT_PLANET, PILOT_SHELL, contour_shell, planet_overview, sample_shell,
+            };
+            let start = Instant::now();
+            let field = PILOT_PLANET.validate(seed)?;
+            let overview = planet_overview(&field, procgen_realtime_pilot::OVERVIEW_FACE_QUADS)?;
+            let volume = sample_shell(&field, PILOT_SHELL)?;
+            let mesh = contour_shell(&volume)?;
+            let elapsed_ms = start.elapsed().as_millis();
+            println!("topology={:?}", mesh.topology());
+            println!(
+                "seed={seed}\nplanet={PILOT_PLANET:#?}\nshell={PILOT_SHELL:?}\nsamples={}\nvertices={}\ntriangles={}\noverview_triangles={}\ngeneration_ms={}",
+                volume.sample_count(),
+                mesh.positions().len(),
+                mesh.triangles().len(),
+                overview.triangles().len(),
+                elapsed_ms
+            );
+        } else {
+            #[cfg(feature = "inspector")]
+            planet_inspector::run(seed);
+            #[cfg(not(feature = "inspector"))]
+            return Err("Enable inspector or use --planet --check".into());
+        }
+        return Ok(());
+    }
+    if check {
+        return Err("--check requires --planet".into());
     }
     if let Some(directory) = capture {
         fs::create_dir_all(&directory)?;

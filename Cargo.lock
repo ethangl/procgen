@@ -3203,6 +3203,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "procgen-core",
+ "procgen-cubesphere",
  "procgen-noise",
  "rayon",
 ]

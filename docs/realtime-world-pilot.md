@@ -1,6 +1,6 @@
 # Real-time procedural world pilot
 
-Status: slice 1 is implemented. Slices 2–5 remain proposals.
+Status: slices 1–2 are implemented. Slices 3–5 remain proposals.
 
 ## Purpose
 
@@ -474,6 +474,15 @@ Keep two test sets: fixed seeds and routes for comparison, and a changing
 sample of seeds to find unexpected terrain and expensive cases. Save failing
 parameters, location, camera route, backend, generator version, timing, and
 screenshots. Add useful discoveries to the fixed set.
+
+Slice 2 adds a six-face spherical shell, validated elevation band, CPU dual
+contouring, and a whole-planet overview in the same application. See the
+[implementation decisions and run commands](../apps/realtime-pilot/README.md#spherical-regions-slice-2).
+Shared samples and polygon ownership cover same-resolution joins and cube
+corners. The initial extractor uses one vertex per cell and reports unresolved
+nonmanifold edges; manifold extraction remains an explicit follow-up before a
+consumer requires it. The inspector can compare overview, region ownership,
+and shifted render origins. It does not implement streaming or mixed LOD.
 
 | Slice                     | Deliverable                                                                              | Exit evidence                                                                                                                          |
 | ------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

@@ -6,12 +6,12 @@ use crate::{
     noise::{NoiseConfig, normalized_noise, uber_noise},
 };
 
-const CAVE_SPACING: f32 = 0.5;
-const CAVE_RADIUS: f32 = 0.11;
-const CAVE_DEPTH: f32 = 0.2;
+pub(crate) const CAVE_SPACING: f32 = 0.5;
+pub(crate) const CAVE_RADIUS: f32 = 0.11;
+pub(crate) const CAVE_DEPTH: f32 = 0.2;
 const DETAIL_WAVELENGTH: f32 = 0.16;
 // Truncation makes the influence of distant cave candidates exactly finite.
-const DENSITY_LIMIT: f32 = CAVE_SPACING * 0.25;
+pub(crate) const DENSITY_LIMIT: f32 = CAVE_SPACING * 0.25;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainConfig {
@@ -69,8 +69,20 @@ impl TerrainField {
     }
 
     fn height(&self, x: f32, z: f32) -> f32 {
-        uber_noise(self.surface_key, Vec3::new(x, 0.0, z), self.config.noise)
-            * self.config.height_scale
+        self.height_at(Vec3::new(x, 0.0, z))
+    }
+
+    pub(crate) fn height_at(&self, position: Vec3) -> f32 {
+        uber_noise(self.surface_key, position, self.config.noise) * self.config.height_scale
+    }
+
+    pub(crate) fn detail_at(&self, position: Vec3) -> f32 {
+        normalized_noise(self.detail_key, position * DETAIL_WAVELENGTH.recip()).value
+            * self.config.detail_scale
+    }
+
+    pub(crate) fn cave_key(&self) -> u32 {
+        self.cave_key
     }
 
     pub(crate) fn column(&self, x: f32, z: f32) -> Column {
@@ -129,8 +141,7 @@ pub(crate) struct Column {
 impl Column {
     pub(crate) fn density(&self, field: &TerrainField, y: f32) -> f32 {
         let position = Vec3::new(self.x, y, self.z);
-        let detail = normalized_noise(field.detail_key, position * DETAIL_WAVELENGTH.recip()).value;
-        let mut density = self.height - y + detail * field.config.detail_scale;
+        let mut density = self.height - y + field.detail_at(position);
         for cave in &self.caves {
             density = density.min(-cave.density(position));
         }
