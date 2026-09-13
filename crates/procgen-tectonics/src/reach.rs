@@ -52,13 +52,16 @@ pub const MAX_GAP_RADIUS: f32 = TRANSPORT_REACH_HOPS as f32;
 /// material. A world in which nothing can move has no bound at all, and this
 /// returns infinity.
 ///
-/// The `rift_opening_speed` term below is dead reserve. A rift adds the
-/// opening to the halves' rotation vectors, but the respeed that ends the same
-/// step sets their lengths back inside the ceiling, and a run respeeds the
-/// motion it was handed before its first step too, so no transport ever reads
-/// a speed carrying it. It is kept only because dropping it would loosen the
-/// bound, which changes what step durations are legal and how far the viewer's
-/// slider reaches; that is its own change and not this one.
+/// The `rift_opening_speed` term below is live, not reserve. A rift adds the
+/// opening to the halves' rotation vectors and restarts each half's drift
+/// band from the speed it parted with, the parent's plus the opening, so a
+/// half of the fastest plate can drift to the ceiling plus the opening. The
+/// reference world does this, which is what the evolution test of this bound
+/// exercises. The band also scales the opening by `speed_drift_limit`, which
+/// this sum leaves out: at the defaults that is a sixth of the opening on top
+/// of the ceiling. Adding it would tighten the bound, which changes what step
+/// durations are legal and how far the viewer's slider reaches; that is its
+/// own change and not this one.
 ///
 /// Evolution and the viewer pass the same number, the kinematics config's own
 /// maximum: a user editing a step duration has not fitted the plates yet, and

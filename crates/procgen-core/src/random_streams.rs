@@ -20,6 +20,8 @@ pub const PLATE_BASEMENT: u64 = 18;
 pub const HOTSPOT_PROVINCE: u64 = 19;
 pub const CRUST_NUCLEUS: u64 = 20;
 pub const CRUST_GROWTH_COST: u64 = 21;
+pub const CRUST_NUCLEUS_COST: u64 = 22;
+pub const CRUST_COST_FIELD: u64 = 23;
 
 #[cfg(test)]
 mod tests {
@@ -48,6 +50,8 @@ mod tests {
             HOTSPOT_PROVINCE,
             CRUST_NUCLEUS,
             CRUST_GROWTH_COST,
+            CRUST_NUCLEUS_COST,
+            CRUST_COST_FIELD,
         ];
         ids.sort_unstable();
         assert!(ids.windows(2).all(|pair| pair[0] != pair[1]));

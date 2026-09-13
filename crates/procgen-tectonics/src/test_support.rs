@@ -506,12 +506,14 @@ pub fn plate_crust(
     }
 }
 
-/// Nucleus count scaled to the 512-cell reference mesh. The default eight
-/// nuclei over the default mesh's 111 plates put a continent across about four
-/// of them; this mesh has thirty-three plates, so three nuclei keep that ratio.
+/// Nucleus count scaled to the 512-cell reference mesh. The default nuclei
+/// over the default mesh's 111 plates put a continent across several of them;
+/// this mesh has thirty-three plates, so three nuclei keep the continents
+/// larger than a plate. Two are cores, so the fixture grows one satellite.
 pub fn reference_crust_config() -> CrustClassificationConfig {
     CrustClassificationConfig {
         nucleus_count: 3,
+        core_count: 2,
         ..CrustClassificationConfig::new(17)
     }
 }

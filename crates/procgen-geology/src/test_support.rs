@@ -58,7 +58,10 @@ impl PlateFixture {
             },
         )
         .unwrap();
-        let crust = classify_crust(&mesh, CrustClassificationConfig::new(17)).unwrap();
+        // Crust seed 11 puts a continent over a trench on the 1,024-cell
+        // mesh, which the volcanic-arc tests need; the clustered nuclei of
+        // seed 17 leave every convergent edge of that mesh ocean over ocean.
+        let crust = classify_crust(&mesh, CrustClassificationConfig::new(11)).unwrap();
         let kinematics =
             generate_plate_kinematics(&mesh, &plates, &crust, PlateKinematicsConfig::new(13))
                 .unwrap();

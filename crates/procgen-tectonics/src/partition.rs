@@ -23,7 +23,7 @@ use procgen_sphere_mesh::SphereMesh;
 use std::{cmp::Reverse, collections::BinaryHeap, fmt};
 
 const UNASSIGNED_PLATE: usize = usize::MAX;
-const BASE_GROWTH_COST: u64 = 100;
+pub(crate) const BASE_GROWTH_COST: u64 = 100;
 pub const MAX_GROWTH_ROUGHNESS: u32 = BASE_GROWTH_COST as u32 - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -162,10 +162,11 @@ pub fn partition_plates(
         GrowthCosts {
             roughness: config.growth_roughness,
             stream: RandomStream::new(config.seed, PLATE_GROWTH_COST),
+            scales: GrowthScales::uniform(seeds.len(), mesh.cell_count()),
         },
     );
     for (plate, &cell) in seeds.iter().enumerate() {
-        growth.seed(cell, plate);
+        growth.seed(cell, plate, 0);
     }
     growth.grow();
     Ok(PlatePartition {
@@ -268,7 +269,8 @@ impl GrowthBounds<'_> {
 }
 
 /// The per-edge cost field growth crosses: how far a cost may vary from the
-/// baseline, and the stream that variation is hashed from.
+/// baseline, the stream that variation is hashed from, and the scales that
+/// make one region or one part of the sphere slower than another.
 ///
 /// The stream is the caller's rather than derived from a seed here, so two
 /// growths over the same mesh cross independent cost fields even when their
@@ -276,6 +278,29 @@ impl GrowthBounds<'_> {
 pub(crate) struct GrowthCosts {
     pub(crate) roughness: u32,
     pub(crate) stream: RandomStream,
+    pub(crate) scales: GrowthScales,
+}
+
+/// Unit of the growth cost scales: a scale of `COST_SCALE_ONE` leaves a
+/// hashed cost as it is.
+pub(crate) const COST_SCALE_ONE: u64 = 256;
+
+/// Integer multipliers on the hashed edge cost, per growing region and per
+/// cell entered, in units of [`COST_SCALE_ONE`]. The partition grows every
+/// plate at one pace over a flat sphere; [`crate::crust`] slows some nuclei
+/// and some parts of the sphere so its continents differ in size and shape.
+pub(crate) struct GrowthScales {
+    pub(crate) region: Vec<u64>,
+    pub(crate) cell: Vec<u64>,
+}
+
+impl GrowthScales {
+    pub(crate) fn uniform(region_count: usize, cell_count: usize) -> Self {
+        Self {
+            region: vec![COST_SCALE_ONE; region_count],
+            cell: vec![COST_SCALE_ONE; cell_count],
+        }
+    }
 }
 
 /// Multi-source shortest-arrival search over per-edge integer costs, bounded
@@ -311,9 +336,11 @@ impl<'mesh> PlateGrowth<'mesh> {
         }
     }
 
-    /// Plants a region's first cell, which arrives at zero cost.
-    pub(crate) fn seed(&mut self, cell: usize, region: usize) {
-        self.settle(cell, region, 0);
+    /// Plants a region's first cell, which arrives at `start` cost: zero for
+    /// a region that grows from the outset, more for one that begins after
+    /// the others have spread that far.
+    pub(crate) fn seed(&mut self, cell: usize, region: usize, start: u64) {
+        self.settle(cell, region, start);
     }
 
     /// Settles every cell the seeds can reach.
@@ -374,7 +401,8 @@ impl<'mesh> PlateGrowth<'mesh> {
             {
                 continue;
             }
-            let candidate_cost = cost.saturating_add(self.edge_cost(corner.edge));
+            let candidate_cost =
+                cost.saturating_add(self.edge_cost(corner.edge, plate, corner.neighbor));
             if candidate_cost < self.best_arrivals[corner.neighbor] {
                 self.best_arrivals[corner.neighbor] = candidate_cost;
                 self.next_sequence = self.next_sequence.wrapping_add(1);
@@ -388,10 +416,16 @@ impl<'mesh> PlateGrowth<'mesh> {
         }
     }
 
-    fn edge_cost(&self, edge: usize) -> u64 {
+    /// The hashed cost of `edge`, scaled for the region crossing it and the
+    /// cell it enters. The scaled cost rounds down and a free edge would let
+    /// a region cross it for nothing, so the floor is one.
+    fn edge_cost(&self, edge: usize, region: usize, cell: usize) -> u64 {
         let roughness = u64::from(self.costs.roughness);
         let offset = self.costs.stream.sample_u64(edge as u64, 0) % (roughness * 2 + 1);
-        BASE_GROWTH_COST - roughness + offset
+        let hashed = BASE_GROWTH_COST - roughness + offset;
+        let scales = &self.costs.scales;
+        (hashed * scales.region[region] * scales.cell[cell] / (COST_SCALE_ONE * COST_SCALE_ONE))
+            .max(1)
     }
 }
 

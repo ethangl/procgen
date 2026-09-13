@@ -456,8 +456,8 @@ mod tests {
         // Switching every added term off and the taper's width to zero leaves
         // the age curve alone, which is what this pin holds. It moves
         // whenever the reference run's crust or its ages do: last with the
-        // removal of slab pull, which speeds every plate up, so the run
-        // subducts more floor and makes more of it.
+        // clustered nuclei, which moved every continent of the reference
+        // world and with them every ridge and trench.
         //
         // The curve is add, multiply, divide, and square root over a model
         // time, so it is bit-identical on every machine; the grid is what
@@ -465,7 +465,7 @@ mod tests {
         // two oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
             quantized_fingerprint(first.cell_elevations.iter().copied()),
-            17_742_386_235_156_407_304
+            4_208_498_535_954_766_098
         );
     }
 

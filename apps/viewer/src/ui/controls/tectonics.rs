@@ -25,6 +25,9 @@ const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
 // One nucleus is a single continent; the top of the range is about the number
 // of plates the default partition makes, past which a nucleus is a plate.
 const NUCLEUS_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=128;
+// Satellites land up to twice this from their core; at the top a cluster
+// spans the sphere and is no longer one.
+const CLUSTER_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.5;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
@@ -177,6 +180,19 @@ fn crust_controls(ui: &mut egui::Ui, config: &mut CrustClassificationConfig) {
         &mut config.nucleus_count,
         NUCLEUS_COUNT_RANGE,
         1.0,
+    );
+    drag_value(
+        ui,
+        "Cores",
+        &mut config.core_count,
+        1..=config.nucleus_count,
+        1.0,
+    );
+    slider(
+        ui,
+        "Cluster spread",
+        &mut config.cluster_spread,
+        CLUSTER_SPREAD_RANGE,
     );
     drag_value(
         ui,

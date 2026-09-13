@@ -228,15 +228,7 @@ impl<'mesh> Cracks<'mesh> {
     fn locate(&mut self, position: Vec3) -> usize {
         let location = self.mesh.locate_delaunay(position, self.triangle_hint);
         self.triangle_hint = location.triangle;
-        location
-            .cells
-            .into_iter()
-            .max_by(|&left, &right| {
-                position
-                    .dot(self.mesh.cell_centers[left])
-                    .total_cmp(&position.dot(self.mesh.cell_centers[right]))
-            })
-            .expect("a Delaunay triangle has three corners")
+        location.nearest_cell(self.mesh, position)
     }
 }
 
