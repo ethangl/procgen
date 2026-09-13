@@ -226,8 +226,7 @@ pub fn derive_base_elevation(
             // floor at 0.08 leaves the dynamic term under three times its own
             // amplitude of room and the field's peak divergence asks for
             // more; the continental base at 0.65 has room for both terms
-            // several times over. `docs/plate-movement.md` counts the cells
-            // that clamp.
+            // several times over.
             (cooled(*age, continental_base, config) + dynamic + basement).clamp(0.0, 1.0)
         })
         .collect();

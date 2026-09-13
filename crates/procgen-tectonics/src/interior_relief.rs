@@ -19,8 +19,8 @@
 //! `0.65 - 0.03 - 0.05`, which is 0.57 and still above the default sea level
 //! of 0.5 that [`crate::CoarseElevationConfig`] carries. That nominal is not a
 //! bound, because the dynamic term is normalised by the divergence field's
-//! root-mean-square rather than its peak; the measured margin is thinner, and
-//! `docs/plate-movement.md` records it. Inside the taper the two terms move a
+//! root-mean-square rather than its peak, so the real margin is thinner than
+//! that arithmetic suggests. Inside the taper the two terms move a
 //! coast on purpose, which is the point of a shelf sitting near the datum.
 //!
 //! Both read [`BaseElevationConfig`], which is the stage's data contract;

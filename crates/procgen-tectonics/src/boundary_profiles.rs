@@ -132,7 +132,8 @@ pub struct BoundaryDeformationConfig {
     /// overflowing: uplift and decay would otherwise balance at about 1.33,
     /// which is above it, so a boundary that keeps converging reaches the
     /// clamp and holds there while a belt whose boundary moves on decays away
-    /// from it. See "Relief decay" in `docs/plate-movement.md`.
+    /// from it. See "Boundary deformation and relief decay" in
+    /// `docs/plate-movement.md`.
     pub maximum_magnitude: f32,
     /// Model time constant of the relief sink. Every step, what a parcel of
     /// crust carries is multiplied by `1 - step_duration / erosion_time`

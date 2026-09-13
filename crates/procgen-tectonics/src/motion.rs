@@ -64,8 +64,7 @@ pub struct PlateKinematicsConfig {
     pub maximum_angular_speed: f32,
     /// Lattice frequency of the flow field, in cycles per unit direction. A
     /// flow cell has to be much larger than a plate for adjacent plates to
-    /// agree, so raising this past the default costs coherence quickly; see the
-    /// measurements in `docs/plate-movement.md`.
+    /// agree, so raising this past the default costs coherence quickly.
     pub flow_frequency: f32,
     /// Fraction of the way from the hashed random axis to the fitted axis.
     /// Zero reproduces independent random motion; one is fully field-driven.

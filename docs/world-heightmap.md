@@ -76,15 +76,11 @@ Completed foundations:
   boundary classification, and per-cell continental crust grown from
   farthest-first nuclei by integer-cost growth to a target continental area,
   ignoring plate boundaries so that most of the coastline is a passive margin.
-  Those velocities are only where a run starts, and they are not even its
-  speeds: what sets speed also reads the share of a plate's perimeter that is
-  subducting slab, which needs ocean-floor ages the kinematics stage does not
-  have yet. Evolution applies it, once before step zero and again at the end
-  of every step, turning each plate's axis through a fixed angle toward a
-  fresh hashed direction and then recomputing its speed from the crust and the
-  trenches the plate then has, times a hashed drift factor bounded to a band
-  around one. Boundaries therefore change regime during a run, and a plate
-  that gains a trench speeds up. It repeatedly reclassifies current boundaries
+  Those velocities are only where a run starts. Evolution drifts its own copy
+  of them: every step turns each plate's axis through a fixed angle toward a
+  fresh hashed direction and takes a hashed step in its speed, bounded to a
+  band around the speed the plate began with. Boundaries therefore change
+  regime during a run. It repeatedly reclassifies current boundaries
   and, over a configured run duration sliced into as many steps as the mesh
   needs, moves the crust itself: the material lives
   in particles, one per cell before step zero, each rotating rigidly with its
@@ -113,13 +109,11 @@ Completed foundations:
   with deterministic overlap resolution and bounded within-plate propagation.
   A parcel also carries how many original parcels it holds: a continent that
   arrives under another continent at a trench merges into it rather than
-  stacking under it, so a collision makes one column of doubled crust and base
-  elevation floats it as a plateau. Continental material stays exactly
-  conserved, as a sum of thickness rather than as a count of parcels. That
-  thickness also flows: each step, a column asks its thickest same-plate
-  continental neighbour for a parcel when that neighbour stands two or more
-  above it, and a column grants at most two such requests, which provably
-  settles into a plateau with a one-parcel rim rather than a spike.
+  stacking under it, so a collision makes one column of doubled crust.
+  Continental material stays exactly conserved, as a sum of thickness rather
+  than as a count of parcels. Nothing reads that thickness as an elevation; it
+  is a record of where continents have met, and the mountains a collision
+  makes are what the convergent profile paints.
 
   The step's profile is scaled by the model time it spends against a
 

@@ -95,8 +95,7 @@ impl Default for PoleDriftConfig {
             // of the 111 plates at the viewer's defaults reached the edge, and
             // about a half over the sixty the viewer now runs. The band
             // therefore bounds the tail of a short run and shapes the bulk of
-            // a long one, which is one of the things "Run length" in
-            // `docs/plate-movement.md` records.
+            // a long one.
             speed_drift_limit: 0.5,
         }
     }
