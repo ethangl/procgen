@@ -581,7 +581,7 @@ mod tests {
         );
         assert_eq!(
             birth_fingerprint(&first.cell_ages),
-            1_962_671_684_258_877_357
+            16_892_226_167_731_275_492
         );
     }
 
@@ -660,7 +660,6 @@ mod tests {
                 &fixture.mesh,
                 age,
                 run.cell_crust(),
-                &run.cell_thickness,
                 &reference_flow_field(),
                 reference_base_elevation_config(),
             )

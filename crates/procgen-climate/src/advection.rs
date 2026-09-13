@@ -44,8 +44,8 @@ pub(crate) struct Route {
 /// is the same on every mesh. That is why moisture reaches the same number of
 /// cells inland on every mesh rather than the same distance, and no step count
 /// this pipeline could afford makes it inert. The fix is a transport that
-/// carries moisture the distance the wind actually moves it; see "Moisture
-/// caps" in `docs/plate-movement.md`.
+/// carries moisture the distance the wind actually moves it, which is its own
+/// change.
 pub(crate) const MAXIMUM_TRANSPORT_FRACTION_PER_STEP: f64 = 0.5;
 
 /// Builds one route per cell from the wind blowing over it.

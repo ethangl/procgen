@@ -251,8 +251,7 @@ skirts, relative tile origins, resident GPU slots, and bounded tile-generation
 scheduling. Slices 15 and 16, tile export, are not started.
 
 The compute-shader tectonics pilot ran three slices and was retired on
-2026-09-10; `docs/compute-shader-tectonics-pilot.md` stays as the record, and
-its Outcome section says what it answered and why it ended.
+2026-09-10. Its design doc is deleted; the record is in git history.
 
 `procgen-core` owns the WGSL mirror of the four-word hash; `procgen-noise` and
 `procgen-terrain` compose it rather than restating it.

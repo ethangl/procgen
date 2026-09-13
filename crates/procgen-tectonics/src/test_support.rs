@@ -72,12 +72,6 @@ pub const REFERENCE_STEP_DURATION: f32 = 0.15;
 /// Kinematics seed of the reference fixtures, and so of their flow field.
 const REFERENCE_MOTION_SEED: u64 = 7;
 
-/// Base speed of the fixtures that build their kinematics by hand. It is the
-/// reference motion config's maximum, which is the unit speed those fixtures
-/// turn their plates at, so a respeed can only slow a plate down and never
-/// carry one past the step bound the config states.
-const HAND_BUILT_BASE_SPEED: f32 = 1.0;
-
 /// The motion config the reference fixtures fit against, and the one the crust
 /// birth prior scales a hop by. The fixtures that build their kinematics by
 /// hand turn their plates at unit speed, which is this config's maximum, so
@@ -206,7 +200,6 @@ impl EvolutionFixture {
         PlateEvolutionInputs {
             partition: &self.partition,
             kinematics: &self.kinematics,
-            kinematics_config: reference_motion_config(),
             boundaries: &self.boundaries,
             birth_prior: &self.birth_prior,
         }
@@ -266,33 +259,17 @@ pub struct BaseElevationFixture {
     pub mesh: SphereMesh,
     pub age: SeafloorAge,
     pub cell_birth: Vec<Option<f32>>,
-    /// What the run under this fixture left, so the field the fixture derives
-    /// is the one the pipeline derives. The test that isolates the thickness
-    /// term sets its own.
-    pub cell_thickness: Vec<u32>,
-
     pub flow: FlowField,
 }
 
 impl BaseElevationFixture {
     pub fn derive(&self, config: BaseElevationConfig) -> BaseElevation {
-        self.derive_with_thickness(config, &self.cell_thickness)
-    }
-
-    /// The same over a chosen thickness column, for the test that isolates
-    /// what the crust under a cell does to it.
-    pub fn derive_with_thickness(
-        &self,
-        config: BaseElevationConfig,
-        cell_thickness: &[u32],
-    ) -> BaseElevation {
         derive_base_elevation(
             &self.mesh,
             &self.age,
             CellCrust {
                 cell_birth: &self.cell_birth,
             },
-            cell_thickness,
             &self.flow,
             config,
         )
@@ -315,7 +292,6 @@ pub fn base_elevation_fixture_with_crust(
         mesh,
         age,
         cell_birth: evolution.cell_birth,
-        cell_thickness: evolution.cell_thickness,
         flow: reference_flow_field(),
     }
 }
@@ -359,14 +335,10 @@ pub fn reference_base_elevation_config() -> BaseElevationConfig {
 /// and the crustal-thickness uplift — so that a continental cell stands at
 /// the margin taper's answer and nothing else.
 ///
-/// The thickness term belongs here for the same reason the other two do: a
-/// test about the taper is not about what a collision did to the reference
-/// run under it.
 pub fn curve_and_taper_only() -> BaseElevationConfig {
     BaseElevationConfig {
         dynamic_topography_amplitude: 0.0,
         basement_amplitude: 0.0,
-        thickness_uplift: 0.0,
         ..reference_base_elevation_config()
     }
 }
@@ -383,7 +355,6 @@ pub fn still_world_fixture() -> EvolutionFixture {
     let mut fixture = evolution_fixture();
     fixture.kinematics = PlateKinematics {
         angular_velocities: vec![Vec3::ZERO; fixture.partition.plate_count],
-        base_speeds: vec![0.0; fixture.partition.plate_count],
     };
     fixture.boundaries =
         classify_boundaries(&fixture.mesh, &fixture.partition, &fixture.kinematics).unwrap();
@@ -399,7 +370,6 @@ pub fn opposed_kinematics(mesh: &SphereMesh, edge: usize, outward: f32) -> Plate
     let apart = (second - first).normalized() * outward;
     PlateKinematics {
         angular_velocities: vec![first.cross(-apart), second.cross(apart)],
-        base_speeds: vec![HAND_BUILT_BASE_SPEED; 2],
     }
 }
 
@@ -626,7 +596,6 @@ fn rift_cap_world() -> (SphereMesh, PlatePartition, PlateEvolutionConfig) {
 fn at_rest(plate_count: usize) -> PlateKinematics {
     PlateKinematics {
         angular_velocities: vec![Vec3::ZERO; plate_count],
-        base_speeds: vec![HAND_BUILT_BASE_SPEED; plate_count],
     }
 }
 

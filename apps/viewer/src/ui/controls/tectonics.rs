@@ -27,13 +27,6 @@ const FLOW_FREQUENCY_RANGE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
 const NUCLEUS_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=128;
 // Crust factors multiply the hashed base speed before it is clamped.
 const CRUST_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.1..=4.0;
-// Both are shares, so both stop at one, where the slab factor disappears: at a
-// trenchless factor of one every plate keeps its whole base speed, and at a
-// saturation of one only a plate that is nothing but trench does. The bottoms
-// sit where a plate without a trench barely moves and where the least trench a
-// plate can have already saturates.
-const TRENCHLESS_SPEED_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
-const SLAB_SATURATION_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
 const EVOLUTION_STEP_RANGE: std::ops::RangeInclusive<usize> = 0..=256;
 // The top is the crate's own ceiling, which is how far the search reaches. At
 // the bottom every cell a rigid rotation left empty makes floor it should not
@@ -68,11 +61,6 @@ const DEFORMATION_DEPTH_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 // A single profile offset is bounded to one, and tectonic elevation clamps to
 // the unit range, so a clamp above one could never bite.
 const DEFORMATION_MAGNITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=1.0;
-// Per parcel of crust past the first. Zero is the world before crustal
-// thickness; the top is what a doubled crust alone would ask for under Airy
-// isostasy, which a typical three-parcel column drives into the elevation
-// clamp. See "Crustal thickness" in `docs/plate-movement.md`.
-const THICKNESS_UPLIFT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.3;
 const SMOOTHING_RADIUS_HOPS: std::ops::RangeInclusive<f32> = 0.0..=32.0;
 
 // The datum must stay strictly inside the unit range the field is clamped to.
@@ -210,8 +198,8 @@ fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
     );
     ui.horizontal(|ui| {
         ui.label("Angular speed").on_hover_text(
-            "The range each plate's hashed base speed is drawn from. Crust and \
-             slab pull scale that draw, so a plate's own speed can sit well \
+            "The range each plate's hashed base speed is drawn from. The crust \
+             factor scales that draw, so a plate's own speed can sit well \
              below the minimum; the maximum is also the ceiling every speed is \
              clamped to.",
         );
@@ -245,18 +233,6 @@ fn kinematics_controls(ui: &mut egui::Ui, config: &mut PlateKinematicsConfig) {
         "Continental speed",
         &mut config.continental_speed_factor,
         CRUST_SPEED_FACTOR_RANGE,
-    );
-    slider(
-        ui,
-        "Trenchless speed",
-        &mut config.trenchless_speed_factor,
-        TRENCHLESS_SPEED_FACTOR_RANGE,
-    );
-    slider(
-        ui,
-        "Slab saturation",
-        &mut config.slab_saturation_fraction,
-        SLAB_SATURATION_RANGE,
     );
 }
 
@@ -437,12 +413,6 @@ fn base_elevation_controls(ui: &mut egui::Ui, config: &mut BaseElevationConfig) 
         "Margin edge",
         &mut config.margin_edge_elevation,
         MARGIN_EDGE_RANGE,
-    );
-    slider(
-        ui,
-        "Thickness uplift",
-        &mut config.thickness_uplift,
-        THICKNESS_UPLIFT_RANGE,
     );
 }
 

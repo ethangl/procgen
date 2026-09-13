@@ -113,7 +113,7 @@ mod tests {
     use crate::test_support::{
         NO_LIFECYCLE, NO_POLE_DRIFT, evolution_fixture, reference_evolution_config,
     };
-    use crate::{PlateEvolutionError, PlateKinematicsConfig, evolve_plate_ownership};
+    use crate::{PlateEvolutionError, evolve_plate_ownership};
     use procgen_sphere_mesh::mean_cell_width;
 
     #[test]
@@ -122,10 +122,14 @@ mod tests {
         let config = reference_evolution_config();
         let radius = fixture.mesh.radius;
         let cell_width = mean_cell_width(radius, fixture.mesh.cell_count());
-        // The configured ceiling, not the fastest plate the fit produced: a
-        // plate that gains a trench is respeeded up to that ceiling, so it is
-        // the speed the bound has to hold.
-        let fastest = PlateKinematicsConfig::new(7).maximum_angular_speed;
+        // The fastest plate the fit produced, which is the speed evolution
+        // bounds its own step against.
+        let fastest = fixture
+            .kinematics
+            .angular_velocities
+            .iter()
+            .map(|rotation| rotation.length())
+            .fold(0.0, f32::max);
         let bound = |config: &PlateEvolutionConfig| {
             maximum_step_duration(fastest, radius, cell_width, config)
         };

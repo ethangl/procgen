@@ -26,9 +26,8 @@
 use crate::{
     BoundaryClassification, BoundaryDeformation, BoundaryDeformationDiagnostics, CellCrust,
     CrustBirthPrior, PlateEvolutionConfig, PlateEvolutionDiagnostics, PlateEvolutionError,
-    PlateKinematics, PlateKinematicsConfig, PlatePartition, StageInputError, classify_boundaries,
-    evolution_config, maximum_step_duration, motion::validate_config as validate_motion_config,
-    step::EvolvingWorld,
+    PlateKinematics, PlatePartition, StageInputError, classify_boundaries, evolution_config,
+    maximum_step_duration, step::EvolvingWorld,
 };
 use procgen_sphere_mesh::{SphereMesh, mean_cell_width};
 
@@ -36,18 +35,12 @@ use procgen_sphere_mesh::{SphereMesh, mean_cell_width};
 #[derive(Clone, Copy, Debug)]
 pub struct PlateEvolutionInputs<'a> {
     pub partition: &'a PlatePartition,
-    /// Plate motion before step zero. A run drifts its own copy of it and
+    /// Plate motion before step zero. A run drifts its own copy of it,
+    /// bounds each plate's speed relative to the speed it holds here, and
     /// returns the motion it ended on.
     pub kinematics: &'a PlateKinematics,
-    /// The config that motion was fitted under. Every step recomputes each
-    /// plate's speed from it, so a run and the stage it starts from cannot
-    /// disagree about the speed rule, and the step bound reads its maximum
-    /// rather than the fastest plate the inputs happen to hold.
-    pub kinematics_config: PlateKinematicsConfig,
     /// Boundaries classified from `partition` and `kinematics`, which the
-    /// run's first respeed reads to reach its subducting fractions. It is not
-    /// what the first step deforms and transports over: that is the
-    /// classification of the respeeded motion, which the run takes itself.
+    /// first step reads.
     pub boundaries: &'a BoundaryClassification,
     /// Crust birth from before step zero.
     pub birth_prior: &'a CrustBirthPrior,
@@ -104,14 +97,11 @@ impl PlateEvolution {
 
 /// Repeatedly classifies current boundaries, raises deformation along them,
 /// rotates every particle of crust with its plate and resolves what each cell
-/// then holds, and drifts and respeeds every plate's rotation vector before
-/// the next classification.
+/// then holds, and drifts every plate's rotation vector before the next
+/// classification.
 ///
-/// A run begins by respeeding the motion it was given, because the kinematics
-/// stage could not: the speed rule reads a subducting fraction and a trench
-/// has a side only once the ocean has ages. A run of no steps therefore
-/// returns the plates at the speed that rule gives them, and the boundaries
-/// that speed implies, over the ownership and the crust it was handed.
+/// A run of no steps is the identity: it returns the ownership, the motion,
+/// and the boundaries it was handed.
 ///
 /// [`PlateEvolution::cell_crust`] is what a cell carries when the run ends.
 pub fn evolve_plate_ownership(
@@ -120,22 +110,24 @@ pub fn evolve_plate_ownership(
     config: PlateEvolutionConfig,
 ) -> Result<PlateEvolution, PlateEvolutionError> {
     evolution_config::validate(&config)?;
-    // The motion config is the one input here that is not a stage output, and
-    // every step's respeed reads it, so it is held to the rules of the stage
-    // that owns it rather than taken on trust.
-    validate_motion_config(inputs.kinematics_config)?;
     inputs.partition.validate(mesh)?;
     inputs.kinematics.validate(inputs.partition)?;
     inputs.boundaries.validate(mesh)?;
     inputs.birth_prior.validate(mesh)?;
     // Last, because it reads both a validated drift band and a validated
-    // motion config: a nonsensical band would otherwise report itself as a
-    // step that outruns the reach it inflates. The bound is the configured
-    // ceiling rather than the fastest plate the inputs hold, because every
-    // respeed clamps to that ceiling and a plate that gains a slab reaches it.
+    // motion: a nonsensical band would otherwise report itself as a step that
+    // outruns the reach it inflates. The bound is the fastest plate the run
+    // actually starts from, which the drift band then inflates; nothing in a
+    // run can make a plate faster than the band around where it began.
+    let fastest_plate = inputs
+        .kinematics
+        .angular_velocities
+        .iter()
+        .map(|rotation| rotation.length())
+        .fold(0.0, f32::max);
     if config.step_duration
         > maximum_step_duration(
-            inputs.kinematics_config.maximum_angular_speed,
+            fastest_plate,
             mesh.radius,
             mean_cell_width(mesh.radius, mesh.cell_count()),
             &config,
@@ -151,15 +143,7 @@ pub fn evolve_plate_ownership(
     }
 
     let mut world = EvolvingWorld::new(mesh, inputs, config);
-    // The motion the kinematics stage fitted is scaled by crust alone: that
-    // stage runs before the crust-birth prior, so no trench it could see has a
-    // side. The prior has since dated the ocean, so a run's first act is the
-    // same respeed it makes every step, over the real ages and the boundaries
-    // its caller classified, and one classification of what that left. Step
-    // zero therefore moves the slab-pulled world rather than a world whose
-    // ocean is all one age.
-    world.respeed(inputs.boundaries);
-    let mut boundaries = classify_boundaries(mesh, &world.partition, &world.kinematics)?;
+    let mut boundaries = inputs.boundaries.clone();
     let mut diagnostics = PlateEvolutionDiagnostics {
         starting_continental_thickness: world.continental_thickness(),
         ..PlateEvolutionDiagnostics::default()
@@ -173,7 +157,6 @@ pub fn evolve_plate_ownership(
         diagnostics.active_step_count += usize::from(active);
         world.drift(step as i32);
         diagnostics.record_lifecycle(world.lifecycle(&boundaries, step as i32));
-        world.respeed(&boundaries);
         boundaries = classify_boundaries(mesh, &world.partition, &world.kinematics)?;
     }
     // Read before compaction, which merges the continent of a plate the run
@@ -227,7 +210,7 @@ mod tests {
     use crate::test_support::{REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION};
     use crate::{
         BoundaryClass, BoundaryDeformationConfig, BoundaryDeformationError, CrustClass,
-        MAX_GAP_RADIUS, MaterialTransportConfig, PoleDriftConfig, subducting_fractions,
+        MAX_GAP_RADIUS, MaterialTransportConfig, PoleDriftConfig,
     };
     use procgen_core::Vec3;
 
@@ -250,44 +233,43 @@ mod tests {
         assert_eq!(first, fixture.evolve(config));
         first.validate(&fixture.mesh).unwrap();
         assert_eq!(first.diagnostics.active_step_count, config.step_count());
-        // Every count here fell when speed became slab pull. Slab pull is a
-        // multiplier below one for every plate short of saturation, and no
-        // plate of this world is half trench, so the run moves about two
-        // thirds of the material it used to.
-        assert_eq!(first.diagnostics.owner_change_count, 147);
-        assert_eq!(first.diagnostics.subducted_particle_count, 112);
-        assert_eq!(first.diagnostics.born_particle_count, 5);
-        // Every foreign continental stack this world used to hold is now a
-        // merge instead, which is why the two collision counts read zero: the
-        // stacks they counted were continental to a parcel. What is left for
-        // them to count is a parcel of another plate that crossed a transform
-        // or a ridge by lattice jitter, and this world has none.
-        assert_eq!(first.diagnostics.accreted_particle_count, 23);
+        // Every count here rose when slab pull went: it was a multiplier
+        // below one for every plate short of saturation, and no plate of this
+        // world is half trench, so dropping it speeds the whole world up and
+        // the run moves about half again the material it did.
+        assert_eq!(first.diagnostics.owner_change_count, 383);
+        assert_eq!(first.diagnostics.subducted_particle_count, 188);
+        assert_eq!(first.diagnostics.born_particle_count, 30);
+        // Every foreign continental stack this world holds is a merge, which
+        // is why the two collision counts read zero: the stacks they counted
+        // were continental to a parcel. What is left for them to count is a
+        // parcel of another plate that crossed a transform or a ridge by
+        // lattice jitter, and this world has none.
+        assert_eq!(first.diagnostics.accreted_particle_count, 36);
         assert_eq!(first.diagnostics.collided_cell_count, 0);
         assert_eq!(first.diagnostics.maximum_collision_stack, 0);
-        // Up from 696: a merged parcel is one fewer parcel standing in the
-        // world, so a cell it would have been near is now a gap that samples
-        // its neighbour instead.
-        assert_eq!(first.diagnostics.sampled_cell_count, 716);
+        // A merged parcel is one fewer parcel standing in the world, so a cell
+        // it would have been near is now a gap that samples its neighbour
+        // instead.
+        assert_eq!(first.diagnostics.sampled_cell_count, 997);
 
         // Exact, and the whole of the conservation rule: a collision merges
         // two parcels into one column rather than losing one.
         assert_eq!(first.diagnostics.starting_continental_thickness, 174);
         assert_eq!(first.diagnostics.final_continental_thickness, 174);
-        assert_eq!(first.diagnostics.maximum_thickness, 3);
-        // Wider than the 27 cells accretion alone thickened: the flow pass
-        // spreads a column into its neighbours, which is the whole point of
-        // it.
-        assert_eq!(first.diagnostics.thickened_cell_count, 34);
-        assert_eq!(first.diagnostics.thickness_transfer_count, 7);
+        assert_eq!(first.diagnostics.maximum_thickness, 4);
+        // The cells accretion doubled, and no more: a merged column stands
+        // where the collision put it rather than spreading into its
+        // neighbours.
+        assert_eq!(first.diagnostics.thickened_cell_count, 47);
 
         // Plates of the reference world clear the minimum continental area a
-        // rift needs. Two draws split their plate and two separate nothing:
-        // slower plates leave more of the world in one piece, so an arc more
-        // often runs out of plate before it has cut one.
-        assert_eq!(first.diagnostics.rift_count, 2);
-        assert_eq!(first.diagnostics.failed_rift_count, 2);
-        assert_eq!(first.diagnostics.suture_count, 7);
+        // rift needs, and every draw that took one cut it: a faster world
+        // breaks itself into more pieces, so an arc has plate enough to cut
+        // through where a slower one ran out of it.
+        assert_eq!(first.diagnostics.rift_count, 3);
+        assert_eq!(first.diagnostics.failed_rift_count, 0);
+        assert_eq!(first.diagnostics.suture_count, 4);
         assert_eq!(first.partition.plate_count, 26);
         // Both moved with crustal thickness, and the reason is worth stating
         // because it is not obvious: within one step accretion only removes a
@@ -295,10 +277,10 @@ mod tests {
         // are untouched. Across steps it is not neutral. The parcel is gone
         // from every later step, so a cell it would have won in step three is
         // won by something else, and the run's floor is made in other places.
-        assert_eq!(ownership_fingerprint(&first), 5_123_690_239_039_431_048);
+        assert_eq!(ownership_fingerprint(&first), 1_855_260_980_066_599_162);
         assert_eq!(
             birth_fingerprint(&first.cell_birth),
-            3_818_539_641_804_957_589
+            17_664_711_403_482_833_826
         );
 
         // Float, so it is never pinned; equality above already covers the whole
@@ -367,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn without_drift_or_lifecycle_the_run_keeps_the_axis_it_started_from() {
+    fn without_drift_or_lifecycle_the_run_keeps_the_motion_it_started_from() {
         let fixture = evolution_fixture();
         let config = PlateEvolutionConfig {
             pole_drift: NO_POLE_DRIFT,
@@ -377,34 +359,19 @@ mod tests {
         .with_steps(REFERENCE_STEP_COUNT, REFERENCE_STEP_DURATION * 0.01);
         let evolution = fixture.evolve(config);
 
-        // Nothing turns an axis and nothing splits a plate, so every plate
-        // holds the direction it started with. Its speed is not the one it
-        // started with: every step derives that afresh from the crust and the
-        // trenches the plate then has. The step is short enough that no plate
-        // loses its last cell, so an id means the same plate either side.
+        // Nothing drifts and nothing splits a plate, so every plate holds
+        // exactly the rotation vector it started with. The step is short
+        // enough that no plate loses its last cell, so an id means the same
+        // plate either side.
         assert_eq!(
             evolution.kinematics.angular_velocities.len(),
             fixture.partition.plate_count
         );
-        for (plate, &rotation) in evolution.kinematics.angular_velocities.iter().enumerate() {
-            let started = fixture.kinematics.angular_velocities[plate];
-            assert!(
-                (rotation.normalized() - started.normalized()).length() < 1.0e-6,
-                "plate {plate} left its axis"
-            );
-        }
-        assert!(
-            evolution
-                .kinematics
-                .angular_velocities
-                .iter()
-                .zip(&fixture.kinematics.angular_velocities)
-                .any(|(after, before)| (after.length() - before.length()).abs() > 1.0e-4),
-            "no plate was respeeded"
+        assert_eq!(
+            evolution.kinematics.angular_velocities,
+            fixture.kinematics.angular_velocities
         );
-        // Both are re-pinned by the speed rule becoming slab pull, and the
-        // step with them: the run now needs a hundredth of the reference step
-        // to keep every plate owning a cell.
+        // Both are re-pinned by the speed rule losing slab pull.
         assert_eq!(ownership_fingerprint(&evolution), 1_312_040_099_017_365_644);
         assert_eq!(
             birth_fingerprint(&evolution.cell_birth),
@@ -413,17 +380,21 @@ mod tests {
     }
 
     /// The speed no plate may pass, which is what
-    /// [`crate::maximum_step_duration`] bounds a step against: the configured
-    /// ceiling the respeed clamps to, widened by the drift band.
+    /// [`crate::maximum_step_duration`] bounds a step against: the fastest
+    /// plate the run starts from, widened by the drift band.
     #[test]
     fn no_step_leaves_a_plate_faster_than_the_step_bound_assumes() {
         let fixture = evolution_fixture();
         let config = reference_evolution_config();
-        let motion = PlateKinematicsConfig::new(7);
-        // The respeed realizes a speed by scaling the rotation vector by a
+        let fastest = fixture
+            .kinematics
+            .angular_velocities
+            .iter()
+            .map(|rotation| rotation.length())
+            .fold(0.0, f32::max);
+        // The drift realizes a speed by scaling the rotation vector by a
         // ratio, so it lands a few ulps either side of the value.
-        let ceiling =
-            motion.maximum_angular_speed * (1.0 + config.pole_drift.speed_drift_limit) + 1.0e-6;
+        let ceiling = fastest * (1.0 + config.pole_drift.speed_drift_limit) + 1.0e-6;
 
         for step_count in [1, 2, 5, 13] {
             let evolution = fixture.evolve(config.with_steps(step_count, config.step_duration));
@@ -434,65 +405,6 @@ mod tests {
                     rotation.length()
                 );
             }
-        }
-    }
-
-    /// A boundary that changes regime changes the speed of the plate whose
-    /// floor goes under it, which is the feedback the slab rule exists for.
-    ///
-    /// The speed walk is off, so a plate's drift factor stays at one and its
-    /// speed is the slab rule's answer alone. A run of `n + 1` steps ends by
-    /// respeeding over the boundaries a run of `n` steps ended on, so the two
-    /// are paired off by one.
-    #[test]
-    fn a_plates_speed_follows_the_trench_share_its_respeed_read() {
-        let fixture = two_plate_fixture(1.0, vec![CrustClass::Continental, CrustClass::Oceanic]);
-        let config = PlateEvolutionConfig {
-            pole_drift: PoleDriftConfig {
-                speed_drift_rate: 0.0,
-                ..drift_config(0).pole_drift
-            },
-            ..drift_config(0)
-        };
-        let run = |step_count| fixture.evolve(config.with_steps(step_count, config.step_duration));
-
-        // The one-cell oceanic plate is the one with a floor to subduct. The
-        // run stops before the continent around it overrides that last cell,
-        // so an id means the same plate at every sample.
-        const SLAB: usize = 1;
-        const FEEDBACK_STEPS: usize = 12;
-        let mut samples: Vec<(f64, f32)> = (0..FEEDBACK_STEPS)
-            .map(|steps| {
-                let before = run(steps);
-                let after = run(steps + 1);
-                assert_eq!(after.partition, fixture.partition, "material moved");
-                let fraction = subducting_fractions(
-                    &fixture.mesh,
-                    &before.partition,
-                    before.cell_crust(),
-                    &before.boundaries,
-                )[SLAB];
-                (fraction, after.kinematics.angular_velocities[SLAB].length())
-            })
-            .collect();
-
-        samples.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let (least, most) = (samples[0], samples[samples.len() - 1]);
-        assert!(
-            most.0 > least.0,
-            "the drift never changed the trench share: {samples:?}"
-        );
-        assert!(
-            most.1 > least.1,
-            "more trench did not mean more speed: {samples:?}"
-        );
-        // The respeed realizes a speed by scaling a rotation vector, so equal
-        // shares land within a few ulps of each other rather than on it.
-        for pair in samples.windows(2) {
-            assert!(
-                pair[1].1 >= pair[0].1 - 1.0e-6,
-                "speed does not follow the share: {samples:?}"
-            );
         }
     }
 
@@ -546,39 +458,21 @@ mod tests {
         );
     }
 
-    /// A run of no steps moves nothing and creates nothing, but it does
-    /// respeed: the speed rule is evolution's, and the motion it was handed
-    /// was scaled by crust alone. What it returns is the plates at the speed
-    /// their trenches earn them and the boundaries that speed implies.
+    /// A run of no steps is the identity: it moves nothing, creates nothing,
+    /// and hands back the ownership, the motion, and the boundaries it was
+    /// given.
     #[test]
-    fn zero_steps_respeeds_the_plates_and_moves_nothing() {
+    fn zero_steps_returns_the_initial_state_and_the_prior() {
         let fixture = evolution_fixture();
         let evolution = fixture.evolve(
             reference_evolution_config().with_steps(0, reference_evolution_config().step_duration),
         );
 
         assert_eq!(evolution.partition, fixture.partition);
+        assert_eq!(evolution.kinematics, fixture.kinematics);
+        assert_eq!(evolution.boundaries, fixture.boundaries);
         assert_eq!(evolution.cell_birth, fixture.birth_prior.cell_birth);
         assert_eq!(evolution.diagnostics, still_world_diagnostics(&fixture));
-
-        // Every axis is the one it was handed; every speed is the rule's.
-        for (plate, &rotation) in evolution.kinematics.angular_velocities.iter().enumerate() {
-            let handed = fixture.kinematics.angular_velocities[plate];
-            assert!(
-                (rotation.normalized() - handed.normalized()).length() < 1.0e-6,
-                "plate {plate} left its axis"
-            );
-        }
-        assert!(
-            evolution
-                .kinematics
-                .angular_velocities
-                .iter()
-                .zip(&fixture.kinematics.angular_velocities)
-                .any(|(after, before)| (after.length() - before.length()).abs() > 1.0e-4),
-            "no plate was respeeded"
-        );
-        assert_ne!(evolution.boundaries, fixture.boundaries);
     }
 
     /// What a run that moved nothing reports: the material it started with,

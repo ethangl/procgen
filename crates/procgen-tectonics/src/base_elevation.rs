@@ -80,31 +80,6 @@ pub struct BaseElevationConfig {
     /// the crust boundary coincide. [`crate::is_land`] is strict, so a cell
     /// exactly at the datum is ocean.
     pub margin_edge_elevation: f32,
-    /// Normalized elevation each extra parcel of crust floats the surface by,
-    /// on continental cells. A cell standing on `n` parcels is raised by
-    /// `thickness_uplift * (n - 1)`, so undeformed continent is untouched and
-    /// a doubled crust stands one whole term above the continent around it.
-    ///
-    /// It is Airy isostasy, which floats a doubled 35 km crust about 6 km
-    /// higher. What the default is set against is where the plateau's surface
-    /// ends up, not how far it stands above its neighbours: the continental
-    /// base is already 0.65, which is 3 km on the land mapping this codebase
-    /// quotes elevations through, so a term that raised a plateau 3 to 5 km
-    /// *above that* would put its surface at 6 to 8 km. Tibet is 5 km above
-    /// the sea, which is 0.75.
-    ///
-    /// At 0.1 a parcel, with lateral flow leaving a median thickened cell two
-    /// parcels deep, the largest plateau of the viewer's defaults has its
-    /// surface at 0.767 to 0.799 — 5.3 to 6.0 km — at every run length from
-    /// 15 steps to 240. That is the target. At 0.15 the same plateau reaches
-    /// 0.817 to 0.840, which is 6.3 to 6.8 km and higher than anything on
-    /// Earth, and roughly triples the cells pinned at the 1.0 clamp. See
-    /// "Crustal thickness" in `docs/plate-movement.md` for the sweep.
-
-    ///
-    /// Zero disables it and restores the world before crustal thickness,
-    /// where a plateau was whatever the convergent profile painted.
-    pub thickness_uplift: f32,
 }
 
 impl Default for BaseElevationConfig {
@@ -122,7 +97,6 @@ impl Default for BaseElevationConfig {
             basement_frequency: 3.0,
             margin_width: 3.0 * default_hop_length(),
             margin_edge_elevation: 0.46,
-            thickness_uplift: 0.1,
         }
     }
 }
@@ -145,11 +119,6 @@ pub struct BaseElevationDiagnostics {
     /// Continental cells the taper reached, which is every continental cell
     /// within `margin_width` of the ocean.
     pub margin_cell_count: usize,
-    /// The thickness term over the cells it raised, which are the continental
-    /// cells standing on more than one parcel. Empty on a world with no
-    /// collision in it.
-    pub thickness_uplift: FieldSummary,
-    pub thickened_cell_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,7 +140,6 @@ impl BaseElevation {
 pub enum BaseElevationError {
     InvalidConfig,
     InvalidMarginEdge,
-    InvalidThicknessUplift,
     InvalidInteriorAmplitude,
 
     InvalidBasementFrequency,
@@ -187,8 +155,6 @@ impl fmt::Display for BaseElevationError {
             Self::InvalidMarginEdge => formatter.write_str(
                 "margin edge elevation must be finite, between 0 and 1, and not above the continental base",
             ),
-            Self::InvalidThicknessUplift => formatter
-                .write_str("thickness uplift must be finite and non-negative; zero disables it"),
             Self::InvalidInteriorAmplitude => formatter.write_str(
 
                 "dynamic topography and basement amplitudes must be finite and non-negative",
@@ -234,16 +200,12 @@ pub fn derive_base_elevation(
     mesh: &SphereMesh,
     seafloor_age: &SeafloorAge,
     cell_crust: CellCrust<'_>,
-    cell_thickness: &[u32],
     flow_field: &FlowField,
     config: BaseElevationConfig,
 ) -> Result<BaseElevation, BaseElevationError> {
     let octaves = validate_config(config)?;
     seafloor_age.validate(mesh)?;
     cell_crust.validate(mesh)?;
-    if cell_thickness.len() != mesh.cell_count() {
-        return Err(StageInputError::CellThickness.into());
-    }
 
     let ContinentalBase {
         cell_bases,
@@ -251,32 +213,22 @@ pub fn derive_base_elevation(
     } = continental_base_field(mesh, cell_crust, config);
     let dynamic_topography = dynamic_topography_field(mesh, flow_field, config);
     let basement = basement_field(mesh, cell_crust, config, octaves);
-    let thickness = thickness_field(cell_thickness, config);
     let cell_elevations: Vec<_> = seafloor_age
         .cell_ages
         .iter()
         .zip(&cell_bases)
         .zip(&dynamic_topography)
         .zip(&basement)
-        .zip(&thickness)
-        .map(
-            |((((age, &continental_base), &dynamic), &basement), &thickness)| {
-                // The composition stage clamps for the same reason: elevation is
-                // normalized and nothing downstream reads a value outside it.
-                // Only the deep end of the oceanic curve can reach it, where the
-                // floor at 0.08 leaves the dynamic term under three times its own
-                // amplitude of room and the field's peak divergence asks for
-                // more; the continental base at 0.65 has room for both terms
-                // several times over. `docs/plate-movement.md` counts the cells
-                // that clamp.
-                // The thickness term rides with the continental base, after the
-                // margin taper has decided it, so a plateau carries its own
-                // basement and dynamic topography like any other continent and
-                // the clamp is what catches a column three parcels deep.
-                (cooled(*age, continental_base, config) + thickness + dynamic + basement)
-                    .clamp(0.0, 1.0)
-            },
-        )
+        .map(|(((age, &continental_base), &dynamic), &basement)| {
+            // The composition stage clamps for the same reason: elevation is
+            // normalized and nothing downstream reads a value outside it.
+            // Only the deep end of the oceanic curve can reach it, where the
+            // floor at 0.08 leaves the dynamic term under three times its own
+            // amplitude of room and the field's peak divergence asks for
+            // more; the continental base at 0.65 has room for both terms
+            // several times over.
+            (cooled(*age, continental_base, config) + dynamic + basement).clamp(0.0, 1.0)
+        })
         .collect();
 
     let oceanic_elevations: Vec<_> = seafloor_age
@@ -293,12 +245,6 @@ pub fn derive_base_elevation(
         .iter()
         .map(|&cell| config.continental_base - cell_bases[cell])
         .collect();
-    let raised: Vec<_> = thickness
-        .iter()
-        .copied()
-        .filter(|&uplift| uplift > 0.0)
-        .collect();
-
     let oceanic_cell_count = oceanic_elevations.len();
     let diagnostics = BaseElevationDiagnostics {
         summary: FieldSummary::from_values(&cell_elevations),
@@ -309,29 +255,12 @@ pub fn derive_base_elevation(
         oceanic_cell_count,
         continental_cell_count: cell_elevations.len() - oceanic_cell_count,
         margin_cell_count: margin_cells.len(),
-        thickness_uplift: FieldSummary::from_values(&raised),
-        thickened_cell_count: raised.len(),
     };
 
     Ok(BaseElevation {
         cell_elevations,
         diagnostics,
     })
-}
-
-/// What the crust under each cell floats it by: `thickness_uplift` per parcel
-/// past the first.
-///
-/// Zero on ocean floor and on undeformed continent alike, because a cell
-/// reads zero parcels where its winner is floor and one where it is continent
-/// nothing has doubled. The field is therefore exactly zero everywhere on a
-/// world with no collision in it, which is what makes every pin taken before
-/// crustal thickness stand.
-fn thickness_field(cell_thickness: &[u32], config: BaseElevationConfig) -> Vec<f32> {
-    cell_thickness
-        .iter()
-        .map(|&thickness| config.thickness_uplift * thickness.saturating_sub(1) as f32)
-        .collect()
 }
 
 /// The cooling curve's own answer for one cell, before interior relief.
@@ -432,10 +361,6 @@ fn validate_config(
     {
         return Err(BaseElevationError::InvalidMarginEdge);
     }
-    if !config.thickness_uplift.is_finite() || config.thickness_uplift < 0.0 {
-        return Err(BaseElevationError::InvalidThicknessUplift);
-    }
-
     validate_interior_relief(config)
 }
 
@@ -530,12 +455,9 @@ mod tests {
         assert_eq!(first.diagnostics.margin_depth, FieldSummary::default());
         // Switching every added term off and the taper's width to zero leaves
         // the age curve alone, which is what this pin holds. It moves
-        // whenever the reference run's crust or its ages do: last with
-        // crustal thickness, which merges an arriving continent into the one
-        // above it, so a parcel that used to survive to win a cell in a later
-        // step is no longer there to win it and the run makes its floor
-        // elsewhere.
-
+        // whenever the reference run's crust or its ages do: last with the
+        // removal of slab pull, which speeds every plate up, so the run
+        // subducts more floor and makes more of it.
         //
         // The curve is add, multiply, divide, and square root over a model
         // time, so it is bit-identical on every machine; the grid is what
@@ -543,7 +465,7 @@ mod tests {
         // two oldest ages, whose elevations sit 0.0028 apart.
         assert_eq!(
             quantized_fingerprint(first.cell_elevations.iter().copied()),
-            76_683_858_554_990_641
+            17_742_386_235_156_407_304
         );
     }
 
@@ -716,7 +638,6 @@ mod tests {
         };
 
         let base = BaseElevationFixture {
-            cell_thickness: vec![1; mesh.cell_count()],
             mesh,
             age,
             cell_birth,
@@ -731,60 +652,6 @@ mod tests {
         assert_eq!(base.diagnostics.continental_cell_count, 1);
     }
 
-    /// The thickness term is a step per parcel past the first, on continental
-    /// crust and nowhere else.
-    ///
-    /// The all-ones case is the one that matters most: it says a world no
-    /// collision has doubled reads exactly what it read before crustal
-    /// thickness existed, which is why every pin taken before this slice that
-    /// did not move was allowed to stand.
-    #[test]
-    fn base_elevation_floats_a_cell_by_the_crust_under_it() {
-        let fixture = base_elevation_fixture();
-        let config = curve_and_taper_only();
-        let flat = fixture.derive(config);
-
-        let uplift = 0.2;
-        let thickened = BaseElevationConfig {
-            thickness_uplift: uplift,
-            ..config
-        };
-        let raised = fixture.derive_with_thickness(thickened, &vec![1; fixture.mesh.cell_count()]);
-
-        assert_eq!(
-            raised.cell_elevations, flat.cell_elevations,
-            "one parcel everywhere is the world before crustal thickness"
-        );
-        assert_eq!(raised.diagnostics.thickened_cell_count, 0);
-
-        // One continental cell doubled, and nothing else touched.
-        let doubled = (0..fixture.mesh.cell_count())
-            .find(|&cell| fixture.cell_birth[cell].is_none())
-            .expect("the fixture must hold continental crust");
-        let mut thickness = vec![1; fixture.mesh.cell_count()];
-        thickness[doubled] = 2;
-        let plateau = fixture.derive_with_thickness(thickened, &thickness);
-
-        for (cell, (&with, &without)) in plateau
-            .cell_elevations
-            .iter()
-            .zip(&flat.cell_elevations)
-            .enumerate()
-        {
-            // Stated as the sum rather than as the difference, because the
-            // difference of two sums is not the term that went into them:
-            // `(base + 0.2) - base` is 0.19999999.
-            let expected = if cell == doubled {
-                without + uplift
-            } else {
-                without
-            };
-            assert_eq!(with, expected, "cell {cell}");
-        }
-        assert_eq!(plateau.diagnostics.thickened_cell_count, 1);
-        assert_eq!(plateau.diagnostics.thickness_uplift.maximum, uplift);
-    }
-
     #[test]
     fn crust_older_than_the_cooling_age_sits_on_the_deep_floor() {
         let mesh = mesh(32);
@@ -794,7 +661,6 @@ mod tests {
             ..curve_and_taper_only()
         };
         let base = BaseElevationFixture {
-            cell_thickness: vec![1; mesh.cell_count()],
             mesh,
             age,
             cell_birth,
@@ -921,7 +787,6 @@ mod tests {
                     CellCrust {
                         cell_birth: &fixture.cell_birth,
                     },
-                    &fixture.cell_thickness,
                     &fixture.flow,
                     config,
                 ),
@@ -947,7 +812,6 @@ mod tests {
                     diagnostics: fixture.age.diagnostics,
                 },
                 crust,
-                &fixture.cell_thickness,
                 &fixture.flow,
                 config,
             ),
@@ -960,7 +824,6 @@ mod tests {
                 CellCrust {
                     cell_birth: &fixture.cell_birth[1..],
                 },
-                &fixture.cell_thickness,
                 &fixture.flow,
                 config,
             ),

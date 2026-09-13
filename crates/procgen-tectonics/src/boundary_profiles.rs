@@ -132,7 +132,8 @@ pub struct BoundaryDeformationConfig {
     /// overflowing: uplift and decay would otherwise balance at about 1.33,
     /// which is above it, so a boundary that keeps converging reaches the
     /// clamp and holds there while a belt whose boundary moves on decays away
-    /// from it. See "Relief decay" in `docs/plate-movement.md`.
+    /// from it. See "Boundary deformation and relief decay" in
+    /// `docs/plate-movement.md`.
     pub maximum_magnitude: f32,
     /// Model time constant of the relief sink. Every step, what a parcel of
     /// crust carries is multiplied by `1 - step_duration / erosion_time`
@@ -157,13 +158,12 @@ impl Default for BoundaryDeformationConfig {
     fn default() -> Self {
         Self {
             convergent: BoundaryEffect {
-                // The fold-and-thrust front at the suture, and no longer the
-                // plateau behind it: crustal thickness floats that out of the
-                // material the collision buried, so what this paints would be
-                // counted twice. Halved and narrowed from 0.4 over six hops
-                // when that landed.
-                offset: 0.2,
-                depth: 3.0 * default_hop_length(),
+                // The collision mountain, belt and all. Crustal thickness is a
+                // record of where continents met rather than an elevation, so
+                // nothing else paints the plateau behind the front and this
+                // carries both, as it did before that record existed.
+                offset: 0.4,
+                depth: 6.0 * default_hop_length(),
             },
 
             rift: ContinentalRiftProfile {
@@ -381,7 +381,7 @@ mod tests {
     fn default_depths_resolve_to_the_hop_counts_they_replaced() {
         let config = BoundaryDeformationConfig::default();
         for (effect, depth) in [
-            (config.convergent, 3),
+            (config.convergent, 6),
             (config.transform, 1),
             (config.collision, 5),
             (config.trench, 1),

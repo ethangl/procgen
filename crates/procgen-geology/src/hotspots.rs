@@ -570,7 +570,6 @@ mod tests {
         let mut fixture = hotspot_fixture(128);
         fixture.kinematics = PlateKinematics {
             angular_velocities: vec![Vec3::ZERO; fixture.plates.plate_count],
-            base_speeds: vec![0.0; fixture.plates.plate_count],
         };
         let config = HotspotFieldConfig {
             hotspot_count: 12,
@@ -684,7 +683,6 @@ mod tests {
 
         let invalid_kinematics = PlateKinematics {
             angular_velocities: Vec::new(),
-            base_speeds: Vec::new(),
         };
         assert_eq!(
             generate_hotspot_field(

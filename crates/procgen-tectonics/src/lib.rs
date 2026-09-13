@@ -47,7 +47,6 @@ pub use base_elevation::{
 };
 pub use boundaries::{
     BoundaryClass, BoundaryClassification, BoundaryClassificationError, classify_boundaries,
-    subducting_fractions,
 };
 pub use boundary_profiles::{
     BoundaryDeformationConfig, BoundaryDeformationError, BoundaryEffect, ContinentalRiftProfile,
@@ -83,6 +82,5 @@ pub use seafloor_age::{
     CrustBirthPrior, CrustBirthPriorConfig, CrustBirthPriorDiagnostics, CrustBirthPriorError,
     SeafloorAge, SeafloorAgeDiagnostics, derive_crust_birth_prior, derive_seafloor_age,
 };
-pub use speed::{PlateSpeedSummary, plate_speed};
 pub use stage::StageInputError;
 pub use step::PoleDriftConfig;
