@@ -487,7 +487,9 @@ Results and remaining pilot limits are in
 
 ## Neutral surface inspection
 
-The streaming inspector now starts in neutral gray with fixed lighting. Select
+The streaming inspector now starts in neutral gray with fixed lighting and
+restrained procedural normal and roughness detail. Select **Plain** under
+**Surface detail** to compare with the untextured material. Select
 averaged mesh, triangle-face, or final-density normals without regenerating the
 world. LOD colors remain available, alongside normal-direction and
 mesh/density-agreement overlays. **Triangle edges** can be combined with any
@@ -499,8 +501,12 @@ cargo run -p procgen-realtime-pilot -- --stream --preset ridges --seed 42 \
 ```
 
 Use `--normals averaged|triangle|density` and
-`--surface neutral|lod|normals|agreement` with saved camera replays for matched
-comparisons. Recordings save a separate `.view.json`; generation cases and
+`--surface neutral|lod|normals|agreement`, plus
+`--surface-detail plain|textured` (default `textured`), with saved camera replays
+for matched comparisons. Surface detail applies only to neutral shading;
+diagnostic overlays retain the base surface. The pattern uses planet coordinates
+at fixed scales and fades below pixel size. It adds no geometry or collision.
+Recordings save a separate `.view.json`; generation cases and
 camera paths keep their existing formats. See
 [surface quality](../../docs/realtime-world-surface-quality.md) for the normal
 contract, memory cost, comparison procedure, and findings.

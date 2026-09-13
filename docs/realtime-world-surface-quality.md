@@ -57,7 +57,8 @@ cargo run -p procgen-realtime-pilot -- --stream \
 
 `--normals` accepts `averaged`, `triangle`, or `density`. `--surface` accepts
 `neutral`, `lod`, `normals`, or `agreement`. `--wireframe` enables triangle
-edges. These options require `--stream`. The UI exposes the same settings.
+edges. Slice 4 adds `--surface-detail plain|textured`, with `textured` as the
+default. These options require `--stream`. The UI exposes the same settings.
 
 Generation cases and camera replay files keep their existing format. Each new
 recording saves its surface settings in a separate `.view.json` and repeats
@@ -82,7 +83,8 @@ cost, not a claim of free rendering detail.
    nonmanifold surfaces: complete; see the repair record below.
 3. Finer nearby geometry with valid joins and collision support: complete;
    see the bounded refinement record below.
-4. Add restrained surface roughness and normal detail with stable mapping.
+4. Restrained surface roughness and normal detail with stable mapping: complete;
+   see the material record below.
 
 Normal selection cannot repair topology, change a silhouette, or increase the
 64-by-64-by-16 source resolution. The comparison tools should identify which
@@ -377,3 +379,87 @@ Its peak managed reservation was 262,192,232 bytes (about 250 MiB), below the
 Build `1e9c92949d6d0387` includes the recording fix. All native artifacts are in
 `/tmp/procgen-surface-slice3`. Screenshot readbacks were enabled, so these runs
 establish coverage and visual comparisons rather than a frame-pacing bound.
+
+## Slice 4: surface material detail
+
+Neutral shading now adds a small normal perturbation and roughness variation.
+The material stays gray under the existing fixed lighting. `--surface-detail
+plain` restores the slice-3 material; `textured` is the new default. The same
+setting is available in the inspector, saved in `.view.json`, and locked during
+recording. LOD, normal-direction, and agreement overlays bypass material detail
+so they continue to inspect the underlying surface. Triangle edges can still be
+drawn over either neutral material.
+
+The shader uses the existing `procgen-noise` gradient noise and its analytic
+derivative. It composes the crate's WGSL source, which already includes the
+canonical `procgen-core` hash. The pilot build identity now includes these WGSL
+files so a shader-library change is visible in recording provenance.
+
+Two fixed bands provide the material grain:
+
+| Band | Lattice cells per model length | Slope strength | Roughness amplitude | Noise key |
+| --- | ---: | ---: | ---: | --- |
+| Coarser grain | 48 | 0.045 | 0.055 | `0x53555246` |
+| Finer grain | 192 | 0.025 | 0.025 | `0x47524149` |
+
+The stream meshes have identity transforms and contain planet coordinates.
+Both bands sample that continuous 3D position. They need no texture UVs,
+cube-face projection, per-region origin, tangent frame, or LOD-dependent seed.
+The same planet position has the same pattern across region borders and mesh
+replacement. Geometry displacement during a LOD change can still change the
+sampled surface position. The fixed material keys are independent of the world
+seed; this is one neutral material applied to all worlds.
+
+The pixel footprint is the square root of the summed squared screen derivatives
+of position. This bounds the footprint in diagonal and grazing views. Each band
+fades smoothly between 0.12 and 0.4 lattice cells per pixel; a fully suppressed
+band skips its noise query. Screen derivatives are evaluated before visibility
+dither and divergent branches. This is conservative distance filtering, not
+temporal antialiasing.
+
+The analytic noise gradient is projected onto the selected normal's tangent
+plane. Its combined slope is capped at 0.08, limiting normal tilt to about
+4.6 degrees. The shading normal changes; the normal used for shadow bias stays
+at the selected base normal. Roughness uses bounded noise contrast around 0.9,
+remaining within 0.82–0.98 and returning to 0.9 when both bands fade out.
+
+This change does not alter density, meshes, silhouettes, collision, placements,
+streaming budgets, or mesh buffer sizes. It adds at most two noise evaluations
+per neutral terrain fragment, with no texture allocation. The initial overview
+and the separate population props retain their existing plain materials.
+
+### Validation
+
+All 37 CPU tests pass. Clippy passes with warnings denied, both with the
+inspector and without default features. Formatting and diff checks pass. The
+CLI rejects an unknown detail mode and rejects surface options without
+`--stream`. Native Metal pipeline compilation succeeds.
+
+Ridges, seed 42, was captured with the same two held poses used in slice 3.
+The plain ground and flight images match the previous slice pixel-for-pixel
+outside the sidebar. Textured shading adds visible grain at ground level and
+less contrast from flight, with the same silhouette and large terrain forms.
+The held textured flight images at 19.5 and 31.5 seconds are identical outside
+the sidebar. This verifies a stationary pattern; it does not establish freedom
+from aliasing under all camera motion. Large inherited triangles and facets
+remain visible.
+
+The matched plain/textured replays and a separate moving flight run all retained
+six resident faces, exercised all three LODs, and installed no obsolete tickets.
+CSV frame counts match saved replay pose counts. All runs completed successfully.
+
+| Capture, build `be14227f3508e100` | Frames | Peak managed bytes | Largest frame upload |
+| --- | ---: | ---: | ---: |
+| Textured, held poses | 4,013 | 262,192,232 | 479,232 |
+| Plain, held poses | 3,988 | 262,192,232 | 479,232 |
+| Textured, moving flight | 4,085 | 240,756,416 | 500,448 |
+
+Final build `97bc32d6655f7a8d` reads baseline roughness from the material and
+adds the noise delta. Its repeated textured replay (`verified`) completed
+4,185 frames with the same peak reservation and largest upload as the held
+captures above, complete coverage, and no obsolete installations.
+
+These remain below the 256 MiB managed limit and 512 KiB upload limit. Captures
+and view settings are in `/tmp/procgen-surface-slice4/final`. Screenshot
+readbacks and some concurrent CPU checks prevent a useful GPU timing comparison.
+Windows/Vulkan validation and a controlled GPU cost measurement remain open.

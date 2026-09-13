@@ -44,9 +44,28 @@ impl std::str::FromStr for SurfaceOverlay {
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u32)]
+pub enum SurfaceDetail {
+    Plain,
+    #[default]
+    Textured,
+}
+impl std::str::FromStr for SurfaceDetail {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "plain" => Ok(Self::Plain),
+            "textured" => Ok(Self::Textured),
+            _ => Err("--surface-detail needs plain or textured"),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SurfaceViewConfig {
     pub normals: NormalMode,
     pub overlay: SurfaceOverlay,
     pub wireframe: bool,
+    pub detail: SurfaceDetail,
 }

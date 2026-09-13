@@ -56,6 +56,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 surface_view.wireframe = true;
                 view_explicit = true;
             }
+            "--surface-detail" => {
+                surface_view.detail = args
+                    .next()
+                    .ok_or("--surface-detail needs a mode")?
+                    .parse()?;
+                view_explicit = true;
+            }
             "--preset" => {
                 preset = Some(
                     args.next()
@@ -115,7 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "Surface inspection (--stream): --normals averaged|triangle|density --surface neutral|lod|normals|agreement --wireframe.\nSpherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
+                    "Surface inspection (--stream): --normals averaged|triangle|density --surface neutral|lod|normals|agreement --surface-detail plain|textured --wireframe.\nSpherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }

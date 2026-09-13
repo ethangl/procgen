@@ -9,10 +9,49 @@
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> modes: vec4<u32>;
 
+struct SurfaceBand {
+    frequency: f32,
+    slope: f32,
+    roughness: f32,
+    key: u32,
+}
+const SURFACE_BANDS = array<SurfaceBand, 2>(
+    SurfaceBand(48.0, 0.045, 0.055, 0x53555246u),
+    SurfaceBand(192.0, 0.025, 0.025, 0x47524149u),
+);
+struct SurfaceSample {
+    slope: vec3<f32>,
+    roughness_delta: f32,
+}
+fn surface_detail(position: vec3<f32>, footprint: f32) -> SurfaceSample {
+    var result = SurfaceSample(vec3(0.0), 0.0);
+    for (var i = 0u; i < 2u; i++) {
+        let band = SURFACE_BANDS[i];
+        // Remove a band before a lattice cell spans fewer than 2.5 pixels.
+        let fade = 1.0 - smoothstep(0.12, 0.4, footprint * band.frequency);
+        if fade > 0.0 {
+            let sample = gradient_noise_3d(band.key, position * band.frequency);
+            // Slope is an authored bump strength, independent of wavelength.
+            result.slope += sample.derivative * (band.slope * fade);
+            result.roughness_delta += clamp(sample.value * 2.0, -1.0, 1.0)
+                * (band.roughness * fade);
+        }
+    }
+    return result;
+}
+
 @fragment
 fn fragment(vertex: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    // Streamed meshes use planet coordinates with identity transforms. No UV,
+    // face, camera, or LOD input changes the pattern's phase or scale.
+    let position = vertex.world_position.xyz;
+    let dx = dpdx(position);
+    let dy = dpdy(position);
+    // Upper bound on the pixel footprint, including grazing/diagonal views.
+    // All screen derivatives precede visibility dither and divergent branches.
+    let footprint = sqrt(dot(dx, dx) + dot(dy, dy));
     // Screen Y points down: this cross product follows outward front-face winding.
-    let triangle = normalize(cross(dpdy(vertex.world_position.xyz), dpdx(vertex.world_position.xyz)));
+    let triangle = normalize(cross(dy, dx));
     let bary = vec3(vertex.uv, 1.0 - vertex.uv.x - vertex.uv.y);
     let width = fwidth(bary);
     let edges = smoothstep(vec3(0.0), width * 1.2, bary);
@@ -33,6 +72,14 @@ fn fragment(vertex: VertexOutput, @builtin(front_facing) is_front: bool) -> Frag
     if !undefined {
         pbr.N = normalize(normal);
         pbr.world_normal = pbr.N;
+        if modes.w == 1u && modes.y == 0u {
+            let detail = surface_detail(position, footprint);
+            let tangent = detail.slope - pbr.N * dot(detail.slope, pbr.N);
+            // Limit the cosmetic normal tilt to atan(0.08), about 4.6 degrees.
+            let slope = tangent / max(1.0, length(tangent) / 0.08);
+            pbr.N = normalize(pbr.N - slope);
+            pbr.material.perceptual_roughness += detail.roughness_delta;
+        }
     }
     if modes.y == 1u {
         var color = vec3(0.16, 0.32, 0.6);
