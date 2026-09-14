@@ -60,6 +60,7 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
         reversed.reverse();
         let replay = dispatch(&reversed);
         let mut max_error = 0.0_f64;
+        let mut max_normal_error = 0.0_f32;
         for (i, &tile) in tiles.iter().enumerate() {
             assert_eq!(
                 first[i],
@@ -68,6 +69,18 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
             );
             let cpu = height_tile_vertices(&field, tile, filter);
             for (a, b) in first[i].iter().zip(cpu) {
+                let n = procgen_core::Vec3::new(a.normal[0], a.normal[1], a.normal[2]);
+                let reference = procgen_core::Vec3::new(b.normal[0], b.normal[1], b.normal[2]);
+                assert!(n.is_finite() && (n.length() - 1.0).abs() < 0.0001);
+                let error = (n - reference).length();
+                max_normal_error = max_normal_error.max(error);
+                // About three degrees of normal direction for f32 field differences
+                // at planetary coordinates; position tolerances remain unchanged.
+                assert!(
+                    error < 0.05,
+                    "radius {}, tile {tile:?}: normal error {error}",
+                    config.radius_m
+                );
                 for axis in 0..3 {
                     let x = a.anchor[axis] as f64 + a.offset[axis] as f64;
                     let y = b.anchor[axis] as f64 + b.offset[axis] as f64;
@@ -91,6 +104,17 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                         .sum::<f64>()
                         .sqrt();
                     assert!(radius < config.radius_m as f64 - config.height_limit_m as f64);
+                    // Integer anchors alone cannot identify a vertex on a
+                    // sub-meter grid; use the skirt's specified top-edge index.
+                    let top_index = match edge {
+                        0 => along * HEIGHT_SIDE,
+                        1 => along * HEIGHT_SIDE + HEIGHT_QUADS,
+                        2 => along,
+                        _ => HEIGHT_QUADS * HEIGHT_SIDE + along,
+                    };
+                    let top = first[i][top_index as usize];
+                    assert_eq!(skirt.anchor, top.anchor, "skirt base anchor");
+                    assert_eq!(skirt.normal, top.normal, "skirt inherits surface shading");
                 }
             }
         }
@@ -119,10 +143,27 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                     &b.offset[..3],
                     "continuous filter at coarse/fine sample"
                 );
+                assert_eq!(a.normal, b.normal, "shared coarse/fine normal");
             }
         }
+        // Cube edges and corners share lighting as well as position.
+        let roots = CubeFace::ALL.map(TileAddress::root);
+        let faces = dispatch(&roots);
+        let mut shared = std::collections::BTreeMap::new();
+        let mut matched = 0;
+        for face in faces {
+            for vertex in &face[..(HEIGHT_SIDE * HEIGHT_SIDE) as usize] {
+                let position = [vertex.anchor[0], vertex.anchor[1], vertex.anchor[2]];
+                if let Some(previous) = shared.insert(position, *vertex) {
+                    assert_eq!(previous.offset, vertex.offset, "cube edge position");
+                    assert_eq!(previous.normal, vertex.normal, "cube edge normal");
+                    matched += 1;
+                }
+            }
+        }
+        assert!(matched > 12 * HEIGHT_QUADS, "all cube edges exercised");
         println!(
-            "radius {}: max height vertex error {max_error:.6} m",
+            "radius {}: max height vertex error {max_error:.6} m, normal error {max_normal_error:.6}",
             config.radius_m
         );
     }

@@ -111,6 +111,11 @@ surface joins. The GPU viewer blends separately depth-tested height and voxel
 layers across the overlap and during height replacement, without pixel discard
 patterns. CPU collision remains independent.
 
+Height tiles carry filtered field normals generated once with each tile. Neutral
+and normal views interpolate them across triangles and use the same normal at
+coincident tile boundaries. Skirts inherit their top edge's normal. Local voxel
+terrain still uses face normals; smoothing that surface is a separate slice.
+
 Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
 retains complete mesh replacement and its 512 KiB per-frame upload limit. There
 is no automatic backend fallback.
@@ -127,7 +132,7 @@ This writes frame/stage timings and six adjacent PNG captures, then exits. Live
 navigation and movement input are disabled during recorded runs.
 The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
 records Metal measurements and remaining limits. The voxel pool is capped at
-300 allocations and 512 MiB; each height snapshot is at most 14.31 MiB.
+300 allocations and 512 MiB; each height snapshot is at most 21.46 MiB with normals.
 The original G5 Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
 preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
 after initial coverage stayed below 250 ms; initial coverage and height updates

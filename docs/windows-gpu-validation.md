@@ -200,15 +200,17 @@ remain in the ignored local directory `target/windows-gpu-validation/`. No raw
 recordings are added to Git. `analyze.ps1` in that directory reproduces the
 summaries; no branch, commit or push was made for this validation.
 
-## Surface-join follow-up: Windows validation pending
+## Surface joins and height normals: Windows validation pending
 
-The results above predate the smooth surface compositor. For that follow-up,
-run the new render test and repeat the two routes from the repository root:
+The results above predate the smooth surface compositor and height-surface
+normals. Run the render and height tests, then repeat the two routes from the
+repository root:
 
 ```powershell
 $env:WGPU_BACKEND = "vulkan"
 $env:RUST_LOG = "warn,bevy_render::renderer=info"
 cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
+cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
 cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-design.json --backend gpu --explore-record target/surface-join-large-vulkan.csv
 cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-design-300km.json --backend gpu --explore-record target/surface-join-small-vulkan.csv
 ```
@@ -216,5 +218,7 @@ cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-d
 Record the tested commit and adapter, test results, clean exit, frame timings,
 and both terrain buffer bytes and the new `surface_target_bytes` column. Inspect
 ridge edges, ground views, and return to orbit for stipple, missing coverage, or
-stale surfaces. Record results here. The numerical generation tolerances and
-terrain settings are unchanged; do not retune them during this validation.
+stale surfaces. Check for smooth distant shading and lighting seams across tile
+edges. Record results here. Existing position and density tolerances are
+unchanged; the new normal test permits a vector difference of 0.05. Do not
+retune terrain settings or tolerances during this validation.

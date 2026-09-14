@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 use crate::{HEIGHT_TILE_BYTES, HEIGHT_VERTEX_COUNT};
 pub fn height_shader() -> String {
     format!(
-        "{}\n{}\nconst HEIGHT_VERTEX_COUNT: u32 = {}u;\nconst HEIGHT_QUADS: u32 = {}u;\nconst HEIGHT_SIDE: u32 = {}u;\nconst HEIGHT_FILTER_DISTANCE_RATIO: f32 = {:?};\nconst HEIGHT_FILTER_MIN_M: f32 = {:?};\n{}",
+        "{}\n{}\nconst HEIGHT_VERTEX_COUNT: u32 = {}u;\nconst HEIGHT_QUADS: u32 = {}u;\nconst HEIGHT_SIDE: u32 = {}u;\nconst HEIGHT_FILTER_DISTANCE_RATIO: f32 = {:?};\nconst HEIGHT_FILTER_MIN_M: f32 = {:?};\nconst HEIGHT_NORMAL_MIN_STEP_M: f32 = {:?};\n{}",
         voxel_density_shader(),
         procgen_cubesphere::MAPPING_WGSL_SOURCE,
         HEIGHT_VERTEX_COUNT,
@@ -14,6 +14,7 @@ pub fn height_shader() -> String {
         crate::HEIGHT_SIDE,
         crate::HEIGHT_FILTER_DISTANCE_RATIO,
         crate::HEIGHT_FILTER_MIN_M,
+        crate::height_mesh::HEIGHT_NORMAL_MIN_STEP_M,
         include_str!("height_gpu.wgsl")
     )
 }

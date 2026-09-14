@@ -493,8 +493,9 @@ A bounded worker generates at most 32 height tiles per batch, with one batch
 in flight. Complete snapshots publish after GPU completion and dissolve over
 250 ms. Unchanged tiles with the same filter inputs reuse their buffers. A new
 filter origin requires resampling; it is selected on camera movement, not every
-render frame. Old height coverage remains visible during the build. A snapshot
-uses at most 15,003,648 bytes (14.31 MiB), plus shared indices and small inputs;
+render frame. Old height coverage remains visible during the build. With the
+height-surface normals below, a snapshot uses at most 22,505,472 bytes
+(21.46 MiB), plus shared indices and small inputs;
 current, retiring and pending snapshots have a fixed bound independent of travel.
 Render commands retain immutable buffers through completion. There is no visual
 geometry readback. GPU exploration uses the event-loop render schedule instead
@@ -683,3 +684,71 @@ This remains a rendered overlap, not a watertight height/voxel mesh. Faceted
 normals, skirt geometry, spatial detail changes, collision evidence gaps, and
 generation latency outliers remain separate work. The original Windows G5
 results above predate this compositor; this follow-up needs its own Vulkan run.
+
+## Height-surface normals
+
+Height tiles now carry a unit outward normal with each vertex. The CPU reference
+and WGSL kernel take six central height differences along the planet's Cartesian
+axes, project the gradient into the sphere's tangent plane, and account for the
+displaced radius. The step is the continuous filter footprint, with a one-meter
+minimum. Samples use the same spatially filtered field as the tile. Neither the
+normal direction nor the difference step depends on which tile owns the vertex.
+Coincident samples can therefore share shading across tile levels, cube edges,
+and cube corners. Skirts inherit the normal at their top vertex to avoid a dark
+curtain along the join.
+
+Normals are generated with the immutable tile, retained in its vertex buffer,
+and interpolated for neutral lighting and the normal view. There are no noise
+evaluations in the draw shader. Local voxel shading still uses face normals;
+that remains a separate follow-up. This change does not move vertices, alter
+triangle indices, change either saved terrain preset, or affect CPU collision.
+
+Each height vertex grows from 32 to 48 bytes. A tile occupies 58,608 bytes and a
+384-tile snapshot occupies 21.46 MiB, versus 14.31 MiB before normals. Existing
+height memory accounting derives this size from the vertex type. The compositor
+targets and voxel pool are unchanged. Six additional height evaluations per
+vertex increase tile generation work; measurements follow below.
+
+The CPU test checks radial normals on a sphere and perpendicularity to independent
+surface secants on displaced terrain. The height GPU suite checks finite unit
+normals, CPU agreement, replay, coincident coarse/fine normals, cube edges and
+corners, and skirt inheritance. Normal agreement permits a vector difference of
+0.05 (about three degrees) for f32 field differences at planetary coordinates.
+Existing position tolerances remain unchanged.
+
+Validation passed: the focused CPU normal test, all three Metal height tests,
+the Metal compositor test, native build, formatting, and Clippy with warnings
+denied for the pilot and the affected GPU test targets.
+
+Metal CPU/GPU normal differences measured 0.010619 on the 4,900 km preset and
+0.013883 on the 300 km preset (about 0.61 and 0.80 degrees). Maximum position
+errors remain 1.281006 m and 0.094482 m, respectively, as before normals.
+
+Both 90-second native routes completed with exit code 0 on Apple M1 Max at
+2880 × 2000. Recordings are `/tmp/height-normals-large.csv` and
+`/tmp/height-normals-small.csv`, with adjacent PNGs and logs. Inspected orbit,
+descent, walking, and return captures show smooth distant height shading. The
+large preset's nearby voxel patch remains visibly faceted. No GPU stream failure
+or overflow was reported.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Frame p50 / p95 | 8.33 / 8.71 ms | 8.34 / 8.80 ms |
+| Maximum frame time | 132.63 ms | 458.38 ms |
+| Sampled height replacement p95 / max | 236.92 / 298.18 ms | 321.50 / 341.06 ms |
+| Largest sampled local publication | 164.03 ms | 303.85 ms |
+| Peak terrain buffers | 205.0 MiB | 243.6 MiB |
+| Peak terrain buffers plus blend targets | 402.8 MiB | 441.3 MiB |
+
+These runs stayed near 8.3 ms frame pacing, whereas the earlier compositor runs
+shifted toward 16.7 ms. They do not establish a speedup from normals or isolate
+GPU draw cost. Percentiles use nearest rank; height observations count changes
+in the positive rounded CSV value, including initial coverage. Startup and
+captures remain in the measurements. Initial local coverage and some height
+replacements still exceed 250 ms.
+
+The small preset's flight and return captures retain a warning that walking
+paused at missing collision coverage. This is an observed contact/coverage issue
+for the separate collision follow-up; completion of the visual route does not
+prove continuous contact. Windows/Vulkan validation of these normals remains
+pending; commands are in the Windows validation handoff.
