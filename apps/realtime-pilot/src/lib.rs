@@ -13,6 +13,7 @@ mod mesh;
 mod meter_position;
 mod noise;
 mod physical_audit;
+mod physical_collision;
 mod physical_motion;
 mod physical_terrain;
 mod placement;
@@ -146,6 +147,7 @@ pub use voxel_collision::{
 
 pub use voxel_surface_audit::{VoxelSurfaceAudit, VoxelSurfaceAuditError, audit_voxel_surfaces};
 
+pub use physical_collision::PhysicalCollision;
 pub use physical_motion::{PLAYER_EYE_M, PLAYER_RADIUS_M, PLAYER_SPEED_MPS, PhysicalWalker};
 
 pub use physical_terrain::{PhysicalTerrain, PhysicalTerrainError, PhysicalTerrainFrame};
@@ -218,10 +220,14 @@ pub use height_coverage::{
 #[cfg(feature = "gpu")]
 mod height_gpu;
 #[cfg(feature = "gpu")]
-pub use height_gpu::{HeightGpuMesher, LOCAL_GPU_WORLD_CONFIG, height_shader};
+pub use height_gpu::{
+    HEIGHT_GPU_BATCH_TILES, HeightGpuMesher, LOCAL_GPU_WORLD_CONFIG, height_shader,
+};
 mod height_mesh;
 pub use height_mesh::{
-    HEIGHT_FILTER_DISTANCE_RATIO, HEIGHT_FILTER_MIN_M, HEIGHT_QUADS, HEIGHT_SIDE,
-    HEIGHT_TILE_BYTES, HEIGHT_VERTEX_COUNT, HeightFilter, HeightVertex, height_indices,
-    height_tile_vertices,
+    HEIGHT_FILTER_DISTANCE_RATIO, HEIGHT_FILTER_MIN_M, HEIGHT_TILE_BYTES, HeightFilter,
+    HeightVertex, height_indices, height_tile_vertices,
 };
+
+mod height_tile;
+pub use height_tile::{HEIGHT_QUADS, HEIGHT_SIDE, HEIGHT_VERTEX_COUNT, HeightTile};

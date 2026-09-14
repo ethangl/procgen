@@ -4,7 +4,11 @@ Status: G1 through G5 are implemented. Physical exploration uses GPU height tile
 and local voxel geometry by default; `--backend cpu` selects the CPU visual audit.
 Metal validation and route measurements are recorded below. Windows/Vulkan
 results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
-Both hosts have completed the G5 routes; visual and measurement gaps remain.
+Both hosts have completed the original G5 routes; visual and measurement gaps
+remain. The [surface-join follow-up](#surface-join-follow-up) replaces pixel
+discard transitions with smooth composition and has separate validation.
+The [stitched height tile follow-up](#stitched-height-tiles) removes radial skirts
+and closes height-tile joins with shared edges.
 This replaces the CPU-only visual generation plan for the physical-planet pilot.
 The original saved terrain settings remain unchanged. G5 adds a separate 300 km
 comparison preset. The earlier world pipeline is unrelated.
@@ -484,21 +488,23 @@ The kernel reuses the physical octave stack, seed, and canonical cube-sphere
 mapping. Unresolved octaves fade out of both height and feedback. One continuous
 distance-based footprint is shared by every tile in a snapshot, so a shared
 sample does not acquire different heights from its neighboring tile levels.
-Each tile adds radial skirts below the validated height envelope to cover
-remaining differences between edge triangulations.
+G5 initially used radial skirts below the validated height envelope. The
+stitched height tile follow-up replaces these with a balanced mesh whose
+fine edges use the same vertices as the neighboring coarse edge.
 
-A bounded worker generates at most 32 height tiles per batch, with one batch
-in flight. Complete snapshots publish after GPU completion and dissolve over
+A bounded worker generates at most 32 height tiles per batch. The latency
+follow-up below pipelines two batches in flight. Complete snapshots publish after GPU completion and dissolve over
 250 ms. Unchanged tiles with the same filter inputs reuse their buffers. A new
 filter origin requires resampling; it is selected on camera movement, not every
-render frame. Old height coverage remains visible during the build. A snapshot
-uses at most 15,003,648 bytes (14.31 MiB), plus shared indices and small inputs;
+render frame. Old height coverage remains visible during the build. With the
+height-surface normals and skirt removal below, a snapshot uses at most
+20,072,448 bytes (19.14 MiB), plus shared indices and small inputs;
 current, retiring and pending snapshots have a fixed bound independent of travel.
 Render commands retain immutable buffers through completion. There is no visual
 geometry readback. GPU exploration uses the event-loop render schedule instead
 of Bevy's pipelined render thread, which stalled once during macOS teardown.
 Generation remains on its worker; GPU submission is capped at eight voxel jobs
-plus one height batch per frame.
+plus two height batches per frame.
 
 Within 256 m of the ground, the GPU voxel region contains a five-by-five-by-five
 cube of chunks around the surface below the camera: 160 m across, 125 chunks,
@@ -517,8 +523,8 @@ local surface for depth at the tested precision. The displacement follows the
 same spatial and 250 ms temporal weight as the voxel draw. This is a rendering
 join between two representations, not a watertight hybrid export or a change
 to the canonical field. CPU collision continues to use the unchanged full-band
-one-meter field. Skirts, flat shading, and short dither transitions can remain
-visible; this slice does not add materials or smooth vertex normals.
+one-meter field. G5 originally used pixel discard during these transitions;
+the surface-join follow-up below replaces that rendering path. The later follow-ups below add smooth normals and remove skirts.
 
 The panel and CSV report height tile count, retained height buffer bytes, and
 height replacement time alongside voxel generation and render timings. Buffer
@@ -539,7 +545,7 @@ cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --te
 ```
 
 The height suite checks CPU agreement on both presets, exact GPU replay under
-reordered submissions, coincident same-level edges, skirt bounds, and repeated
+reordered submissions, coincident same-level and stitched coarse/fine edges, and repeated
 local voxel travel and revisits. Height vertex agreement permits 2 cm plus four
 f32 epsilon units times planet radius for cube-direction normalization. The
 local voxel density/extraction tolerances remain unchanged. The CPU coverage
@@ -596,9 +602,551 @@ within the documented planetary direction tolerance. These are not changes to
 the much tighter local voxel-density agreement bounds.
 
 Windows/Vulkan execution is recorded in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
-Visual refinement of skirts and dither transitions remains. Startup, capture
+Visual refinement of skirts remains. Startup, capture
 costs and latency outliers still
 need to be considered before treating the measured targets as runtime limits.
 The distant surface now omits unresolved geometry, so its orbital appearance is
 smoother than G4's unfiltered voxel surface. No material detail replaces those
 omitted frequencies in this slice.
+
+## Surface-join follow-up
+
+The Windows ridge captures exposed the pixel discard pattern used for local
+overlap. The GPU viewer now renders previous height, current height, and local
+voxels into three separate opaque color/depth layers. A full-screen pass blends
+their colors with the existing 16 m spatial weight and 250 ms replacement time.
+This removes the stipple pattern without changing the generated geometry,
+terrain settings, local coverage, or collision.
+
+Each layer resolves its nearest triangle before composition. Local coverage is
+stored in alpha; it does not make triangles transparent within the local layer.
+The compositor applies local coverage separately to each height snapshot, using
+reverse-Z depth to reject local terrain hidden behind a closer height surface.
+It then blends the two complete results. A new height surface can fade in even
+when it sits behind the previous surface. Missing silhouette coverage blends
+over the scene background. The final depth is the nearest contributing surface;
+a fully retired snapshot contributes neither color nor depth. This single final
+depth is an approximation for future objects crossing a partially blended join.
+There are no such objects in the current pilot.
+
+`physical_surface_layers.rs` owns the render targets and compositor. Targets are
+reused per view and replaced on resize. There are three RGBA16F/Depth32F pairs,
+with a total texture payload of 36 bytes per physical pixel: 197.8 MiB at
+2880 × 2000 and 111.2 MiB at 2160 × 1500. This fixed cost depends on resolution,
+not distance traveled. The panel and CSV report it as `surface_target_bytes`,
+separate from terrain buffers. Other viewer targets, driver padding, and brief
+retention of targets during resize are outside this count.
+
+The production compositor has an offscreen GPU test:
+
+```sh
+cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
+```
+
+It checks every pixel of uniform fixtures at two target sizes: overlap without
+stipple, hidden local terrain, replacement in both depth orders, local visibility
+during replacement, exact transition endpoints, missing silhouettes, and empty
+layers. RGB tolerance is 0.001 for the half-float target; depth tolerance is
+0.00001. The test imports the viewer-owned wgpu module directly; rendering does
+not become part of the generation library.
+
+Validation passed on Metal: the compositor test (eleven cases at two sizes),
+height compute/render shader validation, all four pilot binary tests, the native
+build, and Clippy with warnings denied for the pilot and both affected GPU test
+targets. No generation code or agreement tolerance changed.
+
+Metal native validation on Apple M1 Max at 2880 × 2000 completed both 90-second
+routes with six captures each and exit code 0. The local recordings are
+`/tmp/surface-join-large.csv` and `/tmp/surface-join-small.csv`, with adjacent PNGs
+and logs. Descent, ground, walking, and return captures were inspected. The
+large ridge no longer has the speckled edge seen in the original G5 descent
+capture; inspected views retain terrain coverage. Still captures do not prove
+continuous seam-free motion or contact.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Overall frame p50 / p95 | 8.51 / 17.20 ms | 8.45 / 17.10 ms |
+| Descent frame p95 | 8.76 ms | 8.78 ms |
+| Walking frame p95 | 17.26 ms | 17.87 ms |
+| Maximum frame time | 293.26 ms | 140.57 ms |
+| Largest segment draw-encoding p95 | 0.127 ms | 0.201 ms |
+| Largest sampled local publication | 164.03 ms | 235.67 ms |
+| Largest sampled height replacement | 371.81 ms | 316.14 ms |
+| Peak terrain buffers | 194.0 MiB | 229.3 MiB |
+| Surface blend targets | 197.8 MiB | 197.8 MiB |
+| Peak terrain buffers plus blend targets | 391.7 MiB | 427.0 MiB |
+
+Percentiles use nearest rank. No GPU stream failure or overflow was reported.
+Frame pacing moved from about 8.3 ms to 16.7 ms during each desktop run; focus
+and presentation timing were not recorded. These results include startup and
+captures and do not isolate the compositor's GPU cost or establish performance
+parity with G5. Frame stalls and height replacement over 250 ms remain unresolved.
+
+This remains a rendered overlap, not a watertight height/voxel mesh. Faceted
+normals, skirt geometry, spatial detail changes, collision evidence gaps, and
+generation latency outliers remain separate work. The original Windows G5
+results above predate this compositor; this follow-up needs its own Vulkan run.
+
+## Height-surface normals
+
+Height tiles now carry a unit outward normal with each vertex. The CPU reference
+and WGSL kernel take six central height differences along the planet's Cartesian
+axes, project the gradient into the sphere's tangent plane, and account for the
+displaced radius. The step is the continuous filter footprint, with a one-meter
+minimum. Samples use the same spatially filtered field as the tile. Neither the
+normal direction nor the difference step depends on which tile owns the vertex.
+Coincident samples can therefore share shading across tile levels, cube edges,
+and cube corners. Skirts inherit the normal at their top vertex to avoid a dark
+curtain along the join.
+
+Normals are generated with the immutable tile, retained in its vertex buffer,
+and interpolated for neutral lighting and the normal view. There are no noise
+evaluations in the draw shader. Local voxel shading retained face normals in this
+slice; the follow-up below smooths that surface. This change does not move
+vertices, alter triangle indices, change either saved terrain preset, or affect
+CPU collision.
+
+Each height vertex grows from 32 to 48 bytes. A tile occupies 58,608 bytes and a
+384-tile snapshot occupies 21.46 MiB, versus 14.31 MiB before normals. Existing
+height memory accounting derives this size from the vertex type. The compositor
+targets and voxel pool are unchanged. Six additional height evaluations per
+vertex increase tile generation work; measurements follow below.
+
+The CPU test checks radial normals on a sphere and perpendicularity to independent
+surface secants on displaced terrain. The height GPU suite checks finite unit
+normals, CPU agreement, replay, coincident coarse/fine normals, cube edges and
+corners, and skirt inheritance. Normal agreement permits a vector difference of
+0.05 (about three degrees) for f32 field differences at planetary coordinates.
+Existing position tolerances remain unchanged.
+
+Validation passed: the focused CPU normal test, all three Metal height tests,
+the Metal compositor test, native build, formatting, and Clippy with warnings
+denied for the pilot and the affected GPU test targets.
+
+Metal CPU/GPU normal differences measured 0.010619 on the 4,900 km preset and
+0.013883 on the 300 km preset (about 0.61 and 0.80 degrees). Maximum position
+errors remain 1.281006 m and 0.094482 m, respectively, as before normals.
+
+Both 90-second native routes completed with exit code 0 on Apple M1 Max at
+2880 × 2000. Recordings are `/tmp/height-normals-large.csv` and
+`/tmp/height-normals-small.csv`, with adjacent PNGs and logs. Inspected orbit,
+descent, walking, and return captures show smooth distant height shading. The
+large preset's nearby voxel patch remains visibly faceted. No GPU stream failure
+or overflow was reported.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Frame p50 / p95 | 8.33 / 8.71 ms | 8.34 / 8.80 ms |
+| Maximum frame time | 132.63 ms | 458.38 ms |
+| Sampled height replacement p95 / max | 236.92 / 298.18 ms | 321.50 / 341.06 ms |
+| Largest sampled local publication | 164.03 ms | 303.85 ms |
+| Peak terrain buffers | 205.0 MiB | 243.6 MiB |
+| Peak terrain buffers plus blend targets | 402.8 MiB | 441.3 MiB |
+
+These runs stayed near 8.3 ms frame pacing, whereas the earlier compositor runs
+shifted toward 16.7 ms. They do not establish a speedup from normals or isolate
+GPU draw cost. Percentiles use nearest rank; height observations count changes
+in the positive rounded CSV value, including initial coverage. Startup and
+captures remain in the measurements. Initial local coverage and some height
+replacements still exceed 250 ms.
+
+The small preset's flight and return captures retain a warning that walking
+paused at missing collision coverage. This is an observed contact/coverage issue
+for the separate collision follow-up; completion of the visual route does not
+prove continuous contact. Windows/Vulkan validation of these normals remains
+pending; commands are in the Windows validation handoff.
+
+## Local voxel normals
+
+Regular voxel meshes now carry the outward density gradient at each surface
+vertex. Central differences use the six axis neighbors in the existing density
+halo. Edge roots interpolate the gradients at both endpoints with the same
+fraction as the position; exact-zero roots use the node gradient. Positive
+density is solid, so the outward gradient negates the density derivative.
+The renderer interpolates these gradients and normalizes them per fragment.
+Shared boundary samples therefore produce the same shading on adjacent uniform
+chunks. No new noise evaluations, density buffers, or compute passes are needed.
+
+A zero gradient has no direction and uses the triangle's face normal. Mixed-LOD
+transition meshes retain face normals because their sample stencil has no
+regular halo. The viewer's local patch uses uniform one-meter chunks. This slice
+does not change positions, indices, collision behavior, or either saved preset.
+
+Each voxel vertex grows from 32 to 48 bytes. The pool accounts for the larger
+format through the vertex type and retains its 300-slot, 512 MiB limit. A regular
+slot with capacity for 20,000 vertices adds 320,000 bytes. Height vertices and
+blend targets keep their existing sizes.
+
+The CPU tests check exact plane gradients and analytic quadratic gradients across
+chunk boundaries. Metal tests compare CPU/GPU gradients from identical density
+samples, check exact shared-boundary normals on a curved field at planetary
+coordinates, and retain replay, schedule, topology, overflow, transition, and
+travel checks. Each normal component permits a difference of 0.00001 times
+max(abs(CPU), 1), allowing five decimal digits for interpolation. Existing
+position and density tolerances are unchanged.
+
+Validation passed: all 89 pilot CPU tests, both Metal uniform mesh tests, all five
+streaming/transition tests, all three height tests, the compositor test, native
+build, formatting, and Clippy with warnings denied. The streaming shader test
+needed its shared frame definitions included, matching the render pipeline;
+its corrected validation passed. Repeated local travel peaked at 334.9 MiB
+(large preset) and 280.0 MiB (small preset), within the unchanged pool budget.
+
+Both 90-second native routes completed with exit code 0 on Apple M1 Max at
+2880 × 2000. Recordings are `/tmp/voxel-normals-large.csv` and
+`/tmp/voxel-normals-small.csv`, with adjacent PNGs and logs. Ground and walking
+captures show smooth local lighting in place of the previous triangle shading.
+Ridge silhouettes retain their existing geometry. No GPU stream failure or
+overflow was reported.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Frame p50 / p95 | 8.39 / 16.85 ms | 8.34 / 8.97 ms |
+| Maximum frame time | 579.93 ms | 124.66 ms |
+| Sampled height replacement p95 / max | 290.37 / 338.50 ms | 325.21 / 399.84 ms |
+| Largest sampled local publication | 219.41 ms | 252.61 ms |
+| Peak terrain buffers | 249.0 MiB | 295.5 MiB |
+| Peak terrain buffers plus blend targets | 446.7 MiB | 493.2 MiB |
+
+Percentiles use the same nearest-rank method as the height-normal slice. These
+serial native runs include startup and captures and do not isolate the cost of
+normal generation or drawing. Frame outliers and height replacements over
+250 ms remain. The larger vertex format raises terrain memory use; it remains
+within the existing allocation limits.
+
+The large walking capture shows collision coverage rebuilding; the small return
+capture did not repeat the earlier missing-coverage warning. These observations
+do not establish continuous contact or resolve the prior collision issue.
+Skirts, spatial detail changes, and collision coverage remain separate work.
+Windows/Vulkan validation is pending, with updated commands in the Windows
+validation handoff.
+
+
+## Height coloring
+
+Height is now the exploration viewer's default color mode, with Neutral, LOD,
+and Normals still available. A fixed six-stop ramp spans minus to plus the
+configured height limit; the sidebar legend shows kilometers above the reference
+radius. This is an altitude display, not water, vegetation, snow, or a sea-level
+model. Terrain lighting remains active. The range does not rescale with the
+visible terrain or camera distance.
+
+The viewer owns one linear-RGB palette used for CPU packing, the legend, and the
+generated WGSL declaration. Local GPU vertices derive radial altitude before
+camera rebasing; height vertices carry the already-computed surface height in
+the unused fourth normal component. Skirts inherit the surface height at their
+top edge, and the overlap depth bias does not alter the color. Both draw paths
+interpolate altitude before applying the ramp. CPU audit meshes use the same
+palette at each vertex, then interpolate vertex colors through Bevy.
+
+There are no extra noise evaluations, compute dispatches, or vertex-buffer
+allocations. The frame uniform grows from 144 to 160 bytes for the reference
+radius and height limit. Switching GPU color modes changes only draw state.
+Saved terrain parameters and collision behavior are unchanged.
+
+Remaining branch slices are collision continuity, visible skirt and spatial
+detail transitions, and frame/height-replacement latency, followed by the
+Windows/Vulkan validation of the combined branch.
+
+Validation covers CPU/GPU palette agreement at 513 heights, including values
+outside the ramp, the production render shader and compositor, and height
+geometry, normals, replay, and skirt inheritance on both saved presets. The new
+altitude check verifies that stored height describes the surface geometry using
+the existing planetary direction precision budget. The focused CPU height test
+also passes. Render shader validation now lives with the compositor test, which
+assembles the same palette and frame declarations as the viewer.
+
+Both 90-second Metal routes completed with exit code 0. Captures and logs are
+adjacent to `/tmp/height-colors-small.csv` and `/tmp/height-colors-large.csv`.
+Orbit and ground captures show the ramp on both surfaces. The small run exposed
+a legend layout error; the corrected label row and visible diagnostics were
+verified in the large run. These were visual checks with compilation and tests
+partly concurrent, so their timings are not performance measurements. Native
+build, formatting, and Clippy with warnings denied pass. Windows/Vulkan validation
+of the ramp remains pending with the other branch follow-ups.
+
+
+## Collision continuity
+
+Collision refresh now checks both the current player center and a one-second
+motion forecast, with the existing 20 m query margin. The walker's forecast uses
+requested tangent movement, current velocity, and gravity when airborne.
+Walking and landing keep requesting collision regardless of the height field's
+estimated clearance; the estimate can exceed 32 m during a fall. Nearby flight
+uses its requested velocity for the same coverage lookahead.
+
+`PhysicalCollision` owns the retained patch and the refresh decision. The build
+center advances by at most half a chunk (16 m) per axis so it still covers the
+position that requested it. Completed work must cover the current player center
+with a one-meter installation margin. A stale completion outside that margin is
+dropped without removing retained support. One collision job remains in flight;
+source sampling, 27-chunk extraction, triangle contact queries, and the movement
+solver are unchanged. Arbitrarily slow work can still reach the coverage edge:
+movement must stop safely there, retain its state, and resume after replacement.
+
+The viewer clears a movement warning after the next successful update. Native
+CSV rows are recorded after movement and append `collision_building`,
+`collision_seconds` (last completed build), `grounded`, and `motion`.
+`collision_ready` now checks player-sphere coverage at the walker center (or eye
+outside walking), rather than testing whether a patch exists. `motion` records
+`Idle`, `Advanced`, `MissingCoverage`, `NoLanding`, `Overlap`, `SweepLimit`, or
+`Invalid`. `status` retains its GPU-stream meaning. This distinguishes a falling
+player from missing coverage and records short movement failures that a later
+screenshot cannot show. If the GPU statistics lock is busy, the recorder retains
+the last GPU snapshot and marks `gpu_stats_fresh` false. It still writes the
+current collision result, so statistics contention cannot hide a movement failure.
+
+The deterministic CPU tests cover stale completion rejection, early requests,
+240 m of walking across multiple chunks, delayed replacement on both saved
+terrain presets, and a twenty-second worker stall that must stop and then resume
+movement. With 1.5 seconds of simulated build latency, the fifteen-second walks
+installed one replacement on the large planet and three on the small planet,
+with zero missing-coverage updates. The small fixture flies forward to the first
+walkable triangle before landing, as the native route does over its steep start.
+All 92 CPU tests pass (89 library and three binary tests).
+
+Both final 90-second native routes completed with exit code 0 on Apple M1 Max /
+Metal. Files are `/tmp/collision-final-large.csv` and
+`/tmp/collision-final-small.csv`, with adjacent screenshots and logs. Every
+walking update reported `Advanced`; none reported missing coverage, overlap,
+iteration exhaustion, or invalid motion. These runs validate coverage through
+replacement, not a promise that the player stays grounded on steep terrain.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Recorded walking updates | 888 | 835 |
+| Walking coverage gaps or failed advances | 0 | 0 |
+| Grounded / falling walking updates | 888 / 0 | 383 / 452 |
+| Walking updates while replacement builds | 65 | 193 |
+| Longest completed collision build | 1.172 s | 1.151 s |
+| Rows retaining older GPU statistics | 20 | 9 |
+
+The small route had 53 `NoLanding` updates while flying over its initially steep
+face, before walking began. It then landed and completed the walk without an
+error. The large route had no landing retries. Successful movement clears the
+warning instead of carrying it into later flight/orbit screenshots. The recorder
+regression test verifies that a collision failure still gets its own row when
+GPU statistics are unavailable. The native build, formatting, and Clippy with
+warnings denied pass. No GPU generation or mesh code changed in this slice.
+
+Windows/Vulkan native validation remains pending in the updated handoff. The
+remaining implementation slices are visible skirt/detail transitions and
+frame/height-replacement latency. Faster-than-covered travel or unusually late
+collision work must still stop safely rather than pass through missing terrain.
+
+
+## Stitched height tiles
+
+The visible skirt/detail transition slice removes the height surface's radial
+skirts. A skirt previously extended below the full negative height envelope,
+even when adjacent samples were less than a meter apart. The replacement uses
+2:1 balanced height coverage and shared triangle edges. Selection admits a tile
+split together with all neighbor splits needed to preserve balance, including
+across cube faces. The complete cover stays within 384 tiles. If a refinement
+group does not fit, selection tries the next candidate instead of publishing an
+unbalanced cover.
+
+A fine tile that meets a coarse tile collapses its odd boundary samples onto the
+preceding even sample. Those even samples coincide with the coarse grid, so the
+remaining triangles use the same straight edge. Tile corners stay in place.
+Redundant triangles have zero area; the shared index buffer remains fixed. CPU
+and WGSL use the same integer rule before sphere mapping, filtered height,
+normal, and color evaluation. All 16 combinations of stitched edges are supported.
+There is no deep wall to expose at a ridge or a detail boundary.
+
+`HeightTile` carries the address and coarse-edge mask. Both participate in the
+immutable buffer cache key, so a neighbor-level change rebuilds the affected
+tile even when its address and filter are unchanged. Each published height
+snapshot remains complete. The continuous octave filter, 250 ms replacement
+blend, 16 m local overlap, and one-meter local voxel field are unchanged. The
+height/voxel overlap is still a rendering join between separate representations,
+not a single watertight export. Saved terrain presets and collision are unchanged.
+
+Removing four skirt rows reduces each tile from 1,221 to 1,089 vertices and from
+58,608 to 52,272 bytes. A full 384-tile snapshot drops from 21.46 to 19.14 MiB.
+The index buffer drops from 6,912 to 6,144 indices. These are fixed buffer savings,
+not a frame-time claim; frame and replacement latency remain the next slice.
+
+CPU tests check triangle orientation and full tile area for every edge mask.
+Six complete covers near face centers, edges, and corners, on the ground and in
+orbit, have exactly two oppositely wound triangles at every nondegenerate mesh
+edge. Both saved presets retain the tile cap, six-face coverage, deterministic
+selection, and refinement to one-meter spacing. Metal tests compare all edge
+masks at levels 8 and 18 against the CPU and replay them in reverse submission
+order. They also verify exact shared positions, normals, and altitude across
+both halves of all four edges on all six cube faces. The existing position and
+normal tolerances are unchanged. Height generation, repeated local travel, and
+the production compositor tests pass.
+
+All 94 CPU tests pass. The native build, formatting, and Clippy checks with
+warnings denied pass for the pilot and affected GPU test targets.
+
+Both 90-second native routes completed with exit code 0 on Apple M1 Max / Metal.
+Evidence is `/tmp/stitched-height-large.csv` and
+`/tmp/stitched-height-small.csv`, with six adjacent PNGs and a log for each.
+The inspected ground and orbit captures have no exposed skirt walls or open
+height-tile cracks. The large preset's close ground view still contains broad
+smooth triangles, as in the preceding collision route; this does not retune
+terrain relief or add surface materials.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Height tiles after startup | 384 | 384 |
+| Peak terrain buffer payload | 247.61 MiB | 290.81 MiB |
+| Surface blend target payload | 197.75 MiB | 197.75 MiB |
+| Successful walking updates | 1,017 | 825 |
+| Walking coverage gaps or failed advances | 0 | 0 |
+| Longest height replacement | 429.95 ms | 342.25 ms |
+
+These routes retain collision coverage while the height and local representations
+update. Height replacement still exceeds 250 ms in parts of the route. The next
+implementation slice addresses frame and height-replacement latency. The updated
+Windows handoff includes the stitched-edge CPU/GPU tests and native captures;
+validation of this branch on Vulkan remains pending.
+
+
+## Frame and height-replacement latency
+
+The stitched-tile route records showed that the six screenshot times coincided
+with the largest frame spikes: roughly 118–145 ms on the large preset and
+131–139 ms on the small preset, apart from startup. Bevy's screenshot observer
+converted and encoded PNGs synchronously on the main thread. The physical route
+now copies the captured image to the I/O pool for conversion and encoding. It
+tracks each requested image before readback, waits for all writes before clean
+exit, and returns a failed exit if a write fails. The six capture times and image
+format are unchanged. GPU readback and the image copy still incur a frame cost.
+
+Height replacement had a separate scheduling delay. One batch in flight required
+12 render-frame submissions to build 384 tiles, plus preparation and completion.
+The worker now admits up to two batches of 32 tiles. The render owner submits at
+most eight voxel jobs and two height batches per frame. The next pair cannot be
+admitted until completion frees room; a stalled renderer cannot grow the queue.
+The final batch's completion alone cannot publish a surface while another batch
+is outstanding.
+
+Each batch uses one compute pass, one address buffer, and one filter uniform,
+instead of one set per tile. Device copies split the output into independently
+reusable tile buffers, so keeping one tile does not retain an entire batch.
+The two temporary outputs add at most 3.19 MiB until GPU completion; the existing
+terrain counters report retained tile/voxel buffers and exclude these temporary
+outputs. Geometry stays on the GPU. Agreement tests now exercise full and partial
+batches and reorder tiles across batch boundaries.
+
+The next height snapshot can build during the current 250 ms fade. It publishes
+only after every batch completes and that fade ends, preserving the two complete
+surfaces used by the compositor. Current, previous, and pending snapshots remain
+bounded; overlapping work can retain all three at once (57.43 MiB at 384 tiles
+each). The field, resolution, tile selection, filtering, and kernel arithmetic are
+unchanged in this slice.
+
+The panel and CSV separate `height_build_ms` (preparation through final batch
+completion) from `height_wait_ms` (ready surface waiting for the preceding fade).
+`height_update_ms` remains total time from build start through publication. These
+measurements include CPU and submission waits and are not GPU execution times.
+Focused tests cover a full two-batch window, partial final batches, out-of-order
+completion, and screenshot completion/error handling. The recorder regression,
+native build, and Clippy with warnings denied pass.
+
+Final Metal validation used the same two 90-second native routes, run separately
+without concurrent builds or GPU tests. Files are
+`/tmp/height-latency-final-large.csv` and `/tmp/height-latency-final-small.csv`,
+with six adjacent PNGs and a log each. Both exited successfully after all PNGs
+saved. Inspected ground and orbit captures retain complete surfaces and height
+colors. All 896 large-preset and 831 small-preset walking updates reported
+`Advanced` with collision coverage. Both retained 384 height tiles after startup.
+
+The comparison uses the preceding `/tmp/stitched-height-*.csv` recordings.
+Build statistics count changes in the reported completed-build timing, rather
+than weighting a held statistic by how many frames repeat it. The earlier
+`height_update_ms` measured build time because builds started after the fade;
+the new `height_build_ms` is the comparable measurement.
+
+| Measurement | 4,900 km before → after | 300 km before → after |
+| --- | ---: | ---: |
+| Median height build | 212.48 → 66.36 ms | 224.60 → 105.88 ms |
+| Maximum height build, including startup | 429.95 → 144.71 ms | 342.25 → 156.88 ms |
+| Initial height build | 339.61 → 144.71 ms | 314.66 → 156.88 ms |
+| Descent frame p95 | 8.96 → 8.93 ms | 17.91 → 17.87 ms |
+| Ground frame p95 | 17.18 → 17.21 ms | 17.94 → 17.68 ms |
+| Walk frame p95 | 17.47 → 17.46 ms | 18.61 → 18.07 ms |
+| Flight frame p95 | 8.71 → 17.66 ms | 22.17 → 19.36 ms |
+| Orbit frame p95 | 8.72 → 17.82 ms | 17.34 → 18.06 ms |
+| Maximum frame, including startup and capture | 145.49 → 96.16 ms | 179.37 → 121.91 ms |
+| Peak retained terrain payload | 247.61 → 252.99 MiB | 290.81 → 309.96 MiB |
+
+The six one-second capture-window maxima fell from 118–145 ms to 10–25 ms on
+the large planet. Five small-planet windows fell from 136–139 ms to 18–56 ms;
+the final window still reached 121.91 ms at 89.169 seconds. The large route's
+remaining peak was 96.16 ms during flight at 80.937 seconds. PNG encoding is off
+the main thread, but these measurements do not remove all readback, startup,
+or runtime stalls. Median frame pacing varies between about 8.3 and 16.7 ms
+across desktop runs, including the slower large-preset flight/orbit rows above;
+these results are not a fixed-FPS guarantee.
+
+Build plus publication wait reached 251.36 ms (large) and 273.92 ms (small).
+The maximum completed-build wait was 201.93 and 177.08 ms respectively. The
+250 ms visual fade still limits publication cadence, and worker scheduling can
+add delay after it ends. This must not be described as a sub-250 ms bound on
+camera-to-visible-terrain latency.
+
+All three height GPU tests pass, including CPU agreement, full/partial batch
+replay, shared stitched edges, and repeated local travel. The three focused
+binary tests, native build, formatting, and affected Clippy checks pass.
+Implementation of the planned branch slices is complete. Windows/Vulkan
+validation remains in the handoff; the frame outliers above remain explicit
+performance limits for subsequent work.
+
+### More distant terrain detail
+
+The height grid now uses 64 by 64 quads per tile instead of 32 by 32. The
+384-tile cap and balanced edge stitching remain. This halves vertex spacing at
+the same tile level and raises the maximum triangle count from 786,432 to
+3,145,728 per snapshot, before stitched-edge degenerates and view culling.
+Near the ground, selection stops refining when height spacing reaches one meter;
+the local voxel grid still has one-meter spacing.
+
+The continuous height filter now uses distance divided by 512 instead of 128.
+At a given distance it retains wavelengths four times smaller, equivalent to
+two finer bands when octave wavelengths halve. This is separate from the mesh's
+one-level increase in linear resolution. For example, at 600 km clearance above
+the surface projection, the filter footprint is about 1.17 km instead of
+4.69 km. A 300 km planet's saved 8.192 km band is fully retained there; before
+this change it was absent. The same filter applies to height and normal sampling
+and stays continuous across tile boundaries. Saved noise settings are unchanged.
+
+Each tile now occupies 202,800 bytes for 4,225 vertices. One full snapshot uses
+74.27 MiB; current, previous, and pending snapshots can retain 222.80 MiB. Two
+32-tile GPU batches add at most 12.38 MiB of temporary output. The local voxel
+pool's 512 MiB budget and the viewport-dependent compositor allocations are
+separate from these bounds.
+
+The M1 Max/Metal routes on 2026-09-14 completed with six captures each and no GPU
+stream errors. Orbit captures show finer ridges and valleys, including on the
+lit hemisphere; ground captures retain continuous coverage. The comparison
+below uses the preceding latency slice's recordings and the same saved presets:
+
+| Metric | 4,900 km before / after | 300 km before / after |
+|---|---:|---:|
+| Median completed height build | 66.36 / 147.92 ms | 105.88 / 162.51 ms |
+| Maximum completed height build, including startup | 144.71 / 235.24 ms | 156.88 / 286.72 ms |
+| Descent frame p95 | 8.93 / 17.23 ms | 17.87 / 17.31 ms |
+| Walking frame p95 | 17.46 / 9.18 ms | 18.07 / 18.36 ms |
+| Flight frame p95 | 17.66 / 8.79 ms | 19.36 / 21.10 ms |
+| Return-to-orbit frame p95 | 17.82 / 8.80 ms | 18.06 / 17.80 ms |
+| Peak retained terrain buffers | 252.99 / 409.40 MiB | 309.96 / 475.33 MiB |
+
+Height builds cost more. Frame pacing still varies between roughly 8.3 and
+16.7 ms across desktop runs, so the faster rows do not establish a rendering
+speedup. The small-preset run also had a 503.86 ms startup frame at 0.802 seconds;
+its largest later frame was 81.78 ms during descent. The large-preset maximum
+was 84.15 ms. All 1,719 large-preset and 831 small-preset walking updates were
+`Advanced` with collision coverage. Raw evidence is in
+`/tmp/height-detail-{large,small}.csv`, adjacent logs and PNGs; the comparison
+uses `/tmp/height-latency-final-{large,small}.csv`.
+
+All 94 CPU tests and three height GPU tests pass, including the denser grid's
+stitched seams and exact replay after reordered submissions. Maximum CPU/GPU
+position differences were 1.612976 m (large) and 0.152100 m (small), and normal
+vector differences were 0.046563 and 0.038663. Existing tolerances are unchanged.
+The native build, pilot Clippy checks, and formatting pass. Windows/Vulkan
+validation of these detail settings remains pending.

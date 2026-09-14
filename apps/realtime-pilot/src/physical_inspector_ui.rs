@@ -71,20 +71,27 @@ pub(super) fn panel(
                 None => "Ground clearance (collision): unavailable".into(),
             });
             ui.label(format!("Field clearance estimate: {:.2} m", state.clearance_estimate()));
-            ui.label(if state.collision_busy {
+            ui.label(if state.collision_busy && state.collision.covers(state.collision_position()) {
+                "Nearby collision: retained · replacement building"
+            } else if state.collision_busy {
                 "Nearby collision: building"
-            } else if state.collision.is_some() {
+            } else if state.collision.covers(state.collision_position()) {
                 "Nearby collision: retained"
             } else {
                 "Nearby collision: outside ground range"
             });
             ui.separator();
             ui.horizontal(|ui| {
+                ui.selectable_value(&mut state.coloring, Coloring::Height, "Height");
                 ui.selectable_value(&mut state.coloring, Coloring::Neutral, "Neutral");
                 ui.selectable_value(&mut state.coloring, Coloring::Lod, "LOD");
                 ui.selectable_value(&mut state.coloring, Coloring::Normals, "Normals");
             });
-            ui.label("LOD 0 (red) = 1 m. Each level doubles spacing.");
+            match state.coloring {
+                Coloring::Height => height_legend(ui, state.field.config().height_limit_m),
+                Coloring::Lod => { ui.label("LOD 0 (red) = 1 m. Each level doubles spacing."); }
+                _ => {}
+            }
             ui.separator();
             if let Some(bridge) = &state.gpu {
                 ui.label("Backend: GPU · height tiles + local voxels");
@@ -92,9 +99,11 @@ pub(super) fn panel(
                     let s = &output.stats;
                     ui.label(&s.status);
                     ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
+                    ui.label(format!("Height build {:.1} ms · blend wait {:.1} ms",s.height_build_ms,s.height_wait_ms));
                     ui.label(format!("Chunks: {} resident / {} target · {} pending · {} retiring",s.resident,s.target,s.in_flight,s.retiring));
                     ui.label(format!("{} visible chunks · finest spacing {} m",s.drawn,s.finest_spacing_m.map(|s|s.to_string()).unwrap_or_else(|| "pending".into())));
-                    ui.label(format!("GPU allocation: {:.1} MiB",s.bytes as f64/1048576.0));
+                    ui.label(format!("Terrain buffers: {:.1} MiB",s.bytes as f64/1048576.0));
+                    ui.label(format!("Surface blend targets: {:.1} MiB",s.surface_target_bytes as f64/1048576.0));
                     ui.label(format!("Voxel budget: {:.0} MiB · height tiles capped at {}",procgen_realtime_pilot::LOCAL_GPU_WORLD_CONFIG.memory_budget_bytes as f64/1048576.0,procgen_realtime_pilot::MAX_HEIGHT_TILES));
                     ui.label(format!("Resident {:.1} MiB · retiring {:.1} MiB",s.resident_bytes as f64/1048576.0,s.retiring_bytes as f64/1048576.0));
                     ui.label(format!("Worker selection: {:.2} ms",s.selection_ms));
@@ -124,7 +133,7 @@ pub(super) fn panel(
                 ("Build source", state.source_bytes),
                 ("Build mesh", state.mesh_bytes),
                 ("Displayed buffers", state.display_bytes),
-                ("Collision", state.collision.as_ref().map_or(0, VoxelCollision::payload_bytes)),
+                ("Collision", state.collision.patch().map_or(0, VoxelCollision::payload_bytes)),
             ] {
                 ui.label(format!("{label}: {:.1} MiB", bytes as f32 / 1048576.0));
             }
@@ -151,4 +160,59 @@ pub(super) fn panel(
         }
     }
     Ok(())
+}
+
+fn height_legend(ui: &mut egui::Ui, limit_m: f32) {
+    use crate::physical_color::HEIGHT_COLORS;
+    ui.label("Altitude above reference radius");
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), egui::Sense::hover());
+    let mut mesh = egui::Mesh::default();
+    for stop in HEIGHT_COLORS {
+        let [r, g, b] = stop.rgb;
+        let height = stop.relative_height;
+        let x = egui::lerp(rect.x_range(), (height + 1.0) * 0.5);
+        let color = egui::Rgba::from_rgb(r, g, b).into();
+        mesh.colored_vertex(egui::pos2(x, rect.top()), color);
+        mesh.colored_vertex(egui::pos2(x, rect.bottom()), color);
+    }
+    for i in 0..HEIGHT_COLORS.len() as u32 - 1 {
+        let a = i * 2;
+        mesh.add_triangle(a, a + 1, a + 2);
+        mesh.add_triangle(a + 2, a + 1, a + 3);
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+    let (labels, _) = ui.allocate_exact_size(
+        egui::vec2(
+            ui.available_width(),
+            ui.text_style_height(&egui::TextStyle::Body),
+        ),
+        egui::Sense::hover(),
+    );
+    for (x, align, text) in [
+        (
+            labels.left(),
+            egui::Align2::LEFT_CENTER,
+            format!("−{:.1} km", limit_m / 1000.0),
+        ),
+        (
+            labels.center().x,
+            egui::Align2::CENTER_CENTER,
+            "0 km".into(),
+        ),
+        (
+            labels.right(),
+            egui::Align2::RIGHT_CENTER,
+            format!("+{:.1} km", limit_m / 1000.0),
+        ),
+    ] {
+        ui.painter().text(
+            egui::pos2(x, labels.center().y),
+            align,
+            text,
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().text_color(),
+        );
+    }
+    ui.label("Colors show elevation only.");
 }

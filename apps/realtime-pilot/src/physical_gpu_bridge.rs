@@ -1,6 +1,6 @@
 //! Renderer-owned messages, immutable snapshots, and visual transition settings.
 use bevy::prelude::Resource;
-use procgen_cubesphere::TileAddress;
+use procgen_realtime_pilot::HeightTile;
 use procgen_realtime_pilot::{HeightFilter, MeterPosition, PlanetDesignField, VoxelGpuLease};
 use std::{
     collections::BTreeMap,
@@ -11,7 +11,7 @@ pub const SURFACE_BLEND_SECONDS: f32 = 0.25;
 pub const LOCAL_BLEND_M: f32 = 16.0;
 pub const LOCAL_SURFACE_BIAS_M: f32 = 1.0;
 pub struct HeightFrame {
-    pub tiles: BTreeMap<TileAddress, Arc<wgpu::Buffer>>,
+    pub tiles: BTreeMap<HeightTile, Arc<wgpu::Buffer>>,
     pub born: f32,
     pub filter: HeightFilter,
 }
@@ -47,7 +47,10 @@ pub struct GpuStats {
     pub status: String,
     pub height_tiles: usize,
     pub height_bytes: u64,
+    pub surface_target_bytes: u64,
     pub height_update_ms: f64,
+    pub height_build_ms: f64,
+    pub height_wait_ms: f64,
     pub resident: usize,
     pub finest_spacing_m: Option<i32>,
     pub drawn: usize,

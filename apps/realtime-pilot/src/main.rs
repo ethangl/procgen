@@ -10,6 +10,10 @@ mod display;
 #[cfg(feature = "inspector")]
 mod inspector;
 #[cfg(feature = "inspector")]
+mod physical_capture;
+#[cfg(feature = "inspector")]
+mod physical_color;
+#[cfg(feature = "inspector")]
 mod physical_gpu;
 #[cfg(feature = "inspector")]
 mod physical_gpu_render;
@@ -21,6 +25,8 @@ mod physical_jobs;
 mod physical_record;
 #[cfg(feature = "inspector")]
 mod physical_render;
+#[cfg(feature = "inspector")]
+mod physical_surface_layers;
 #[cfg(feature = "inspector")]
 mod planet_inspector;
 mod replay;

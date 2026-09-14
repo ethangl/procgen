@@ -19,10 +19,6 @@ const CONFIG: VoxelGpuMeshConfig = VoxelGpuMeshConfig {
 #[test]
 fn voxel_transition_wgsl_validates_without_a_device() {
     validate_wgsl("voxel transition", &voxel_transition_shader());
-    validate_wgsl(
-        "voxel direct rendering",
-        include_str!("../../../apps/realtime-pilot/src/physical_gpu.wgsl"),
-    );
 }
 fn position(x: i32, y: i32, z: i32) -> VoxelPosition {
     VoxelPosition {
@@ -289,7 +285,8 @@ fn gpu_transitions_match_cpu_close_seams_and_reject_overflow() {
     let sentinel = vec![
         VoxelMeshVertex {
             anchor_m: [-17; 4],
-            offset_m: [-17.0; 4]
+            offset_m: [-17.0; 4],
+            normal: [-17.0; 4]
         };
         3
     ];

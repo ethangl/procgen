@@ -1,9 +1,13 @@
 //! Bounded distant height coverage and the independent meter-scale voxel region.
 use crate::{
-    PlanetDesignField, VoxelChunkAddress, VoxelCoverage, VoxelCoverageError, VoxelPosition,
+    HeightTile, PlanetDesignField, VoxelChunkAddress, VoxelCoverage, VoxelCoverageError,
+    VoxelPosition,
 };
 use procgen_core::Vec3;
-use procgen_cubesphere::{CubeFace, MAX_TILE_LEVEL, TILE_QUADS, TileAddress, vertex_spacing};
+use procgen_cubesphere::{
+    CubeFace, FaceEdge, MAX_TILE_LEVEL, TILE_QUADS, TileAddress, vertex_spacing,
+};
+use std::collections::BTreeSet;
 
 pub const MAX_HEIGHT_TILES: usize = 384;
 pub const LOCAL_VOXEL_RADIUS_CHUNKS: i32 = 2;
@@ -11,8 +15,9 @@ pub const LOCAL_VOXEL_ACTIVATION_M: f32 = 256.0;
 
 /// Complete six-face coverage. Only address metadata is generated on the CPU.
 /// Distance uses the surface projection, so local relief cannot force every tile
-/// in the planet's full height envelope to the finest level.
-pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> Vec<TileAddress> {
+/// in the planet's full height envelope to the finest level. Every admitted
+/// refinement retains 2:1 edge balance, including across cube faces.
+pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> Vec<HeightTile> {
     let radius = field.config().radius_m;
     let p = Vec3::new(eye.x_m as f32, eye.y_m as f32, eye.z_m as f32);
     let direction = if p.length_squared() == 0.0 {
@@ -22,12 +27,11 @@ pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> 
     };
     let clearance = p.length() - radius - field.height(direction, 0.0);
     let surface = direction * radius;
-    let mut leaves: Vec<_> = CubeFace::ALL.into_iter().map(TileAddress::root).collect();
+    let mut leaves: BTreeSet<_> = CubeFace::ALL.into_iter().map(TileAddress::root).collect();
     loop {
-        let next = leaves
+        let mut candidates: Vec<_> = leaves
             .iter()
-            .enumerate()
-            .filter_map(|(i, &tile)| {
+            .filter_map(|&tile| {
                 if tile.level() == MAX_TILE_LEVEL
                     || vertex_spacing(tile.level())
                         * radius
@@ -44,22 +48,57 @@ pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> 
                 let width = vertex_spacing(tile.level()) * radius * TILE_QUADS as f32;
                 let lateral = ((center - surface).length() - width).max(0.0);
                 let distance = lateral.hypot(clearance.max(0.0));
-                // A 32-quad tile should span a small view angle in orbit too.
+                // A tile should span a small view angle in orbit too.
                 // Camera priority and the fixed tile cap still bound refinement.
-                (distance < 8.0 * width).then_some((i, distance / width, tile))
+                (distance < 8.0 * width).then_some((distance / width, tile))
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
-        let Some((i, _, tile)) = next else {
-            break;
-        };
-        if leaves.len() + 3 > MAX_HEIGHT_TILES {
-            break;
+            .collect();
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        let refinement = candidates.into_iter().find_map(|(_, tile)| {
+            let mut splits = BTreeSet::new();
+            refinement_closure(tile, &leaves, &mut splits);
+            (leaves.len() + 3 * splits.len() <= MAX_HEIGHT_TILES).then_some(splits)
+        });
+        let Some(splits) = refinement else { break };
+        for tile in splits {
+            leaves.remove(&tile);
+            leaves.extend(tile.children().unwrap());
         }
-        leaves.swap_remove(i);
-        leaves.extend(tile.children().unwrap());
     }
-    leaves.sort();
     leaves
+        .iter()
+        .map(|&tile| {
+            HeightTile::new(
+                tile,
+                FaceEdge::ALL.into_iter().filter(|&edge| {
+                    covering_leaf(tile.edge_neighbor(edge), &leaves)
+                        .is_some_and(|neighbor| neighbor.level() < tile.level())
+                }),
+            )
+        })
+        .collect()
+}
+
+// Start with six roots and admit each split together with its required neighbor
+// splits. The tile cap therefore cannot leave an unbalanced intermediate cover.
+fn refinement_closure(
+    tile: TileAddress,
+    leaves: &BTreeSet<TileAddress>,
+    splits: &mut BTreeSet<TileAddress>,
+) {
+    if !splits.insert(tile) {
+        return;
+    }
+    for edge in FaceEdge::ALL {
+        if let Some(neighbor) = covering_leaf(tile.edge_neighbor(edge), leaves)
+            && neighbor.level() < tile.level()
+        {
+            refinement_closure(neighbor, leaves, splits);
+        }
+    }
+}
+fn covering_leaf(tile: TileAddress, leaves: &BTreeSet<TileAddress>) -> Option<TileAddress> {
+    std::iter::successors(Some(tile), |t| t.parent()).find(|t| leaves.contains(t))
 }
 
 /// A five-by-five-by-five cube of unchanged one-meter chunks around the ground
@@ -126,17 +165,29 @@ mod tests {
                     z_m: ground.z as i32,
                 };
                 let tiles = select_height_coverage(&field, eye);
+                let addresses: BTreeSet<_> = tiles.iter().map(|t| t.address()).collect();
+                for &tile in &addresses {
+                    for edge in FaceEdge::ALL {
+                        if let Some(neighbor) = covering_leaf(tile.edge_neighbor(edge), &addresses)
+                        {
+                            assert!(
+                                tile.level() - neighbor.level() <= 1,
+                                "balanced cube seams too"
+                            );
+                        }
+                    }
+                }
                 assert!(tiles.len() <= MAX_HEIGHT_TILES);
                 for face in CubeFace::ALL {
                     let area: f64 = tiles
                         .iter()
-                        .filter(|t| t.face() == face)
-                        .map(|t| 4.0_f64.powi(-(t.level() as i32)))
+                        .filter(|t| t.address().face() == face)
+                        .map(|t| 4.0_f64.powi(-(t.address().level() as i32)))
                         .sum();
                     assert_eq!(area, 1.0);
                 }
                 assert_eq!(tiles, select_height_coverage(&field, eye));
-                assert!(tiles.iter().any(|t| vertex_spacing(t.level())
+                assert!(tiles.iter().any(|t| vertex_spacing(t.address().level())
                     * config.radius_m
                     * (TILE_QUADS / crate::HEIGHT_QUADS) as f32
                     <= 1.0));

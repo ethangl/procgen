@@ -1,12 +1,28 @@
 //! GPU height tiles and canonical CPU audit vertices. No device discovery.
-use crate::{PlanetDesignField, VoxelGpuParameters, voxel_density_shader};
-use procgen_cubesphere::TileAddress;
+use crate::{HeightTile, PlanetDesignField, VoxelGpuParameters, voxel_density_shader};
 use wgpu::util::DeviceExt;
 
 use crate::{HEIGHT_TILE_BYTES, HEIGHT_VERTEX_COUNT};
+/// Bounds temporary mesh output and interference with rendering.
+pub const HEIGHT_GPU_BATCH_TILES: usize = 32;
 pub fn height_shader() -> String {
+    use procgen_cubesphere::FaceEdge;
+    let edge_constants: String = [
+        ("LEFT", FaceEdge::Left),
+        ("RIGHT", FaceEdge::Right),
+        ("BOTTOM", FaceEdge::Bottom),
+        ("TOP", FaceEdge::Top),
+    ]
+    .into_iter()
+    .map(|(name, edge)| {
+        format!(
+            "const HEIGHT_EDGE_{name}: u32 = {}u;\n",
+            crate::height_tile::edge_bit(edge)
+        )
+    })
+    .collect();
     format!(
-        "{}\n{}\nconst HEIGHT_VERTEX_COUNT: u32 = {}u;\nconst HEIGHT_QUADS: u32 = {}u;\nconst HEIGHT_SIDE: u32 = {}u;\nconst HEIGHT_FILTER_DISTANCE_RATIO: f32 = {:?};\nconst HEIGHT_FILTER_MIN_M: f32 = {:?};\n{}",
+        "{edge_constants}{}\n{}\nconst HEIGHT_VERTEX_COUNT: u32 = {}u;\nconst HEIGHT_QUADS: u32 = {}u;\nconst HEIGHT_SIDE: u32 = {}u;\nconst HEIGHT_FILTER_DISTANCE_RATIO: f32 = {:?};\nconst HEIGHT_FILTER_MIN_M: f32 = {:?};\nconst HEIGHT_NORMAL_MIN_STEP_M: f32 = {:?};\n{}",
         voxel_density_shader(),
         procgen_cubesphere::MAPPING_WGSL_SOURCE,
         HEIGHT_VERTEX_COUNT,
@@ -14,6 +30,7 @@ pub fn height_shader() -> String {
         crate::HEIGHT_SIDE,
         crate::HEIGHT_FILTER_DISTANCE_RATIO,
         crate::HEIGHT_FILTER_MIN_M,
+        crate::height_mesh::HEIGHT_NORMAL_MIN_STEP_M,
         include_str!("height_gpu.wgsl")
     )
 }
@@ -50,25 +67,29 @@ impl HeightGpuMesher {
         });
         Self { pipeline, field }
     }
-    /// Encode one immutable tile. The caller retains output through draw completion.
-    pub fn encode(
+    /// One compute pass, followed by device copies into independently reusable
+    /// tile buffers. The temporary output is bounded by HEIGHT_GPU_BATCH_TILES.
+    pub fn encode_batch(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        tile: TileAddress,
+        tiles: &[HeightTile],
         filter: crate::HeightFilter,
-    ) -> wgpu::Buffer {
+    ) -> Vec<wgpu::Buffer> {
+        assert!(
+            !tiles.is_empty() && tiles.len() <= HEIGHT_GPU_BATCH_TILES,
+            "height batch must contain 1..={HEIGHT_GPU_BATCH_TILES} tiles"
+        );
+        let addresses: Vec<_> = tiles.iter().map(|t| t.gpu_words()).collect();
         let address = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("physical height address"),
-            contents: bytemuck::cast_slice(&tile.gpu_words()),
+            contents: bytemuck::cast_slice(&addresses),
             usage: wgpu::BufferUsages::STORAGE,
         });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("physical height vertices"),
-            size: HEIGHT_TILE_BYTES,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_SRC,
+            size: HEIGHT_TILE_BYTES * tiles.len() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let filter = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -101,9 +122,32 @@ impl HeightGpuMesher {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.field, &[]);
         pass.set_bind_group(1, &group, &[]);
-        pass.dispatch_workgroups(HEIGHT_VERTEX_COUNT.div_ceil(64), 1, 1);
+        pass.dispatch_workgroups(
+            (HEIGHT_VERTEX_COUNT * tiles.len() as u32).div_ceil(64),
+            1,
+            1,
+        );
         drop(pass);
-        output
+        (0..tiles.len())
+            .map(|i| {
+                let tile = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("immutable height tile"),
+                    size: HEIGHT_TILE_BYTES,
+                    usage: wgpu::BufferUsages::VERTEX
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_buffer_to_buffer(
+                    &output,
+                    i as u64 * HEIGHT_TILE_BYTES,
+                    &tile,
+                    0,
+                    HEIGHT_TILE_BYTES,
+                );
+                tile
+            })
+            .collect()
     }
 }
 

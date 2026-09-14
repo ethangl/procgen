@@ -1,6 +1,6 @@
 struct Parameters { vertex_capacity: u32, index_capacity: u32, one: f32, zero: f32 }
 struct Chunk { x: i32, y: i32, z: i32, spacing: i32, blocked: array<u32, MASK_WORDS> }
-struct Vertex { anchor: vec4<i32>, offset: vec4<f32> }
+struct Vertex { anchor: vec4<i32>, offset: vec4<f32>, normal: vec4<f32> }
 struct Block { total: vec2<u32>, offset: vec2<u32> }
 struct Status { vertices: u32, indices: u32, overflow: u32, reserved: u32 }
 struct Draw { indices: u32, instances: u32, first_index: u32, base_vertex: i32, first_instance: u32 }
@@ -21,8 +21,15 @@ fn grid_point(id: u32, side: u32) -> vec3<i32> {
 fn node_id(p: vec3<i32>) -> u32 { return u32(p.x) + NODES * (u32(p.y) + NODES * u32(p.z)); }
 fn corner(mask: u32) -> vec3<i32> { return vec3<i32>(i32(mask & 1u), i32((mask >> 1u) & 1u), i32((mask >> 2u) & 1u)); }
 fn potential(p: vec3<i32>) -> f32 {
-    let h = vec3<u32>(p) + vec3<u32>(HALO);
+    let h = vec3<u32>(p + vec3<i32>(i32(HALO)));
     return density[h.x + SAMPLE_SIDE * (h.y + SAMPLE_SIDE * h.z)];
+}
+fn density_normal(p: vec3<i32>) -> vec3<f32> {
+    return vec3<f32>(
+        potential(p-vec3(1,0,0))-potential(p+vec3(1,0,0)),
+        potential(p-vec3(0,1,0))-potential(p+vec3(0,1,0)),
+        potential(p-vec3(0,0,1))-potential(p+vec3(0,0,1))
+    ) / (2.0*f32(chunk.spacing));
 }
 fn in_chunk(p: vec3<i32>) -> bool { return all(p >= vec3<i32>(0)) && all(p <= vec3<i32>(i32(CELLS))); }
 fn is_active(slot: u32) -> bool {
@@ -82,7 +89,7 @@ fn cell_triangles(cell: u32) -> CellTriangles {
 fn offset(slot: u32) -> vec2<u32> { return scratch[slot] + blocks[slot / GROUP_SIZE].offset; }
 fn vertex(slot: u32) -> Vertex {
     let p = grid_point(slot / 8u, NODES);
-    if slot % 8u == 7u { return Vertex(vec4<i32>(p * chunk.spacing, 0), vec4<f32>(0.0)); }
+    if slot % 8u == 7u { return Vertex(vec4<i32>(p * chunk.spacing, 0), vec4<f32>(0.0), vec4(density_normal(p),0.0)); }
     let q = p + corner(slot % 8u + 1u);
     let a = potential(p);
     let b = potential(q);
@@ -95,7 +102,9 @@ fn vertex(slot: u32) -> Vertex {
     let math = F32Arithmetic(params.one, params.zero);
     let fraction = ratio / f32_add(1.0, ratio, math);
     let delta = fma(vec3<f32>((end - start) * chunk.spacing), vec3<f32>(fraction), vec3<f32>(params.zero));
-    return Vertex(vec4<i32>(start * chunk.spacing, 0), vec4<f32>(delta, 0.0));
+    let a_normal = density_normal(start);
+    let normal = f32_scale_add(density_normal(end)-a_normal, fraction, a_normal, math);
+    return Vertex(vec4<i32>(start * chunk.spacing, 0), vec4<f32>(delta, 0.0), vec4(normal,0.0));
 }
 
 @compute @workgroup_size(GROUP_SIZE)

@@ -199,3 +199,60 @@ Raw logs, three CSVs, eighteen PNGs, environment details and analysis results
 remain in the ignored local directory `target/windows-gpu-validation/`. No raw
 recordings are added to Git. `analyze.ps1` in that directory reproduces the
 summaries; no branch, commit or push was made for this validation.
+
+## Surface cleanup: Windows validation pending
+
+The results above predate the smooth surface compositor, height-surface normals,
+local voxel normals, height coloring, collision continuity, and stitched height
+tiles, bounded height batch overlap, background PNG encoding, and the denser
+64-quad height grids with two more distance-filtered octave bands. Run the render
+and terrain tests, then repeat the two routes from the repository root:
+
+```powershell
+$env:WGPU_BACKEND = "vulkan"
+$env:RUST_LOG = "warn,bevy_render::renderer=info"
+cargo test -p procgen-realtime-pilot --no-default-features physical_collision -- --nocapture
+cargo test -p procgen-realtime-pilot --no-default-features height_ -- --nocapture
+cargo test -p procgen-realtime-pilot --bin procgen-realtime-pilot physical_ -- --nocapture
+cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
+cargo test -p procgen-gpu-tests --test voxel_mesh_agreement --test voxel_streaming_agreement -- --nocapture --test-threads=1
+cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
+cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-design.json --backend gpu --explore-record target/surface-join-large-vulkan.csv
+cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-design-300km.json --backend gpu --explore-record target/surface-join-small-vulkan.csv
+```
+
+Record the tested commit and adapter, test results, clean exit, frame timings,
+and both terrain buffer bytes and the new `surface_target_bytes` column. Inspect
+ridge edges, ground views, and return to orbit for stipple, missing coverage, or
+stale surfaces. Check for smooth distant shading and lighting seams across tile
+edges, smooth ground shading, and lighting seams across local chunk boundaries.
+The viewer now starts in Height mode. Check that its kilometer legend stays
+fixed during travel and that LOD joins have no cracks or vertical curtains.
+Height skirts have been removed; the surface uses balanced, stitched tile edges. Switch
+to Neutral and back once in an interactive run. Record results here. Existing
+position and density tolerances are unchanged.
+Height normals permit a vector difference of 0.05. Voxel normal components from
+identical density samples permit a difference of 0.00001 times max(abs(CPU), 1).
+Do not retune terrain settings or tolerances during this validation.
+
+The collision follow-up appends `collision_building`, `collision_seconds`,
+`grounded`, and `motion` to each CSV row. `collision_ready` now means the retained
+patch covers the player sphere, not just that a patch exists. For rows where
+`walking` is true, count each `motion` outcome and report any `MissingCoverage`,
+`Overlap`, `SweepLimit`, or `Invalid` with its time and build state. Report landing
+failures separately. A falling player can have valid coverage while `grounded`
+is false. Do not infer uninterrupted contact from the GPU `status` column.
+
+`gpu_stats_fresh` is false on rows that retain the last GPU-statistics snapshot
+because its lock was busy. Collision results on those rows are current and must
+be included when counting movement failures.
+
+
+The latency follow-up keeps at most two 32-tile height batches in flight and can
+build during the preceding fade. CSV columns `height_build_ms` and
+`height_wait_ms` separate build time from the wait to publish after that fade.
+Report both, plus the existing total `height_update_ms`. They are elapsed times,
+not GPU execution timestamps. PNG encoding now runs on the I/O pool; verify all
+six images exist after each clean route exit. Compare frame p95/p99 by route phase
+and report capture windows separately (4, 25, 55, 73, 83, and 89 seconds). Keep
+startup and capture outliers visible rather than dropping them from the report.

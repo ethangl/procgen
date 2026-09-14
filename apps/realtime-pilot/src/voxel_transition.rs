@@ -98,6 +98,7 @@ pub fn build_voxel_transition_mesh(
                     VoxelMeshVertex {
                         anchor_m: a,
                         offset_m: [0.0; 4],
+                        normal: [0.0; 4],
                     }
                 } else {
                     edge_vertex(

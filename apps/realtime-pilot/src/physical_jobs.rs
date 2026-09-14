@@ -70,7 +70,7 @@ impl Jobs {
             )
             .map(|p| TerrainResult {
                 kind: TerrainKind::Overview,
-                packed: PackedSurface::overview(&p),
+                packed: PackedSurface::overview(&p, source.config()),
                 generation_seconds: started.elapsed().as_secs_f32(),
                 source_bytes: 0,
                 mesh_bytes: 0,
@@ -79,7 +79,8 @@ impl Jobs {
             if results.send(overview).is_err() {
                 return;
             }
-            let mut terrain = PhysicalTerrain::new(source).expect("fixed viewer residency config");
+            let mut terrain =
+                PhysicalTerrain::new(Arc::clone(&source)).expect("fixed viewer residency config");
             while !stop.load(Ordering::Relaxed) {
                 let request = match requests.recv_timeout(std::time::Duration::from_millis(50)) {
                     Ok(r) => r,
@@ -89,7 +90,8 @@ impl Jobs {
                 let result = terrain
                     .build(request.camera, &stop)
                     .map(|frame| {
-                        let packed = PackedSurface::voxel(&frame.surface, request.coloring);
+                        let packed =
+                            PackedSurface::voxel(&frame.surface, request.coloring, source.config());
                         TerrainResult {
                             kind: TerrainKind::Voxels(request.coloring),
                             packed,

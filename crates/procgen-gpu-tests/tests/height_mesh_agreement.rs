@@ -1,13 +1,9 @@
-use procgen_cubesphere::{CubeFace, TileAddress};
+use procgen_cubesphere::{CubeFace, FaceEdge, TileAddress};
 use procgen_gpu_tests::{readback, request_device_for_backends, validate_wgsl};
 use procgen_realtime_pilot::*;
 #[test]
-fn height_compute_and_render_shaders_validate() {
+fn height_compute_shader_validates() {
     validate_wgsl("physical height", &height_shader());
-    validate_wgsl(
-        "physical rendering",
-        include_str!("../../../apps/realtime-pilot/src/physical_gpu.wgsl"),
-    );
 }
 #[test]
 fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
@@ -40,11 +36,11 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
             TileAddress::new(CubeFace::PositiveX, 18, 131072, 131072).unwrap(),
             TileAddress::root(CubeFace::NegativeY),
         ];
-        let dispatch = |tiles: &[TileAddress]| {
+        let dispatch_mesh = |tiles: &[HeightTile]| {
             let mut encoder = device.create_command_encoder(&Default::default());
             let buffers: Vec<_> = tiles
-                .iter()
-                .map(|&t| mesher.encode(&device, &mut encoder, t, filter))
+                .chunks(HEIGHT_GPU_BATCH_TILES)
+                .flat_map(|batch| mesher.encode_batch(&device, &mut encoder, batch, filter))
                 .collect();
             queue.submit([encoder.finish()]);
             buffers
@@ -52,19 +48,63 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                 .map(|b| readback::<HeightVertex>(&device, &queue, b, HEIGHT_VERTEX_COUNT as usize))
                 .collect::<Vec<_>>()
         };
-        let first = dispatch(&tiles);
-        let mut reversed = tiles;
+        let dispatch = |tiles: &[TileAddress]| {
+            dispatch_mesh(
+                &tiles
+                    .iter()
+                    .map(|&t| HeightTile::new(t, []))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let mut audited: Vec<_> = tiles.iter().map(|&t| HeightTile::new(t, [])).collect();
+        for tile in [tiles[1], tiles[2]] {
+            for mask in 1..16 {
+                audited.push(HeightTile::new(
+                    tile,
+                    FaceEdge::ALL
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, e)| (mask & (1 << i) != 0).then_some(e)),
+                ));
+            }
+        }
+        let first = dispatch_mesh(&audited);
+        let mut reversed = audited.clone();
         reversed.reverse();
-        let replay = dispatch(&reversed);
+        let replay = dispatch_mesh(&reversed);
         let mut max_error = 0.0_f64;
-        for (i, &tile) in tiles.iter().enumerate() {
+        let mut max_normal_error = 0.0_f32;
+        for (i, &tile) in audited.iter().enumerate() {
             assert_eq!(
                 first[i],
-                replay[tiles.len() - 1 - i],
+                replay[audited.len() - 1 - i],
                 "tile schedule invariance"
             );
             let cpu = height_tile_vertices(&field, tile, filter);
             for (a, b) in first[i].iter().zip(cpu) {
+                assert!(a.normal[3].is_finite() && a.normal[3].abs() <= config.height_limit_m);
+                let radius = (0..3)
+                    .map(|axis| (a.anchor[axis] as f64 + a.offset[axis] as f64).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                // The stored color altitude must describe the surface geometry.
+                // Retain the position check's planetary direction precision budget.
+                assert!(
+                    (radius - config.radius_m as f64 - a.normal[3] as f64).abs()
+                        <= 0.02 + 4.0 * f32::EPSILON as f64 * config.radius_m as f64
+                );
+                let n = procgen_core::Vec3::new(a.normal[0], a.normal[1], a.normal[2]);
+                let reference = procgen_core::Vec3::new(b.normal[0], b.normal[1], b.normal[2]);
+                assert!(n.is_finite() && (n.length() - 1.0).abs() < 0.0001);
+                let error = (n - reference).length();
+                max_normal_error = max_normal_error.max(error);
+                // About three degrees of normal direction for f32 field differences
+                // at planetary coordinates; position tolerances remain unchanged.
+                assert!(
+                    error < 0.05,
+                    "radius {}, tile {tile:?}: normal error {error}",
+                    config.radius_m
+                );
                 for axis in 0..3 {
                     let x = a.anchor[axis] as f64 + a.offset[axis] as f64;
                     let y = b.anchor[axis] as f64 + b.offset[axis] as f64;
@@ -77,17 +117,6 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                         "radius {}, tile {tile:?}, error {error}",
                         config.radius_m
                     );
-                }
-            }
-            for edge in 0..4 {
-                for along in 0..HEIGHT_SIDE {
-                    let skirt =
-                        first[i][(HEIGHT_SIDE * HEIGHT_SIDE + edge * HEIGHT_SIDE + along) as usize];
-                    let radius = (0..3)
-                        .map(|a| (skirt.anchor[a] as f64 + skirt.offset[a] as f64).powi(2))
-                        .sum::<f64>()
-                        .sqrt();
-                    assert!(radius < config.radius_m as f64 - config.height_limit_m as f64);
                 }
             }
         }
@@ -116,10 +145,72 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                     &b.offset[..3],
                     "continuous filter at coarse/fine sample"
                 );
+                assert_eq!(a.normal, b.normal, "shared coarse/fine normal");
+            }
+        }
+        // Cube edges and corners share lighting as well as position.
+        let roots = CubeFace::ALL.map(TileAddress::root);
+        let faces = dispatch(&roots);
+        let mut shared = std::collections::BTreeMap::new();
+        let mut matched = 0;
+        for face in faces {
+            for vertex in &face[..(HEIGHT_SIDE * HEIGHT_SIDE) as usize] {
+                let position = [vertex.anchor[0], vertex.anchor[1], vertex.anchor[2]];
+                if let Some(previous) = shared.insert(position, *vertex) {
+                    assert_eq!(previous.offset, vertex.offset, "cube edge position");
+                    assert_eq!(previous.normal, vertex.normal, "cube edge normal");
+                    matched += 1;
+                }
+            }
+        }
+        assert!(matched > 12 * HEIGHT_QUADS, "all cube edges exercised");
+        // Every face orientation, both halves of every edge, and reversed cube
+        // seams must use the actual coarse mesh vertices and straight segments.
+        for face in CubeFace::ALL {
+            for edge in FaceEdge::ALL {
+                for along in [0, 1] {
+                    let (x, y) = match edge {
+                        FaceEdge::Left => (0, along),
+                        FaceEdge::Right => (255, along),
+                        FaceEdge::Bottom => (along, 0),
+                        FaceEdge::Top => (along, 255),
+                    };
+                    let fine = TileAddress::new(face, 8, x, y).unwrap();
+                    let coarse = fine.edge_neighbor(edge).parent().unwrap();
+                    let meshes = dispatch_mesh(&[
+                        HeightTile::new(fine, [edge]),
+                        HeightTile::new(coarse, []),
+                    ]);
+                    let surface = |v: &HeightVertex| {
+                        (v.anchor[..3].to_vec(), v.offset[..3].to_vec(), v.normal)
+                    };
+                    let mut previous = None;
+                    for i in 0..HEIGHT_SIDE {
+                        let index = match edge {
+                            FaceEdge::Left => i * HEIGHT_SIDE,
+                            FaceEdge::Right => i * HEIGHT_SIDE + HEIGHT_QUADS,
+                            FaceEdge::Bottom => i,
+                            FaceEdge::Top => HEIGHT_QUADS * HEIGHT_SIDE + i,
+                        };
+                        let p = surface(&meshes[0][index as usize]);
+                        assert!(
+                            meshes[1].iter().any(|v| surface(v) == p),
+                            "{face:?} {edge:?} sample {i} must coincide with coarse surface"
+                        );
+                        if i % 2 == 1 {
+                            assert_eq!(
+                                previous.as_ref(),
+                                Some(&p),
+                                "redundant edge sample collapses"
+                            );
+                        }
+                        previous = Some(p);
+                    }
+                }
             }
         }
         println!(
-            "radius {}: max height vertex error {max_error:.6} m",
+            "radius {}: max height vertex error {max_error:.6} m, normal error {max_normal_error:.6}",
             config.radius_m
         );
     }
