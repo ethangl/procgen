@@ -209,3 +209,19 @@ pub use voxel_gpu_world::{
 mod voxel_gpu_timing;
 #[cfg(feature = "gpu")]
 pub use voxel_gpu_timing::VoxelGpuTimes;
+
+mod height_coverage;
+pub use height_coverage::{
+    LOCAL_VOXEL_ACTIVATION_M, LOCAL_VOXEL_RADIUS_CHUNKS, MAX_HEIGHT_TILES, local_voxel_coverage,
+    select_height_coverage,
+};
+#[cfg(feature = "gpu")]
+mod height_gpu;
+#[cfg(feature = "gpu")]
+pub use height_gpu::{HeightGpuMesher, LOCAL_GPU_WORLD_CONFIG, height_shader};
+mod height_mesh;
+pub use height_mesh::{
+    HEIGHT_FILTER_DISTANCE_RATIO, HEIGHT_FILTER_MIN_M, HEIGHT_QUADS, HEIGHT_SIDE,
+    HEIGHT_TILE_BYTES, HEIGHT_VERTEX_COUNT, HeightFilter, HeightVertex, height_indices,
+    height_tile_vertices,
+};

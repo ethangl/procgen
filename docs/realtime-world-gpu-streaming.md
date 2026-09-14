@@ -1,10 +1,12 @@
 # Real-time pilot: GPU generation and incremental streaming
 
-Status: G1 through G4 are implemented and validated on Metal. Physical exploration
-uses GPU generation and direct drawing by default; `--backend cpu` selects the
-CPU visual audit. G5 and Windows/Vulkan execution remain open.
-This replaces the CPU-only visual generation plan for the physical-planet pilot. The saved terrain settings are
-held fixed while this work proceeds. The earlier world pipeline is unrelated.
+Status: G1 through G5 are implemented. Physical exploration uses GPU height tiles
+and local voxel geometry by default; `--backend cpu` selects the CPU visual audit.
+Metal validation and route measurements are recorded below. Windows/Vulkan
+execution remains pending; the two-host G5 acceptance is not yet closed.
+This replaces the CPU-only visual generation plan for the physical-planet pilot.
+The original saved terrain settings remain unchanged. G5 adds a separate 300 km
+comparison preset. The earlier world pipeline is unrelated.
 
 ## Required architecture
 
@@ -462,3 +464,139 @@ Acceptance: measured orbit-to-ground routes on Metal and Vulkan, bounded memory
 through repeated travel, explicit failure handling, deterministic revisits, and
 stable collision contact. Record p50/p95 frame and update latency and the hardware
 used. A fast isolated density dispatch does not complete this phase.
+
+
+### G5 implementation
+
+`planet-design-300km.json` uses seed 42 and a 300,000 m radius. It keeps the saved
+bands from 65,536 m through 16 m unchanged. The new broadest band uses the
+original continental shape controls at 131,072 m wavelength and 4,096 m
+amplitude. The height limit remains 12,000 m. This gives 14 bands, retains local
+relief, and changes continental scale separately. The 4,900 km preset is intact.
+
+Distant coverage is now a complete six-face cube-sphere height surface, with at
+most 384 tiles and 32 by 32 quads per tile. Refinement extends to eight tile
+widths from the surface projection, retaining useful orbital geometry under the
+same cap. The CPU selects addresses; the GPU
+samples the physical height field and writes split integer/residual vertices.
+The kernel reuses the physical octave stack, seed, and canonical cube-sphere
+mapping. Unresolved octaves fade out of both height and feedback. One continuous
+distance-based footprint is shared by every tile in a snapshot, so a shared
+sample does not acquire different heights from its neighboring tile levels.
+Each tile adds radial skirts below the validated height envelope to cover
+remaining differences between edge triangulations.
+
+A bounded worker generates at most 32 height tiles per batch, with one batch
+in flight. Complete snapshots publish after GPU completion and dissolve over
+250 ms. Unchanged tiles with the same filter inputs reuse their buffers. A new
+filter origin requires resampling; it is selected on camera movement, not every
+render frame. Old height coverage remains visible during the build. A snapshot
+uses at most 15,003,648 bytes (14.31 MiB), plus shared indices and small inputs;
+current, retiring and pending snapshots have a fixed bound independent of travel.
+Render commands retain immutable buffers through completion. There is no visual
+geometry readback. GPU exploration uses the event-loop render schedule instead
+of Bevy's pipelined render thread, which stalled once during macOS teardown.
+Generation remains on its worker; GPU submission is capped at eight voxel jobs
+plus one height batch per frame.
+
+Within 256 m of the ground, the GPU voxel region contains a five-by-five-by-five
+cube of chunks around the surface below the camera: 160 m across, 125 chunks,
+and one-meter samples throughout. Camera motion reuses unchanged chunk keys.
+The pool allows 300 slots, eight jobs in flight, and a 512 MiB allocation budget.
+Each slot reserves 20,000 regular vertices and 40,000 regular triangles. Uniform
+local resolution needs no transition geometry; one inert transition triangle
+keeps the common buffer contract. The complete local region publishes together,
+so its displayed bounds never promise coverage that is still being generated.
+The generic G3 mixed-LOD extractor remains available and tested.
+
+The local region dissolves into height coverage over its outer 16 m. Reusing
+chunks does not restart the whole region's activation fade. The height
+surface moves up to one meter inward within that overlap so it cannot fight the
+local surface for depth at the tested precision. The displacement follows the
+same spatial and 250 ms temporal weight as the voxel draw. This is a rendering
+join between two representations, not a watertight hybrid export or a change
+to the canonical field. CPU collision continues to use the unchanged full-band
+one-meter field. Skirts, flat shading, and short dither transitions can remain
+visible; this slice does not add materials or smooth vertex normals.
+
+The panel and CSV report height tile count, retained height buffer bytes, and
+height replacement time alongside voxel generation and render timings. Buffer
+counters exclude driver allocations, render targets, and transient command
+metadata. The voxel pool retains free slots for reuse but cannot grow past its
+fixed slot and byte limits.
+
+Run either preset through the same native route:
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design-300km.json \
+  --explore-record g5-small.csv
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json \
+  --explore-record g5-large.csv
+cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
+```
+
+The height suite checks CPU agreement on both presets, exact GPU replay under
+reordered submissions, coincident same-level edges, skirt bounds, and repeated
+local voxel travel and revisits. Height vertex agreement permits 2 cm plus four
+f32 epsilon units times planet radius for cube-direction normalization. The
+local voxel density/extraction tolerances remain unchanged. The CPU coverage
+suite checks complete face area, bounded selection, deterministic addresses,
+face/corner views, and one-meter local resolution on both presets.
+
+
+### G5 native routes on Metal
+
+Both fixed 90-second routes completed on Apple M1 Max at 2,880 by 2,000 pixels,
+including descent, a ground hold, walking, flight and return to orbit. Each
+produced six captures and exited successfully, with no stream failure. Recorded
+runs now ignore live navigation and movement input. Preliminary runs that were
+changed by live controls are excluded from these measurements.
+
+| Segment | 4,900 km frame p50 / p95 | 300 km frame p50 / p95 |
+| --- | ---: | ---: |
+| Orbit | 8.3 / 8.7 ms | 8.3 / 8.8 ms |
+| Descent | 8.3 / 8.8 ms | 8.3 / 13.4 ms |
+| Ground hold | 8.3 / 8.7 ms | 8.3 / 8.7 ms |
+| Walk | 8.3 / 8.7 ms | 8.3 / 9.8 ms |
+| Flight | 8.3 / 8.7 ms | 8.3 / 8.8 ms |
+| Return to orbit | 8.3 / 8.7 ms | 8.3 / 8.7 ms |
+
+Peak terrain allocation was 190.8 MiB on the large planet and 229.3 MiB on the
+small planet, compared with G4's 5.27 GiB on the large planet. The change in
+coverage, rather than radius alone, accounts for the memory reduction. Both
+held about 148 MiB at rest on the ground. Frame maxima were 126.5 ms and
+122.5 ms, respectively, including screenshot and startup costs. Render
+scheduling p95 stayed below 0.4 ms and draw encoding p95 below 0.16 ms in every
+segment. These are local observations, not guaranteed frame bounds.
+
+One-meter voxel coverage first became resident at 18.5 seconds on the large
+planet and 15.0 seconds on the small planet, after descent began at 5 seconds.
+Initial local builds took about 201 ms and 261 ms. The large route's local move
+published in 63 ms; small-route updates ranged from about 34 to 195 ms.
+Complete height snapshot updates reached 203 ms and 251 ms. Nearby updates
+meet the 250 ms target once local coverage is resident in these runs. Initial
+coverage and height replacement can still exceed it slightly. Retained height
+coverage prevents those waits from exposing an empty planet.
+
+A separate repeated-travel GPU audit visits local offsets 0, 64, 192, 0, 64,
+192, 0 m on both presets. It reproduces the same voxel geometry on every return
+and stays below 264.7 MiB (large) and 222.0 MiB (small) for voxel allocations.
+Submission-to-publication measurements exclude geometry audit readback: 64 m
+moves took about 59–70 ms, and 192 m moves about 110–122 ms in the final run.
+
+Validation passes 84 library tests plus the binary tests with and without the
+inspector, all Metal G1/G2/G3 suites, three G5 GPU tests, shader validation,
+Clippy with warnings denied, formatting, and the native build. Shared coarse/fine
+height samples agree exactly on Metal; maximum CPU/GPU height vertex component
+errors were 1.281 m for the large planet and 0.0945 m for the small planet,
+within the documented planetary direction tolerance. These are not changes to
+the much tighter local voxel-density agreement bounds.
+
+Remaining acceptance work is Windows/Vulkan execution and visual refinement of
+skirts and dither transitions. Startup, capture costs and latency outliers still
+need to be considered before treating the measured targets as runtime limits.
+The distant surface now omits unresolved geometry, so its orbital appearance is
+smoother than G4's unfiltered voxel surface. No material detail replaces those
+omitted frequencies in this slice.

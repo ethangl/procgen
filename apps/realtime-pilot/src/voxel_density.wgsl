@@ -65,7 +65,7 @@ fn pilot_shape(n: f32, sharpness: f32) -> f32 {
     return base + (shaped - base) * abs(sharpness);
 }
 
-fn pilot_height(direction: vec3<f32>) -> f32 {
+fn pilot_filtered_height(direction: vec3<f32>, spacing_m: f32) -> f32 {
     var sum = 0.0;
     var slope = vec3(0.0);
     var ridge = vec3(0.0);
@@ -73,9 +73,15 @@ fn pilot_height(direction: vec3<f32>) -> f32 {
     for (var i = 0u; i < pilot.octave_count; i++) {
         let o = pilot.octaves[i];
         if o.enabled == 0u || o.amplitude_m == 0.0 { continue; }
+        var weight = 1.0;
+        if spacing_m > 0.0 {
+            let t = clamp((o.wavelength_m / spacing_m - 2.0) * 0.5, 0.0, 1.0);
+            weight = t * t * (3.0 - 2.0 * t);
+        }
+        if weight == 0.0 { continue; }
         let p = pilot_scale_add(direction, pilot_divide(pilot.radius_m, o.wavelength_m), warp);
         let sample = scale_sample(gradient_noise_3d_with_arithmetic(pilot.key, p, F32Arithmetic(pilot.arithmetic.x, pilot.arithmetic.y)), PILOT_NOISE_SCALE);
-        let d = sample.derivative;
+        let d = sample.derivative * weight;
         slope = pilot_scale_add(d, o.slope_erosion, slope);
         ridge = pilot_scale_add(d, o.ridge_erosion, ridge);
         let altitude = clamp(sum / pilot.height_limit_m, 0.0, 1.0);
@@ -83,11 +89,14 @@ fn pilot_height(direction: vec3<f32>) -> f32 {
         let damping = (1.0 + (altitude_weight - 1.0) * o.altitude_erosion)
             * (1.0 - o.ridge_erosion / (1.0 + pilot_length_squared(ridge)))
             / (1.0 + pilot_length_squared(slope));
-        sum += o.amplitude_m * pilot_shape(sample.value, o.sharpness) * damping;
+        sum += weight * o.amplitude_m * pilot_shape(sample.value, o.sharpness) * damping;
         warp = pilot_scale_add(d, o.perturbation, warp);
     }
     let relative = sum / pilot.height_limit_m;
     return sum / pilot_sqrt(1.0 + relative * relative);
+}
+fn pilot_height(direction: vec3<f32>) -> f32 {
+    return pilot_filtered_height(direction, 0.0);
 }
 
 struct PilotCompensated {

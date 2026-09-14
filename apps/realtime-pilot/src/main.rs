@@ -324,3 +324,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
+
+#[cfg(feature = "inspector")]
+mod physical_height;
+
+#[cfg(feature = "inspector")]
+mod physical_gpu_bridge;

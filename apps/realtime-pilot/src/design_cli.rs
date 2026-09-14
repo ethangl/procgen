@@ -229,8 +229,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         }
         if mode == DesignMode::Explore {
             let backend = match backend.as_deref().unwrap_or("gpu") {
-                "gpu" => crate::physical_gpu::ExplorationBackend::Gpu,
-                "cpu" => crate::physical_gpu::ExplorationBackend::Cpu,
+                "gpu" => crate::physical_gpu_bridge::ExplorationBackend::Gpu,
+                "cpu" => crate::physical_gpu_bridge::ExplorationBackend::Cpu,
                 _ => unreachable!("validated backend"),
             };
             let record = record

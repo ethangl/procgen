@@ -19,6 +19,10 @@ pub(super) fn panel(
     let panel = egui::SidePanel::left("physical-exploration")
         .exact_width(340.0)
         .show(ctx, |ui| {
+            if state.record.is_some() {
+                ui.label("Recording a fixed route; live controls are disabled.");
+                ui.disable();
+            }
             ui.heading("Physical planet");
             ui.label(&state.path);
             ui.label(format!("Radius: {:.1} km", state.field.config().radius_m / 1000.0));
@@ -83,13 +87,15 @@ pub(super) fn panel(
             ui.label("LOD 0 (red) = 1 m. Each level doubles spacing.");
             ui.separator();
             if let Some(bridge) = &state.gpu {
-                ui.label("Backend: GPU · direct resident buffers");
+                ui.label("Backend: GPU · height tiles + local voxels");
                 if let Ok(output) = bridge.output.try_lock() {
                     let s = &output.stats;
                     ui.label(&s.status);
+                    ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
                     ui.label(format!("Chunks: {} resident / {} target · {} pending · {} retiring",s.resident,s.target,s.in_flight,s.retiring));
                     ui.label(format!("{} visible chunks · finest spacing {} m",s.drawn,s.finest_spacing_m.map(|s|s.to_string()).unwrap_or_else(|| "pending".into())));
-                    ui.label(format!("GPU allocation: {:.1} MiB / {:.0} MiB",s.bytes as f64/1048576.0,crate::physical_gpu::GPU_WORLD_CONFIG.memory_budget_bytes as f64/1048576.0));
+                    ui.label(format!("GPU allocation: {:.1} MiB",s.bytes as f64/1048576.0));
+                    ui.label(format!("Voxel budget: {:.0} MiB · height tiles capped at {}",procgen_realtime_pilot::LOCAL_GPU_WORLD_CONFIG.memory_budget_bytes as f64/1048576.0,procgen_realtime_pilot::MAX_HEIGHT_TILES));
                     ui.label(format!("Resident {:.1} MiB · retiring {:.1} MiB",s.resident_bytes as f64/1048576.0,s.retiring_bytes as f64/1048576.0));
                     ui.label(format!("Worker selection: {:.2} ms",s.selection_ms));
                     ui.label(format!("Last job: {:.2} ms preparation · {:.2} ms encoding",s.preparation_ms,s.encoding_ms));

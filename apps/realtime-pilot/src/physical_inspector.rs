@@ -2,7 +2,7 @@
 #[path = "physical_inspector_ui.rs"]
 mod ui;
 use crate::{
-    physical_gpu::{ExplorationBackend, GpuBridge, GpuCamera},
+    physical_gpu_bridge::{ExplorationBackend, GpuBridge, GpuCamera},
     physical_gpu_render::{GpuTerrainPlugin, GpuView},
     physical_jobs::{Jobs, TerrainKind, TerrainRequest, TerrainResult},
     physical_render::{Coloring, PhysicalUploads, UPLOAD_LIMIT, core, vector},
@@ -202,6 +202,21 @@ pub fn run(
         state.status = "GPU exploration · collision uses the CPU reference".into();
     }
     let gpu = state.gpu.clone();
+    let plugins = DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Real-time world pilot — physical exploration".into(),
+            resolution: (1440, 1000).into(),
+            ..default()
+        }),
+        ..default()
+    });
+    // Keep the render queue on the event-loop thread. GPU generation remains
+    // asynchronous; the pipelined renderer can stall during macOS teardown.
+    let plugins = if backend == ExplorationBackend::Gpu {
+        plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
+    } else {
+        plugins
+    };
     let mut app = App::new();
     app.insert_non_send_resource(state)
         .insert_resource(ClearColor(Color::srgb(0.025, 0.03, 0.04)))
@@ -210,14 +225,7 @@ pub fn run(
             brightness: 500.0,
             ..default()
         })
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Real-time world pilot — physical exploration".into(),
-                resolution: (1440, 1000).into(),
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(plugins)
         .add_plugins((EguiPlugin::default(), PhysicalUploads::default()))
         .add_systems(Startup, setup)
         .add_systems(
@@ -389,8 +397,8 @@ fn movement(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    let keyboard_blocked = ctx.wants_keyboard_input();
-    let pointer_blocked = ctx.wants_pointer_input();
+    let keyboard_blocked = state.record.is_some() || ctx.wants_keyboard_input();
+    let pointer_blocked = state.record.is_some() || ctx.wants_pointer_input();
     let dt = time.delta_secs().min(0.05);
     state.frame_ms = state.frame_ms * 0.95 + time.delta_secs() * 1000.0 * 0.05;
     state.peak_frame_ms = state.peak_frame_ms.max(time.delta_secs() * 1000.0);
