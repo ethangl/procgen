@@ -32,14 +32,19 @@ const LOCAL: Sample = Sample {
     },
     depth: 0.625,
 };
+enum ExpectedColor {
+    Rgb([f32; 3]),
+    Water,
+}
 struct Case {
+    ocean: bool,
     name: &'static str,
     previous: Sample,
     current: Sample,
     local: Sample,
     blend: f32,
     replacing: bool,
-    expected_rgb: [f32; 3],
+    expected_color: ExpectedColor,
     expected_depth: f32,
 }
 
@@ -86,46 +91,51 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
     let compositor = SurfaceCompositor::new(&device, &layout);
     let cases = [
         Case {
+            ocean: false,
             name: "first snapshot is immediately opaque",
             previous: EMPTY,
             current: RED,
             local: EMPTY,
             blend: 0.0,
             replacing: false,
-            expected_rgb: [1.0, 0.0, 0.0],
+            expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
             expected_depth: 0.5,
         },
         Case {
+            ocean: false,
             name: "height crossfade works when new surface is behind old",
             previous: BLUE,
             current: RED,
             local: EMPTY,
             blend: 0.5,
             replacing: true,
-            expected_rgb: [0.5, 0.0, 0.5],
+            expected_color: ExpectedColor::Rgb([0.5, 0.0, 0.5]),
             expected_depth: 0.75,
         },
         Case {
+            ocean: false,
             name: "local overlap is smooth",
             previous: EMPTY,
             current: RED,
             local: LOCAL,
             blend: 1.0,
             replacing: false,
-            expected_rgb: [0.5, 0.5, 0.0],
+            expected_color: ExpectedColor::Rgb([0.5, 0.5, 0.0]),
             expected_depth: 0.625,
         },
         Case {
+            ocean: false,
             name: "height occludes hidden local surface",
             previous: EMPTY,
             current: BLUE,
             local: LOCAL,
             blend: 1.0,
             replacing: false,
-            expected_rgb: [0.0, 0.0, 1.0],
+            expected_color: ExpectedColor::Rgb([0.0, 0.0, 1.0]),
             expected_depth: 0.75,
         },
         Case {
+            ocean: false,
             name: "coverage rounded to zero cannot write invisible depth",
             previous: EMPTY,
             current: RED,
@@ -135,68 +145,127 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             },
             blend: 1.0,
             replacing: false,
-            expected_rgb: [1.0, 0.0, 0.0],
+            expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
             expected_depth: 0.5,
         },
         Case {
+            ocean: false,
             name: "local visibility blends separately through height replacement",
             previous: BLUE,
             current: RED,
             local: LOCAL,
             blend: 0.5,
             replacing: true,
-            expected_rgb: [0.25, 0.25, 0.5],
+            expected_color: ExpectedColor::Rgb([0.25, 0.25, 0.5]),
             expected_depth: 0.75,
         },
         Case {
+            ocean: false,
             name: "retired height cannot retain invisible depth",
             previous: BLUE,
             current: RED,
             local: EMPTY,
             blend: 1.0,
             replacing: true,
-            expected_rgb: [1.0, 0.0, 0.0],
+            expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
             expected_depth: 0.5,
         },
         Case {
+            ocean: false,
             name: "unborn height cannot write depth",
             previous: RED,
             current: BLUE,
             local: EMPTY,
             blend: 0.0,
             replacing: true,
-            expected_rgb: [1.0, 0.0, 0.0],
+            expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
             expected_depth: 0.5,
         },
         Case {
+            ocean: false,
             name: "silhouette fades over background",
             previous: BLUE,
             current: EMPTY,
             local: EMPTY,
             blend: 0.5,
             replacing: true,
-            expected_rgb: [0.5, 0.5, 1.0],
+            expected_color: ExpectedColor::Rgb([0.5, 0.5, 1.0]),
             expected_depth: 0.75,
         },
         Case {
+            ocean: false,
             name: "missing height does not multiply local coverage",
             previous: EMPTY,
             current: EMPTY,
             local: LOCAL,
             blend: 0.5,
             replacing: true,
-            expected_rgb: [0.5, 1.0, 0.5],
+            expected_color: ExpectedColor::Rgb([0.5, 1.0, 0.5]),
             expected_depth: 0.625,
         },
         Case {
+            ocean: false,
             name: "empty layers preserve scene",
             previous: EMPTY,
             current: EMPTY,
             local: EMPTY,
             blend: 0.5,
             replacing: false,
-            expected_rgb: [1.0, 1.0, 1.0],
+            expected_color: ExpectedColor::Rgb([1.0, 1.0, 1.0]),
             expected_depth: 0.0,
+        },
+        Case {
+            ocean: true,
+            name: "ocean covers submerged terrain",
+            previous: EMPTY,
+            current: Sample {
+                color: wgpu::Color::RED,
+                depth: 0.001,
+            },
+            local: EMPTY,
+            blend: 1.0,
+            replacing: false,
+            expected_color: ExpectedColor::Water,
+            expected_depth: 0.5,
+        },
+        Case {
+            ocean: true,
+            name: "dry local terrain occludes ocean",
+            previous: EMPTY,
+            current: EMPTY,
+            local: BLUE,
+            blend: 1.0,
+            replacing: false,
+            expected_color: ExpectedColor::Rgb([0.0, 0.0, 1.0]),
+            expected_depth: 0.75,
+        },
+        Case {
+            ocean: true,
+            name: "water resolves separately before terrain crossfade",
+            previous: BLUE,
+            current: Sample {
+                color: wgpu::Color::RED,
+                depth: 0.001,
+            },
+            local: EMPTY,
+            blend: 0.5,
+            replacing: true,
+            expected_color: ExpectedColor::Water,
+            expected_depth: 0.75,
+        },
+        Case {
+            ocean: true,
+            name: "retired dry terrain cannot mask new ocean",
+            previous: BLUE,
+            current: Sample {
+                color: wgpu::Color::RED,
+                depth: 0.001,
+            },
+            local: EMPTY,
+            blend: 1.0,
+            replacing: true,
+            expected_color: ExpectedColor::Water,
+            expected_depth: 0.5,
         },
     ];
     // Recreate at a second size, as the viewer does on window resize.
@@ -229,6 +298,25 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             frame[88..92].copy_from_slice(&u32::from(case.replacing).to_le_bytes());
             frame[96..100].copy_from_slice(&case.blend.to_le_bytes());
             frame[108..112].copy_from_slice(&1f32.to_le_bytes());
+            if case.ocean {
+                let clip = [
+                    1f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., -1., 0., 0., 1., 0.,
+                ];
+                let inverse = [
+                    1f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0., 0., -1., 0.,
+                ];
+                frame[..64].copy_from_slice(bytemuck::cast_slice(&clip));
+                frame[160..224].copy_from_slice(bytemuck::cast_slice(&inverse));
+                frame[224..240].copy_from_slice(bytemuck::cast_slice(&[
+                    0f32,
+                    0.,
+                    size[0] as f32,
+                    size[1] as f32,
+                ]));
+                frame[256..272].copy_from_slice(bytemuck::cast_slice(&[0f32, 0., 1., 300_002.]));
+                frame[272..288]
+                    .copy_from_slice(bytemuck::cast_slice(&[300_000f32, 2., 1_200_004., 1.]));
+            }
             queue.write_buffer(&uniform, 0, &frame);
             let mut encoder = device.create_command_encoder(&Default::default());
             for (layer, sample) in [
@@ -306,7 +394,8 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             let z = readback::<f32>(&device, &queue, &depth_copy, 64 * size[1] as usize);
             for y in 0..size[1] as usize {
                 for x in 0..size[0] as usize {
-                    for c in 0..3 {
+                    let mut pixel_rgb = [0.0; 3];
+                    for (c, channel) in pixel_rgb.iter_mut().enumerate() {
                         let half = rgb[y * 128 + x * 4 + c];
                         let value = if half == 0 {
                             0.0
@@ -314,10 +403,20 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                             (1.0 + f32::from(half & 1023) / 1024.0)
                                 * 2f32.powi(i32::from(half >> 10) - 15)
                         };
+                        *channel = value;
                         // Half-float render target precision, independent of adapter.
+                        if let ExpectedColor::Rgb(rgb) = case.expected_color {
+                            assert!(
+                                (value - rgb[c]).abs() < 0.001,
+                                "{} pixel {x},{y}: {value}",
+                                case.name
+                            );
+                        }
+                    }
+                    if let ExpectedColor::Water = case.expected_color {
                         assert!(
-                            (value - case.expected_rgb[c]).abs() < 0.001,
-                            "{} pixel {x},{y}: {value}",
+                            pixel_rgb[2] > pixel_rgb[0] && pixel_rgb[1] > pixel_rgb[0],
+                            "{}: {pixel_rgb:?}",
                             case.name
                         );
                     }

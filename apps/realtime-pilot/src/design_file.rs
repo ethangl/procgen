@@ -4,20 +4,33 @@ use serde::{Deserialize, Serialize};
 use std::{error::Error, fs, path::Path};
 
 const FORMAT_VERSION: u32 = 1;
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DesignFile {
+pub struct DesignFile {
     format_version: u32,
-    design: PlanetDesignConfig,
+    pub design: PlanetDesignConfig,
+    #[serde(default)]
+    pub ocean: crate::ocean::OceanConfig,
 }
-pub fn encode(config: &PlanetDesignConfig) -> Result<String, Box<dyn Error>> {
-    config.validate()?;
-    Ok(serde_json::to_string_pretty(&DesignFile {
-        format_version: FORMAT_VERSION,
-        design: config.clone(),
-    })? + "\n")
+impl DesignFile {
+    pub fn new(design: PlanetDesignConfig) -> Self {
+        Self {
+            format_version: FORMAT_VERSION,
+            design,
+            ocean: Default::default(),
+        }
+    }
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        self.design.validate()?;
+        self.ocean.validate()?;
+        Ok(())
+    }
 }
-pub fn load(path: &Path) -> Result<PlanetDesignConfig, Box<dyn Error>> {
+pub fn encode(file: &DesignFile) -> Result<String, Box<dyn Error>> {
+    file.validate()?;
+    Ok(serde_json::to_string_pretty(file)? + "\n")
+}
+pub fn load(path: &Path) -> Result<DesignFile, Box<dyn Error>> {
     let file: DesignFile = serde_json::from_str(&fs::read_to_string(path)?)?;
     if file.format_version != FORMAT_VERSION {
         return Err(format!(
@@ -26,10 +39,10 @@ pub fn load(path: &Path) -> Result<PlanetDesignConfig, Box<dyn Error>> {
         )
         .into());
     }
-    file.design.validate()?;
-    Ok(file.design)
+    file.validate()?;
+    Ok(file)
 }
-pub fn save(path: &Path, config: &PlanetDesignConfig) -> Result<(), Box<dyn Error>> {
+pub fn save(path: &Path, config: &DesignFile) -> Result<(), Box<dyn Error>> {
     fs::write(path, encode(config)?)?;
     Ok(())
 }
@@ -47,9 +60,21 @@ mod tests {
         config.octaves[3].enabled = false;
         config.octaves[7].amplitude_m = 12.5;
         config.octaves[10].perturbation = 0.9;
+        let mut config = DesignFile::new(config);
+        config.ocean.sea_level_m = 123.25;
         save(&path, &config).unwrap();
         assert_eq!(load(&path).unwrap(), config);
         let mut value: serde_json::Value = serde_json::from_str(&encode(&config).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("ocean");
+        fs::write(&path, value.to_string()).unwrap();
+        assert_eq!(
+            load(&path).unwrap().ocean,
+            crate::ocean::OceanConfig::default()
+        );
+        value["ocean"] = serde_json::json!({"enabled": true, "sea_level_m": 20001});
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(load(&path).unwrap_err().to_string().contains("sea level"));
+        value.as_object_mut().unwrap().remove("ocean");
         value["format_version"] = 2.into();
         fs::write(&path, value.to_string()).unwrap();
         assert!(

@@ -95,7 +95,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second native route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU orbit/descent exploration with live octave controls and planet-design-300km.json. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second native route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU orbit/descent exploration with live octave controls, oceans, and planet-design-300km.json. Sea level in the Design tab updates immediately; Save controls writes terrain and ocean settings. Oceans are visual only on the GPU backend. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
                 );
                 return Ok(());
             }
@@ -133,22 +133,28 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if path.is_some() && seed.is_some() {
         return Err("--design-file includes its seed; do not also pass --seed".into());
     }
-    let config = match &path {
+    let document = match &path {
         Some(p) => crate::design_file::load(p)?,
-        None if seed.is_some() => PlanetDesignConfig::starter(seed.unwrap()),
+        None if seed.is_some() => {
+            crate::design_file::DesignFile::new(PlanetDesignConfig::starter(seed.unwrap()))
+        }
         None => {
             let default_path = default_design_path();
             let config = crate::design_file::load(&default_path)?;
-            path = Some(default_path);
+            #[cfg(feature = "inspector")]
+            {
+                path = Some(default_path);
+            }
             config
         }
     };
+    let config = &document.design;
     let field = config.validate()?;
     if mode == DesignMode::ExplorationAudit {
         let result =
             procgen_realtime_pilot::audit_physical_exploration(std::sync::Arc::new(field))?;
         if let Some(p) = &output {
-            crate::design_file::save(p, &config)?;
+            crate::design_file::save(p, &document)?;
         }
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -156,7 +162,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if mode == DesignMode::SurfaceAudit {
         let result = procgen_realtime_pilot::audit_voxel_surfaces(std::sync::Arc::new(field))?;
         if let Some(p) = &output {
-            crate::design_file::save(p, &config)?;
+            crate::design_file::save(p, &document)?;
         }
         println!(
             "{}",
@@ -172,7 +178,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             procgen_realtime_pilot::VoxelResidencyConfig::default(),
         )?;
         if let Some(p) = &output {
-            crate::design_file::save(p, &config)?;
+            crate::design_file::save(p, &document)?;
         }
         println!(
             "{}",
@@ -203,7 +209,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             },
         )?;
         if let Some(p) = &output {
-            crate::design_file::save(p, &config)?;
+            crate::design_file::save(p, &document)?;
         }
         println!(
             "{}",
@@ -214,9 +220,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if mode == DesignMode::PreviewAudit {
-        let result = generate_design_preview(&config, preview)?;
+        let result = generate_design_preview(config, preview)?;
         if let Some(p) = &output {
-            crate::design_file::save(p, &config)?;
+            crate::design_file::save(p, &document)?;
         }
         println!(
             "{}",
@@ -232,7 +238,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "inspector")]
     {
         if let Some(p) = &output {
-            crate::design_file::save(p, &config)?;
+            crate::design_file::save(p, &document)?;
         }
         if mode == DesignMode::Explore {
             let backend = match backend.as_deref().unwrap_or("gpu") {
@@ -243,7 +249,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             let record = record
                 .map(crate::physical_record::PhysicalRecord::new)
                 .transpose()?;
-            crate::physical_inspector::run(config, output.or(path), backend, record);
+            crate::physical_inspector::run(document, output.or(path), backend, record);
         }
         Ok(())
     }
@@ -301,6 +307,6 @@ mod tests {
             assert!(!selected([mode.to_owned()].into_iter()));
         }
         let config = crate::design_file::load(&default_design_path()).unwrap();
-        assert_eq!(config.radius_m, 300_000.0);
+        assert_eq!(config.design.radius_m, 300_000.0);
     }
 }
