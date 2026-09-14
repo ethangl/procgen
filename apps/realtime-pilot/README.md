@@ -21,8 +21,10 @@ for enable state, wavelength, amplitude, sharpness, warp, and all damping values
 Valid terrain edits apply 350 ms after the last edit. Rapid edits coalesce. An edit,
 including an invalid draft, invalidates older unpublished results. The last
 complete design remains visible while its replacement builds on a worker.
-Height meshes, local voxels, field queries, and collision switch to the accepted
-design together. Edits do not reset the camera or its orientation.
+Height meshes and field queries switch to the accepted design together. Edits
+preserve the camera and its orientation, except that enabled altitude protection
+raises it if the new terrain would cover it. The viewer builds no local voxels
+or collision meshes.
 
 **Load…** opens a path dialog, validates the file, and makes it the current design.
 **Save controls** overwrites that current file. Its path is read-only in the panel;
@@ -97,121 +99,58 @@ QEF mesh and reports mesh storage separately from density residency. The old
 `--stream` experiment remains separate.
 See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2c-voxel-meshes-and-nearby-collision-implemented).
 
-## Physical exploration
-
-```sh
-cargo run -p procgen-realtime-pilot -- \
-  --design --explore --design-file planet-design.json
-```
+## Orbit and flight
 
 Use **Descend continuously** to travel from orbit or **Go to ground** for a direct
-shortcut. **Walk** lands on independent one-meter collision support. W/A/S/D
-move, right drag looks around, and E/Q move up/down in flight. Scroll changes
-orbit distance or flight speed. In Orbit, left drag rotates around the current
-screen up/right axes, including across the poles. The player has a 1.7 m eye height and walks at
-4 m/s. The panel distinguishes reference altitude, measured ground clearance,
-and the height-field estimate.
+shortcut to five meters above terrain. **Fly** enables W/A/S/D movement, right
+drag looks around, and E/Q move radially up/down. Scroll changes orbit distance
+or flight speed. In Orbit, left drag rotates around the current screen axes,
+including across the poles.
 
-The 300 km preset includes the user's saved octave tuning: the broadest band is
-256 km with 3,200 m amplitude, and the finest band is 32 m with 2 m amplitude.
-Warp and damping are zero in every band; the height bound remains 12 km.
-The original `planet-design.json` is unchanged.
+**Keep camera 5 m above terrain** is enabled by default. It samples the canonical
+height field at the camera direction and raises a low camera radially. Disable
+it for unrestricted terrain inspection. This checks the endpoint only: fast
+lateral flight can cross a ridge. It provides no walking, swept collision,
+gravity, or water contact. Camera preferences are not saved in design files.
 
-```sh
-cargo run -p procgen-realtime-pilot -- \
-  --design --explore --design-file planet-design-300km.json
-```
+The GPU draws up to 384 height tiles with 64 by 64 quads each. The existing
+one-meter refinement target, increased distant detail, stitched edges, filtered
+normals, colors, and 250 ms replacement fades are unchanged. Height generation
+keeps at most two batches of 32 tiles in flight. The viewer no longer creates
+voxel geometry, CPU collision meshes, or a collision worker. Previous/current
+height surfaces need two RGBA16F/Depth32F layers, or 24 bytes per physical pixel:
+131.8 MiB at 2880 × 2000, excluding driver padding and other render targets.
 
-The viewer loads your saved octave settings and uses GPU exploration by default.
-Live edits use the same viewer and do not require a restart. Height
-coloring is the default; Neutral, LOD, and Normals remain available. Density and mesh generation run on
-Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
-preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
-planet coverage and 125 one-meter voxel chunks around nearby ground. Each height
-tile has 64 by 64 quads. The distance filter retains terrain wavelengths four
-times smaller than the original G5 setting: two more bands for an octave stack
-whose wavelengths halve each octave. Height filtering is continuous across
-tiles. Adjacent tile levels differ by at most one;
-fine edges share coarse vertices, so no skirts are needed. A 16 m overlap joins
-height coverage to local voxels. The GPU viewer blends separately depth-tested height and voxel
-layers across the overlap and during height replacement, without pixel discard
-patterns. Height generation keeps at most two batches of 32 tiles in flight.
-Each batch uses one compute pass and device copies into reusable tile buffers.
-It can build during the current fade; publication waits for the fade to finish.
-Temporary batch outputs add at most 12.38 MiB, outside the retained terrain counters.
-CPU collision remains independent. Nearby collision retains its current
-patch while a replacement builds. Walking forecasts one second of movement and
-gravity to request coverage early, including during falls; a late build stops
-movement at the coverage boundary and resumes it when support arrives.
+**Height** colors use a fixed ramp from minus to plus the configured height
+limit, measured above the reference radius. Neutral, LOD, and Normals remain
+available. The saved 300 km design and all generation defaults are unchanged.
+See [the flight viewer](../../docs/realtime-world-flight-viewer.md) for architecture,
+validation, and limits.
 
-The **Height** view uses a fixed color ramp from minus to plus the configured
-height limit, measured above the reference radius. The legend shows kilometers;
-zero is the reference sphere, not a generated sea level. Terrain colors indicate altitude
-only. Both surfaces use the same palette and range, with terrain lighting. GPU
-view changes require no regeneration. The CPU audit uses the same palette when
-packing its mesh.
-
-Height tiles carry filtered field normals generated once with each tile. Neutral
-and normal views interpolate them across triangles and use the same normal at
-coincident tile boundaries. Local uniform
-voxel meshes carry outward gradients from central differences in their existing
-density halo. The renderer interpolates and normalizes these gradients for smooth
-ground shading. Zero gradients and mixed-LOD transition meshes use face normals.
-Both vertex formats occupy 48 bytes; normal generation adds no voxel noise samples.
-
-Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
-retains complete mesh replacement and its 512 KiB per-frame upload limit. Its
-design is fixed for each run; live editing belongs to the GPU viewer. There
+Use `--backend cpu` for the explicit CPU visual audit. It retains complete voxel
+mesh replacement and the 512 KiB per-frame upload limit. Its design is fixed
+for each run; live editing and water rendering belong to the GPU viewer. There
 is no automatic backend fallback.
 
-Record the fixed 90-second native orbit/descent/walk/flight route:
+Record the fixed 90-second native orbit/descent/flight route:
 
 ```sh
 cargo run -p procgen-realtime-pilot -- \
-  --design --explore --design-file planet-design.json --backend gpu \
-  --explore-record g5-route.csv
+  --explore-record /tmp/procgen-flight-route.csv
 ```
 
 This writes frame/stage timings and six adjacent PNG captures, then exits.
-PNG encoding runs off the main thread; clean exit waits for every image to save.
-`height_build_ms` measures preparation, submission waits, and GPU completion.
-`height_wait_ms` is the completed surface's wait for the preceding fade;
-`height_update_ms` includes both. These are elapsed times, not GPU timestamps.
-Collision columns include `collision_building`, `collision_seconds`, `grounded`,
-and `motion` after movement each frame. `gpu_stats_fresh` is false when the
-recorder retains the last GPU-statistics snapshot because its lock is busy;
-collision results are still written for that frame. `collision_ready` now checks coverage
-around the player's center rather than whether any old patch exists. `motion`
-distinguishes `Advanced`, `MissingCoverage`, `NoLanding`, `Overlap`, `SweepLimit`,
-`Invalid`, and `Idle`; `status` still describes GPU streaming. A falling player
-can have valid collision coverage without being grounded. Live
-navigation and movement input are disabled during recorded runs.
-The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
-records Metal measurements and remaining limits. The voxel pool is capped at
-300 allocations and 512 MiB; each height snapshot is at most 74.27 MiB. Current,
-previous, and pending height snapshots can retain up to 222.80 MiB together.
-See [distant detail measurements](../../docs/realtime-world-gpu-streaming.md#more-distant-terrain-detail)
-for the current grid and filter costs.
-The original G5 Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
-preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
-after initial coverage stayed below 250 ms; initial coverage and height updates
-can slightly exceed it. The render overlap is not a watertight mesh export.
-Windows/Vulkan validation on RTX 5070 passed all 12 GPU tests and completed both
-routes. Peak terrain allocation was 188.9 MiB (large) and 229.3 MiB (small).
-Height replacement and frame outliers remain, as do visual overlap and continuous
-contact evidence gaps. See the [Windows results](../../docs/windows-gpu-validation.md#windowsvulkan-validation-2026-09-14)
-for measurements and their limits.
+PNG encoding runs off the main thread; clean exit waits for images to save.
+The CSV now reports height generation, buffer/target bytes, camera position,
+`terrain_clearance_m`, and `altitude_protection`. Voxel and collision columns
+have been removed. `gpu_stats_fresh` is false when the last GPU-statistics
+snapshot is reused because its lock is busy; camera clearance stays current.
+`height_build_ms` measures preparation, submission waits, and GPU completion;
+`height_wait_ms` measures waiting for the preceding fade. These are elapsed
+times, not GPU timestamps. Live navigation is disabled during recorded runs.
 
-The surface-join follow-up adds three full-resolution RGBA16F/Depth32F layers:
-36 bytes per physical pixel, reused until the window size changes. The panel and
-CSV (`surface_target_bytes`) report this texture payload separately from terrain
-buffers. At 2880 × 2000 it adds 197.8 MiB; at 2160 × 1500 it adds 111.2 MiB.
-These counts exclude driver padding and the viewer's other render targets.
-See [local voxel normal validation](../../docs/realtime-world-gpu-streaming.md#local-voxel-normals)
-for current measurements; the original G5 timings above predate the compositor
-and both terrain normal updates. These follow-ups still need Windows/Vulkan validation.
-
-Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
+The previous closed-coverage, walking, and collision-handoff audit remains an
+explicit headless validation path:
 
 ```sh
 cargo run -p procgen-realtime-pilot --no-default-features -- \
@@ -220,13 +159,14 @@ cargo run -p procgen-realtime-pilot --no-default-features -- \
 
 ## GPU generation work
 
-GPU generation and incremental chunk replacement are integrated. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
+The reusable GPU voxel generators and their audits remain available. The default
+viewer now uses only height tiles. See the historical [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
 G1 supplies a WGSL density kernel and CPU/GPU agreement checks. G2 adds bounded
 uniform-chunk meshing, deterministic scans, and GPU vertex/index/draw buffers.
-G3 adds 2:1 transitions and bounded incremental GPU residency. G4 connects these
-buffers to the exploration viewer and keeps preparation off the render thread.
-G5 adds filtered GPU height tiles, bounded local voxels, and short visual transitions.
-It runs on Metal on macOS and Vulkan on Windows/Linux:
+G3 adds 2:1 transitions and bounded incremental GPU residency. G4 connected these
+buffers to the former voxel viewer. G5 added filtered GPU height tiles, bounded
+local voxels, and short visual transitions. These audit paths run on Metal on
+macOS and Vulkan on Windows/Linux:
 
 ```sh
 cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture

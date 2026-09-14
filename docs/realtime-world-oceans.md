@@ -4,7 +4,8 @@ The GPU orbit/descent viewer renders a smooth spherical ocean at reference
 radius plus sea level. Run `cargo run -p procgen-realtime-pilot`. The Design tab
 has **Show ocean** and **Sea level (m)** controls. These take effect on the next
 frame, without terrain generation or camera movement. Terrain defaults,
-one-meter local voxels, distant detail, coloring, and navigation are unchanged.
+distant detail, and coloring are unchanged. The current [flight viewer](realtime-world-flight-viewer.md)
+uses height tiles and optional radial camera protection.
 
 ## Saved settings
 
@@ -25,8 +26,7 @@ sea level does not invalidate pending terrain work.
 ## Rendering
 
 The existing opaque terrain compositor intersects each camera ray with the
-water sphere. It compares water and terrain depth, so height tiles and local
-voxels both cut shorelines. Water resolves within each terrain snapshot before
+water sphere. It compares water and height-tile depth to cut shorelines. Water resolves within each terrain snapshot before
 crossfading, so retiring terrain cannot leave an old shoreline. There is no
 water mesh, LOD, density sampling, readback, or extra render target.
 
@@ -46,8 +46,8 @@ a tinted exit surface. These are visual approximations, not fluid simulation.
   terrain, tides, and atmosphere are not included.
 - Every exposed basin below sea level fills, including disconnected inland
   depressions. There is no drainage or ocean-connectivity model.
-- Water does not affect collision. Walking uses the terrain, including the
-  seafloor; flight can pass through water. Swimming and buoyancy are not included.
+- Flight can pass through water. Optional altitude protection follows terrain,
+  including the seafloor. Swimming and buoyancy are not included.
 - Shorelines depend on the displayed terrain mesh resolution. Subpixel coast
   edges have no dedicated antialiasing, and missing terrain coverage cannot
   supply a seabed depth.
@@ -72,7 +72,8 @@ camera height at radius extremes, sphere intersections against a geometric
 reference, dry terrain occlusion, shallow/deep water, underwater depth, and
 shoreline replacement through the real compositor.
 
-On 2026-09-14, the 90-second native Metal route with the current saved 300 km
+Historical validation before the flight simplification: on 2026-09-14, the
+90-second native Metal route with the current saved 300 km
 preset recorded 10,477 frames. All 1,738 walking frames reported `Advanced`,
 collision coverage, and one-meter finest spacing. Six screenshots were saved
 as `/tmp/procgen-ocean-route.1.png` through `.6.png`; the orbit image shows

@@ -1,14 +1,12 @@
-//! Native input and movement with retained asynchronous collision coverage.
+//! Orbit and flight input with optional radial terrain clearance.
 use super::{Inspector, MAX_ORBIT_CLEARANCE_RADII, Navigation};
-use crate::physical_record::MotionOutcome;
 use crate::physical_render::core;
 use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     prelude::*,
 };
 use bevy_egui::EguiContexts;
-use procgen_realtime_pilot::{MeterPosition, PhysicalWalker, VoxelPosition};
-use std::time::Instant;
+use procgen_realtime_pilot::{CAMERA_CLEARANCE_M, MeterPosition, VoxelPosition};
 
 pub(super) fn movement(
     mut state: NonSendMut<Inspector>,
@@ -25,7 +23,6 @@ pub(super) fn movement(
     let keyboard_blocked = state.record.is_some() || ctx.wants_keyboard_input();
     let pointer_blocked = state.record.is_some() || ctx.wants_pointer_input();
     let dt = time.delta_secs().min(0.05);
-    state.motion = MotionOutcome::Idle;
     state.frame_ms = state.frame_ms * 0.95 + time.delta_secs() * 1000.0 * 0.05;
     state.peak_frame_ms = state.peak_frame_ms.max(time.delta_secs() * 1000.0);
     let up = state.up();
@@ -50,7 +47,7 @@ pub(super) fn movement(
     if !pointer_blocked && scroll_lines != 0.0 {
         if state.mode == Navigation::Orbit {
             let clearance = (state.clearance_estimate() * (-scroll_lines * 0.08).exp()).clamp(
-                5.0,
+                CAMERA_CLEARANCE_M,
                 state.field.config().radius_m * MAX_ORBIT_CLEARANCE_RADII,
             );
             state.set_radial(clearance);
@@ -62,8 +59,8 @@ pub(super) fn movement(
     }
     if state.descent {
         let clearance = state.clearance_estimate();
-        if clearance > 6.0 {
-            state.set_radial((clearance * (-dt * 0.8).exp()).max(5.0));
+        if clearance > CAMERA_CLEARANCE_M + 1.0 {
+            state.set_radial((clearance * (-dt * 0.8).exp()).max(CAMERA_CLEARANCE_M));
         } else {
             state.descent = false;
             state.mode = Navigation::Fly;
@@ -82,10 +79,12 @@ pub(super) fn movement(
         key(KeyCode::KeyE) - key(KeyCode::KeyQ),
         key(KeyCode::KeyS) - key(KeyCode::KeyW),
     );
-    if state.record.as_ref().is_some_and(|r| r.moving()) {
+    if state.record.as_ref().is_some_and(|r| r.forward()) {
         input.z = -1.0;
     }
-    let mut forecast = state.eye;
+    if state.record.as_ref().is_some_and(|r| r.rising()) {
+        input.y = 1.0;
+    }
     if state.mode == Navigation::Fly && input != Vec3::ZERO {
         state.descent = false;
         let clearance = state.clearance_estimate();
@@ -104,114 +103,20 @@ pub(super) fn movement(
                 * state.speed_factor,
         );
         let delta = velocity * dt;
-        forecast = state.eye.translated(velocity);
-        if clearance < 32.0 {
-            if let Some(collision) = state.collision.patch() {
-                match collision.sweep(state.eye.relative_to(collision.origin_m()), delta, 0.2) {
-                    Ok(sweep) => {
-                        state.eye = MeterPosition::new(collision.origin_m(), sweep.position_m);
-                        state.motion = MotionOutcome::Advanced;
-                        state.status = "Flying with nearby collision.".into();
-                    }
-                    Err(e) => {
-                        state.motion = MotionOutcome::from_error(&e);
-                        state.status = format!("Flight paused: {e}");
-                    }
-                }
-            } else {
-                state.status = "Flight paused for nearby collision.".into();
-                state.motion = MotionOutcome::MissingCoverage;
-            }
+        let next = state.eye.translated(delta);
+        if next.altitude_m(state.field.config().radius_m)
+            <= (state.field.config().radius_m * MAX_ORBIT_CLEARANCE_RADII
+                + state.field.config().height_limit_m) as f64
+        {
+            state.eye = next;
+            state.status = "Flying.".into();
         } else {
-            let next = state.eye.translated(delta);
-            if next.altitude_m(state.field.config().radius_m)
-                <= (state.field.config().radius_m * MAX_ORBIT_CLEARANCE_RADII
-                    + state.field.config().height_limit_m) as f64
-            {
-                state.eye = next;
-                state.status = "Flying.".into();
-            } else {
-                state.status = "Flight reached the exploration boundary. Move toward the planet or press Orbit.".into();
-            }
+            state.status =
+                "Flight reached the exploration boundary. Move toward the planet or press Orbit."
+                    .into();
         }
     }
-    let direction = core(state.rotation * Vec3::new(input.x, 0.0, input.z));
-    let position = state.collision_position();
-    if let Some(walker) = &state.walker {
-        forecast = walker.collision_forecast(direction);
-    }
-    if (state.walker.is_some() || state.landing || state.clearance_estimate() < 32.0)
-        && !state.collision_busy
-        && let Some(request) = state.collision.request(position, forecast)
-        && state
-            .jobs
-            .collision
-            .try_send(crate::physical_jobs::CollisionRequest {
-                field: std::sync::Arc::clone(&state.field),
-                position: request,
-            })
-            .is_ok()
-    {
-        state.collision_busy = true;
-    }
-    if state.landing
-        && let Some(collision) = state.collision.patch()
-    {
-        match PhysicalWalker::land(collision, state.eye) {
-            Ok(walker) => {
-                state.eye = walker.eye();
-                state.walker = Some(walker);
-                state.mode = Navigation::Walk;
-                state.landing = false;
-                state.face_horizon();
-                state.status = "Walking on one-meter collision terrain.".into();
-            }
-            Err(e) => {
-                state.motion = MotionOutcome::from_error(&e);
-                state.status = format!("Landing: {e}");
-            }
-        }
-    }
-    if state.mode == Navigation::Walk {
-        let started = Instant::now();
-        let direction = core(state.rotation * Vec3::new(input.x, 0.0, input.z));
-        // Move the walker out briefly to borrow the independent patch.
-        if let Some(mut walker) = state.walker.take() {
-            if let Some(collision) = state.collision.patch() {
-                match walker.advance(collision, direction, dt) {
-                    Ok(()) => {
-                        state.motion = MotionOutcome::Advanced;
-                        state.status = if walker.grounded() {
-                            "Walking on one-meter collision terrain."
-                        } else {
-                            "Falling with collision coverage."
-                        }
-                        .into();
-                    }
-                    Err(e) => {
-                        state.motion = MotionOutcome::from_error(&e);
-                        state.status = format!("Walking paused: {e}");
-                    }
-                }
-                state.eye = walker.eye();
-            } else {
-                state.motion = MotionOutcome::MissingCoverage;
-            }
-            state.walker = Some(walker);
-        }
-        state.query_ms = started.elapsed().as_secs_f32() * 1000.0;
-    }
-    if state.last_query.elapsed().as_millis() > 200 {
-        state.last_query = Instant::now();
-        state.ground_clearance = state.collision.patch().and_then(|c| {
-            let p = state.eye.relative_to(c.origin_m());
-            let up = state.eye.direction();
-            c.ray(p, p - up * 24.0)
-                .ok()
-                .flatten()
-                .map(|hit| (p - hit.position_m).length())
-        });
-    }
+    state.protect_altitude();
 }
 
 /// Rotate the position and view together about the current screen axes.

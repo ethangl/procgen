@@ -8,7 +8,6 @@ use crate::{
     physical_gpu_bridge::{ExplorationBackend, GpuBridge, GpuCamera},
     physical_gpu_render::{GpuTerrainPlugin, GpuView},
     physical_jobs::{Jobs, TerrainKind, TerrainRequest, TerrainResult},
-    physical_record::{ContactFrame, MotionOutcome},
     physical_render::{Coloring, PhysicalUploads, UPLOAD_LIMIT, vector},
 };
 use bevy::{
@@ -17,9 +16,7 @@ use bevy::{
     render::render_resource::BlendState,
 };
 use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
-use procgen_realtime_pilot::{
-    MeterPosition, PhysicalCollision, PhysicalWalker, PlanetDesignField, VoxelPosition,
-};
+use procgen_realtime_pilot::{MeterPosition, PlanetDesignField, VoxelPosition};
 use std::{
     path::PathBuf,
     sync::{Arc, mpsc::TryRecvError},
@@ -30,7 +27,6 @@ use std::{
 enum Navigation {
     Orbit,
     Fly,
-    Walk,
 }
 struct MeshEntity {
     entity: Entity,
@@ -50,21 +46,16 @@ struct Inspector {
     record: Option<crate::physical_record::PhysicalRecord>,
     gpu: Option<GpuBridge>,
     field: Arc<PlanetDesignField>,
-    jobs: Jobs,
+    jobs: Option<Jobs>,
+    keep_above_terrain: bool,
     editor: crate::design_panel::DesignPanel,
     revision: u64,
     eye: MeterPosition,
     rotation: Quat,
     mode: Navigation,
-    walker: Option<PhysicalWalker>,
-    landing: bool,
     descent: bool,
     speed_factor: f32,
     coloring: Coloring,
-    collision: PhysicalCollision,
-    motion: MotionOutcome,
-    collision_busy: bool,
-    collision_seconds: f32,
     terrain_busy: bool,
     last_request: Option<TerrainRequest>,
     staging: Option<Staging>,
@@ -80,16 +71,13 @@ struct Inspector {
     peak_upload_ms: f32,
     frame_ms: f32,
     peak_frame_ms: f32,
-    query_ms: f32,
-    ground_clearance: Option<f32>,
-    last_query: Instant,
     status: String,
 }
 impl Inspector {
-    fn collision_position(&self) -> MeterPosition {
-        self.walker
-            .as_ref()
-            .map_or(self.eye, PhysicalWalker::center)
+    fn protect_altitude(&mut self) {
+        if self.keep_above_terrain {
+            self.eye = procgen_realtime_pilot::keep_camera_above_terrain(&self.field, self.eye);
+        }
     }
     fn up(&self) -> Vec3 {
         vector(self.eye.direction())
@@ -131,8 +119,6 @@ impl Inspector {
             .rotation;
     }
     fn orbit(&mut self) {
-        self.walker = None;
-        self.landing = false;
         self.descent = false;
         self.mode = Navigation::Orbit;
         self.status = "Orbiting.".into();
@@ -140,11 +126,10 @@ impl Inspector {
         self.face_ground();
     }
     fn near_ground(&mut self) {
-        self.walker = None;
         self.mode = Navigation::Fly;
         self.status = "Flying near ground.".into();
         self.descent = false;
-        self.set_radial(5.0);
+        self.set_radial(procgen_realtime_pilot::CAMERA_CLEARANCE_M);
         self.face_horizon();
     }
 }
@@ -160,7 +145,8 @@ impl Inspector {
         let mut state = Inspector {
             record,
             gpu: None,
-            jobs: Jobs::start(Arc::clone(&field), backend),
+            jobs: (backend == ExplorationBackend::Cpu).then(|| Jobs::start(Arc::clone(&field))),
+            keep_above_terrain: true,
             field,
             editor: crate::design_panel::DesignPanel::new(document, path),
             revision: 0,
@@ -174,15 +160,9 @@ impl Inspector {
             ),
             rotation: Quat::IDENTITY,
             mode: Navigation::Orbit,
-            walker: None,
-            landing: false,
             descent: false,
             speed_factor: 1.0,
             coloring: Coloring::default(),
-            collision: PhysicalCollision::default(),
-            motion: MotionOutcome::Idle,
-            collision_busy: false,
-            collision_seconds: 0.0,
             terrain_busy: true,
             last_request: None,
             staging: None,
@@ -198,9 +178,6 @@ impl Inspector {
             peak_upload_ms: 0.0,
             frame_ms: 0.0,
             peak_frame_ms: 0.0,
-            query_ms: 0.0,
-            ground_clearance: None,
-            last_query: Instant::now(),
             status: "Building distant overview…".into(),
         };
         state.face_ground();
@@ -209,29 +186,12 @@ impl Inspector {
                 Arc::clone(&state.field),
                 GpuCamera { eye: state.eye },
             ));
-            state.status = "GPU exploration · collision uses the CPU reference".into();
+            state.status = "GPU height terrain · orbit and flight".into();
         }
         state
     }
-    fn receive_collision(
-        &mut self,
-        field: Arc<PlanetDesignField>,
-        result: Result<crate::physical_jobs::CollisionResult, String>,
-    ) {
-        self.collision_busy = false;
-        if !Arc::ptr_eq(&field, &self.field) {
-            return;
-        }
-        match result {
-            Ok(result) => {
-                self.collision_seconds = result.seconds;
-                self.collision
-                    .install(result.patch, self.collision_position());
-            }
-            Err(e) => self.status = e,
-        }
-    }
 }
+
 pub fn run(
     document: crate::design_file::DesignFile,
     path: Option<PathBuf>,
@@ -356,18 +316,9 @@ fn apply_design(mut state: NonSendMut<Inspector>) {
     }
     let ready = bridge.designs.lock().unwrap().take_ready();
     if let Some(publication) = ready {
-        state.field = Arc::clone(&publication.design.field);
-        state.revision = publication.design.revision;
-        // Field, render buffers and collision change together. Never reuse old support.
-        state.collision = PhysicalCollision::default();
-        state.ground_clearance = None;
-        state.collision_seconds = 0.0;
-        if let Some(result) = publication.collision {
-            state.collision_seconds = result.seconds;
-            let position = state.collision_position();
-            state.collision.install(result.patch, position);
-        }
-        *bridge.display.lock().unwrap() = publication.design;
+        state.field = Arc::clone(&publication.field);
+        state.revision = publication.revision;
+        *bridge.display.lock().unwrap() = publication;
         info!(
             "Applied design revision {} at {:?}",
             state.revision, state.eye
@@ -376,7 +327,13 @@ fn apply_design(mut state: NonSendMut<Inspector>) {
 }
 fn receive(mut state: NonSendMut<Inspector>) {
     if state.gpu.is_none() && state.staging.is_none() && !state.retiring {
-        match state.jobs.surfaces.try_recv() {
+        match state
+            .jobs
+            .as_ref()
+            .expect("CPU audit worker")
+            .surfaces
+            .try_recv()
+        {
             Ok(Ok(result)) => {
                 state.terrain_busy = false;
                 state.status = "Uploading terrain…".into();
@@ -392,9 +349,6 @@ fn receive(mut state: NonSendMut<Inspector>) {
             Err(TryRecvError::Disconnected) => state.status = "Terrain worker stopped.".into(),
             Err(TryRecvError::Empty) => {}
         }
-    }
-    if let Ok((field, result)) = state.jobs.patches.try_recv() {
-        state.receive_collision(field, result);
     }
 }
 fn record_route(
@@ -423,12 +377,10 @@ fn record_route(
                 state.face_ground();
             }
             Some(RouteAction::Ground) => state.near_ground(),
-            Some(RouteAction::Walk) => {
-                state.landing = true;
-            }
             Some(RouteAction::Fly) => {
-                state.walker = None;
-                state.landing = false;
+                state.mode = Navigation::Fly;
+            }
+            Some(RouteAction::Rise) => {
                 state.mode = Navigation::Fly;
             }
             Some(RouteAction::Orbit) => state.orbit(),
@@ -447,14 +399,6 @@ fn record_route(
 }
 fn record_frame(mut state: NonSendMut<Inspector>, time: Res<Time<Real>>) {
     if let Some(mut record) = state.record.take() {
-        let contact = ContactFrame {
-            walking: state.mode == Navigation::Walk,
-            grounded: state.walker.as_ref().is_some_and(PhysicalWalker::grounded),
-            covered: state.collision.covers(state.collision_position()),
-            building: state.collision_busy,
-            build_seconds: state.collision_seconds,
-            motion: state.motion,
-        };
         let displayed = state
             .gpu
             .as_ref()
@@ -465,7 +409,8 @@ fn record_frame(mut state: NonSendMut<Inspector>, time: Res<Time<Real>>) {
                 time.delta_secs() * 1000.0,
                 output.as_ref().map(|o| &o.stats),
                 state.eye,
-                contact,
+                state.clearance_estimate(),
+                state.keep_above_terrain,
             )
             .expect("write route CSV");
         drop(output);
@@ -583,7 +528,14 @@ fn stream(
                 camera,
                 coloring: state.coloring,
             };
-            if state.jobs.terrain.try_send(request).is_ok() {
+            if state
+                .jobs
+                .as_ref()
+                .expect("CPU audit worker")
+                .terrain
+                .try_send(request)
+                .is_ok()
+            {
                 state.last_request = Some(request);
                 state.terrain_busy = true;
                 state.status = "Generating complete voxel terrain…".into();
@@ -632,12 +584,32 @@ fn position_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_gpu_bridge::{DesignPublication, DisplayedDesign, GpuOutput};
+    use crate::physical_gpu_bridge::{DisplayedDesign, GpuOutput};
     use procgen_realtime_pilot::PlanetDesignConfig;
-    use std::sync::{Mutex, atomic::AtomicBool};
+    use std::sync::Mutex;
 
     #[test]
-    fn publication_switches_design_and_collision_without_moving_camera() {
+    fn altitude_protection_can_be_disabled_and_reenabled_below_terrain() {
+        let mut state = Inspector::new(
+            crate::design_file::DesignFile::new(PlanetDesignConfig::starter(42)),
+            None,
+            ExplorationBackend::Gpu,
+            None,
+        );
+        state.set_radial(-50.0);
+        let below = state.eye;
+        state.keep_above_terrain = false;
+        state.protect_altitude();
+        assert_eq!(state.eye, below);
+        state.keep_above_terrain = true;
+        state.protect_altitude();
+        assert!(
+            (state.clearance_estimate() - procgen_realtime_pilot::CAMERA_CLEARANCE_M).abs() < 0.001
+        );
+        assert!(state.jobs.is_none());
+    }
+    #[test]
+    fn publication_switches_design_without_moving_camera_or_starting_cpu_work() {
         let mut config = PlanetDesignConfig::starter(42);
         config.radius_m = 300_000.0;
         config.octaves.iter_mut().for_each(|o| o.enabled = false);
@@ -648,70 +620,29 @@ mod tests {
             None,
         );
         state.near_ground();
-        let old_field = Arc::clone(&state.field);
         let eye = state.eye;
         let rotation = state.rotation;
-        let old_patch = procgen_realtime_pilot::VoxelCollision::build(
-            &old_field,
-            eye.anchor(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-        state.collision.install(old_patch, eye);
         state.editor.edits.seed_text = "43".into();
         state.editor.edits.observe(Instant::now());
         let revision = state.editor.edits.revision();
         let field = Arc::new(state.editor.edits.validated().unwrap());
-        let patch = procgen_realtime_pilot::VoxelCollision::build(
-            &field,
-            eye.anchor(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
         let output = Arc::new(Mutex::new(GpuOutput::default()));
         let bridge = state.gpu.as_ref().unwrap().clone();
         bridge.designs.lock().unwrap().invalidate(revision);
-        assert!(bridge.designs.lock().unwrap().publish(DesignPublication {
-            design: DisplayedDesign {
-                revision,
-                field: Arc::clone(&field),
-                output: Arc::clone(&output)
-            },
-            collision: Some(crate::physical_jobs::CollisionResult {
-                patch,
-                seconds: 1.0
-            }),
+        assert!(bridge.designs.lock().unwrap().publish(DisplayedDesign {
+            revision,
+            field: Arc::clone(&field),
+            output: Arc::clone(&output),
         }));
         let mut app = App::new();
         app.insert_non_send_resource(state)
             .add_systems(Update, apply_design);
         app.update();
-        let mut state = app.world_mut().non_send_resource_mut::<Inspector>();
+        let state = app.world_mut().non_send_resource_mut::<Inspector>();
         assert_eq!(state.eye, eye);
         assert_eq!(state.rotation, rotation);
         assert!(Arc::ptr_eq(&state.field, &field));
         assert!(Arc::ptr_eq(&bridge.display.lock().unwrap().output, &output));
-        assert!(state.collision.covers(eye));
-        let stale_patch = procgen_realtime_pilot::VoxelCollision::build(
-            &old_field,
-            eye.anchor(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-        state.receive_collision(
-            Arc::clone(&old_field),
-            Ok(crate::physical_jobs::CollisionResult {
-                patch: stale_patch,
-                seconds: 99.0,
-            }),
-        );
-        assert_eq!(
-            state.collision_seconds, 1.0,
-            "old successful jobs cannot replace current support"
-        );
-        state.status = "current".into();
-        state.receive_collision(old_field, Err("obsolete collision failure".into()));
-        assert_eq!(state.status, "current");
-        assert!(state.collision.covers(eye));
+        assert!(state.jobs.is_none());
     }
 }

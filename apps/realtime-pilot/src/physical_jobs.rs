@@ -1,8 +1,8 @@
-//! Presentation workers: one terrain build and one independent collision build.
+//! Explicit CPU visual audit worker. The GPU viewer does not start this worker.
 use crate::physical_render::{Coloring, PackedSurface};
 use procgen_realtime_pilot::{
     DesignPreviewConfig, PhysicalTerrain, PlanetDesignField, PreviewArea, PreviewBands,
-    VoxelCollision, VoxelPosition, generate_design_preview,
+    VoxelPosition, generate_design_preview,
 };
 use std::{
     sync::{
@@ -31,38 +31,20 @@ pub struct TerrainResult {
     pub source_bytes: usize,
     pub mesh_bytes: usize,
 }
-pub struct CollisionRequest {
-    pub field: Arc<PlanetDesignField>,
-    pub position: VoxelPosition,
-}
-pub struct CollisionResult {
-    pub patch: VoxelCollision,
-    pub seconds: f32,
-}
 pub struct Jobs {
     pub terrain: SyncSender<TerrainRequest>,
     pub surfaces: Receiver<Result<TerrainResult, String>>,
-    pub collision: SyncSender<CollisionRequest>,
-    pub patches: Receiver<(Arc<PlanetDesignField>, Result<CollisionResult, String>)>,
     cancel: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
 }
 impl Jobs {
-    pub fn start(
-        field: Arc<PlanetDesignField>,
-        backend: crate::physical_gpu_bridge::ExplorationBackend,
-    ) -> Self {
+    pub fn start(field: Arc<PlanetDesignField>) -> Self {
         let (terrain, requests) = mpsc::sync_channel::<TerrainRequest>(1);
         let (results, surfaces) = mpsc::sync_channel(1);
-        let (collision, probes) = mpsc::sync_channel::<CollisionRequest>(1);
-        let (contacts, patches) = mpsc::sync_channel(1);
         let cancel = Arc::new(AtomicBool::new(false));
         let source = Arc::clone(&field);
         let stop = Arc::clone(&cancel);
         let render = std::thread::spawn(move || {
-            if backend == crate::physical_gpu_bridge::ExplorationBackend::Gpu {
-                return;
-            }
             let started = Instant::now();
             let overview = generate_design_preview(
                 source.config(),
@@ -110,33 +92,11 @@ impl Jobs {
                 }
             }
         });
-        let stop = Arc::clone(&cancel);
-        let contact = std::thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                let probe = match probes.recv_timeout(std::time::Duration::from_millis(50)) {
-                    Ok(p) => p,
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(_) => break,
-                };
-                let start = Instant::now();
-                let result = VoxelCollision::build(&probe.field, probe.position, &stop)
-                    .map(|patch| CollisionResult {
-                        patch,
-                        seconds: start.elapsed().as_secs_f32(),
-                    })
-                    .map_err(|e| e.to_string());
-                if stop.load(Ordering::Relaxed) || contacts.send((probe.field, result)).is_err() {
-                    break;
-                }
-            }
-        });
         Self {
             terrain,
             surfaces,
-            collision,
-            patches,
             cancel,
-            workers: vec![render, contact],
+            workers: vec![render],
         }
     }
 }
@@ -146,7 +106,6 @@ impl Drop for Jobs {
         // Drain completed products before joining a sender that may be blocked.
         while self.workers.iter().any(|w| !w.is_finished()) {
             while self.surfaces.try_recv().is_ok() {}
-            while self.patches.try_recv().is_ok() {}
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         for worker in self.workers.drain(..) {

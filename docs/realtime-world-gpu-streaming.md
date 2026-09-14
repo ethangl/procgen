@@ -1,7 +1,12 @@
 # Real-time pilot: GPU generation and incremental streaming
 
-Status: G1 through G5 are implemented. Physical exploration uses GPU height tiles
-and local voxel geometry by default; `--backend cpu` selects the CPU visual audit.
+Current viewer: [GPU height terrain, oceans, and flight](realtime-world-flight-viewer.md).
+Runtime local voxels, walking, and collision have been removed. The implementation
+sequence and measurements below describe the earlier voxel pilot; its reusable
+generation code and explicit CPU/GPU audits remain.
+
+Status: G1 through G5 are implemented. The earlier G5 viewer used GPU height tiles
+and local voxel geometry; `--backend cpu` selects the CPU visual audit.
 Metal validation and route measurements are recorded below. Windows/Vulkan
 results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 Both hosts have completed the original G5 routes; visual and measurement gaps
@@ -13,7 +18,7 @@ This replaces the CPU-only visual generation plan for the physical-planet pilot.
 The original saved terrain settings remain unchanged. G5 adds a separate 300 km
 comparison preset. The earlier world pipeline is unrelated.
 
-## Required architecture
+## Original G1–G5 architecture
 
 GPU density generation and meshing through wgpu are required on macOS/Metal and
 Windows/Vulkan. Visual density, extraction scratch, vertices, indices, and draw
