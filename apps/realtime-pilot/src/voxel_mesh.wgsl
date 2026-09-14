@@ -1,5 +1,5 @@
 struct Parameters { vertex_capacity: u32, index_capacity: u32, one: f32, zero: f32 }
-struct Chunk { x: i32, y: i32, z: i32, spacing: i32 }
+struct Chunk { x: i32, y: i32, z: i32, spacing: i32, blocked: array<u32, MASK_WORDS> }
 struct Vertex { anchor: vec4<i32>, offset: vec4<f32> }
 struct Block { total: vec2<u32>, offset: vec2<u32> }
 struct Status { vertices: u32, indices: u32, overflow: u32, reserved: u32 }
@@ -50,6 +50,7 @@ fn root_slot(a: vec3<i32>, b: vec3<i32>, da: f32, db: f32) -> u32 {
 }
 struct CellTriangles { roots: array<vec3<u32>, 12>, count: u32 }
 fn cell_triangles(cell: u32) -> CellTriangles {
+    if (chunk.blocked[cell / 32u] & (1u << (cell % 32u))) != 0u { return CellTriangles(); }
     let base = grid_point(cell, CELLS);
     var d: array<f32, 8>;
     for (var i = 0u; i < 8u; i++) { d[i] = potential(base + corner(i)); }

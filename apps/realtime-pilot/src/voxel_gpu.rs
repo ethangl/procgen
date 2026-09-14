@@ -102,3 +102,21 @@ pub fn voxel_density_shader() -> String {
         include_str!("voxel_density.wgsl"),
     )
 }
+
+/// Input record for the sample_points density entry point.
+#[cfg(feature = "gpu")]
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(crate) struct VoxelGpuPoint {
+    position_m: [i32; 3],
+    reserved: i32,
+}
+#[cfg(feature = "gpu")]
+impl VoxelGpuPoint {
+    pub fn new(p: crate::VoxelPosition) -> Self {
+        Self {
+            position_m: [p.x_m, p.y_m, p.z_m],
+            reserved: 0,
+        }
+    }
+}

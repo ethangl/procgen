@@ -36,8 +36,11 @@ mod voxel_collision;
 mod voxel_collision_index;
 mod voxel_density;
 mod voxel_gpu;
+mod voxel_gpu_residency;
+mod voxel_leaf_index;
 mod voxel_mesh_gpu;
 mod voxel_mesh_topology;
+mod voxel_neighborhood;
 mod voxel_residency;
 mod voxel_selection;
 mod voxel_surface;
@@ -45,6 +48,9 @@ mod voxel_surface_audit;
 mod voxel_surface_extract;
 mod voxel_surface_faces;
 mod voxel_surface_grid;
+mod voxel_transition;
+mod voxel_transition_gpu;
+mod voxel_transition_plan;
 mod voxel_travel_audit;
 mod walking;
 
@@ -158,3 +164,39 @@ pub use voxel_mesh_gpu::{
     VoxelMeshGpuParameters, VoxelMeshStatus, voxel_mesh_shader,
 };
 pub use voxel_mesh_topology::{VOXEL_MESH_MAX_TRIANGLES, VOXEL_MESH_VERTEX_SLOTS};
+
+pub use voxel_mesh_gpu::VoxelMeshGpuChunk;
+pub use voxel_neighborhood::{
+    MAX_VOXEL_COVERAGE_LEAVES, VoxelCoverage, VoxelCoverageError, VoxelMeshKey,
+    select_voxel_coverage,
+};
+pub use voxel_transition::{
+    VoxelTransitionSamples, build_voxel_regular_mesh, build_voxel_transition_mesh,
+    sample_voxel_transition,
+};
+pub use voxel_transition_plan::{
+    MAX_TRANSITION_TETRAHEDRA, VOXEL_CELL_MASK_WORDS, VoxelTransitionNode, VoxelTransitionPlan,
+};
+
+pub use voxel_transition_gpu::{
+    VoxelTransitionConfig, VoxelTransitionGpuParameters, voxel_transition_shader,
+};
+
+pub use voxel_gpu_residency::{
+    VoxelGpuOutcome, VoxelGpuRequest, VoxelGpuResidency, VoxelGpuTicket, VoxelPublication,
+    VoxelStreamConfig, VoxelStreamError,
+};
+
+#[cfg(feature = "gpu")]
+mod voxel_gpu_buffers;
+#[cfg(feature = "gpu")]
+mod voxel_gpu_compute;
+#[cfg(feature = "gpu")]
+pub use voxel_gpu_buffers::{VoxelGpuMeshBuffers, VoxelGpuMeshConfig, VoxelGpuSlot};
+#[cfg(feature = "gpu")]
+pub use voxel_gpu_compute::{VoxelGpuInput, VoxelGpuMesher, VoxelGpuWork};
+
+#[cfg(feature = "gpu")]
+mod voxel_gpu_world;
+#[cfg(feature = "gpu")]
+pub use voxel_gpu_world::{VoxelGpuError, VoxelGpuEvent, VoxelGpuWorld, VoxelGpuWorldConfig};

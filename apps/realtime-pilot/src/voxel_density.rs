@@ -137,7 +137,7 @@ pub(crate) fn sample_voxel_chunk_cancellable(
     Ok(Some(result))
 }
 
-fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {
+pub(crate) fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {
     // All root and halo coordinates fit exactly in f32 at their LOD spacing.
     let p = position.as_vec3();
     let radius = field.config().radius_m;

@@ -1,7 +1,7 @@
 # Real-time pilot: GPU generation and incremental streaming
 
-Status: G1 density and G2 uniform-chunk meshing run on the GPU. Validation is
-recorded below. The exploration viewer still uses the CPU path until G4.
+Status: G1 density, G2 meshing, and G3 mixed-LOD GPU residency are implemented.
+Metal validation is recorded below. The exploration viewer still uses the CPU path until G4.
 This replaces the CPU-only visual generation plan for the physical-planet pilot. The saved terrain settings are
 held fixed while this work proceeds. The earlier world pipeline is unrelated.
 
@@ -223,8 +223,128 @@ edges, and corners remain closed during replacement; eviction/revisit reproduces
 results; stale jobs and slot reuse cannot corrupt visible coverage. Measure
 changed chunks and time-to-first-local-detail on a fixed travel route.
 
+### G3 implementation
+
+`VoxelCoverage` enforces 2:1 spacing at faces, edges, and corners. Balancing splits
+coarse neighbors and preserves requested fine leaves; it returns an error if the
+leaf budget is insufficient. A sparse octree index serves neighbor queries.
+`VoxelMeshKey` contains the chunk address and its finer face/edge neighbors.
+Point-only contacts introduce no new samples or subdivisions and do not invalidate
+a mesh. Equal/coarser neighbors also do not change that chunk's extraction.
+
+`VoxelTransitionPlan` compiles topology without reading density. Only affected
+coarse boundary cells replace G2's six tetrahedra. Each replacement cell connects
+its center to a shared triangulation of its six faces. Fine-facing squares split
+into four squares with the same diagonals as the fine mesh. Split edge knots also
+subdivide adjacent faces, which closes edge and corner junctions. Unaffected cells
+keep G2's topology. At most 5,768 cells and 276,864 tetrahedra belong to a chunk's
+transition plan. Node stencils select canonical source points at the finest
+incident resolution; derived interior nodes average coarse source corners.
+
+G1's new `sample_points` entry point evaluates these integer source points through
+the same potential function as the chunk grid. It does not read neighboring CPU
+volumes or narrow the seed again. G3 then classifies transition tetrahedra, scans
+counts, and emits indexed triangle soup with canonical shared root positions.
+Regular and transition outputs have separate draw buffers but publish together.
+The GPU never reads CPU-generated visual vertices or indices. The CPU reference
+uses the same transition topology and interpolation, and remains available for
+audits. The existing adaptive extractor and walking collision are unchanged.
+
+The optional pilot `gpu` feature owns `VoxelGpuMesher` and `VoxelGpuWorld` through
+wgpu. G2's audit now uses this production encoder rather than maintaining a second
+copy. Device selection is explicit; Metal and Vulkan use the same shaders and
+require eight storage bindings, without optional GPU features. The viewer does
+not enable this path yet.
+
+`VoxelGpuResidency` owns slot generations, a camera-priority queue, and connected
+local replacement groups. Changed chunks and incident transition changes form a
+group. Unchanged keys retain their GPU slots. The scheduler finishes one group at
+a time so partial groups cannot fill the pool and prevent publication. Camera
+priority changes do not interrupt that group. If selection splits pending work
+into several groups, it retains one and discards the other unpublished work.
+It retains old coverage until every new member is ready. A failed group releases unpublished
+fragments and permits independent groups to progress; it requires an explicit retry.
+
+Cancelled jobs keep their slot until completion, including a leave/revisit before
+the old job acknowledges completion. Generation tickets reject duplicate and stale
+receipts. Retirement also waits for submissions that used the old draw buffers.
+The renderer must call `track_draw_submission` after submitting those draws and
+serialize that handoff with publication. G4 must preserve this ownership contract.
+GPU completion polling does not wait: each job maps only two overflow flags,
+eight bytes total. Visual samples, geometry, and draw counts remain on the GPU.
+Device or mapping failure stops that stream explicitly, with no CPU fallback.
+
+Output slots stay allocated for reuse. Source grids, transition inputs, and scan
+scratch live only while their job is in flight. `VoxelGpuMeshConfig::slot_bytes`
+and `VoxelGpuMesher::work_bytes` provide the output cost and a conservative work
+reservation. The owner checks the memory budget before allocating a destination
+or submitting work. Both geometry overflow and budget failure retain old coverage.
+Slot headroom includes the larger of current/final residency plus the largest
+replacement group; initial empty residency needs only its requested slots.
+
+Run on macOS/Metal or Windows/Vulkan:
+
+```sh
+cargo test -p procgen-gpu-tests --test voxel_streaming_agreement -- --nocapture --test-threads=1
+```
+
+For Naga validation only, filter to
+`voxel_transition_wgsl_validates_without_a_device`. CPU tests cover all eight
+refinement orientations, exact-zero planes, neighbor-index agreement with exhaustive
+search, atomic local publication, delayed retirement, cancellation/ABA, insufficient
+headroom, and independent progress after a group fails. GPU tests cover mixed
+faces/edges/corners across three LOD levels, exact zeros, a fine feature missed by all coarse corners,
+capacity sentinels, real overflow and budget failures, old coverage while receipts
+are pending, unchanged slots, eviction/revisit, and exact GPU replay.
+
+The 15-chunk sphere fixture is closed with both extractors: G3 produces 105,024
+triangles versus 228,330 for the adaptive baseline. Maximum radial error is
+0.029335 m versus 0.020615 m, respectively, under a 0.125 m fixture bound (one
+sixteenth of its 2 m coarse voxel). Identical input potentials require exact
+CPU/GPU indices and counts; position tolerance remains 0.00001 times spacing.
+Shared GPU boundary positions and revisited outputs must be exact.
+
+### G3 saved-terrain route on Metal
+
+The GPU route covers a 256 m cube around the saved +X landing area, with 71 leaves:
+2 m coarse voxels and a 64 m region of 1 m voxels. It moves from
+`(4903255, 16, 16)` to `(4903255, 32, 16)`, then `(4903255, 80, 16)`, and returns.
+The slot pool allows 128 slots and two jobs in flight, with a 512 MiB GPU budget.
+Each slot reserves 30,000 regular vertices, 60,000 regular triangles, and 16,384
+transition triangles. The cube boundary is intentional; this audit does not claim
+to render the whole planet.
+
+| Stop | Rebuilt chunks | First useful publication | Peak GPU allocation |
+| --- | ---: | ---: | ---: |
+| Cold residency | 71 | about 199 ms | 238 MiB |
+| 16 m move | 0 | existing output reused | 234 MiB |
+| 64 m move | 23 | about 129 ms | 314 MiB |
+| Revisit | 23 | about 106 ms | 316 MiB |
+
+These local Apple M1 Max measurements start after coverage selection, exclude
+pipeline construction and geometry audit readback, and poll completion at 1 ms
+intervals. They are residency timings, not viewer frame times or GPU timestamps.
+The movement retains the other 48 slots and reproduces the original output on
+revisit. Preparation includes CPU transition planning, buffer creation, and input
+upload; it took about 84 ms in total across the 23 changed chunks. Command encoding
+took about 5 ms total. The saved settings remain unchanged.
+
+Planet-wide metadata selection was measured separately: the current 512-leaf
+request expands to 2,304 balanced leaves while retaining meter-scale detail. The
+sparse index reduced selection/balancing from about 244 ms to 46 ms. G4 must budget
+that larger coverage and move selection and topology preparation off the render
+thread; these timings do not meet its 2 ms CPU frame target yet. GPU generation
+itself is asynchronous, but job preparation currently runs during admission.
+Vulkan execution remains pending on the Windows host.
+
+Validation passes the pilot suites with and without the inspector, the focused
+residency regression, all three Metal density/meshing/streaming suites, Clippy
+with warnings denied for the pilot and GPU tests, formatting, and the native
+pilot build.
+
 ## G4: GPU exploration integration
 
+Move coverage selection and transition-plan preparation off the render thread.
 Connect resident GPU geometry directly to Bevy rendering and GPU draw counts.
 Make GPU and CPU audit modes explicit. Stop whole-planet CPU mesh generation,
 packing, and upload during normal GPU exploration. Keep nearby collision on its

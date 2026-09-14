@@ -206,7 +206,7 @@ fn gpu_mesh_matches_reference_and_is_schedule_invariant() {
     }
     let sequential_ms = gpu.dispatch(&jobs.iter().collect::<Vec<_>>(), false);
     println!(
-        "13-chunk warm replay, including worst-case checkerboard: interleaved {interleaved_ms:.2} ms, sequential {sequential_ms:.2} ms"
+        "13-chunk warm replay, including worst-case checkerboard: batched {interleaved_ms:.2} ms, sequential {sequential_ms:.2} ms"
     );
     for (job, previous) in jobs.iter().zip(&first) {
         let current = gpu.audit(job).mesh.unwrap();
@@ -264,10 +264,13 @@ fn check_overflow(gpu: &Gpu, volume: &VoxelVolume) {
             config.vertex_capacity as usize
         ];
         let indices = vec![0xdeadbeefu32; config.triangle_capacity as usize * 3];
+        gpu.queue.write_buffer(
+            &job.slot.regular.vertices,
+            0,
+            bytemuck::cast_slice(&vertices),
+        );
         gpu.queue
-            .write_buffer(&job.vertices, 0, bytemuck::cast_slice(&vertices));
-        gpu.queue
-            .write_buffer(&job.indices, 0, bytemuck::cast_slice(&indices));
+            .write_buffer(&job.slot.regular.indices, 0, bytemuck::cast_slice(&indices));
         gpu.dispatch(&[&job], false);
         let audit = gpu.audit(&job);
         assert_eq!(audit.status.overflow, 1);
@@ -276,11 +279,21 @@ fn check_overflow(gpu: &Gpu, volume: &VoxelVolume) {
         assert!(audit.mesh.is_none());
         assert_eq!(audit.draw.index_count, 0);
         assert_eq!(
-            readback::<VoxelMeshVertex>(&gpu.device, &gpu.queue, &job.vertices, vertices.len()),
+            readback::<VoxelMeshVertex>(
+                &gpu.device,
+                &gpu.queue,
+                &job.slot.regular.vertices,
+                vertices.len()
+            ),
             vertices
         );
         assert_eq!(
-            readback::<u32>(&gpu.device, &gpu.queue, &job.indices, indices.len()),
+            readback::<u32>(
+                &gpu.device,
+                &gpu.queue,
+                &job.slot.regular.indices,
+                indices.len()
+            ),
             indices
         );
     }

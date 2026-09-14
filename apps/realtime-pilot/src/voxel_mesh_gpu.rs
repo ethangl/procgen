@@ -6,7 +6,33 @@ use bytemuck::{Pod, Zeroable};
 use crate::voxel_mesh_topology::{
     CELL_COUNT, CELLS, NODES, RINGS, TETS, VOXEL_MESH_MAX_TRIANGLES, VOXEL_MESH_VERTEX_SLOTS,
 };
-use crate::{VOXEL_HALO, VOXEL_SAMPLE_COUNT, VOXEL_SAMPLE_SIDE, VoxelMeshError};
+use crate::{
+    VOXEL_HALO, VOXEL_SAMPLE_COUNT, VOXEL_SAMPLE_SIDE, VoxelChunkAddress, VoxelGpuChunk,
+    VoxelMeshError, VoxelTransitionPlan,
+};
+
+/// G2 extraction skips cells owned by the transition plan. Density generation
+/// still binds the original 16-byte VoxelGpuChunk record.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct VoxelMeshGpuChunk {
+    chunk: VoxelGpuChunk,
+    blocked: [u32; crate::voxel_transition_plan::VOXEL_CELL_MASK_WORDS],
+}
+impl VoxelMeshGpuChunk {
+    pub fn uniform(address: VoxelChunkAddress) -> Self {
+        Self {
+            chunk: VoxelGpuChunk::new(address),
+            blocked: [0; crate::voxel_transition_plan::VOXEL_CELL_MASK_WORDS],
+        }
+    }
+    pub fn transition(plan: &VoxelTransitionPlan) -> Self {
+        Self {
+            chunk: VoxelGpuChunk::new(plan.key().address()),
+            blocked: plan.blocked,
+        }
+    }
+}
 
 pub const VOXEL_MESH_WORKGROUP_SIZE: usize = 256;
 pub const VOXEL_MESH_SCAN_BLOCKS: usize =
@@ -73,7 +99,7 @@ pub struct VoxelMeshDraw {
     pub first_instance: u32,
 }
 
-/// One chunk per bind group. Bindings: 0 parameters, 1 chunk record, 2 potentials,
+/// One chunk per bind group. Bindings: 0 parameters, 1 VoxelMeshGpuChunk record, 2 potentials,
 /// 3 scan scratch (vertex slots * 8 bytes), 4 block scratch (scan blocks * 16),
 /// 5 status (16), 6 vertices (capacity * 32), 7 indices (triangle capacity * 12),
 /// 8 indirect draw (20). All but 0 are storage; 1/2 are read-only. Outputs also
@@ -84,8 +110,9 @@ pub struct VoxelMeshDraw {
 /// passes. Scratch and outputs must belong to an unpublished destination slot.
 /// The consumer validates device buffer/binding limits before allocating slots.
 pub fn voxel_mesh_shader() -> String {
+    let mask_words = crate::voxel_transition_plan::VOXEL_CELL_MASK_WORDS;
     let mut source = format!(
-        "const CELLS: u32 = {CELLS}u;\nconst NODES: u32 = {NODES}u;\nconst CELL_COUNT: u32 = {CELL_COUNT}u;\nconst SLOTS: u32 = {VOXEL_MESH_VERTEX_SLOTS}u;\nconst BLOCKS: u32 = {VOXEL_MESH_SCAN_BLOCKS}u;\nconst GROUP_SIZE: u32 = {VOXEL_MESH_WORKGROUP_SIZE}u;\nconst SAMPLE_SIDE: u32 = {VOXEL_SAMPLE_SIDE}u;\nconst SAMPLE_COUNT: u32 = {VOXEL_SAMPLE_COUNT}u;\nconst HALO: u32 = {VOXEL_HALO}u;\n"
+        "const MASK_WORDS: u32 = {mask_words}u;\nconst CELLS: u32 = {CELLS}u;\nconst NODES: u32 = {NODES}u;\nconst CELL_COUNT: u32 = {CELL_COUNT}u;\nconst SLOTS: u32 = {VOXEL_MESH_VERTEX_SLOTS}u;\nconst BLOCKS: u32 = {VOXEL_MESH_SCAN_BLOCKS}u;\nconst GROUP_SIZE: u32 = {VOXEL_MESH_WORKGROUP_SIZE}u;\nconst SAMPLE_SIDE: u32 = {VOXEL_SAMPLE_SIDE}u;\nconst SAMPLE_COUNT: u32 = {VOXEL_SAMPLE_COUNT}u;\nconst HALO: u32 = {VOXEL_HALO}u;\n"
     );
     writeln!(source, "const TETS = array<vec4<u32>, 6>(").unwrap();
     for t in TETS {

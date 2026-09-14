@@ -115,11 +115,13 @@ GPU generation and incremental chunk replacement are required for the next
 phase. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
 G1 supplies a WGSL density kernel and CPU/GPU agreement checks. G2 adds bounded
 uniform-chunk meshing, deterministic scans, and GPU vertex/index/draw buffers.
+G3 adds 2:1 transitions and bounded incremental GPU residency.
 It runs on Metal on macOS and Vulkan on Windows/Linux:
 
 ```sh
 cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
 cargo test -p procgen-gpu-tests --test voxel_mesh_agreement -- --nocapture
+cargo test -p procgen-gpu-tests --test voxel_streaming_agreement -- --nocapture --test-threads=1
 ```
 
 This checks real GPU chunk batches, shared halo/parent samples, repeated runs,
@@ -132,9 +134,15 @@ The meshing audit checks topology, exact shared boundaries, replay order, capaci
 failures, and saved-terrain agreement with CPU extraction and collision. It feeds
 GPU density directly into extraction without an intermediate readback.
 
-The exploration viewer still uses CPU meshing. Mixed LOD and persistent chunk
-buffers are G3; rendering integration is G4. The isolated GPU kernels do not yet
-shorten the viewer's complete mesh rebuild.
+The streaming audit checks mixed-LOD seams, local publication, slot reuse,
+cancellation, retirement, overflow, memory limits, and a fixed route through the
+saved terrain. Normal generation reads back only eight bytes of overflow flags
+per job. The optional `gpu` feature owns the wgpu implementation; tests enable it
+explicitly and use the same encoder as the residency owner.
+
+The exploration viewer still uses CPU meshing. G4 connects resident GPU buffers to
+Bevy rendering and moves selection/preparation off the render thread. The current
+GPU audits do not shorten the viewer's complete mesh rebuild.
 
 ## Run the original experiments
 

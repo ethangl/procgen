@@ -127,3 +127,18 @@ pub(crate) fn cell_triangles(volume: &VoxelVolume, cell: usize) -> CellTriangles
     }
     result
 }
+
+// The first Freudenthal tetrahedron has positive orientation. Transition cell
+// cones use that same orientation, with edges expressed as local vertex pairs.
+pub(crate) static SIMPLEX_RINGS: LazyLock<[[u32; 4]; 16]> = LazyLock::new(|| {
+    std::array::from_fn(|case| {
+        RINGS[case].map(|e| {
+            if e == NONE {
+                NONE
+            } else {
+                let index = |c| TETS[0].iter().position(|&v| v == c).unwrap() as u32;
+                index(e / 8) * 4 + index(e % 8)
+            }
+        })
+    })
+});

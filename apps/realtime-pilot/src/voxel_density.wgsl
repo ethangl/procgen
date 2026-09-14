@@ -140,3 +140,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let chunk = pilot_chunks[chunk_index];
     pilot_potentials[id.x] = pilot_potential(vec3(chunk.origin_x_m, chunk.origin_y_m, chunk.origin_z_m) + local * chunk.spacing_m);
 }
+
+// Transition stencils request canonical integer source points. Record xyz is a
+// point rather than a chunk origin; spacing is unused by this entry point.
+@compute @workgroup_size(64)
+fn sample_points(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= arrayLength(&pilot_chunks) { return; }
+    let point = pilot_chunks[id.x];
+    pilot_potentials[id.x] = pilot_potential(vec3(point.origin_x_m, point.origin_y_m, point.origin_z_m));
+}

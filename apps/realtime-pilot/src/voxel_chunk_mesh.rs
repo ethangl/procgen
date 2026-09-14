@@ -39,6 +39,10 @@ pub enum VoxelMeshError {
     Indices,
     Triangle,
     Capacity,
+    TransitionPlan,
+    TransitionCapacity,
+    TransitionSamples,
+    TransitionAddress,
 }
 impl From<VoxelVolumeError> for VoxelMeshError {
     fn from(value: VoxelVolumeError) -> Self {
@@ -55,6 +59,16 @@ impl fmt::Display for VoxelMeshError {
                 "chunk mesh indices must form triangles and refer to existing vertices"
             ),
             Self::Triangle => write!(f, "chunk mesh triangles must have nonzero area"),
+            Self::TransitionPlan => f.write_str("transition plan must contain bounded nodes, sample stencils, and distinct tetrahedron vertices"),
+            Self::TransitionCapacity => write!(
+                f,
+                "transition capacity must be in 1..={} triangles",
+                crate::MAX_TRANSITION_TETRAHEDRA * 2
+            ),
+            Self::TransitionSamples => {
+                f.write_str("transition samples must be finite and match the plan")
+            }
+            Self::TransitionAddress => f.write_str("transition plan must match the source chunk"),
             Self::Capacity => write!(
                 f,
                 "mesh capacities must be positive and at most {} vertices and {} triangles",
@@ -173,31 +187,50 @@ pub(crate) fn candidate(volume: &VoxelVolume, slot: usize) -> Option<VoxelMeshVe
     if !((a < 0.0 && b > 0.0) || (a > 0.0 && b < 0.0)) {
         return None;
     }
-    let (start, end, near, far) = if a.abs() <= b.abs() {
-        (p, q, a, b)
+    Some(edge_vertex(
+        p.map(|v| v * spacing),
+        q.map(|v| v * spacing),
+        a,
+        b,
+    ))
+}
+
+pub(crate) fn edge_vertex(a: [i32; 3], b: [i32; 3], da: f32, db: f32) -> VoxelMeshVertex {
+    // Canonical endpoint order also covers non-monotone transition edges.
+    let (a, b, da, db) = if a <= b {
+        (a, b, da, db)
     } else {
-        (q, p, b, a)
+        (b, a, db, da)
     };
-    // Ratio form cannot overflow when finite input potentials have opposite signs.
-    let fraction = (near / far).abs();
-    let t = fraction / (1.0 + fraction);
-    Some(VoxelMeshVertex {
-        anchor_m: [
-            start[0] * spacing,
-            start[1] * spacing,
-            start[2] * spacing,
-            0,
-        ],
+    let (start, end, near, far) = if da.abs() <= db.abs() {
+        (a, b, da, db)
+    } else {
+        (b, a, db, da)
+    };
+    let ratio = (near / far).abs();
+    let t = ratio / (1.0 + ratio);
+    VoxelMeshVertex {
+        anchor_m: [start[0], start[1], start[2], 0],
         offset_m: [
-            (end[0] - start[0]) as f32 * spacing as f32 * t,
-            (end[1] - start[1]) as f32 * spacing as f32 * t,
-            (end[2] - start[2]) as f32 * spacing as f32 * t,
+            (end[0] - start[0]) as f32 * t,
+            (end[1] - start[1]) as f32 * t,
+            (end[2] - start[2]) as f32 * t,
             0.0,
         ],
-    })
+    }
 }
 
 pub fn build_voxel_chunk_mesh(volume: &VoxelVolume) -> Result<VoxelChunkMesh, VoxelMeshError> {
+    build_regular_mesh(
+        volume,
+        &[0; crate::voxel_transition_plan::VOXEL_CELL_MASK_WORDS],
+    )
+}
+
+pub(crate) fn build_regular_mesh(
+    volume: &VoxelVolume,
+    blocked: &[u32; crate::voxel_transition_plan::VOXEL_CELL_MASK_WORDS],
+) -> Result<VoxelChunkMesh, VoxelMeshError> {
     volume.validate()?;
     let candidates: Vec<_> = (0..VOXEL_MESH_VERTEX_SLOTS)
         .into_par_iter()
@@ -213,7 +246,16 @@ pub fn build_voxel_chunk_mesh(volume: &VoxelVolume) -> Result<VoxelChunkMesh, Vo
     }
     let cells: Vec<_> = (0..CELL_COUNT)
         .into_par_iter()
-        .map(|i| topology::cell_triangles(volume, i))
+        .map(|i| {
+            if blocked[i / 32] & (1 << (i % 32)) == 0 {
+                topology::cell_triangles(volume, i)
+            } else {
+                topology::CellTriangles {
+                    roots: [[0; 3]; 12],
+                    count: 0,
+                }
+            }
+        })
         .collect();
     let indices = cells
         .iter()
