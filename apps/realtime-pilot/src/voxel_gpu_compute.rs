@@ -1,5 +1,6 @@
 //! wgpu command encoding used by residency and explicit CPU/GPU agreement audits.
 use crate::voxel_gpu_buffers::{OVERFLOW_FLAGS_BYTES, storage};
+use crate::voxel_gpu_timing::{GpuTiming, TIMING_BYTES};
 use crate::{
     PlanetDesignField, VOXEL_MESH_SCAN_BLOCKS, VOXEL_MESH_VERTEX_SLOTS, VOXEL_MESH_WORKGROUP_SIZE,
     VOXEL_SAMPLE_COUNT, VoxelGpuChunk, VoxelGpuMeshConfig, VoxelGpuParameters, VoxelGpuSlot,
@@ -17,6 +18,7 @@ pub enum VoxelGpuInput<'a> {
     },
 }
 pub struct VoxelGpuWork {
+    pub(crate) timing: Option<GpuTiming>,
     regular: wgpu::BindGroup,
     transition: Option<wgpu::BindGroup>,
     density_group: Option<wgpu::BindGroup>,
@@ -35,7 +37,8 @@ impl VoxelGpuWork {
         &self.point_values
     }
     pub fn allocated_bytes(&self) -> u64 {
-        self.buffers.iter().map(wgpu::Buffer::size).sum::<u64>()
+        self.timing.as_ref().map_or(0, |_| TIMING_BYTES)
+            + self.buffers.iter().map(wgpu::Buffer::size).sum::<u64>()
             + self.density.size()
             + self.point_values.size()
     }
@@ -89,9 +92,36 @@ impl MeshKernels {
         });
         Self { pipelines, layout }
     }
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, group: &wgpu::BindGroup, blocks: u32) {
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        group: &wgpu::BindGroup,
+        blocks: u32,
+        timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>,
+    ) {
         for (i, pipeline) in self.pipelines.iter().enumerate() {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("voxel extraction"),
+                timestamp_writes: timestamps
+                    .as_ref()
+                    .map(|t| wgpu::ComputePassTimestampWrites {
+                        query_set: t.query_set,
+                        beginning_of_pass_write_index: if i == 0 {
+                            t.beginning_of_pass_write_index
+                        } else {
+                            None
+                        },
+                        end_of_pass_write_index: if i == 3 {
+                            t.end_of_pass_write_index
+                        } else {
+                            None
+                        },
+                    })
+                    .filter(|t| {
+                        t.beginning_of_pass_write_index.is_some()
+                            || t.end_of_pass_write_index.is_some()
+                    }),
+            });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, group, &[]);
             pass.dispatch_workgroups(if i == 2 { 1 } else { blocks }, 1, 1);
@@ -141,7 +171,7 @@ impl VoxelGpuMesher {
         let tets = plan.tetrahedra().len() as u64;
         let blocks = tets.div_ceil(VOXEL_MESH_WORKGROUP_SIZE as u64);
         // Regular params/chunk/mask/scratch, density params, point records/values,
-        // transition params/nodes/tets/scratch, and eight-byte completion readback.
+        // transition params/nodes/tets/scratch, flags, and optional timestamp storage.
         16 + 16
             + size_of::<VoxelMeshGpuChunk>() as u64
             + (VOXEL_MESH_VERTEX_SLOTS * 8 + VOXEL_MESH_SCAN_BLOCKS * 16 + VOXEL_SAMPLE_COUNT * 4)
@@ -153,6 +183,7 @@ impl VoxelGpuMesher {
             + tets.max(1) * 16
             + (tets + blocks).max(1) * 8
             + OVERFLOW_FLAGS_BYTES
+            + 2 * TIMING_BYTES
     }
     pub fn prepare(
         &self,
@@ -333,6 +364,11 @@ impl VoxelGpuMesher {
         };
         buffers.extend([params, chunk, mesh_chunk, scratch, blocks]);
         let work = VoxelGpuWork {
+            timing: if density_group.is_some() {
+                GpuTiming::new(&self.device)
+            } else {
+                None
+            },
             regular,
             transition,
             density_group,
@@ -354,12 +390,29 @@ impl VoxelGpuMesher {
     ) {
         encoder.clear_buffer(&slot.transition.status, 0, None);
         encoder.clear_buffer(&slot.transition.draw, 0, None);
+        let timestamps = |begin, end| {
+            work.timing
+                .as_ref()
+                .map(|t| wgpu::ComputePassTimestampWrites {
+                    query_set: &t.queries,
+                    beginning_of_pass_write_index: begin,
+                    end_of_pass_write_index: end,
+                })
+        };
         if let Some(group) = &work.density_group {
             encode_density(
                 encoder,
                 &self.density,
                 group,
                 (VOXEL_SAMPLE_COUNT as u32).div_ceil(64),
+                timestamps(
+                    Some(0),
+                    if work.points_group.is_none() {
+                        Some(1)
+                    } else {
+                        None
+                    },
+                ),
             );
         }
         if let Some(group) = &work.points_group {
@@ -368,13 +421,32 @@ impl VoxelGpuMesher {
                 &self.points,
                 group,
                 (work.point_count as u32).div_ceil(64),
+                timestamps(None, Some(1)),
             );
         }
-        self.regular
-            .encode(encoder, &work.regular, VOXEL_MESH_SCAN_BLOCKS as u32);
+        self.regular.encode(
+            encoder,
+            &work.regular,
+            VOXEL_MESH_SCAN_BLOCKS as u32,
+            timestamps(
+                Some(2),
+                if work.transition.is_none() {
+                    Some(3)
+                } else {
+                    None
+                },
+            ),
+        );
         if let Some(group) = &work.transition {
-            self.transition
-                .encode(encoder, group, work.transition_blocks);
+            self.transition.encode(
+                encoder,
+                group,
+                work.transition_blocks,
+                timestamps(None, Some(3)),
+            );
+        }
+        if let Some(timing) = &work.timing {
+            encoder.resolve_query_set(&timing.queries, 0..4, &timing.resolved, 0);
         }
     }
 }
@@ -402,8 +474,12 @@ fn encode_density(
     pipeline: &wgpu::ComputePipeline,
     group: &wgpu::BindGroup,
     blocks: u32,
+    timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
 ) {
-    let mut pass = encoder.begin_compute_pass(&Default::default());
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: Some("voxel density"),
+        timestamp_writes,
+    });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, group, &[]);
     pass.dispatch_workgroups(blocks, 1, 1);

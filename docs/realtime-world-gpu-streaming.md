@@ -1,7 +1,8 @@
 # Real-time pilot: GPU generation and incremental streaming
 
-Status: G1 density, G2 meshing, and G3 mixed-LOD GPU residency are implemented.
-Metal validation is recorded below. The exploration viewer still uses the CPU path until G4.
+Status: G1 through G4 are implemented and validated on Metal. Physical exploration
+uses GPU generation and direct drawing by default; `--backend cpu` selects the
+CPU visual audit. G5 and Windows/Vulkan execution remain open.
 This replaces the CPU-only visual generation plan for the physical-planet pilot. The saved terrain settings are
 held fixed while this work proceeds. The earlier world pipeline is unrelated.
 
@@ -50,8 +51,8 @@ field packing layout, integer chunk records, and the assembled compute shader,
 with no wgpu or Bevy dependency in those modules. A 64-thread workgroup writes
 chunk-major unsaturated f32 potentials into storage. No CPU noise evaluations or
 per-sample coordinate uploads occur in the GPU dispatch. The existing GPU test
-crate owns device creation and audit readback; the viewer remains on its CPU
-reference until G4.
+crate owns device creation and audit readback. G1 kept the viewer on its CPU
+reference; G4 connects these kernels to exploration.
 
 The initial direct translation differed from CPU by up to 1.52 m on steep saved
 terrain. Shader reassociation changed compensated radial residuals and noise
@@ -253,8 +254,8 @@ audits. The existing adaptive extractor and walking collision are unchanged.
 The optional pilot `gpu` feature owns `VoxelGpuMesher` and `VoxelGpuWorld` through
 wgpu. G2's audit now uses this production encoder rather than maintaining a second
 copy. Device selection is explicit; Metal and Vulkan use the same shaders and
-require eight storage bindings, without optional GPU features. The viewer does
-not enable this path yet.
+require eight storage bindings, without optional GPU features. G3 exposed this
+path for audits; G4 enables it in the viewer.
 
 `VoxelGpuResidency` owns slot generations, a camera-priority queue, and connected
 local replacement groups. Changed chunks and incident transition changes form a
@@ -268,10 +269,11 @@ fragments and permits independent groups to progress; it requires an explicit re
 Cancelled jobs keep their slot until completion, including a leave/revisit before
 the old job acknowledges completion. Generation tickets reject duplicate and stale
 receipts. Retirement also waits for submissions that used the old draw buffers.
-The renderer must call `track_draw_submission` after submitting those draws and
-serialize that handoff with publication. G4 must preserve this ownership contract.
-GPU completion polling does not wait: each job maps only two overflow flags,
-eight bytes total. Visual samples, geometry, and draw counts remain on the GPU.
+Borrowed draw buffers require `track_draw_submission` after submission, serialized
+with publication. G4 instead holds owned draw leases through GPU completion.
+GPU completion polling does not wait: each job maps two overflow flags, eight
+bytes total, plus optional G4 timestamps. Visual samples, geometry, and draw
+counts remain on the GPU.
 Device or mapping failure stops that stream explicitly, with no CPU fallback.
 
 Output slots stay allocated for reuse. Source grids, transition inputs, and scan
@@ -356,6 +358,98 @@ first useful detail, resident/retiring bytes, and frame times. Diagnose these
 separately. Initial targets are a 2 ms CPU scheduling budget per frame and useful
 nearby refinement within 250 ms once coverage is resident; these are targets to
 measure on both hosts, not claims about current performance.
+
+### G4 implementation
+
+The inspector enables the pilot's `gpu` feature. `--explore` selects GPU
+exploration by default; `--backend cpu` keeps the existing CPU visual audit.
+GPU mode starts no CPU visual build or overview upload. Collision keeps its
+separate CPU worker and one-meter canonical field.
+
+The generation worker selects the target partition, advances through closed
+intermediate coverage, prepares transition plans and inputs, and encodes GPU
+commands. It prioritizes nearby splits before distant coarsening. Each step
+preserves 2:1 balance; coarsening checks sibling and neighbor metadata before
+rebuilding an index. A CPU orbit/ground/move/revisit test reaches each requested
+partition without repeating a partition. The final metadata route takes about
+1.6 seconds in total on the M1 Max; this work is off the render thread.
+
+`VoxelGpuSubmission` transfers encoded commands to the render queue owner. The
+renderer submits them and arms asynchronous completion, while the worker keeps
+their inputs alive. Latest camera input and immutable draw snapshots cross a
+small shared mailbox. `VoxelGpuLease` pins an output allocation through snapshot
+replacement and through GPU draw completion; a completed retirement cannot reuse
+a leased slot. Tests retain old draw leases through real replacement and delayed
+submission before permitting reuse.
+
+The render node draws regular and transition buffers with indexed-indirect
+commands. Sixteen-byte instance records carry integer chunk origins and LOD;
+integer camera subtraction precedes float conversion in the vertex shader.
+Frustum checks reject whole chunk bounds before encoding draws. Neutral lighting
+and normal inspection use triangle derivatives. View changes update only camera
+and display metadata. Visual potentials, vertices, indices, and draw counts are
+never read back for normal exploration.
+
+The viewer allows 4,096 output slots, two pending jobs, and an 8 GiB allocation
+budget. A slot reserves 20,000 regular vertices, 40,000 regular triangles, and
+8,192 transition triangles (about 1.91 MiB). Its retained pool is reusable but
+does not shrink after travel. Overflow and budget errors stop the stream with
+old coverage retained; they do not select a different backend. These remain
+large reservations until G5 replaces distant voxel coverage.
+
+The panel and CSV separate worker selection/preparation, command encoding,
+submission-to-receipt latency, local publication latency, render scheduling,
+draw encoding, GPU stage times, and frame times. Submission-to-receipt includes
+queueing, GPU execution, and callback polling. Job completion also includes
+preparation. Displayed stage counters are the latest observation of each stage,
+not necessarily the same job. Resident, retiring, and total allocation bytes are
+reported separately. Timestamp-capable devices read 32 extra bytes per job;
+unsupported devices report timing as unavailable. Timestamps use compute-pass
+boundaries: encoder timestamps produced zero intervals and stale outputs on the
+tested Metal path. The native-device regression requires valid stage intervals.
+
+Run the native route (writes a CSV and six PNG captures, then exits):
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json --backend gpu \
+  --explore-record g4-route.csv
+```
+
+### G4 native route on Metal
+
+The saved 4,900 km design was exercised on the Apple M1 Max in a 2,880 by 2,000
+window, with orbit, continuous descent, a ground hold, walking, flight, and a
+return to orbit. The route includes screenshot capture costs. The saved octave
+settings and CPU collision implementation are unchanged.
+
+| Segment | Frame p50 | Frame p95 | Render scheduling p95 | Draw encoding p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Orbit | 8.4 ms | 17.1 ms | 0.24 ms | 0.04 ms |
+| Descent | 16.6 ms | 17.4 ms | 0.34 ms | 0.10 ms |
+| Ground hold | 8.8 ms | 17.5 ms | 0.36 ms | 0.13 ms |
+| Walk | 16.7 ms | 17.5 ms | 0.36 ms | 0.28 ms |
+| Flight | 16.7 ms | 17.7 ms | 0.43 ms | 0.34 ms |
+| Return to orbit | 16.7 ms | 18.6 ms | 0.30 ms | 0.82 ms |
+
+Meter-scale geometry first became resident at 27.9 seconds; descent began at
+5 seconds. Walking used canonical collision, and the full route completed
+without an overflow or stream failure. Peak GPU allocation was about 5.3 GiB.
+The largest observed frame in the final route was 142 ms; an earlier complete
+route reached 307 ms. These are native viewer measurements,
+not isolated compute throughput or Vulkan measurements.
+
+The typical CPU render scheduling cost meets the 2 ms target. Local publication
+can still exceed 250 ms, full target coverage can lag travel, and the retained
+voxel pool remains large. G5 must reduce distant generation and memory, filter
+coarse geometry, and address replacement latency and outlier frames. One-meter
+samples in the nearest leaves do not imply that all visible terrain or the entire
+collision box has reached that resolution.
+
+Validation includes the pilot suites with and without the inspector, G1/G2/G3
+Metal agreement suites, progressive coverage, direct-render shader validation,
+native device feature/limit tests, queued submission, leased retirement, Clippy,
+and a native viewer build. Vulkan execution remains pending on the Windows host.
 
 ## G5: distant coverage, filtering, and final budgets
 

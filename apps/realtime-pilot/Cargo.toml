@@ -7,7 +7,7 @@ rust-version.workspace = true
 [features]
 default = ["inspector"]
 gpu = ["dep:wgpu"]
-inspector = ["dep:bevy", "dep:bevy_egui"]
+inspector = ["gpu", "dep:bevy", "dep:bevy_egui"]
 
 [dependencies]
 wgpu = { version = "27.0.1", optional = true, default-features = false, features = ["metal", "vulkan", "std", "wgsl"] }

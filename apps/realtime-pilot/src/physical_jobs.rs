@@ -44,7 +44,10 @@ pub struct Jobs {
     workers: Vec<JoinHandle<()>>,
 }
 impl Jobs {
-    pub fn start(field: Arc<PlanetDesignField>) -> Self {
+    pub fn start(
+        field: Arc<PlanetDesignField>,
+        backend: crate::physical_gpu::ExplorationBackend,
+    ) -> Self {
         let (terrain, requests) = mpsc::sync_channel::<TerrainRequest>(1);
         let (results, surfaces) = mpsc::sync_channel(1);
         let (collision, probes) = mpsc::sync_channel(1);
@@ -53,6 +56,9 @@ impl Jobs {
         let source = Arc::clone(&field);
         let stop = Arc::clone(&cancel);
         let render = std::thread::spawn(move || {
+            if backend == crate::physical_gpu::ExplorationBackend::Gpu {
+                return;
+            }
             let started = Instant::now();
             let overview = generate_design_preview(
                 source.config(),

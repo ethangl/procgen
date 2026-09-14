@@ -34,6 +34,7 @@ mod voxel_audit;
 mod voxel_chunk_mesh;
 mod voxel_collision;
 mod voxel_collision_index;
+mod voxel_coverage_step;
 mod voxel_density;
 mod voxel_gpu;
 mod voxel_gpu_residency;
@@ -199,4 +200,12 @@ pub use voxel_gpu_compute::{VoxelGpuInput, VoxelGpuMesher, VoxelGpuWork};
 #[cfg(feature = "gpu")]
 mod voxel_gpu_world;
 #[cfg(feature = "gpu")]
-pub use voxel_gpu_world::{VoxelGpuError, VoxelGpuEvent, VoxelGpuWorld, VoxelGpuWorldConfig};
+pub use voxel_gpu_world::{
+    VoxelGpuError, VoxelGpuEvent, VoxelGpuLease, VoxelGpuSubmission, VoxelGpuWorld,
+    VoxelGpuWorldConfig,
+};
+
+#[cfg(feature = "gpu")]
+mod voxel_gpu_timing;
+#[cfg(feature = "gpu")]
+pub use voxel_gpu_timing::VoxelGpuTimes;

@@ -340,8 +340,17 @@ impl VoxelGpuResidency {
         publication
     }
     pub fn release_completed(&mut self, completed_submission: u64) {
-        for slot in &mut self.slots {
-            if matches!(slot.state,State::Retiring(until) if until <= completed_submission) {
+        self.release_unleased(completed_submission, |_| true);
+    }
+    pub(crate) fn release_unleased(
+        &mut self,
+        completed_submission: u64,
+        unleased: impl Fn(usize) -> bool,
+    ) {
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if matches!(slot.state,State::Retiring(until) if until <= completed_submission)
+                && unleased(index)
+            {
                 slot.state = State::Free;
             }
         }

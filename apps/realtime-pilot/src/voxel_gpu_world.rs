@@ -1,5 +1,6 @@
 //! Bounded persistent GPU slots with asynchronous completion and local publication.
 use crate::voxel_gpu_buffers::OVERFLOW_FLAGS_BYTES;
+use crate::voxel_gpu_timing::{GpuTiming, TIMING_BYTES};
 use crate::{
     PlanetDesignField, VoxelCoverage, VoxelGpuInput, VoxelGpuMeshConfig, VoxelGpuMesher,
     VoxelGpuOutcome, VoxelGpuResidency, VoxelGpuSlot, VoxelGpuTicket, VoxelGpuWork, VoxelMeshError,
@@ -72,13 +73,42 @@ pub enum VoxelGpuEvent {
     Completed {
         ticket: VoxelGpuTicket,
         elapsed_ms: f64,
+        submission_latency_ms: f64,
+        gpu_times: Option<crate::VoxelGpuTimes>,
         outcome: VoxelGpuOutcome,
     },
     Published(VoxelPublication),
 }
 enum Completion {
-    Job(VoxelGpuTicket, Result<(), wgpu::BufferAsyncError>),
+    Job {
+        ticket: VoxelGpuTicket,
+        result: Result<(), wgpu::BufferAsyncError>,
+        submission_latency_ms: f64,
+    },
     Fence(u64),
+}
+/// Encoded work transferred to the owner of the render queue. Mapping is armed
+/// on that thread only after its submission has been registered.
+pub struct VoxelGpuSubmission {
+    commands: wgpu::CommandBuffer,
+    flags: wgpu::Buffer,
+    ticket: VoxelGpuTicket,
+    sender: mpsc::Sender<Completion>,
+}
+impl VoxelGpuSubmission {
+    pub fn submit(self, queue: &wgpu::Queue) {
+        let submitted = Instant::now();
+        queue.submit([self.commands]);
+        self.flags
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = self.sender.send(Completion::Job {
+                    ticket: self.ticket,
+                    result,
+                    submission_latency_ms: submitted.elapsed().as_secs_f64() * 1000.0,
+                });
+            });
+    }
 }
 struct Pending {
     ticket: VoxelGpuTicket,
@@ -88,6 +118,13 @@ struct Pending {
     start: Instant,
 }
 
+#[derive(Clone)]
+pub struct VoxelGpuLease {
+    pub ticket: VoxelGpuTicket,
+    pub key: VoxelMeshKey,
+    pub slot: Arc<VoxelGpuSlot>,
+}
+
 pub struct VoxelGpuWorld {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -95,7 +132,7 @@ pub struct VoxelGpuWorld {
     field: Arc<PlanetDesignField>,
     config: VoxelGpuWorldConfig,
     residency: VoxelGpuResidency,
-    slots: Vec<Option<VoxelGpuSlot>>,
+    slots: Vec<Option<Arc<VoxelGpuSlot>>>,
     jobs: Vec<Pending>,
     sender: mpsc::Sender<Completion>,
     receiver: mpsc::Receiver<Completion>,
@@ -170,6 +207,12 @@ impl VoxelGpuWorld {
     pub fn failed(&self) -> impl Iterator<Item = &VoxelMeshKey> {
         self.residency.failed()
     }
+    pub fn resident_bytes(&self) -> u64 {
+        self.residency.residents().count() as u64 * self.config.mesh.slot_bytes()
+    }
+    pub fn retiring_bytes(&self) -> u64 {
+        self.residency.retiring() as u64 * self.config.mesh.slot_bytes()
+    }
     pub fn memory_bytes(&self) -> u64 {
         self.slots.iter().filter(|s| s.is_some()).count() as u64 * self.config.mesh.slot_bytes()
             + self
@@ -187,9 +230,26 @@ impl VoxelGpuWorld {
                 key,
                 self.slots[ticket.slot()]
                     .as_ref()
-                    .expect("resident allocation"),
+                    .expect("resident allocation")
+                    .as_ref(),
             )
         })
+    }
+    /// A draw lease pins the allocation until the consumer and its submitted
+    /// commands have released it. Keep the lease through GPU completion.
+    pub fn resident_leases(&self) -> Vec<VoxelGpuLease> {
+        self.residency
+            .residents()
+            .map(|(ticket, key)| VoxelGpuLease {
+                ticket,
+                key: key.clone(),
+                slot: Arc::clone(
+                    self.slots[ticket.slot()]
+                        .as_ref()
+                        .expect("resident allocation"),
+                ),
+            })
+            .collect()
     }
     /// Call immediately after submitting commands that use resident draw buffers
     /// on this queue. Retirement then waits for that submission's completion too.
@@ -201,9 +261,17 @@ impl VoxelGpuWorld {
             let _ = sender.send(Completion::Fence(fence));
         });
     }
-    /// Non-blocking device poll. Reads only two overflow flags (eight bytes) per
-    /// completed job. Density, vertices, indices, and draw counts remain on the GPU.
+    /// Non-blocking device poll. Reads two overflow flags and optional stage
+    /// timestamps. Density, vertices, indices, and draw counts remain on the GPU.
     pub fn update(&mut self) -> Result<Vec<VoxelGpuEvent>, VoxelGpuError> {
+        let queue = self.queue.clone();
+        self.update_with_submit(|submission| submission.submit(&queue))
+    }
+    /// Preparation and encoding run here; the caller owns command submission.
+    pub fn update_with_submit(
+        &mut self,
+        mut submit: impl FnMut(VoxelGpuSubmission),
+    ) -> Result<Vec<VoxelGpuEvent>, VoxelGpuError> {
         if self.stopped {
             return Err(VoxelGpuError::Stopped);
         }
@@ -217,7 +285,11 @@ impl VoxelGpuWorld {
                 Completion::Fence(fence) => {
                     self.completed_submission = self.completed_submission.max(fence)
                 }
-                Completion::Job(ticket, result) => {
+                Completion::Job {
+                    ticket,
+                    result,
+                    submission_latency_ms,
+                } => {
                     if let Err(error) = result {
                         self.stopped = true;
                         return Err(VoxelGpuError::Map(error));
@@ -229,7 +301,14 @@ impl VoxelGpuWorld {
                         .expect("pending completion");
                     let job = self.jobs.remove(index);
                     let mapped = job.flags.slice(..).get_mapped_range();
-                    let flags: &[u32] = bytemuck::cast_slice(&mapped);
+                    let flags: &[u32] =
+                        bytemuck::cast_slice(&mapped[..OVERFLOW_FLAGS_BYTES as usize]);
+                    let gpu_times = job.work.timing.as_ref().map(|_| {
+                        GpuTiming::times(
+                            &mapped[OVERFLOW_FLAGS_BYTES as usize..],
+                            self.queue.get_timestamp_period(),
+                        )
+                    });
                     let outcome = if flags.iter().any(|&flag| flag != 0) {
                         VoxelGpuOutcome::Failed
                     } else {
@@ -243,6 +322,8 @@ impl VoxelGpuWorld {
                         ticket,
                         elapsed_ms: job.start.elapsed().as_secs_f64() * 1000.0,
                         outcome,
+                        gpu_times,
+                        submission_latency_ms,
                     });
                 }
             }
@@ -251,7 +332,12 @@ impl VoxelGpuWorld {
         if !publication.installed.is_empty() || !publication.retired.is_empty() {
             events.push(VoxelGpuEvent::Published(publication));
         }
-        self.residency.release_completed(self.completed_submission);
+        self.residency
+            .release_unleased(self.completed_submission, |index| {
+                self.slots[index]
+                    .as_ref()
+                    .is_none_or(|slot| Arc::strong_count(slot) == 1)
+            });
         while let Some(request) = self.residency.admit() {
             let start = Instant::now();
             let plan = VoxelTransitionPlan::new(request.key);
@@ -269,7 +355,7 @@ impl VoxelGpuWorld {
             }
             if self.slots[request.ticket.slot()].is_none() {
                 self.slots[request.ticket.slot()] =
-                    Some(VoxelGpuSlot::new(&self.device, self.config.mesh)?);
+                    Some(Arc::new(VoxelGpuSlot::new(&self.device, self.config.mesh)?));
             }
             let slot = self.slots[request.ticket.slot()].as_ref().unwrap();
             let work = self.mesher.prepare(
@@ -280,7 +366,7 @@ impl VoxelGpuWorld {
             )?;
             let flags = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("voxel overflow completion"),
-                size: OVERFLOW_FLAGS_BYTES,
+                size: OVERFLOW_FLAGS_BYTES + work.timing.as_ref().map_or(0, |_| TIMING_BYTES),
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
@@ -298,15 +384,23 @@ impl VoxelGpuWorld {
                 flag_bytes,
                 flag_bytes,
             );
-            self.queue.submit([encoder.finish()]);
+            if let Some(timing) = &work.timing {
+                encoder.copy_buffer_to_buffer(
+                    &timing.resolved,
+                    0,
+                    &flags,
+                    OVERFLOW_FLAGS_BYTES,
+                    TIMING_BYTES,
+                );
+            }
             self.last_submission += 1;
-            let sender = self.sender.clone();
             let ticket = request.ticket;
-            flags
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    let _ = sender.send(Completion::Job(ticket, result));
-                });
+            submit(VoxelGpuSubmission {
+                commands: encoder.finish(),
+                flags: flags.clone(),
+                ticket,
+                sender: self.sender.clone(),
+            });
             events.push(VoxelGpuEvent::Submitted {
                 ticket,
                 preparation_ms,

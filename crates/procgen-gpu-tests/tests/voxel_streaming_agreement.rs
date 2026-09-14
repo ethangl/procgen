@@ -19,6 +19,10 @@ const CONFIG: VoxelGpuMeshConfig = VoxelGpuMeshConfig {
 #[test]
 fn voxel_transition_wgsl_validates_without_a_device() {
     validate_wgsl("voxel transition", &voxel_transition_shader());
+    validate_wgsl(
+        "voxel direct rendering",
+        include_str!("../../../apps/realtime-pilot/src/physical_gpu.wgsl"),
+    );
 }
 fn position(x: i32, y: i32, z: i32) -> VoxelPosition {
     VoxelPosition {
@@ -387,8 +391,14 @@ fn settle(world: &mut VoxelGpuWorld) -> Run {
                     run.preparation_ms += preparation_ms;
                     run.encoding_ms += encoding_ms;
                 }
-                VoxelGpuEvent::Completed { outcome, .. } => {
-                    assert!(matches!(outcome, VoxelGpuOutcome::Ready))
+                VoxelGpuEvent::Completed {
+                    outcome, gpu_times, ..
+                } => {
+                    assert!(matches!(outcome, VoxelGpuOutcome::Ready));
+                    if let Some(times) = gpu_times {
+                        assert!(times.density_ms > 0.0 && times.density_ms.is_finite());
+                        assert!(times.extraction_ms > 0.0 && times.extraction_ms.is_finite());
+                    }
                 }
                 VoxelGpuEvent::Published(p) => {
                     if !p.installed.is_empty() && run.first_publication_ms == 0.0 {
@@ -480,9 +490,32 @@ fn saved_terrain_stream_reuses_retires_cancels_and_reproduces_slots() {
     encoder.copy_buffer_to_buffer(read_source, 0, &sink, 0, 32);
     queue.submit([encoder.finish()]);
     world.track_draw_submission();
+    let drawn = world.resident_leases();
     world.set_coverage(&b, position(4_903_255, 80, 16)).unwrap();
     let moved = settle(&mut world);
     let second = snapshot(&device, &queue, &world, root);
+    assert!(
+        world.retiring() > 0,
+        "draw leases must prevent slot reuse after GPU completion"
+    );
+    for lease in &drawn {
+        let old = &first[&lease.key];
+        if old.regular_vertices.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            readback::<VoxelMeshVertex>(
+                &device,
+                &queue,
+                &lease.slot.regular.vertices,
+                old.regular_vertices.len()
+            ),
+            old.regular_vertices
+        );
+    }
+    drop(drawn);
+    world.update().unwrap();
+    assert_eq!(world.retiring(), 0);
     assert!(
         moved.submitted > 0 && moved.submitted < b.leaves().len(),
         "{} of {} chunks changed",
@@ -625,4 +658,103 @@ fn gpu_failures_keep_previous_coverage_and_memory_reservations() {
     assert!(matches!(limited.update(), Err(VoxelGpuError::MemoryBudget)));
     assert_eq!(limited.resident_slots().next().unwrap().0, ticket);
     assert!(limited.memory_bytes() <= budget);
+}
+
+#[test]
+fn native_device_orbit_meshes_stay_inside_their_chunks() {
+    use procgen_gpu_tests::block_on;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else {
+            wgpu::Backends::VULKAN
+        },
+        ..Default::default()
+    });
+    let adapter = block_on(instance.request_adapter(&Default::default())).unwrap();
+    let mut features = adapter.features();
+    if adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu {
+        features.remove(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS);
+    }
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: features,
+        required_limits: adapter.limits(),
+        experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
+        ..Default::default()
+    }))
+    .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(include_str!("../../../planet-design.json")).unwrap();
+    let design: PlanetDesignConfig = serde_json::from_value(json["design"].clone()).unwrap();
+    let field = Arc::new(design.validate().unwrap());
+    let camera = position(14_700_000, 0, 0);
+    let coverage = select_voxel_coverage(&field, camera, 512, 4096).unwrap();
+    let mut world = VoxelGpuWorld::new(
+        &device,
+        &queue,
+        field,
+        VoxelGpuWorldConfig {
+            stream: VoxelStreamConfig {
+                max_slots: 128,
+                max_in_flight: 2,
+            },
+            mesh: CONFIG,
+            memory_budget_bytes: 1024 * 1024 * 1024,
+        },
+    )
+    .unwrap();
+    let mut current = VoxelCoverage::new(vec![VoxelChunkAddress::root()]).unwrap();
+    world.set_coverage(&current, camera).unwrap();
+    let mut pending = Vec::new();
+    world
+        .update_with_submit(|submission| pending.push(submission))
+        .unwrap();
+    assert!(!pending.is_empty());
+    device.poll(wgpu::PollType::Poll).unwrap();
+    world
+        .update_with_submit(|submission| pending.push(submission))
+        .unwrap();
+    assert_eq!(
+        world.resident_slots().count(),
+        0,
+        "encoding alone cannot publish work"
+    );
+    for submission in pending {
+        submission.submit(&queue);
+    }
+    settle(&mut world);
+    while current.leaves() != coverage.leaves() {
+        current = current.step_toward(&coverage, camera).unwrap();
+        world.set_coverage(&current, camera).unwrap();
+        settle(&mut world);
+    }
+    for (_, key, slot) in world.resident_slots() {
+        for part in [&slot.regular, &slot.transition] {
+            let mesh = mesh(&device, &queue, key.address(), part);
+            let span = key.address().span_m() as f64;
+            for vertex in mesh.vertices() {
+                let p = key.address().origin();
+                let origin = [p.x_m, p.y_m, p.z_m];
+                let r = (0..3)
+                    .map(|i| {
+                        (origin[i] as f64 + vertex.anchor_m[i] as f64 + vertex.offset_m[i] as f64)
+                            .powi(2)
+                    })
+                    .sum::<f64>()
+                    .sqrt();
+                assert!(
+                    (4_500_000.0..5_300_000.0).contains(&r),
+                    "invalid orbit radius {r}, {key:?}, {vertex:?}"
+                );
+                for axis in 0..3 {
+                    let local = vertex.anchor_m[axis] as f64 + vertex.offset_m[axis] as f64;
+                    assert!(
+                        (0.0..=span).contains(&local),
+                        "{key:?} invalid local vertex {vertex:?}"
+                    );
+                }
+            }
+        }
+    }
+    println!("orbit vertices within radial bounds");
 }

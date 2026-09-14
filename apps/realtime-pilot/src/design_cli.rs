@@ -6,6 +6,8 @@ use std::{error::Error, path::PathBuf};
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
+    let mut record = None;
+    let mut backend = None;
     let mut seed = None;
     let mut path = None;
     let mut output = None;
@@ -21,6 +23,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--design" => {}
+            "--explore-record" => {
+                record = Some(PathBuf::from(
+                    args.next().ok_or("--explore-record needs a CSV path")?,
+                ))
+            }
+            "--backend" => {
+                let value = args.next().ok_or("--backend needs gpu or cpu")?;
+                if !matches!(value.as_str(), "gpu" | "cpu") {
+                    return Err("--backend needs gpu or cpu".into());
+                }
+                backend = Some(value);
+            }
             "--seed" => seed = Some(args.next().ok_or("--seed needs u64")?.parse()?),
             "--design-file" => {
                 path = Some(PathBuf::from(
@@ -81,7 +95,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore (orbit, flight, and walking); --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens the physical planet and octave editor. --write-design saves the full config."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second native route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens the physical planet and octave editor. --write-design saves the full config."
                 );
                 return Ok(());
             }
@@ -105,6 +119,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     }
     if mode != DesignMode::ChunkAudit && (chunk_lod.is_some() || chunk_point.is_some()) {
         return Err("--chunk-lod/--chunk-point require --check-chunks".into());
+    }
+    if record.is_some() && backend.as_deref() == Some("cpu") {
+        return Err("--explore-record requires the GPU exploration backend".into());
+    }
+    if record.is_some() && mode != DesignMode::Explore {
+        return Err("--explore-record requires --explore".into());
+    }
+    if backend.is_some() && mode != DesignMode::Explore {
+        return Err("--backend requires --explore".into());
     }
     if path.is_some() && seed.is_some() {
         return Err("--design-file includes its seed; do not also pass --seed".into());
@@ -205,7 +228,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             crate::design_file::save(p, &config)?;
         }
         if mode == DesignMode::Explore {
-            crate::physical_inspector::run(config, path);
+            let backend = match backend.as_deref().unwrap_or("gpu") {
+                "gpu" => crate::physical_gpu::ExplorationBackend::Gpu,
+                "cpu" => crate::physical_gpu::ExplorationBackend::Cpu,
+                _ => unreachable!("validated backend"),
+            };
+            let record = record
+                .map(crate::physical_record::PhysicalRecord::new)
+                .transpose()?;
+            crate::physical_inspector::run(config, path, backend, record);
         } else {
             crate::design_inspector::run(config, preview, output.or(path));
         }

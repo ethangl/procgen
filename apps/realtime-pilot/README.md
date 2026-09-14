@@ -91,16 +91,30 @@ orbit distance or flight speed. The player has a 1.7 m eye height and walks at
 4 m/s. The panel distinguishes reference altitude, measured ground clearance,
 and the height-field estimate.
 
-The viewer loads your saved octave settings. Edit and save in the existing
-`--design` editor, then launch exploration again. Neutral, LOD-color, and normal
-views are available. A complete old mesh stays visible until a replacement is
-fully uploaded. Upload admission is capped at 512 KiB per frame; collision
-builds and replaces independently. Selection shares refinement across octants
-at camera boundaries. The retuned 4,900 km preset builds about 5.5 million ground
-triangles in 37 seconds on the tested M1 Max, with 83.7 MiB of source density and
-320 MiB of allocated CPU mesh payload. Visual LOD can lag travel. The leaf cap
-does not guarantee one-meter visual spacing everywhere in the collision cube. Replacement pops and further
-geometry filtering remain open; Windows/Vulkan validation is pending.
+The viewer loads your saved octave settings and uses GPU exploration by default.
+Edit and save in the `--design` editor, then launch exploration again. Neutral,
+LOD-color, and normal views are available. Density and mesh generation run on
+Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
+preparation run on a worker, with complete local replacements and independent
+CPU collision. Saved octave settings are unchanged.
+
+Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
+retains complete mesh replacement and its 512 KiB per-frame upload limit. There
+is no automatic backend fallback.
+
+Record the fixed 90-second native orbit/descent/walk/flight route:
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json --backend gpu \
+  --explore-record g4-route.csv
+```
+
+This writes frame/stage timings and six adjacent PNG captures, then exits.
+The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g4-gpu-exploration-integration)
+records Metal measurements and remaining limits. Whole-planet voxel coverage
+still consumes several GiB; distant coverage, filtering, replacement latency,
+and Windows/Vulkan validation remain open.
 
 Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
 
@@ -111,11 +125,11 @@ cargo run -p procgen-realtime-pilot --no-default-features -- \
 
 ## GPU generation work
 
-GPU generation and incremental chunk replacement are required for the next
-phase. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
+GPU generation and incremental chunk replacement are integrated. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
 G1 supplies a WGSL density kernel and CPU/GPU agreement checks. G2 adds bounded
 uniform-chunk meshing, deterministic scans, and GPU vertex/index/draw buffers.
-G3 adds 2:1 transitions and bounded incremental GPU residency.
+G3 adds 2:1 transitions and bounded incremental GPU residency. G4 connects these
+buffers to the exploration viewer and keeps preparation off the render thread.
 It runs on Metal on macOS and Vulkan on Windows/Linux:
 
 ```sh
@@ -136,13 +150,12 @@ GPU density directly into extraction without an intermediate readback.
 
 The streaming audit checks mixed-LOD seams, local publication, slot reuse,
 cancellation, retirement, overflow, memory limits, and a fixed route through the
-saved terrain. Normal generation reads back only eight bytes of overflow flags
-per job. The optional `gpu` feature owns the wgpu implementation; tests enable it
-explicitly and use the same encoder as the residency owner.
-
-The exploration viewer still uses CPU meshing. G4 connects resident GPU buffers to
-Bevy rendering and moves selection/preparation off the render thread. The current
-GPU audits do not shorten the viewer's complete mesh rebuild.
+saved terrain. Normal generation reads back eight bytes of overflow flags and,
+when supported, 32 bytes of stage timestamps per job. Visual samples, vertices,
+indices, and draw counts remain on the GPU. The `gpu` feature owns the wgpu
+implementation; the inspector enables it, and the audits use the same encoder
+as the residency owner. Native-device tests also check deferred submission,
+draw leases through slot retirement, and timestamp validity.
 
 ## Run the original experiments
 
