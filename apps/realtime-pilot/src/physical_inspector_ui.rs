@@ -49,7 +49,7 @@ pub(super) fn panel(
                 Navigation::Fly => "Fly: W A S D · E / Q up / down",
             });
             ui.label("Hold right mouse to look · scroll adjusts flight speed");
-            ui.label(format!("Flight speed factor: {:.2}×", state.speed_factor));
+            ui.label(format!("Flight speed: {:.1} m/s ({:.2}×)", super::navigation::flight_speed_mps(state.clearance_estimate(), state.speed_factor), state.speed_factor));
             ui.checkbox(&mut state.keep_above_terrain, format!("Keep camera {CAMERA_CLEARANCE_M:.0} m above terrain"));
             ui.separator();
             if state.gpu.is_some() && state.editor.tab != crate::design_panel::Tab::Status {

@@ -88,19 +88,10 @@ pub(super) fn movement(
     if state.mode == Navigation::Fly && input != Vec3::ZERO {
         state.descent = false;
         let clearance = state.clearance_estimate();
-        let speed = if clearance < 64.0 {
-            8.0
-        } else if state.eye.altitude_m(state.field.config().radius_m)
-            < state.field.config().height_limit_m as f64 + 100.0
-        {
-            50.0
-        } else {
-            (clearance * 0.6).clamp(8.0, 2_000_000.0)
-        };
+        let speed = flight_speed_mps(clearance, state.speed_factor);
         let velocity = core(
             (state.rotation * Vec3::new(input.x, 0.0, input.z) + up * input.y).normalize_or_zero()
-                * speed
-                * state.speed_factor,
+                * speed,
         );
         let delta = velocity * dt;
         let next = state.eye.translated(delta);
@@ -117,6 +108,20 @@ pub(super) fn movement(
         }
     }
     state.protect_altitude();
+}
+
+const GROUND_FLIGHT_SPEED_MPS: f32 = 8.0;
+const GROUND_FLIGHT_CLEARANCE_M: f32 = 64.0;
+const FLIGHT_SPEED_PER_CLEARANCE: f32 = 0.6;
+const MAX_FLIGHT_SPEED_MPS: f32 = 2_000_000.0;
+
+/// Retain ground maneuvering speed, then accelerate continuously with clearance.
+/// The design's height limit must not introduce a flight-speed discontinuity.
+pub(super) fn flight_speed_mps(clearance_m: f32, factor: f32) -> f32 {
+    let above_ground_band = (clearance_m - GROUND_FLIGHT_CLEARANCE_M).max(0.0);
+    (GROUND_FLIGHT_SPEED_MPS + above_ground_band * FLIGHT_SPEED_PER_CLEARANCE)
+        .min(MAX_FLIGHT_SPEED_MPS)
+        * factor
 }
 
 /// Rotate the position and view together about the current screen axes.
@@ -165,6 +170,75 @@ mod tests {
         );
         let orientation = Transform::IDENTITY.looking_to(-Vec3::X, Vec3::Y).rotation;
         (eye, orientation)
+    }
+
+    #[test]
+    fn all_flight_keys_remain_responsive_across_the_height_envelope() {
+        // Reproduce the reported stall across the old 12,100 m speed boundary.
+        // Exercise the movement system, including keyboard gating and translation.
+        for altitude in [12_099.0, 12_101.0] {
+            for key in [
+                KeyCode::KeyW,
+                KeyCode::KeyA,
+                KeyCode::KeyS,
+                KeyCode::KeyD,
+                KeyCode::KeyQ,
+                KeyCode::KeyE,
+            ] {
+                let mut config = procgen_realtime_pilot::PlanetDesignConfig::starter(42);
+                config.radius_m = 256_000.;
+                config.octaves.iter_mut().for_each(|o| o.enabled = false);
+                let mut state = Inspector::new(
+                    crate::design_file::DesignFile::new(config),
+                    None,
+                    crate::physical_gpu_bridge::ExplorationBackend::Gpu,
+                    None,
+                );
+                state.mode = Navigation::Fly;
+                state.speed_factor = 0.9;
+                state.set_radial(altitude);
+                let before = state.eye;
+                let mut keys = ButtonInput::<KeyCode>::default();
+                keys.press(key);
+                let mut time = Time::<Real>::default();
+                time.advance_by(std::time::Duration::from_secs_f32(1.0 / 120.0));
+                let mut app = App::new();
+                app.insert_non_send_resource(state)
+                    .insert_resource(time)
+                    .insert_resource(keys)
+                    .init_resource::<ButtonInput<MouseButton>>()
+                    .init_resource::<AccumulatedMouseMotion>()
+                    .init_resource::<AccumulatedMouseScroll>()
+                    .init_resource::<bevy_egui::EguiUserTextures>()
+                    .add_systems(Update, movement);
+                app.world_mut().spawn(bevy_egui::PrimaryEguiContext);
+                app.update();
+                let state = app.world_mut().non_send_resource_mut::<Inspector>();
+                let traveled = (state.eye.relative_to(before.anchor())
+                    - before.relative_to(before.anchor()))
+                .length();
+                assert!(
+                    traveled > 40.0 && traveled < 60.0,
+                    "{key:?} at {altitude} moved {traveled} m; high-altitude input must not collapse to ground speed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flight_speed_preserves_ground_control_and_varies_continuously_to_orbit() {
+        for clearance in [-100.0, 0.0, 5.0, 63.0, 64.0] {
+            assert_eq!(flight_speed_mps(clearance, 1.0), 8.0);
+        }
+        assert!(flight_speed_mps(64.01, 1.0) - flight_speed_mps(64.0, 1.0) < 0.01);
+        let mut previous = 0.0;
+        for clearance in [5.0, 64.0, 128.0, 1_000.0, 12_000.0, 100_000.0, 10_000_000.0] {
+            let speed = flight_speed_mps(clearance, 1.0);
+            assert!(speed >= previous && speed <= 2_000_000.0);
+            previous = speed;
+        }
+        assert_eq!(flight_speed_mps(5.0, 0.25), 2.0);
+        assert_eq!(flight_speed_mps(5.0, 8.0), 64.0);
     }
 
     #[test]
