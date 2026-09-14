@@ -49,16 +49,16 @@ fn sphere_roots_shore_occlusion_and_underwater_depth() {
                 Vec3::Z * altitude,
             );
             let camera = physical_ocean::OceanCamera::new(eye, radius as f32, 0.0);
-            let mut frame = [0f32; 72];
+            let mut frame = [0f32; 64];
             // Reverse-Z perspective, near 1 m, eye at the relative origin.
             frame[..16].copy_from_slice(&[
                 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., -1., 0., 0., 1., 0.,
             ]);
-            frame[40..56].copy_from_slice(&[
+            frame[32..48].copy_from_slice(&[
                 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0., 0., -1., 0.,
             ]);
-            frame[64..68].copy_from_slice(&camera.radial);
-            frame[68..72].copy_from_slice(&camera.sphere);
+            frame[56..60].copy_from_slice(&camera.radial);
+            frame[60..64].copy_from_slice(&camera.sphere);
             let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: bytemuck::cast_slice(&frame),

@@ -1,5 +1,10 @@
 # Real-time pilot: physical scale and octree LOD
 
+Current viewer: [GPU height terrain, oceans, and flight](realtime-world-flight-viewer.md).
+Runtime local voxels, walking, and collision have been removed. The implementation
+sequence and measurements below describe the earlier voxel pilot; its reusable
+generation code and explicit CPU/GPU audits remain.
+
 Status: slice 1 implements physical broad terrain, an octave editor, and bounded
 CPU height previews. Slice 2a adds octree addresses and canonical density chunks
 with one-meter finest spacing. Slice 2b adds bounded camera-driven density

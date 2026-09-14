@@ -13,7 +13,11 @@ noise-preview and local-volume editing windows are removed; their generation
 code and headless audits remain. The original radius-4 streaming experiment
 still runs through `--stream`. The GPU viewer also has a first
 [ocean rendering slice](realtime-world-oceans.md), with live sea level and explicit
-saving alongside terrain settings.
+saving alongside terrain settings. The current [flight viewer](realtime-world-flight-viewer.md)
+uses only GPU height tiles and oceans, with optional radial camera protection.
+Walking and runtime local voxels/collision are removed; their reusable generators
+and explicit audits remain. The original gameplay experiments described below
+are historical scope, not requirements for the default viewer.
 
 ## Purpose
 

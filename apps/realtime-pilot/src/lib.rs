@@ -231,3 +231,6 @@ pub use height_mesh::{
 
 mod height_tile;
 pub use height_tile::{HEIGHT_QUADS, HEIGHT_SIDE, HEIGHT_VERTEX_COUNT, HeightTile};
+
+mod camera_clearance;
+pub use camera_clearance::{CAMERA_CLEARANCE_M, keep_camera_above_terrain};

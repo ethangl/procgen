@@ -95,7 +95,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second native route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU orbit/descent exploration with live octave controls, oceans, and planet-design-300km.json. Sea level in the Design tab updates immediately; Save controls writes terrain and ocean settings. Oceans are visual only on the GPU backend. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nOrbit and flight: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second orbit/descent/flight route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU height terrain with live octave controls, oceans, and planet-design-300km.json. Orbit and free flight replace walking and runtime voxels/collision. Optional radial camera protection keeps 5 m terrain clearance; it is not swept collision. Sea level in the Design tab updates immediately; Save controls writes terrain and ocean settings. Oceans are visual only on the GPU backend. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
                 );
                 return Ok(());
             }
@@ -116,7 +116,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             | DesignMode::SurfaceAudit
     ) && preview_explicit
     {
-        return Err("voxel modes do not accept height-preview options".into());
+        return Err("height-preview options require --check".into());
     }
     if mode != DesignMode::ChunkAudit && (chunk_lod.is_some() || chunk_point.is_some()) {
         return Err("--chunk-lod/--chunk-point require --check-chunks".into());

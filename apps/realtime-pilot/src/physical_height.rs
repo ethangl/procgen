@@ -1,7 +1,7 @@
 //! Immutable height tile cache with bounded batch overlap and atomic publication.
 pub const HEIGHT_BATCHES_IN_FLIGHT: usize = 2;
 use crate::physical_gpu_bridge::{
-    GpuGeneration, HeightFrame, HeightSubmission, SURFACE_BLEND_SECONDS, TerrainSubmission,
+    GpuGeneration, HeightFrame, HeightSubmission, SURFACE_BLEND_SECONDS,
 };
 use procgen_realtime_pilot::HeightTile;
 use procgen_realtime_pilot::{
@@ -137,10 +137,10 @@ impl HeightStream {
             bridge
                 .shared
                 .submit
-                .send(TerrainSubmission::Height(HeightSubmission {
+                .send(HeightSubmission {
                     commands: encoder.finish(),
                     completed,
-                }))
+                })
                 .expect("render queue owner");
             pending.receipts.push(receipt);
         }
