@@ -3,7 +3,8 @@
 Status: G1 through G5 are implemented. Physical exploration uses GPU height tiles
 and local voxel geometry by default; `--backend cpu` selects the CPU visual audit.
 Metal validation and route measurements are recorded below. Windows/Vulkan
-execution remains pending; the two-host G5 acceptance is not yet closed.
+results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
+Both hosts have completed the G5 routes; visual and measurement gaps remain.
 This replaces the CPU-only visual generation plan for the physical-planet pilot.
 The original saved terrain settings remain unchanged. G5 adds a separate 300 km
 comparison preset. The earlier world pipeline is unrelated.
@@ -100,7 +101,7 @@ of potentials. Warm dispatch plus completion takes about 13 ms; CPU sampling
 measured 217–318 ms across local runs. Audit readback adds about 2–3.4 ms.
 Shader/pipeline creation measured 134 ms initially and about 2 ms with the driver
 cache warm. These are local observations with other work running, not guaranteed
-latency bounds. Vulkan execution remains pending on the Windows host.
+latency bounds. See the [Windows/Vulkan results](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 
 Validation also passes the existing pilot suites with and without inspector
 features, an independent f64 oracle test for the fixed square root, shared
@@ -204,7 +205,7 @@ A warm 13-chunk fixture batch, including the checkerboard, took 9.94 ms with eac
 chunk's passes adjacent and 28.75 ms with passes interleaved across chunks. Both
 schedules returned identical output. These are local observations, not budgets.
 Pipeline creation measured 264 ms cold and about 4 ms with the driver cache warm.
-Vulkan execution remains pending on the Windows host. These checks do not measure
+See the [Windows/Vulkan results](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14). These checks do not measure
 viewer frame rate: mixed LOD, persistent residency, and rendering remain G3/G4.
 
 Validation passes both Metal density/meshing suites, 76 pilot tests without the
@@ -339,7 +340,7 @@ sparse index reduced selection/balancing from about 244 ms to 46 ms. G4 must bud
 that larger coverage and move selection and topology preparation off the render
 thread; these timings do not meet its 2 ms CPU frame target yet. GPU generation
 itself is asynchronous, but job preparation currently runs during admission.
-Vulkan execution remains pending on the Windows host.
+See the [Windows/Vulkan results](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 
 Validation passes the pilot suites with and without the inspector, the focused
 residency regression, all three Metal density/meshing/streaming suites, Clippy
@@ -451,7 +452,7 @@ collision box has reached that resolution.
 Validation includes the pilot suites with and without the inspector, G1/G2/G3
 Metal agreement suites, progressive coverage, direct-render shader validation,
 native device feature/limit tests, queued submission, leased retirement, Clippy,
-and a native viewer build. Vulkan execution remains pending on the Windows host.
+and a native viewer build. See the [Windows/Vulkan results](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 
 ## G5: distant coverage, filtering, and final budgets
 
@@ -594,8 +595,9 @@ errors were 1.281 m for the large planet and 0.0945 m for the small planet,
 within the documented planetary direction tolerance. These are not changes to
 the much tighter local voxel-density agreement bounds.
 
-Remaining acceptance work is Windows/Vulkan execution and visual refinement of
-skirts and dither transitions. Startup, capture costs and latency outliers still
+Windows/Vulkan execution is recorded in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
+Visual refinement of skirts and dither transitions remains. Startup, capture
+costs and latency outliers still
 need to be considered before treating the measured targets as runtime limits.
 The distant surface now omits unresolved geometry, so its orbital appearance is
 smoother than G4's unfiltered voxel surface. No material detail replaces those
