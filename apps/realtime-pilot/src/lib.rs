@@ -13,6 +13,7 @@ mod mesh;
 mod meter_position;
 mod noise;
 mod physical_audit;
+mod physical_collision;
 mod physical_motion;
 mod physical_terrain;
 mod placement;
@@ -146,6 +147,7 @@ pub use voxel_collision::{
 
 pub use voxel_surface_audit::{VoxelSurfaceAudit, VoxelSurfaceAuditError, audit_voxel_surfaces};
 
+pub use physical_collision::PhysicalCollision;
 pub use physical_motion::{PLAYER_EYE_M, PLAYER_RADIUS_M, PLAYER_SPEED_MPS, PhysicalWalker};
 
 pub use physical_terrain::{PhysicalTerrain, PhysicalTerrainError, PhysicalTerrainFrame};

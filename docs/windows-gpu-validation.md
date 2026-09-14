@@ -203,12 +203,13 @@ summaries; no branch, commit or push was made for this validation.
 ## Surface cleanup: Windows validation pending
 
 The results above predate the smooth surface compositor, height-surface normals,
-local voxel normals, and height coloring. Run the render and terrain tests, then
-repeat the two routes from the repository root:
+local voxel normals, height coloring, and collision continuity. Run the render
+and terrain tests, then repeat the two routes from the repository root:
 
 ```powershell
 $env:WGPU_BACKEND = "vulkan"
 $env:RUST_LOG = "warn,bevy_render::renderer=info"
+cargo test -p procgen-realtime-pilot --no-default-features physical_collision -- --nocapture
 cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
 cargo test -p procgen-gpu-tests --test voxel_mesh_agreement --test voxel_streaming_agreement -- --nocapture --test-threads=1
 cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
@@ -228,3 +229,15 @@ position and density tolerances are unchanged.
 Height normals permit a vector difference of 0.05. Voxel normal components from
 identical density samples permit a difference of 0.00001 times max(abs(CPU), 1).
 Do not retune terrain settings or tolerances during this validation.
+
+The collision follow-up appends `collision_building`, `collision_seconds`,
+`grounded`, and `motion` to each CSV row. `collision_ready` now means the retained
+patch covers the player sphere, not just that a patch exists. For rows where
+`walking` is true, count each `motion` outcome and report any `MissingCoverage`,
+`Overlap`, `SweepLimit`, or `Invalid` with its time and build state. Report landing
+failures separately. A falling player can have valid coverage while `grounded`
+is false. Do not infer uninterrupted contact from the GPU `status` column.
+
+`gpu_stats_fresh` is false on rows that retain the last GPU-statistics snapshot
+because its lock was busy. Collision results on those rows are current and must
+be included when counting movement failures.

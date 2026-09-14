@@ -71,9 +71,11 @@ pub(super) fn panel(
                 None => "Ground clearance (collision): unavailable".into(),
             });
             ui.label(format!("Field clearance estimate: {:.2} m", state.clearance_estimate()));
-            ui.label(if state.collision_busy {
+            ui.label(if state.collision_busy && state.collision.covers(state.collision_position()) {
+                "Nearby collision: retained · replacement building"
+            } else if state.collision_busy {
                 "Nearby collision: building"
-            } else if state.collision.is_some() {
+            } else if state.collision.covers(state.collision_position()) {
                 "Nearby collision: retained"
             } else {
                 "Nearby collision: outside ground range"
@@ -130,7 +132,7 @@ pub(super) fn panel(
                 ("Build source", state.source_bytes),
                 ("Build mesh", state.mesh_bytes),
                 ("Displayed buffers", state.display_bytes),
-                ("Collision", state.collision.as_ref().map_or(0, VoxelCollision::payload_bytes)),
+                ("Collision", state.collision.patch().map_or(0, VoxelCollision::payload_bytes)),
             ] {
                 ui.label(format!("{label}: {:.1} MiB", bytes as f32 / 1048576.0));
             }

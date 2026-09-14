@@ -1,6 +1,6 @@
 //! Fixed native orbit/descent/walk/flight route and frame measurements.
 use crate::physical_gpu_bridge::GpuStats;
-use procgen_realtime_pilot::MeterPosition;
+use procgen_realtime_pilot::{ContactError, MeterPosition, VoxelCollisionError};
 use std::{
     fs::File,
     io::{self, BufWriter, Write},
@@ -8,12 +8,43 @@ use std::{
     time::Instant,
 };
 
+#[derive(Clone, Copy, Debug)]
+pub enum MotionOutcome {
+    Idle,
+    Advanced,
+    MissingCoverage,
+    NoLanding,
+    Overlap,
+    SweepLimit,
+    Invalid,
+}
+impl MotionOutcome {
+    pub fn from_error(error: &VoxelCollisionError) -> Self {
+        match error {
+            VoxelCollisionError::Contact(ContactError::MissingCoverage) => Self::MissingCoverage,
+            VoxelCollisionError::Contact(ContactError::NoLanding) => Self::NoLanding,
+            VoxelCollisionError::Contact(ContactError::SweepLimit) => Self::SweepLimit,
+            VoxelCollisionError::Overlap => Self::Overlap,
+            _ => Self::Invalid,
+        }
+    }
+}
+pub struct ContactFrame {
+    pub walking: bool,
+    pub grounded: bool,
+    pub covered: bool,
+    pub building: bool,
+    pub build_seconds: f32,
+    pub motion: MotionOutcome,
+}
+
 pub struct PhysicalRecord {
     start: Instant,
     output: BufWriter<File>,
     path: PathBuf,
     phase: usize,
     capture: usize,
+    last_stats: GpuStats,
 }
 #[derive(Clone, Copy)]
 pub enum RouteAction {
@@ -29,7 +60,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,resident,finest_spacing_m,drawn,target,in_flight,retiring,gpu_bytes,resident_bytes,retiring_bytes,selection_ms,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,scheduler_ms,draw_ms,gpu_density_ms,gpu_extraction_ms,x_m,y_m,z_m,walking,collision_ready,surface_target_bytes,status"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,resident,finest_spacing_m,drawn,target,in_flight,retiring,gpu_bytes,resident_bytes,retiring_bytes,selection_ms,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,scheduler_ms,draw_ms,gpu_density_ms,gpu_extraction_ms,x_m,y_m,z_m,walking,collision_ready,surface_target_bytes,status,collision_building,collision_seconds,grounded,motion,gpu_stats_fresh"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -37,6 +68,7 @@ impl PhysicalRecord {
             path,
             phase: 0,
             capture: 0,
+            last_stats: GpuStats::default(),
         })
     }
     pub fn action(&mut self) -> Option<RouteAction> {
@@ -74,19 +106,31 @@ impl PhysicalRecord {
     pub fn write(
         &mut self,
         frame_ms: f32,
-        stats: &GpuStats,
+        stats: Option<&GpuStats>,
         eye: MeterPosition,
-        walking: bool,
-        collision_ready: bool,
+        contact: ContactFrame,
     ) -> io::Result<()> {
+        let gpu_stats_fresh = stats.is_some();
+        if let Some(stats) = stats {
+            self.last_stats.clone_from(stats);
+        }
+        let stats = &self.last_stats;
         let p = eye.anchor();
+        let ContactFrame {
+            walking,
+            covered: collision_ready,
+            building,
+            build_seconds,
+            grounded,
+            motion,
+        } = contact;
         let (density, extraction) = stats
             .gpu_times
             .map(|t| (t.density_ms.to_string(), t.extraction_ms.to_string()))
             .unwrap_or_default();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{},{},{},{walking},{collision_ready},{},{:?}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{},{},{},{walking},{collision_ready},{},{:?},{building},{build_seconds:.3},{grounded},{motion:?},{gpu_stats_fresh}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -121,5 +165,68 @@ impl PhysicalRecord {
     }
     pub fn finish(&mut self) -> io::Result<()> {
         self.output.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use procgen_realtime_pilot::VoxelPosition;
+    #[test]
+    fn collision_failures_are_recorded_even_when_gpu_statistics_are_busy() {
+        let path =
+            std::env::temp_dir().join(format!("procgen-contact-record-{}.csv", std::process::id()));
+        let mut record = PhysicalRecord::new(path.clone()).unwrap();
+        let stats = GpuStats {
+            resident: 125,
+            ..Default::default()
+        };
+        let eye = MeterPosition::new(
+            VoxelPosition {
+                x_m: 300_000,
+                y_m: 0,
+                z_m: 0,
+            },
+            procgen_core::Vec3::ZERO,
+        );
+        for (stats, motion, covered) in [
+            (Some(&stats), MotionOutcome::Advanced, true),
+            (None, MotionOutcome::MissingCoverage, false),
+        ] {
+            record
+                .write(
+                    8.0,
+                    stats,
+                    eye,
+                    ContactFrame {
+                        walking: true,
+                        grounded: false,
+                        covered,
+                        building: true,
+                        build_seconds: 1.5,
+                        motion,
+                    },
+                )
+                .unwrap();
+        }
+        record.finish().unwrap();
+        drop(record);
+        let csv = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let rows: Vec<_> = csv
+            .lines()
+            .map(|line| line.split(',').collect::<Vec<_>>())
+            .collect();
+        assert_eq!(rows.len(), 3, "every movement update has a row");
+        let value = |row: usize, name| rows[row][rows[0].iter().position(|&h| h == name).unwrap()];
+        assert_eq!(value(1, "gpu_stats_fresh"), "true");
+        assert_eq!(value(2, "gpu_stats_fresh"), "false");
+        assert_eq!(
+            value(2, "resident"),
+            "125",
+            "retain the last GPU snapshot explicitly"
+        );
+        assert_eq!(value(2, "motion"), "MissingCoverage");
+        assert_eq!(value(2, "collision_ready"), "false");
     }
 }

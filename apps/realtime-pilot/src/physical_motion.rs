@@ -8,6 +8,8 @@ pub const PLAYER_RADIUS_M: f32 = 0.4;
 pub const PLAYER_EYE_M: f32 = 1.7;
 pub const PLAYER_SPEED_MPS: f32 = 4.0;
 const WALKABLE_COSINE: f32 = 0.65;
+const GRAVITY_MPS2: f32 = 9.81;
+const COLLISION_LOOKAHEAD_SECONDS: f32 = 1.0;
 
 #[derive(Clone)]
 pub struct PhysicalWalker {
@@ -46,6 +48,28 @@ impl PhysicalWalker {
     pub fn grounded(&self) -> bool {
         self.grounded
     }
+    /// One second of requested movement and gravity for collision prefetch only.
+    /// This does not move the player or replace triangle contact queries.
+    pub fn collision_forecast(&self, input: Vec3) -> MeterPosition {
+        let up = self.center.direction();
+        let velocity = self.tangent(input) * PLAYER_SPEED_MPS + self.velocity;
+        let gravity = if self.grounded {
+            Vec3::ZERO
+        } else {
+            -up * (0.5 * GRAVITY_MPS2 * COLLISION_LOOKAHEAD_SECONDS.powi(2))
+        };
+        self.center
+            .translated(velocity * COLLISION_LOOKAHEAD_SECONDS + gravity)
+    }
+    fn tangent(&self, input: Vec3) -> Vec3 {
+        let up = self.center.direction();
+        let tangent = input - up * input.dot(up);
+        if tangent.length_squared() > 1e-12 {
+            tangent.normalized() * input.length().min(1.0)
+        } else {
+            Vec3::ZERO
+        }
+    }
     /// Missing support leaves the complete previous movement state unchanged.
     pub fn advance(
         &mut self,
@@ -74,16 +98,11 @@ impl PhysicalWalker {
         dt: f32,
     ) -> Result<(), VoxelCollisionError> {
         let up = self.center.direction();
-        let tangent = input - up * input.dot(up);
-        let tangent = if tangent.length_squared() > 1e-12 {
-            tangent.normalized() * input.length().min(1.0)
-        } else {
-            Vec3::ZERO
-        };
+        let tangent = self.tangent(input);
         if self.grounded {
             self.velocity = Vec3::ZERO;
         } else {
-            self.velocity = self.velocity - up * (9.81 * dt);
+            self.velocity = self.velocity - up * (GRAVITY_MPS2 * dt);
         }
         let mut motion = (tangent * PLAYER_SPEED_MPS + self.velocity) * dt;
         let mut p = self.center.relative_to(collision.origin_m());

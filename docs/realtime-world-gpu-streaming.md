@@ -862,3 +862,72 @@ verified in the large run. These were visual checks with compilation and tests
 partly concurrent, so their timings are not performance measurements. Native
 build, formatting, and Clippy with warnings denied pass. Windows/Vulkan validation
 of the ramp remains pending with the other branch follow-ups.
+
+
+## Collision continuity
+
+Collision refresh now checks both the current player center and a one-second
+motion forecast, with the existing 20 m query margin. The walker's forecast uses
+requested tangent movement, current velocity, and gravity when airborne.
+Walking and landing keep requesting collision regardless of the height field's
+estimated clearance; the estimate can exceed 32 m during a fall. Nearby flight
+uses its requested velocity for the same coverage lookahead.
+
+`PhysicalCollision` owns the retained patch and the refresh decision. The build
+center advances by at most half a chunk (16 m) per axis so it still covers the
+position that requested it. Completed work must cover the current player center
+with a one-meter installation margin. A stale completion outside that margin is
+dropped without removing retained support. One collision job remains in flight;
+source sampling, 27-chunk extraction, triangle contact queries, and the movement
+solver are unchanged. Arbitrarily slow work can still reach the coverage edge:
+movement must stop safely there, retain its state, and resume after replacement.
+
+The viewer clears a movement warning after the next successful update. Native
+CSV rows are recorded after movement and append `collision_building`,
+`collision_seconds` (last completed build), `grounded`, and `motion`.
+`collision_ready` now checks player-sphere coverage at the walker center (or eye
+outside walking), rather than testing whether a patch exists. `motion` records
+`Idle`, `Advanced`, `MissingCoverage`, `NoLanding`, `Overlap`, `SweepLimit`, or
+`Invalid`. `status` retains its GPU-stream meaning. This distinguishes a falling
+player from missing coverage and records short movement failures that a later
+screenshot cannot show. If the GPU statistics lock is busy, the recorder retains
+the last GPU snapshot and marks `gpu_stats_fresh` false. It still writes the
+current collision result, so statistics contention cannot hide a movement failure.
+
+The deterministic CPU tests cover stale completion rejection, early requests,
+240 m of walking across multiple chunks, delayed replacement on both saved
+terrain presets, and a twenty-second worker stall that must stop and then resume
+movement. With 1.5 seconds of simulated build latency, the fifteen-second walks
+installed one replacement on the large planet and three on the small planet,
+with zero missing-coverage updates. The small fixture flies forward to the first
+walkable triangle before landing, as the native route does over its steep start.
+All 92 CPU tests pass (89 library and three binary tests).
+
+Both final 90-second native routes completed with exit code 0 on Apple M1 Max /
+Metal. Files are `/tmp/collision-final-large.csv` and
+`/tmp/collision-final-small.csv`, with adjacent screenshots and logs. Every
+walking update reported `Advanced`; none reported missing coverage, overlap,
+iteration exhaustion, or invalid motion. These runs validate coverage through
+replacement, not a promise that the player stays grounded on steep terrain.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Recorded walking updates | 888 | 835 |
+| Walking coverage gaps or failed advances | 0 | 0 |
+| Grounded / falling walking updates | 888 / 0 | 383 / 452 |
+| Walking updates while replacement builds | 65 | 193 |
+| Longest completed collision build | 1.172 s | 1.151 s |
+| Rows retaining older GPU statistics | 20 | 9 |
+
+The small route had 53 `NoLanding` updates while flying over its initially steep
+face, before walking began. It then landed and completed the walk without an
+error. The large route had no landing retries. Successful movement clears the
+warning instead of carrying it into later flight/orbit screenshots. The recorder
+regression test verifies that a collision failure still gets its own row when
+GPU statistics are unavailable. The native build, formatting, and Clippy with
+warnings denied pass. No GPU generation or mesh code changed in this slice.
+
+Windows/Vulkan native validation remains pending in the updated handoff. The
+remaining implementation slices are visible skirt/detail transitions and
+frame/height-replacement latency. Faster-than-covered travel or unusually late
+collision work must still stop safely rather than pass through missing terrain.

@@ -109,7 +109,10 @@ planet coverage and 125 one-meter voxel chunks around nearby ground. Height
 filtering is continuous across tiles; skirts and a 16 m overlap cover the
 surface joins. The GPU viewer blends separately depth-tested height and voxel
 layers across the overlap and during height replacement, without pixel discard
-patterns. CPU collision remains independent.
+patterns. CPU collision remains independent. Nearby collision retains its current
+patch while a replacement builds. Walking forecasts one second of movement and
+gravity to request coverage early, including during falls; a late build stops
+movement at the coverage boundary and resumes it when support arrives.
 
 The **Height** view uses a fixed color ramp from minus to plus the configured
 height limit, measured above the reference radius. The legend shows kilometers;
@@ -138,7 +141,15 @@ cargo run -p procgen-realtime-pilot -- \
   --explore-record g5-route.csv
 ```
 
-This writes frame/stage timings and six adjacent PNG captures, then exits. Live
+This writes frame/stage timings and six adjacent PNG captures, then exits.
+Collision columns include `collision_building`, `collision_seconds`, `grounded`,
+and `motion` after movement each frame. `gpu_stats_fresh` is false when the
+recorder retains the last GPU-statistics snapshot because its lock is busy;
+collision results are still written for that frame. `collision_ready` now checks coverage
+around the player's center rather than whether any old patch exists. `motion`
+distinguishes `Advanced`, `MissingCoverage`, `NoLanding`, `Overlap`, `SweepLimit`,
+`Invalid`, and `Idle`; `status` still describes GPU streaming. A falling player
+can have valid collision coverage without being grounded. Live
 navigation and movement input are disabled during recorded runs.
 The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
 records Metal measurements and remaining limits. The voxel pool is capped at
