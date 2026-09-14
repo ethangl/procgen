@@ -129,8 +129,12 @@ records Metal measurements and remaining limits. The voxel pool is capped at
 Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
 preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
 after initial coverage stayed below 250 ms; initial coverage and height updates
-can slightly exceed it. The render overlap is not a watertight mesh export. Windows/Vulkan execution
-remains to be checked on that host.
+can slightly exceed it. The render overlap is not a watertight mesh export.
+Windows/Vulkan validation on RTX 5070 passed all 12 GPU tests and completed both
+routes. Peak terrain allocation was 188.9 MiB (large) and 229.3 MiB (small).
+Height replacement and frame outliers remain, as do visual overlap and continuous
+contact evidence gaps. See the [Windows results](../../docs/windows-gpu-validation.md#windowsvulkan-validation-2026-09-14)
+for measurements and their limits.
 
 Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
 
