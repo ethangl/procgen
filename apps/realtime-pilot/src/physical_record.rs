@@ -29,7 +29,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,resident,finest_spacing_m,drawn,target,in_flight,retiring,gpu_bytes,resident_bytes,retiring_bytes,selection_ms,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,scheduler_ms,draw_ms,gpu_density_ms,gpu_extraction_ms,x_m,y_m,z_m,walking,collision_ready,status"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,resident,finest_spacing_m,drawn,target,in_flight,retiring,gpu_bytes,resident_bytes,retiring_bytes,selection_ms,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,scheduler_ms,draw_ms,gpu_density_ms,gpu_extraction_ms,x_m,y_m,z_m,walking,collision_ready,surface_target_bytes,status"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -86,7 +86,7 @@ impl PhysicalRecord {
             .unwrap_or_default();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{},{},{},{walking},{collision_ready},{:?}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{},{},{},{walking},{collision_ready},{},{:?}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -115,6 +115,7 @@ impl PhysicalRecord {
             p.x_m,
             p.y_m,
             p.z_m,
+            stats.surface_target_bytes,
             stats.status
         )
     }

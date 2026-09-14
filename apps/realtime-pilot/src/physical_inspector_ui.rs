@@ -94,7 +94,8 @@ pub(super) fn panel(
                     ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
                     ui.label(format!("Chunks: {} resident / {} target · {} pending · {} retiring",s.resident,s.target,s.in_flight,s.retiring));
                     ui.label(format!("{} visible chunks · finest spacing {} m",s.drawn,s.finest_spacing_m.map(|s|s.to_string()).unwrap_or_else(|| "pending".into())));
-                    ui.label(format!("GPU allocation: {:.1} MiB",s.bytes as f64/1048576.0));
+                    ui.label(format!("Terrain buffers: {:.1} MiB",s.bytes as f64/1048576.0));
+                    ui.label(format!("Surface blend targets: {:.1} MiB",s.surface_target_bytes as f64/1048576.0));
                     ui.label(format!("Voxel budget: {:.0} MiB · height tiles capped at {}",procgen_realtime_pilot::LOCAL_GPU_WORLD_CONFIG.memory_budget_bytes as f64/1048576.0,procgen_realtime_pilot::MAX_HEIGHT_TILES));
                     ui.label(format!("Resident {:.1} MiB · retiring {:.1} MiB",s.resident_bytes as f64/1048576.0,s.retiring_bytes as f64/1048576.0));
                     ui.label(format!("Worker selection: {:.2} ms",s.selection_ms));

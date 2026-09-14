@@ -199,3 +199,22 @@ Raw logs, three CSVs, eighteen PNGs, environment details and analysis results
 remain in the ignored local directory `target/windows-gpu-validation/`. No raw
 recordings are added to Git. `analyze.ps1` in that directory reproduces the
 summaries; no branch, commit or push was made for this validation.
+
+## Surface-join follow-up: Windows validation pending
+
+The results above predate the smooth surface compositor. For that follow-up,
+run the new render test and repeat the two routes from the repository root:
+
+```powershell
+$env:WGPU_BACKEND = "vulkan"
+$env:RUST_LOG = "warn,bevy_render::renderer=info"
+cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
+cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-design.json --backend gpu --explore-record target/surface-join-large-vulkan.csv
+cargo run -p procgen-realtime-pilot -- --design --explore --design-file planet-design-300km.json --backend gpu --explore-record target/surface-join-small-vulkan.csv
+```
+
+Record the tested commit and adapter, test results, clean exit, frame timings,
+and both terrain buffer bytes and the new `surface_target_bytes` column. Inspect
+ridge edges, ground views, and return to orbit for stipple, missing coverage, or
+stale surfaces. Record results here. The numerical generation tolerances and
+terrain settings are unchanged; do not retune them during this validation.

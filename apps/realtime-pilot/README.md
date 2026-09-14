@@ -107,7 +107,9 @@ Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
 preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
 planet coverage and 125 one-meter voxel chunks around nearby ground. Height
 filtering is continuous across tiles; skirts and a 16 m overlap cover the
-surface joins. CPU collision remains independent.
+surface joins. The GPU viewer blends separately depth-tested height and voxel
+layers across the overlap and during height replacement, without pixel discard
+patterns. CPU collision remains independent.
 
 Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
 retains complete mesh replacement and its 512 KiB per-frame upload limit. There
@@ -126,7 +128,7 @@ navigation and movement input are disabled during recorded runs.
 The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
 records Metal measurements and remaining limits. The voxel pool is capped at
 300 allocations and 512 MiB; each height snapshot is at most 14.31 MiB.
-Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
+The original G5 Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
 preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
 after initial coverage stayed below 250 ms; initial coverage and height updates
 can slightly exceed it. The render overlap is not a watertight mesh export.
@@ -135,6 +137,14 @@ routes. Peak terrain allocation was 188.9 MiB (large) and 229.3 MiB (small).
 Height replacement and frame outliers remain, as do visual overlap and continuous
 contact evidence gaps. See the [Windows results](../../docs/windows-gpu-validation.md#windowsvulkan-validation-2026-09-14)
 for measurements and their limits.
+
+The surface-join follow-up adds three full-resolution RGBA16F/Depth32F layers:
+36 bytes per physical pixel, reused until the window size changes. The panel and
+CSV (`surface_target_bytes`) report this texture payload separately from terrain
+buffers. At 2880 × 2000 it adds 197.8 MiB; at 2160 × 1500 it adds 111.2 MiB.
+These counts exclude driver padding and the viewer's other render targets.
+See [surface-join validation](../../docs/realtime-world-gpu-streaming.md#surface-join-follow-up)
+for current measurements; the original G5 timings above predate the compositor.
 
 Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
 
@@ -158,6 +168,7 @@ cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
 cargo test -p procgen-gpu-tests --test voxel_mesh_agreement -- --nocapture
 cargo test -p procgen-gpu-tests --test voxel_streaming_agreement -- --nocapture --test-threads=1
 cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
+cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
 ```
 
 This checks real GPU chunk batches, shared halo/parent samples, repeated runs,

@@ -22,6 +22,8 @@ mod physical_record;
 #[cfg(feature = "inspector")]
 mod physical_render;
 #[cfg(feature = "inspector")]
+mod physical_surface_layers;
+#[cfg(feature = "inspector")]
 mod planet_inspector;
 mod replay;
 #[cfg(feature = "inspector")]

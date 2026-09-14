@@ -47,6 +47,7 @@ pub struct GpuStats {
     pub status: String,
     pub height_tiles: usize,
     pub height_bytes: u64,
+    pub surface_target_bytes: u64,
     pub height_update_ms: f64,
     pub resident: usize,
     pub finest_spacing_m: Option<i32>,

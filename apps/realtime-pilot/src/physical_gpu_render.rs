@@ -3,6 +3,10 @@ use crate::physical_gpu::GpuWorker;
 use crate::physical_gpu_bridge::{
     DrawFrame, GpuBridge, HeightFrame, LOCAL_BLEND_M, LOCAL_SURFACE_BIAS_M, SURFACE_BLEND_SECONDS,
 };
+use crate::physical_surface_layers::{
+    COLOR_FORMAT, DEPTH_FORMAT, FRAME_BYTES, SurfaceCompositor, SurfaceLayer, SurfaceLayers,
+    TERRAIN_SHADER,
+};
 use bevy::{
     camera::primitives::{Aabb, Frustum},
     core_pipeline::core_3d::graph::{Core3d, Node3d},
@@ -58,7 +62,7 @@ struct GpuDraw {
     uniform: wgpu::Buffer,
     pipeline: wgpu::RenderPipeline,
     height_pipeline: wgpu::RenderPipeline,
-    old_height_pipeline: wgpu::RenderPipeline,
+    compositor: SurfaceCompositor,
     height_indices: wgpu::Buffer,
     height_index_count: u32,
     height: Option<Arc<HeightFrame>>,
@@ -79,7 +83,7 @@ fn initialize(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: NonZeroU64::new(144),
+                min_binding_size: NonZeroU64::new(FRAME_BYTES),
             },
             count: None,
         }),
@@ -91,7 +95,7 @@ fn initialize(
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("voxel direct render"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("physical_gpu.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADER.into()),
     });
     let make_pipeline = |vertex_entry, fragment_entry, local| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -119,7 +123,7 @@ fn initialize(
                 entry_point: Some(fragment_entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
+                    format: COLOR_FORMAT,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -129,7 +133,7 @@ fn initialize(
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
+                format: DEPTH_FORMAT,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::GreaterEqual,
                 stencil: Default::default(),
@@ -142,7 +146,7 @@ fn initialize(
     };
     let uniform = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("voxel camera"),
-        size: 144,
+        size: FRAME_BYTES,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -162,7 +166,7 @@ fn initialize(
     });
     commands.insert_resource(GpuDraw {
         height_pipeline: make_pipeline("height_vertex", "height_fragment", false),
-        old_height_pipeline: make_pipeline("height_vertex", "old_height_fragment", false),
+        compositor: SurfaceCompositor::new(device, &layout),
         height_indices,
         height_index_count: indices.len() as u32,
         height: None,
@@ -178,8 +182,31 @@ fn initialize(
         bridge.clone(),
     ));
 }
-fn prepare(bridge: Res<GpuBridge>, mut draw: ResMut<GpuDraw>, queue: Res<RenderQueue>) {
+#[derive(Component)]
+struct ViewSurfaces(SurfaceLayers);
+fn prepare(
+    mut commands: Commands,
+    bridge: Res<GpuBridge>,
+    mut draw: ResMut<GpuDraw>,
+    queue: Res<RenderQueue>,
+    device: Res<RenderDevice>,
+    views: Query<(Entity, &ExtractedCamera, Option<&ViewSurfaces>), With<GpuView>>,
+) {
     let start = Instant::now();
+    for (entity, camera, surfaces) in &views {
+        let Some(size) = camera.physical_target_size else {
+            continue;
+        };
+        if size.x == 0 || size.y == 0 {
+            continue;
+        }
+        if surfaces.is_none_or(|s| s.0.size != size.to_array()) {
+            commands.entity(entity).insert(ViewSurfaces(
+                draw.compositor
+                    .create_layers(device.wgpu_device(), size.to_array()),
+            ));
+        }
+    }
     for submission in bridge.submissions.lock().unwrap().try_iter().take(
         procgen_realtime_pilot::LOCAL_GPU_WORLD_CONFIG
             .stream
@@ -221,18 +248,23 @@ impl ViewNode for GpuTerrainNode {
         &'static ExtractedCamera,
         &'static ViewTarget,
         &'static ViewDepthTexture,
+        &'static ViewSurfaces,
     );
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         context: &mut RenderContext<'w>,
-        (settings, frustum, view, camera, target, depth): QueryItem<'w, '_, Self::ViewQuery>,
+        (settings, frustum, view, camera, target, depth, surfaces): QueryItem<
+            'w,
+            '_,
+            Self::ViewQuery,
+        >,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let draw = world.resource::<GpuDraw>();
         let start = Instant::now();
         let matrix = view.clip_from_view * view.world_from_view.to_matrix().inverse();
-        let mut uniform = [0u8; 144];
+        let mut uniform = [0u8; FRAME_BYTES as usize];
         uniform[..64].copy_from_slice(bytemuck::cast_slice(&matrix.to_cols_array()));
         uniform[64..80].copy_from_slice(bytemuck::cast_slice(&settings.anchor));
         uniform[80..96].copy_from_slice(bytemuck::cast_slice(&[
@@ -268,34 +300,39 @@ impl ViewNode for GpuTerrainNode {
         world
             .resource::<RenderQueue>()
             .write_buffer(&draw.uniform, 0, &uniform);
-        let attachment = [Some(target.get_color_attachment())];
-        let mut pass = context
-            .command_encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voxel indirect draw"),
-                color_attachments: &attachment,
-                depth_stencil_attachment: Some(depth.get_attachment(wgpu::StoreOp::Store)),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        if let Some(v) = &camera.viewport {
-            pass.set_viewport(
-                v.physical_position.x as f32,
-                v.physical_position.y as f32,
-                v.physical_size.x as f32,
-                v.physical_size.y as f32,
-                v.depth.start,
-                v.depth.end,
-            );
-        }
-        pass.set_bind_group(0, &draw.group, &[]);
-        pass.set_index_buffer(draw.height_indices.slice(..), wgpu::IndexFormat::Uint32);
-        for (height, pipeline) in [
-            (&draw.previous_height, &draw.old_height_pipeline),
-            (&draw.height, &draw.height_pipeline),
+        let viewport = |pass: &mut wgpu::RenderPass<'_>| {
+            if let Some(v) = &camera.viewport {
+                pass.set_viewport(
+                    v.physical_position.x as f32,
+                    v.physical_position.y as f32,
+                    v.physical_size.x as f32,
+                    v.physical_size.y as f32,
+                    v.depth.start,
+                    v.depth.end,
+                );
+            }
+        };
+        for (height, layer) in [
+            (&draw.previous_height, SurfaceLayer::PreviousHeight),
+            (&draw.height, SurfaceLayer::CurrentHeight),
         ] {
+            // Clear absent layers too: a retired snapshot must not leave stale pixels.
+            let attachment = [Some(surfaces.0.color_attachment(layer))];
+            let mut pass =
+                context
+                    .command_encoder()
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("opaque height layer"),
+                        color_attachments: &attachment,
+                        depth_stencil_attachment: Some(surfaces.0.depth_attachment(layer)),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+            viewport(&mut pass);
+            pass.set_bind_group(0, &draw.group, &[]);
+            pass.set_index_buffer(draw.height_indices.slice(..), wgpu::IndexFormat::Uint32);
             if let Some(height) = height {
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(&draw.height_pipeline);
                 for (tile, buffer) in &height.tiles {
                     let field = &world.resource::<GpuBridge>().field;
                     let radius = field.config().radius_m;
@@ -329,6 +366,18 @@ impl ViewNode for GpuTerrainNode {
                 }
             }
         }
+        let attachment = [Some(surfaces.0.color_attachment(SurfaceLayer::Local))];
+        let mut pass = context
+            .command_encoder()
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("opaque local layer"),
+                color_attachments: &attachment,
+                depth_stencil_attachment: Some(surfaces.0.depth_attachment(SurfaceLayer::Local)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        viewport(&mut pass);
+        pass.set_bind_group(0, &draw.group, &[]);
         pass.set_pipeline(&draw.pipeline);
         let mut drawn = 0;
         if let Some(frame) = &draw.frame {
@@ -358,7 +407,21 @@ impl ViewNode for GpuTerrainNode {
             }
         }
         drop(pass);
+        let attachment = [Some(target.get_color_attachment())];
+        let mut pass = context
+            .command_encoder()
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("smooth surface composition"),
+                color_attachments: &attachment,
+                depth_stencil_attachment: Some(depth.get_attachment(wgpu::StoreOp::Store)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        viewport(&mut pass);
+        draw.compositor.draw(&mut pass, &surfaces.0, &draw.group);
+        drop(pass);
         if let Ok(mut output) = world.resource::<GpuBridge>().output.try_lock() {
+            output.stats.surface_target_bytes = surfaces.0.bytes();
             output.stats.drawn = drawn;
             output.stats.draw_ms = start.elapsed().as_secs_f64() * 1000.0;
         }

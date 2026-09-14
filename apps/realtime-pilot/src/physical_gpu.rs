@@ -187,6 +187,7 @@ fn generate(
             stats.height_update_ms = output.stats.height_update_ms;
             stats.scheduler_ms = output.stats.scheduler_ms;
             stats.draw_ms = output.stats.draw_ms;
+            stats.surface_target_bytes = output.stats.surface_target_bytes;
             stats.drawn = output.stats.drawn;
             output.stats = stats.clone();
             report = Instant::now();

@@ -6,7 +6,10 @@ fn height_compute_and_render_shaders_validate() {
     validate_wgsl("physical height", &height_shader());
     validate_wgsl(
         "physical rendering",
-        include_str!("../../../apps/realtime-pilot/src/physical_gpu.wgsl"),
+        concat!(
+            include_str!("../../../apps/realtime-pilot/src/physical_frame.wgsl"),
+            include_str!("../../../apps/realtime-pilot/src/physical_gpu.wgsl"),
+        ),
     );
 }
 #[test]

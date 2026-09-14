@@ -1,8 +1,3 @@
-struct Frame {
-    clip: mat4x4<f32>, anchor: vec4<i32>, style: vec4<u32>,
-    times: vec4<f32>, local_lo: vec4<f32>, local_hi: vec4<f32>,
-}
-@group(0) @binding(0) var<uniform> frame: Frame;
 struct Vertex {
     @builtin(position) clip: vec4<f32>,
     @location(0) position: vec3<f32>,
@@ -31,12 +26,6 @@ fn local_weight(p: vec3<f32>) -> f32 {
     out.lod = u32(max(0.0,ceil(log2(offset.w))));
     return out;
 }
-fn screen_threshold(p: vec2<f32>) -> f32 {
-    let xy = vec2<u32>(p);
-    var h = xy.x * 1664525u + xy.y * 1013904223u;
-    h = (h ^ (h >> 16u)) * 2246822519u;
-    return f32(h & 255u)/256.0;
-}
 fn shade(in: Vertex, front: bool) -> vec4<f32> {
     var normal = normalize(cross(dpdy(in.position),dpdx(in.position)));
     if !front { normal = -normal; }
@@ -51,16 +40,12 @@ fn shade(in: Vertex, front: bool) -> vec4<f32> {
     return vec4<f32>(vec3<f32>(0.52)*intensity,1.0);
 }
 @fragment fn fragment(in: Vertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    if screen_threshold(in.clip.xy) >= local_weight(in.position) { discard; }
-    return shade(in,front);
+    let weight = local_weight(in.position);
+    if weight == 0.0 { discard; }
+    // Keep the nearest local surface opaque within its own depth layer.
+    // Alpha is the coverage used by the final surface compositor.
+    return vec4<f32>(shade(in,front).rgb, weight);
 }
 @fragment fn height_fragment(in: Vertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let blend = clamp((frame.times.x-frame.times.y)/frame.times.w,0.0,1.0);
-    if frame.style.z != 0u && screen_threshold(in.clip.xy) >= blend { discard; }
-    return shade(in,front);
-}
-@fragment fn old_height_fragment(in: Vertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let blend = clamp((frame.times.x-frame.times.y)/frame.times.w,0.0,1.0);
-    if screen_threshold(in.clip.xy) < blend { discard; }
     return shade(in,front);
 }

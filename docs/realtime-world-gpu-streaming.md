@@ -4,7 +4,9 @@ Status: G1 through G5 are implemented. Physical exploration uses GPU height tile
 and local voxel geometry by default; `--backend cpu` selects the CPU visual audit.
 Metal validation and route measurements are recorded below. Windows/Vulkan
 results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
-Both hosts have completed the G5 routes; visual and measurement gaps remain.
+Both hosts have completed the original G5 routes; visual and measurement gaps
+remain. The [surface-join follow-up](#surface-join-follow-up) replaces pixel
+discard transitions with smooth composition and has separate validation.
 This replaces the CPU-only visual generation plan for the physical-planet pilot.
 The original saved terrain settings remain unchanged. G5 adds a separate 300 km
 comparison preset. The earlier world pipeline is unrelated.
@@ -517,8 +519,9 @@ local surface for depth at the tested precision. The displacement follows the
 same spatial and 250 ms temporal weight as the voxel draw. This is a rendering
 join between two representations, not a watertight hybrid export or a change
 to the canonical field. CPU collision continues to use the unchanged full-band
-one-meter field. Skirts, flat shading, and short dither transitions can remain
-visible; this slice does not add materials or smooth vertex normals.
+one-meter field. G5 originally used pixel discard during these transitions;
+the surface-join follow-up below replaces that rendering path. Skirts and flat
+shading can remain visible; this work does not add materials or smooth normals.
 
 The panel and CSV report height tile count, retained height buffer bytes, and
 height replacement time alongside voxel generation and render timings. Buffer
@@ -596,9 +599,87 @@ within the documented planetary direction tolerance. These are not changes to
 the much tighter local voxel-density agreement bounds.
 
 Windows/Vulkan execution is recorded in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
-Visual refinement of skirts and dither transitions remains. Startup, capture
+Visual refinement of skirts remains. Startup, capture
 costs and latency outliers still
 need to be considered before treating the measured targets as runtime limits.
 The distant surface now omits unresolved geometry, so its orbital appearance is
 smoother than G4's unfiltered voxel surface. No material detail replaces those
 omitted frequencies in this slice.
+
+## Surface-join follow-up
+
+The Windows ridge captures exposed the pixel discard pattern used for local
+overlap. The GPU viewer now renders previous height, current height, and local
+voxels into three separate opaque color/depth layers. A full-screen pass blends
+their colors with the existing 16 m spatial weight and 250 ms replacement time.
+This removes the stipple pattern without changing the generated geometry,
+terrain settings, local coverage, or collision.
+
+Each layer resolves its nearest triangle before composition. Local coverage is
+stored in alpha; it does not make triangles transparent within the local layer.
+The compositor applies local coverage separately to each height snapshot, using
+reverse-Z depth to reject local terrain hidden behind a closer height surface.
+It then blends the two complete results. A new height surface can fade in even
+when it sits behind the previous surface. Missing silhouette coverage blends
+over the scene background. The final depth is the nearest contributing surface;
+a fully retired snapshot contributes neither color nor depth. This single final
+depth is an approximation for future objects crossing a partially blended join.
+There are no such objects in the current pilot.
+
+`physical_surface_layers.rs` owns the render targets and compositor. Targets are
+reused per view and replaced on resize. There are three RGBA16F/Depth32F pairs,
+with a total texture payload of 36 bytes per physical pixel: 197.8 MiB at
+2880 × 2000 and 111.2 MiB at 2160 × 1500. This fixed cost depends on resolution,
+not distance traveled. The panel and CSV report it as `surface_target_bytes`,
+separate from terrain buffers. Other viewer targets, driver padding, and brief
+retention of targets during resize are outside this count.
+
+The production compositor has an offscreen GPU test:
+
+```sh
+cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
+```
+
+It checks every pixel of uniform fixtures at two target sizes: overlap without
+stipple, hidden local terrain, replacement in both depth orders, local visibility
+during replacement, exact transition endpoints, missing silhouettes, and empty
+layers. RGB tolerance is 0.001 for the half-float target; depth tolerance is
+0.00001. The test imports the viewer-owned wgpu module directly; rendering does
+not become part of the generation library.
+
+Validation passed on Metal: the compositor test (eleven cases at two sizes),
+height compute/render shader validation, all four pilot binary tests, the native
+build, and Clippy with warnings denied for the pilot and both affected GPU test
+targets. No generation code or agreement tolerance changed.
+
+Metal native validation on Apple M1 Max at 2880 × 2000 completed both 90-second
+routes with six captures each and exit code 0. The local recordings are
+`/tmp/surface-join-large.csv` and `/tmp/surface-join-small.csv`, with adjacent PNGs
+and logs. Descent, ground, walking, and return captures were inspected. The
+large ridge no longer has the speckled edge seen in the original G5 descent
+capture; inspected views retain terrain coverage. Still captures do not prove
+continuous seam-free motion or contact.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Overall frame p50 / p95 | 8.51 / 17.20 ms | 8.45 / 17.10 ms |
+| Descent frame p95 | 8.76 ms | 8.78 ms |
+| Walking frame p95 | 17.26 ms | 17.87 ms |
+| Maximum frame time | 293.26 ms | 140.57 ms |
+| Largest segment draw-encoding p95 | 0.127 ms | 0.201 ms |
+| Largest sampled local publication | 164.03 ms | 235.67 ms |
+| Largest sampled height replacement | 371.81 ms | 316.14 ms |
+| Peak terrain buffers | 194.0 MiB | 229.3 MiB |
+| Surface blend targets | 197.8 MiB | 197.8 MiB |
+| Peak terrain buffers plus blend targets | 391.7 MiB | 427.0 MiB |
+
+Percentiles use nearest rank. No GPU stream failure or overflow was reported.
+Frame pacing moved from about 8.3 ms to 16.7 ms during each desktop run; focus
+and presentation timing were not recorded. These results include startup and
+captures and do not isolate the compositor's GPU cost or establish performance
+parity with G5. Frame stalls and height replacement over 250 ms remain unresolved.
+
+This remains a rendered overlap, not a watertight height/voxel mesh. Faceted
+normals, skirt geometry, spatial detail changes, collision evidence gaps, and
+generation latency outliers remain separate work. The original Windows G5
+results above predate this compositor; this follow-up needs its own Vulkan run.
