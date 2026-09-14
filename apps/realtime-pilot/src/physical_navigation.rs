@@ -34,20 +34,13 @@ pub(super) fn movement(
             * state.rotation
             * Quat::from_rotation_x(-mouse.delta.y * 0.003);
     }
-    if !pointer_blocked && state.mode == Navigation::Orbit && buttons.pressed(MouseButton::Left) {
-        let rotation = Quat::from_rotation_y(-mouse.delta.x * 0.003)
-            * Quat::from_axis_angle(state.rotation * Vec3::X, -mouse.delta.y * 0.003);
-        let radius = state.field.config().radius_m
-            + state.eye.altitude_m(state.field.config().radius_m) as f32;
-        let p = rotation * up * radius;
-        state.eye = MeterPosition::new(
-            VoxelPosition {
-                x_m: p.x.round() as i32,
-                y_m: p.y.round() as i32,
-                z_m: p.z.round() as i32,
-            },
-            procgen_core::Vec3::ZERO,
-        );
+    if !pointer_blocked
+        && state.mode == Navigation::Orbit
+        && buttons.pressed(MouseButton::Left)
+        && mouse.delta != Vec2::ZERO
+    {
+        let state = &mut *state;
+        drag_orbit(&mut state.eye, &mut state.rotation, mouse.delta);
         state.face_ground();
     }
     let scroll_lines = match scroll.unit {
@@ -218,5 +211,88 @@ pub(super) fn movement(
                 .flatten()
                 .map(|hit| (p - hit.position_m).length())
         });
+    }
+}
+
+/// Rotate the position and view together about the current screen axes.
+fn drag_orbit(eye: &mut MeterPosition, orientation: &mut Quat, delta: Vec2) {
+    let local = Quat::from_scaled_axis(Vec3::new(-delta.y, -delta.x, 0.0) * 0.003);
+    let orbit = (*orientation * local * orientation.conjugate()).normalize();
+    // This is host camera positioning only. Retain fractional meters while
+    // rotating a large planet-relative position, as MeterPosition does in flight.
+    let anchor = eye.anchor();
+    let offset = eye.relative_to(anchor);
+    let position = bevy::math::DVec3::new(
+        anchor.x_m as f64 + offset.x as f64,
+        anchor.y_m as f64 + offset.y as f64,
+        anchor.z_m as f64 + offset.z as f64,
+    );
+    let next = orbit.as_dquat().normalize() * position;
+    let anchor = VoxelPosition {
+        x_m: next.x.round() as i32,
+        y_m: next.y.round() as i32,
+        z_m: next.z.round() as i32,
+    };
+    *eye = MeterPosition::new(
+        anchor,
+        procgen_core::Vec3::new(
+            (next.x - anchor.x_m as f64) as f32,
+            (next.y - anchor.y_m as f64) as f32,
+            (next.z - anchor.z_m as f64) as f32,
+        ),
+    );
+    *orientation = (orbit * *orientation).normalize();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physical_render::vector;
+
+    fn view(radius: i32) -> (MeterPosition, Quat) {
+        let eye = MeterPosition::new(
+            VoxelPosition {
+                x_m: radius,
+                y_m: 0,
+                z_m: 0,
+            },
+            procgen_core::Vec3::X * 0.25,
+        );
+        let orientation = Transform::IDENTITY.looking_to(-Vec3::X, Vec3::Y).rotation;
+        (eye, orientation)
+    }
+
+    #[test]
+    fn horizontal_drags_follow_screen_up_after_crossing_a_pole() {
+        let (mut eye, mut orientation) = view(900_000);
+        for vertical in [600.0, -250.0, 800.0, -1100.0] {
+            drag_orbit(&mut eye, &mut orientation, Vec2::new(0.0, vertical));
+            let right = orientation * Vec3::X;
+            let up = orientation * Vec3::Y;
+            let before = vector(eye.direction());
+            drag_orbit(&mut eye, &mut orientation, Vec2::new(100.0, 0.0));
+            let after = vector(eye.direction());
+            // Horizontal drag moves along screen right, with no vertical motion or roll.
+            assert!((after.dot(up) - before.dot(up)).abs() < 0.000001);
+            assert!(after.dot(right) < -0.25);
+            assert!((orientation * Vec3::Y - up).length() < 0.000001);
+            assert!((orientation * Vec3::NEG_Z + after).length() < 0.000001);
+        }
+    }
+
+    #[test]
+    fn repeated_drags_keep_orbit_distance_and_planet_centered() {
+        let (mut eye, mut orientation) = view(8_000_000);
+        for i in 0..2000 {
+            let delta = if i % 2 == 0 {
+                Vec2::new(35.0, 70.0)
+            } else {
+                Vec2::new(-20.0, 15.0)
+            };
+            drag_orbit(&mut eye, &mut orientation, delta);
+            // Sub-meter host positioning should not turn rotation into zoom.
+            assert!((eye.altitude_m(8_000_000.0) - 0.25).abs() < 0.001);
+            assert!((orientation * Vec3::NEG_Z + vector(eye.direction())).length() < 0.00001);
+        }
     }
 }
