@@ -223,11 +223,10 @@ mod height_gpu;
 pub use height_gpu::{
     HEIGHT_GPU_BATCH_TILES, HeightGpuMesher, LOCAL_GPU_WORLD_CONFIG, height_shader,
 };
+mod height_detail;
+pub use height_detail::{HEIGHT_DETAIL_RATIO, HEIGHT_FILTER_MIN_M};
 mod height_mesh;
-pub use height_mesh::{
-    HEIGHT_FILTER_DISTANCE_RATIO, HEIGHT_FILTER_MIN_M, HEIGHT_TILE_BYTES, HeightFilter,
-    HeightVertex, height_indices, height_tile_vertices,
-};
+pub use height_mesh::{HEIGHT_TILE_BYTES, HeightVertex, height_indices, height_tile_vertices};
 
 mod height_tile;
 pub use height_tile::{HEIGHT_QUADS, HEIGHT_SIDE, HEIGHT_VERTEX_COUNT, HeightTile};

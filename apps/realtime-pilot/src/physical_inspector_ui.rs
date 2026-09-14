@@ -89,6 +89,7 @@ pub(super) fn panel(
                     let s = &output.stats;
                     ui.label(&s.status);
                     ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
+                    ui.label(format!("Tile work: {} generated · {} reused",s.height_generated_tiles,s.height_reused_tiles));
                     ui.label(format!("Height build {:.1} ms · blend wait {:.1} ms",s.height_build_ms,s.height_wait_ms));
                     ui.label(format!("Surface blend targets: {:.1} MiB",s.surface_target_bytes as f64/1048576.0));
                     ui.label(format!("Height tiles capped at {}",procgen_realtime_pilot::MAX_HEIGHT_TILES));

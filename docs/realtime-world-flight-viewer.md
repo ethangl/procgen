@@ -15,9 +15,10 @@ terrain generation, distant detail, and continuous orbit-to-surface coverage.
 ## Generation and publication
 
 The worker selects complete six-face coverage on the CPU and generates height
-vertices and filtered normals with wgpu compute. The current tile budget (384),
-64-by-64-quad grids, one-meter refinement target, distant octave filter, stitched
-edges, colors, and 250 ms transitions are unchanged. Refinement is subject to
+vertices and filtered normals with wgpu compute. [Reusable height tiles](realtime-world-height-reuse.md)
+now derive filtering from the tile layout, so movement can retain unchanged
+buffers. The tile budget (384), 64-by-64-quad grids, one-meter refinement target,
+stitched edges, colors, and 250 ms transitions remain. Refinement is subject to
 the tile budget; this is not a promise of uniform one-meter coverage.
 
 Each worker generation owns immutable height snapshots. At most two batches of

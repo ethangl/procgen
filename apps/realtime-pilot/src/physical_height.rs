@@ -4,9 +4,7 @@ use crate::physical_gpu_bridge::{
     GpuGeneration, HeightFrame, HeightSubmission, SURFACE_BLEND_SECONDS,
 };
 use procgen_realtime_pilot::HeightTile;
-use procgen_realtime_pilot::{
-    HEIGHT_GPU_BATCH_TILES, HEIGHT_TILE_BYTES, HeightFilter, HeightGpuMesher,
-};
+use procgen_realtime_pilot::{HEIGHT_GPU_BATCH_TILES, HEIGHT_TILE_BYTES, HeightGpuMesher};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, mpsc},
@@ -57,7 +55,6 @@ impl HeightStream {
         device: &wgpu::Device,
         bridge: &GpuGeneration,
         target: &[HeightTile],
-        filter: HeightFilter,
         admit: bool,
     ) {
         let blend_complete = self.current.as_ref().is_none_or(|current| {
@@ -88,7 +85,6 @@ impl HeightStream {
                 return;
             }
             if let Some(current) = &self.current
-                && current.filter == filter
                 && current.tiles.keys().copied().eq(target.iter().copied())
             {
                 return;
@@ -96,23 +92,19 @@ impl HeightStream {
             let mut tiles = BTreeMap::new();
             let mut remaining = VecDeque::new();
             for &tile in target {
-                if let Some(buffer) = self
-                    .current
-                    .as_ref()
-                    .filter(|c| c.filter == filter)
-                    .and_then(|c| c.tiles.get(&tile))
-                {
+                if let Some(buffer) = self.current.as_ref().and_then(|c| c.tiles.get(&tile)) {
                     tiles.insert(tile, Arc::clone(buffer));
                 } else {
                     remaining.push_back(tile);
                 }
             }
+            {
+                let mut output = bridge.design.output.lock().unwrap();
+                output.stats.height_generated_tiles += remaining.len() as u64;
+                output.stats.height_reused_tiles += tiles.len() as u64;
+            }
             self.pending = Some(Pending {
-                frame: HeightFrame {
-                    tiles,
-                    filter,
-                    born: 0.0,
-                },
+                frame: HeightFrame { tiles, born: 0.0 },
                 remaining,
                 receipts: Vec::new(),
                 ready_at: None,
@@ -126,9 +118,7 @@ impl HeightStream {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("bounded height batch"),
             });
-            let buffers =
-                self.mesher
-                    .encode_batch(device, &mut encoder, &batch, pending.frame.filter);
+            let buffers = self.mesher.encode_batch(device, &mut encoder, &batch);
             pending
                 .frame
                 .tiles
@@ -184,10 +174,6 @@ mod tests {
             frame: HeightFrame {
                 tiles: BTreeMap::new(),
                 born: 0.0,
-                filter: HeightFilter {
-                    surface_m: [0.0; 3],
-                    clearance_m: 0.0,
-                },
             },
             remaining: tiles.clone().into(),
             receipts: Vec::new(),

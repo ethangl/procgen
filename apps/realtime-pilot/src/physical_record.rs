@@ -39,7 +39,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -99,7 +99,7 @@ impl PhysicalRecord {
         let p = eye.anchor();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -114,7 +114,9 @@ impl PhysicalRecord {
             stats.surface_target_bytes,
             stats.status,
             stats.height_build_ms,
-            stats.height_wait_ms
+            stats.height_wait_ms,
+            stats.height_generated_tiles,
+            stats.height_reused_tiles
         )
     }
     pub fn finish(&mut self) -> io::Result<()> {
