@@ -5,10 +5,13 @@ measurements are recorded; Windows/Vulkan validation and the full frame-pacing
 objective remain open. Neutral surface inspection is implemented as the first
 [surface-quality slice](realtime-world-surface-quality.md).
 
-The next phase is [physical scale and octree LOD](realtime-world-planet-scale.md).
-It adds a physical terrain field, an octave editor, and meter-scale octree
-addressing/density samples. The original streaming experiment still uses its
-bounded radius-4 source while camera-driven chunk residency and meshes are built.
+The [physical-scale phase](realtime-world-planet-scale.md) and
+[GPU streaming work](realtime-world-gpu-streaming.md) now provide the default
+orbit/descent viewer. `cargo run -p procgen-realtime-pilot` loads
+`planet-design-300km.json` and exposes live per-octave controls. The separate
+noise-preview and local-volume editing windows are removed; their generation
+code and headless audits remain. The original radius-4 streaming experiment
+still runs through `--stream`.
 
 ## Purpose
 

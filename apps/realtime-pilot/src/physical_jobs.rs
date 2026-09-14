@@ -31,6 +31,10 @@ pub struct TerrainResult {
     pub source_bytes: usize,
     pub mesh_bytes: usize,
 }
+pub struct CollisionRequest {
+    pub field: Arc<PlanetDesignField>,
+    pub position: VoxelPosition,
+}
 pub struct CollisionResult {
     pub patch: VoxelCollision,
     pub seconds: f32,
@@ -38,8 +42,8 @@ pub struct CollisionResult {
 pub struct Jobs {
     pub terrain: SyncSender<TerrainRequest>,
     pub surfaces: Receiver<Result<TerrainResult, String>>,
-    pub collision: SyncSender<VoxelPosition>,
-    pub patches: Receiver<Result<CollisionResult, String>>,
+    pub collision: SyncSender<CollisionRequest>,
+    pub patches: Receiver<(Arc<PlanetDesignField>, Result<CollisionResult, String>)>,
     cancel: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
 }
@@ -50,7 +54,7 @@ impl Jobs {
     ) -> Self {
         let (terrain, requests) = mpsc::sync_channel::<TerrainRequest>(1);
         let (results, surfaces) = mpsc::sync_channel(1);
-        let (collision, probes) = mpsc::sync_channel(1);
+        let (collision, probes) = mpsc::sync_channel::<CollisionRequest>(1);
         let (contacts, patches) = mpsc::sync_channel(1);
         let cancel = Arc::new(AtomicBool::new(false));
         let source = Arc::clone(&field);
@@ -115,13 +119,13 @@ impl Jobs {
                     Err(_) => break,
                 };
                 let start = Instant::now();
-                let result = VoxelCollision::build(&field, probe, &stop)
+                let result = VoxelCollision::build(&probe.field, probe.position, &stop)
                     .map(|patch| CollisionResult {
                         patch,
                         seconds: start.elapsed().as_secs_f32(),
                     })
                     .map_err(|e| e.to_string());
-                if stop.load(Ordering::Relaxed) || contacts.send(result).is_err() {
+                if stop.load(Ordering::Relaxed) || contacts.send((probe.field, result)).is_err() {
                     break;
                 }
             }

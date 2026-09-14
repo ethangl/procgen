@@ -41,12 +41,13 @@ one kilometer per model unit. Its render refinement is not one-meter sampling.
 
 ## Slice 1: physical dimensions and octave editor
 
-Run `cargo run -p procgen-realtime-pilot -- --design`. The default editing preset
-has seed 42, a 2,000-kilometer reference radius, and 18 bands from 1,048.576 km
-to 8 m, halving wavelength each time. The first amplitude is 4,000 m; later
-amplitudes decrease by 0.55. The smooth absolute height bound is 12,000 m.
-These are provisional tuning values, not accepted visual defaults or an Earth
-model. Zero elevation is the reference sphere; there is no water simulation.
+`cargo run -p procgen-realtime-pilot` opens the GPU orbit/descent viewer with
+`planet-design-300km.json`. Design and Octaves tabs provide live controls.
+The earlier standalone height-preview editor is removed; its CPU preview
+generator and headless audits remain. `--seed U64` explicitly selects the
+unchanged starter: a 2,000 km radius, 18 bands from 1,048.576 km to 8 m,
+4,000 m first amplitude, 0.55 amplitude decay, and a 12,000 m height bound.
+Zero elevation is the reference sphere; there is no water simulation.
 
 `PlanetDesignConfig` owns meter-based dimensions and ordered octave records.
 It validates to an immutable CPU field. Each record contains enable state,
@@ -65,47 +66,51 @@ Amplitude is therefore a coefficient before feedback and bounding, not a promise
 that a peak will equal that value. Changing one band can affect later bands
 through feedback. Disabled and zero-amplitude bands have no feedback effect.
 
-The viewer has two bounded height previews:
+The headless preview generator retains two bounded height previews:
 
 - **Planet:** a welded cube-sphere grid, with physical radius and elevation.
 - **Local patch:** a curved tangent patch at editable latitude/longitude, spanning
   128 m to 100 km. Coordinates are relative to its center surface. Curvature is
   evaluated without subtracting two large planet radii.
 
-Both use power-of-two grids, up to 256 quads per side. Geometry is uniformly
-scaled for display; elevation is never exaggerated. The grid is a diagnostic
+Both use power-of-two grids, up to 256 quads per side. They retain physical
+dimensions with no height exaggeration. The grid is a diagnostic
 height mesh, not a voxel volume. Globe sample spacing uses a conservative
 reference-sphere estimate; patch spacing is nominal tangent spacing. Neither is
 an exact bound on distance along steep terrain or on warped noise bandwidth.
 
 Unresolved noise fades smoothly between four and two samples per wavelength.
 The fade multiplies height and derivative feedback; fully filtered bands cost no
-noise query. The editor reports each band's applied preview weight. A globe
-cannot show meter-scale detail: switch to a small patch to inspect those bands.
+noise query. The headless report includes each band's applied preview weight. A globe
+cannot show meter-scale detail; a small patch can audit those bands.
 The full-resolution elevation percentiles are sampled separately over 65,536
 approximately equal-area directions, so they describe the selected field over
 the planet, not the visible patch or filtered mesh extrema.
 
-**Solo** evaluates a band alone, including a disabled band selected explicitly;
-it does not isolate its marginal effect within the interacting stack. **Combined
-terrain** restores the complete stack. Auto apply waits 350 ms after edits and
-permits one worker at a time. Changes during a job coalesce into the next request.
-The previous preview remains visible while the existing status line reports progress.
-With auto apply off, that line reports pending edits. Editable controls use stable
-IDs so status and validation changes cannot interrupt text entry.
+The headless `--solo` option evaluates a band alone, including a disabled band
+selected explicitly. It does not isolate that band's marginal effect in the stack.
+
+The GPU viewer applies valid edits 350 ms after the last change. Every draft
+change invalidates older pending results, including when the draft is invalid.
+A single worker drains bounded GPU submissions before replacing a design;
+complete height and local voxel coverage, plus nearby collision when needed,
+publish as one design revision. The camera is not reset. New collision requests
+carry their immutable field, so old completions cannot replace new support.
 
 **Save controls**, **Load**, and **Copy JSON** exchange a strict version-1 file
 containing seed, radius, height bound, and every octave value. Save writes the
-editable controls, including edits not yet displayed. Camera, solo selection,
-patch position, preview resolution, and coloring are viewer preferences and are
-not saved as generation data. Loading validates the entire design. With auto
-apply off, press Generate to display it.
+valid editable controls, including edits not yet displayed. It only runs on an
+explicit action and overwrites the current loaded file. The displayed path is
+read-only; Load and Save as use explicit path dialogs. Camera and coloring remain
+viewer preferences. Loading validates
+the entire design and applies it automatically. Status uses a fixed area, and
+editable controls have stable IDs so updates cannot interrupt typing.
 
 Headless examples:
 
 ```sh
 cargo run -p procgen-realtime-pilot --no-default-features -- \
-  --design --check --write-design /tmp/planet-design.json
+  --design --seed 42 --check --write-design /tmp/planet-design.json
 cargo run -p procgen-realtime-pilot --no-default-features -- \
   --design --design-file /tmp/planet-design.json --check --patch-span 128 --solo 17
 cargo run -p procgen-realtime-pilot -- \
@@ -389,10 +394,10 @@ cargo run -p procgen-realtime-pilot --no-default-features -- \
   --design --design-file planet-design.json --check-explore
 ```
 
-The exploration mode loads the same saved design as the editor. It does not
-change the file. Edit and save with `--design`, then start exploration with that
-file. The editor's stable widget IDs and input-focus regression test remain in
-place. The original `--stream` experiment remains separate.
+The default exploration viewer includes the live design controls described above.
+It changes a file only when Save controls or `--write-design` is requested.
+`--backend cpu` remains an explicit visual audit with a fixed design per run.
+The original `--stream` experiment remains separate.
 
 **Orbit** resets to three reference radii from the center. Left drag rotates the
 view; scroll changes clearance. **Descend continuously** follows the current
@@ -542,7 +547,7 @@ band 5 (65,536 m) increases from 256 to 1,024 m. Bands 6–17 increase eightfold
 from 1,024 m amplitude at 32,768 m wavelength down to 0.5 m at 16 m wavelength.
 This ramp adds hills and local relief without changing the broadest bands,
 noise shaping, erosion controls, or the physical scale. It changes this saved
-preset only; the editor's starter preset retains its existing settings.
+preset only; the explicit `--seed` starter preset retains its existing settings.
 
 A 65-by-65 full-field probe around the +X landing point measures:
 

@@ -1150,3 +1150,86 @@ position differences were 1.612976 m (large) and 0.152100 m (small), and normal
 vector differences were 0.046563 and 0.038663. Existing tolerances are unchanged.
 The native build, pilot Clippy checks, and formatting pass. Windows/Vulkan
 validation of these detail settings remains pending.
+
+## Viewer consolidation
+
+`cargo run -p procgen-realtime-pilot` now opens this GPU viewer with the repository's
+`planet-design-300km.json`. The baseline is remote main's `4e05c23` squash of
+`gpu-clean-up`; its tree matches `714900e` exactly. This includes 64-by-64 height
+tiles, the distance/512 octave filter, stitched edges, smooth normals, height
+coloring, and the existing navigation and one-meter voxel settings.
+
+Design and Octaves tabs replace the standalone noise-preview editor. Valid edits
+apply after 350 ms without a Generate action. Draft revisions invalidate pending
+requests and completed publications, including during invalid text entry. The
+worker finishes already submitted bounded GPU batches before changing designs.
+It builds a separate height/voxel generation and nearby CPU collision support,
+then offers one revision to the application. The application accepts only the
+latest revision and switches field, render snapshot, and collision together.
+The camera's physical point and rotation are retained. Collision requests carry
+an immutable field identity; results from earlier designs cannot install.
+
+The last complete design remains visible while the replacement builds. GPU
+leases and queue completion retain retired buffers until draws finish. There is
+one generation worker, one queued latest request, and at most one pending design
+publication. During edits, displayed terrain and the replacement generation can
+both retain buffers; existing per-generation budgets still apply. The displayed
+statistics do not include the unpublished design's allocations or build latency.
+This is not a claim that live edits meet the fixed-route memory or latency figures.
+
+Controls use stable widget IDs, and validation and file notices use reserved
+layout space. Load applies a validated design. Save controls and Copy JSON use
+the valid draft; file writes happen only on Save controls or `--write-design`.
+`--design-file` overrides the default. `--seed` explicitly selects the unchanged
+starter preset. `--backend cpu` remains a fixed-design visual validation path.
+The CPU preview generator, headless audits/captures, and other experimental modes
+remain; only the standalone noise-preview and local-volume editing windows were
+removed. The headless `--check` path retains patch and solo diagnostics.
+
+Limits: a design edit can move the surface through the retained camera position.
+It does not relocate the camera or guarantee a walkable landing. Ground movement
+can pause while new collision coverage is obtained after travel during a build.
+Windows/Vulkan validation of live editing remains pending.
+
+Consolidation validation on macOS/Metal, 2026-09-14:
+
+- All 91 library tests and 12 binary tests pass, including edit coalescing,
+  invalid-draft invalidation, stale publication/collision rejection, atomic design
+  installation without camera movement, and stable text focus/layout. The
+  no-default-features suite also passes. Pilot Clippy and formatting pass.
+- All three `height_mesh_agreement` tests and the `surface_composition` test pass
+  on Metal. Terrain kernels and their agreement tolerances are unchanged.
+- Native default launch showed the 300 km preset with distant detail and Height
+  coloring. Manual edits covered octave enable state, numeric amplitude entry
+  across multiple updates, invalid/valid seed entry, and explicit save/reload
+  through `/tmp/procgen-live-design.json`. Repository preset files stayed unchanged.
+- Continuous descent reached 125 one-meter local chunks. A ground-level octave
+  edit changed both measured and field clearance while retaining camera altitude.
+  The manual landing location was too steep; it did not establish walking there.
+- The unchanged 90-second recorded route completed with six captures. All 1,567
+  walking frames reported `Advanced` with collision coverage, and no GPU stream
+  errors occurred. Evidence is `/tmp/procgen-consolidation-route.csv`, its adjacent
+  log, and `.1.png` through `.6.png`. This is a smoke test, not a new latency claim;
+  other checks also ran during the route.
+- The saved-file override also passed the headless preview and one-meter chunk
+  audit. The retained local-volume capture command produced all three preset
+  image/text pairs. A final repeat of the interactive check was blocked when
+  the desktop locked; the earlier manual checks and completed route are recorded
+  above.
+
+
+### Save destination correction
+
+Save controls now overwrites the current loaded file. The path in the panel is
+read-only; Load and Save as open explicit path dialogs. A canceled or failed
+file action cannot change the Save target. This prevents stray text in a path
+field from silently redirecting a normal save. CLI file overrides still select
+the current file.
+
+The user's saved `planet-design-300km.jsonw` was recovered byte-for-byte into
+`planet-design-300km.json`. This is an explicit preset retune: the first five
+wavelengths are 256, 128, 64, 32, and 16 km; their amplitudes are 3,200, 3,200,
+3,200, 1,600, and 800 m. The finest band is 32 m, all warp and damping values
+are zero, and the seed, radius, and height bound remain unchanged. The saved
+156 m band is preserved exactly. Earlier route measurements above describe the
+previous preset, not this retune.

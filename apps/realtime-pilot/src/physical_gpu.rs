@@ -1,5 +1,8 @@
 //! Terrain generation worker; rendering consumes immutable GPU snapshots.
-use crate::physical_gpu_bridge::{DrawFrame, GpuBridge, GpuStats, TerrainSubmission};
+use crate::physical_gpu_bridge::{
+    DesignPublication, DesignRequest, DisplayedDesign, DrawFrame, GpuBridge, GpuGeneration,
+    GpuOutput, GpuStats, TerrainSubmission,
+};
 use bevy::prelude::*;
 use procgen_realtime_pilot::{
     LOCAL_GPU_WORLD_CONFIG, VoxelCoverage, VoxelGpuEvent, VoxelGpuOutcome, VoxelGpuWorld,
@@ -7,7 +10,7 @@ use procgen_realtime_pilot::{
 };
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
@@ -41,7 +44,12 @@ impl GpuWorker {
                 Ok(Err(error)) => error.to_string(),
                 Err(_) => "GPU worker panicked; see the terminal diagnostic".into(),
             };
-            bridge.output.lock().unwrap().stats.status = format!("GPU stream stopped: {error}");
+            bridge.designs.lock().unwrap().failure = Some(format!(
+                "GPU stream stopped: {error}. Restart the viewer to retry."
+            ));
+            let displayed = bridge.display.lock().unwrap().clone();
+            displayed.output.lock().unwrap().stats.status = format!("GPU stream stopped: {error}");
+            error!("GPU stream stopped: {error}");
         });
         Self {
             stop,
@@ -55,18 +63,39 @@ fn generate(
     bridge: &GpuBridge,
     stop: &AtomicBool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut generation = GpuGeneration {
+        shared: bridge.clone(),
+        design: bridge.display.lock().unwrap().clone(),
+    };
+    while let Some(request) = generate_revision(device, queue, &generation, stop)? {
+        generation.design = DisplayedDesign {
+            revision: request.revision,
+            field: request.field,
+            output: Arc::new(Mutex::new(GpuOutput::default())),
+        };
+    }
+    Ok(())
+}
+fn generate_revision(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    bridge: &GpuGeneration,
+    stop: &AtomicBool,
+) -> Result<Option<DesignRequest>, Box<dyn std::error::Error>> {
+    let revision = bridge.design.revision;
+    let mut offered = revision == 0;
     let mut world = VoxelGpuWorld::new(
         device,
         queue,
-        Arc::clone(&bridge.field),
+        Arc::clone(&bridge.design.field),
         LOCAL_GPU_WORLD_CONFIG,
     )?;
     let mut heights = crate::physical_height::HeightStream::new(device, bridge);
     let mut selected_at = None;
     let mut height_target = Vec::new();
     let mut height_filter = procgen_realtime_pilot::HeightFilter::new(
-        &bridge.field,
-        bridge.camera.lock().unwrap().eye.anchor(),
+        &bridge.design.field,
+        bridge.shared.camera.lock().unwrap().eye.anchor(),
     );
     let mut target = VoxelCoverage::new(Vec::new())?;
     let mut current = target.clone();
@@ -75,22 +104,38 @@ fn generate(
     let mut report = Instant::now();
     let mut dirty = false;
     while !stop.load(Ordering::Relaxed) {
-        let camera = *bridge.camera.lock().unwrap();
-        let clearance = camera.eye.altitude_m(bridge.field.config().radius_m) as f32
-            - bridge.field.elevation_m(camera.eye.direction(), 0.0)?;
+        // Drain the bounded GPU work before replacing its owner. No UI thread joins.
+        if world.settled()
+            && heights.idle()
+            && let Some(request) = bridge.shared.designs.lock().unwrap().request.take()
+        {
+            return Ok(Some(request));
+        }
+        let camera = *bridge.shared.camera.lock().unwrap();
+        let clearance = camera.eye.altitude_m(bridge.design.field.config().radius_m) as f32
+            - bridge
+                .design
+                .field
+                .elevation_m(camera.eye.direction(), 0.0)?;
         let threshold = (clearance * 0.1).clamp(8.0, 100_000.0);
         if selected_at.is_none_or(|p| camera.eye.relative_to(p).length() > threshold) {
             let start = Instant::now();
-            height_target = select_height_coverage(&bridge.field, camera.eye.anchor());
-            height_filter =
-                procgen_realtime_pilot::HeightFilter::new(&bridge.field, camera.eye.anchor());
-            target = local_voxel_coverage(&bridge.field, camera.eye.anchor())?;
+            height_target = select_height_coverage(&bridge.design.field, camera.eye.anchor());
+            height_filter = procgen_realtime_pilot::HeightFilter::new(
+                &bridge.design.field,
+                camera.eye.anchor(),
+            );
+            target = local_voxel_coverage(&bridge.design.field, camera.eye.anchor())?;
             selected_at = Some(camera.eye.anchor());
             stats.selection_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
-        heights.update(device, bridge, &height_target, height_filter);
+        let replacing = bridge.shared.designs.lock().unwrap().request.is_some();
+        heights.update(device, bridge, &height_target, height_filter, !replacing);
         for event in world.update_with_submit(|submission| {
-            let _ = bridge.submit.send(TerrainSubmission::Voxel(submission));
+            let _ = bridge
+                .shared
+                .submit
+                .send(TerrainSubmission::Voxel(submission));
         })? {
             match event {
                 VoxelGpuEvent::Submitted {
@@ -146,13 +191,13 @@ fn generate(
                 stats.publication_ms = replacement.elapsed().as_secs_f64() * 1000.0;
                 stats.resident = leases.len();
                 stats.finest_spacing_m = leases.first().map(|l| l.key.address().spacing_m());
-                let mut output = bridge.output.lock().unwrap();
+                let mut output = bridge.design.output.lock().unwrap();
                 // Reusing nearby chunks must not restart the whole region's fade.
                 let born = match &output.frame {
                     Some(previous) if !previous.leases.is_empty() && !leases.is_empty() => {
                         previous.born
                     }
-                    _ => bridge.start.elapsed().as_secs_f32(),
+                    _ => bridge.shared.start.elapsed().as_secs_f32(),
                 };
                 output.frame = Some(Arc::new(DrawFrame {
                     leases,
@@ -162,11 +207,37 @@ fn generate(
                 }));
                 dirty = false;
             }
-            if current.leaves() != target.leaves() {
+            if !replacing && current.leaves() != target.leaves() {
                 world.set_coverage(&target, camera.eye.anchor())?;
                 current = target.clone();
                 replacement = Instant::now();
             }
+        }
+        if !offered && world.settled() && current.leaves() == target.leaves() && heights.ready() {
+            let collision = if clearance < 32.0 {
+                let start = Instant::now();
+                let patch = procgen_realtime_pilot::VoxelCollision::build(
+                    &bridge.design.field,
+                    camera.eye.anchor(),
+                    stop,
+                )?;
+                Some(crate::physical_jobs::CollisionResult {
+                    patch,
+                    seconds: start.elapsed().as_secs_f32(),
+                })
+            } else {
+                None
+            };
+            let publication = DesignPublication {
+                design: DisplayedDesign {
+                    revision,
+                    field: Arc::clone(&bridge.design.field),
+                    output: Arc::clone(&bridge.design.output),
+                },
+                collision,
+            };
+            bridge.shared.designs.lock().unwrap().publish(publication);
+            offered = true;
         }
         if report.elapsed() >= Duration::from_millis(16) {
             stats.target = target.leaves().len();
@@ -182,7 +253,7 @@ fn generate(
                 "Updating local GPU voxels"
             }
             .into();
-            let mut output = bridge.output.lock().unwrap();
+            let mut output = bridge.design.output.lock().unwrap();
             stats.height_tiles = output.height.as_ref().map_or(0, |h| h.tiles.len());
             stats.height_update_ms = output.stats.height_update_ms;
             stats.height_build_ms = output.stats.height_build_ms;
@@ -196,5 +267,5 @@ fn generate(
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    Ok(())
+    Ok(None)
 }

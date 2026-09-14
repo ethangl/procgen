@@ -3,12 +3,12 @@ mod controls;
 mod design_cli;
 #[cfg(feature = "inspector")]
 mod design_controls;
+#[cfg(feature = "inspector")]
+mod design_edits;
 mod design_file;
 #[cfg(feature = "inspector")]
-mod design_inspector;
+mod design_panel;
 mod display;
-#[cfg(feature = "inspector")]
-mod inspector;
 #[cfg(feature = "inspector")]
 mod physical_capture;
 #[cfg(feature = "inspector")]
@@ -48,7 +48,7 @@ use std::{error::Error, fs, path::PathBuf, time::Instant};
 use procgen_realtime_pilot::{INSPECTION_GRID, PRESETS, sample_volume};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if std::env::args().any(|arg| arg == "--design") {
+    if design_cli::selected(std::env::args().skip(1)) {
         return design_cli::run();
     }
     let mut args = std::env::args().skip(1);
@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "Surface inspection (--stream): --normals averaged|triangle|density --surface neutral|lod|normals|agreement --surface-detail plain|textured --wireframe.\nSpherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nPhysical planet editor: --design [--design-file FILE] [--check].\nDefault: local volume inspector. --planet: spherical regions. --planet --check: headless mesh report."
+                    "Surface inspection (--stream): --normals averaged|triangle|density --surface neutral|lod|normals|agreement --surface-detail plain|textured --wireframe.\nSpherical experiments: --stream --preset hills|ridges|basins; --case FILE; --replay FILE --record CSV.\nHeadless stress: --sweep DIRECTORY [--samples N] [--sample-seed U64].\nprocgen-realtime-pilot [--seed U64] [--planet [--check]] [--capture DIRECTORY] [--stream [--record CSV [--screenshots] [--walk-route]]]\n--stream: streaming flight inspector; --record runs the fixed route and exits.\nGPU orbit/descent viewer (default): [--design-file FILE] [--backend gpu|cpu].\nDefault file: planet-design-300km.json. Live octave edits apply automatically; saving is explicit.\nDesign audits and full options: --design --help.\n--planet: spherical regions. --planet --check: headless mesh report."
                 );
                 return Ok(());
             }
@@ -268,7 +268,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if planet {
         if capture.is_some() {
-            return Err("--capture is for the local volume inspector".into());
+            return Err("--capture is for headless local-volume diagnostics".into());
         }
         if check {
             use procgen_realtime_pilot::{
@@ -320,13 +320,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             print!("{info}");
         }
     } else {
-        #[cfg(feature = "inspector")]
-        inspector::run(seed);
-        #[cfg(not(feature = "inspector"))]
-        return Err(
-            "This build requires --capture DIRECTORY. Enable the inspector feature for the UI."
-                .into(),
-        );
+        return Err("select an experiment or use the default GPU viewer; see --help".into());
     }
     Ok(())
 }
