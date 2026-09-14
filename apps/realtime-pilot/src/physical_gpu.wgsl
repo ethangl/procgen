@@ -9,12 +9,12 @@ fn local_weight(p: vec3<f32>) -> f32 {
     let edge = min(d.x,min(d.y,d.z));
     return smoothstep(0.0,frame.local_lo.w,edge) * clamp((frame.times.x-frame.times.z)/frame.times.w,0.0,1.0) * frame.local_hi.w;
 }
-@vertex fn vertex(@location(0) anchor: vec4<i32>, @location(1) offset: vec4<f32>, @location(2) origin: vec4<i32>) -> Vertex {
+@vertex fn vertex(@location(0) anchor: vec4<i32>, @location(1) offset: vec4<f32>, @location(2) origin: vec4<i32>, @location(3) normal: vec4<f32>) -> Vertex {
     var out: Vertex;
     out.position = vec3<f32>(origin.xyz + anchor.xyz - frame.anchor.xyz) + offset.xyz;
     out.clip = frame.clip * vec4<f32>(out.position,1.0);
     out.lod = u32(origin.w);
-    out.normal = vec3(0.0);
+    out.normal = normal.xyz;
     return out;
 }
 @vertex fn height_vertex(@location(0) anchor: vec4<i32>, @location(1) offset: vec4<f32>, @location(3) normal: vec4<f32>) -> Vertex {
@@ -47,6 +47,9 @@ fn shade(in: Vertex, normal: vec3<f32>) -> vec4<f32> {
     // Alpha is the coverage used by the final surface compositor.
     var normal = normalize(cross(dpdy(in.position),dpdx(in.position)));
     if !front { normal = -normal; }
+    // A critical density point has no gradient direction. Transition vertices
+    // also request geometric shading until they have a shared normal stencil.
+    if dot(in.normal,in.normal) > 0.0 { normal = normalize(in.normal); }
     return vec4<f32>(shade(in,normal).rgb, weight);
 }
 @fragment fn height_fragment(in: Vertex) -> @location(0) vec4<f32> {

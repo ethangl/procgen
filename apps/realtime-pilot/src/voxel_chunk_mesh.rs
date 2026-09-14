@@ -17,6 +17,9 @@ use crate::{MeterPosition, VoxelChunkAddress, VoxelPosition, VoxelVolume, VoxelV
 pub struct VoxelMeshVertex {
     pub anchor_m: [i32; 4],
     pub offset_m: [f32; 4],
+    /// Outward density gradient, interpolated before normalization; w is unused.
+    /// Zero requests a geometric face normal (critical points and transitions).
+    pub normal: [f32; 4],
 }
 impl VoxelMeshVertex {
     pub fn position(self, address: VoxelChunkAddress) -> MeterPosition {
@@ -123,6 +126,7 @@ impl VoxelChunkMesh {
             for axis in 0..3 {
                 if !(0..=span).contains(&v.anchor_m[axis])
                     || !v.offset_m[axis].is_finite()
+                    || !v.normal[axis].is_finite()
                     || v.offset_m[axis].abs() > self.address.spacing_m() as f32
                     || !(0.0..=span as f64)
                         .contains(&(v.anchor_m[axis] as f64 + v.offset_m[axis] as f64))
@@ -174,9 +178,10 @@ pub(crate) fn candidate(volume: &VoxelVolume, slot: usize) -> Option<VoxelMeshVe
                     && topology::potential(volume, q) < 0.0
             })
         });
-        return touches_air.then_some(VoxelMeshVertex {
+        return touches_air.then(|| VoxelMeshVertex {
             anchor_m: [p[0] * spacing, p[1] * spacing, p[2] * spacing, 0],
             offset_m: [0.0; 4],
+            normal: density_normal(volume, p),
         });
     }
     let q = topology::add(p, topology::corner((slot % 8 + 1) as u32));
@@ -187,12 +192,38 @@ pub(crate) fn candidate(volume: &VoxelVolume, slot: usize) -> Option<VoxelMeshVe
     if !((a < 0.0 && b > 0.0) || (a > 0.0 && b < 0.0)) {
         return None;
     }
-    Some(edge_vertex(
-        p.map(|v| v * spacing),
-        q.map(|v| v * spacing),
-        a,
-        b,
-    ))
+    let mut vertex = edge_vertex(p.map(|v| v * spacing), q.map(|v| v * spacing), a, b);
+    let (start, end, near, far) = if a.abs() <= b.abs() {
+        (p, q, a, b)
+    } else {
+        (q, p, b, a)
+    };
+    let start_normal = density_normal(volume, start);
+    let end_normal = density_normal(volume, end);
+    let fraction = edge_fraction(near, far);
+    vertex.normal =
+        std::array::from_fn(|i| start_normal[i] + (end_normal[i] - start_normal[i]) * fraction);
+    Some(vertex)
+}
+
+fn density_normal(volume: &VoxelVolume, point: [i32; 3]) -> [f32; 4] {
+    let mut result = [0.0; 4];
+    for axis in 0..3 {
+        let mut lo = point;
+        let mut hi = point;
+        lo[axis] -= 1;
+        hi[axis] += 1;
+        // Positive density is solid: its negative gradient points outward.
+        // The existing halo supplies both sides even on chunk boundaries.
+        result[axis] = (topology::potential(volume, lo) - topology::potential(volume, hi))
+            / (2.0 * volume.address().spacing_m() as f32);
+    }
+    result
+}
+
+fn edge_fraction(near: f32, far: f32) -> f32 {
+    let ratio = (near / far).abs();
+    ratio / (1.0 + ratio)
 }
 
 pub(crate) fn edge_vertex(a: [i32; 3], b: [i32; 3], da: f32, db: f32) -> VoxelMeshVertex {
@@ -207,8 +238,7 @@ pub(crate) fn edge_vertex(a: [i32; 3], b: [i32; 3], da: f32, db: f32) -> VoxelMe
     } else {
         (b, a, db, da)
     };
-    let ratio = (near / far).abs();
-    let t = ratio / (1.0 + ratio);
+    let t = edge_fraction(near, far);
     VoxelMeshVertex {
         anchor_m: [start[0], start[1], start[2], 0],
         offset_m: [
@@ -217,6 +247,9 @@ pub(crate) fn edge_vertex(a: [i32; 3], b: [i32; 3], da: f32, db: f32) -> VoxelMe
             (end[2] - start[2]) as f32 * t,
             0.0,
         ],
+        // Transition stencils have no regular density halo. Their consumer uses
+        // face normals; regular extraction supplies density normals afterward.
+        normal: [0.0; 4],
     }
 }
 
@@ -301,6 +334,11 @@ mod tests {
             .map(|v| v.position(address).relative_to(address.origin()))
             .collect();
         assert!(positions.iter().all(|p| p.x == 16.0));
+        assert!(
+            many.vertices()
+                .iter()
+                .all(|v| v.normal == [1.0, 0.0, 0.0, 0.0])
+        );
         let mut edges = BTreeMap::<[u32; 2], usize>::new();
         for t in many.indices().chunks_exact(3) {
             let [a, b, c] = [t[0], t[1], t[2]].map(|i| positions[i as usize]);
@@ -324,6 +362,44 @@ mod tests {
     }
 
     #[test]
+    fn density_normals_follow_a_curved_field_across_chunk_boundaries() {
+        for x in [0, 32] {
+            let address = VoxelChunkAddress::containing(
+                VoxelPosition {
+                    x_m: x,
+                    y_m: 0,
+                    z_m: 0,
+                },
+                0,
+            )
+            .unwrap();
+            // A quadratic has an independent analytic gradient at every root.
+            let volume = VoxelVolume::fixture(address, |p| {
+                let d = Vec3::new(
+                    (p.x_m - 32) as f32,
+                    (p.y_m - 16) as f32,
+                    (p.z_m - 16) as f32,
+                );
+                22.0 * 22.0 - d.length_squared()
+            });
+            let mesh = build_voxel_chunk_mesh(&volume).unwrap();
+            assert!(!mesh.vertices().is_empty());
+            for v in mesh.vertices() {
+                let p = v.position(address).relative_to(VoxelPosition {
+                    x_m: 32,
+                    y_m: 16,
+                    z_m: 16,
+                });
+                let n = Vec3::new(v.normal[0], v.normal[1], v.normal[2]);
+                assert!(
+                    (n - p * 2.0).length() < 0.0001,
+                    "outward analytic gradient, including halo endpoints"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn invalid_readback_is_rejected_by_its_owner() {
         let a = VoxelChunkAddress::root();
         assert!(VoxelVolume::from_potentials(a, vec![0.0]).is_err());
@@ -331,6 +407,14 @@ mod tests {
             VoxelVolume::from_potentials(a, vec![f32::NAN; crate::VOXEL_SAMPLE_COUNT]).is_err()
         );
         let vertex = VoxelMeshVertex::zeroed();
+        let bad_normal = VoxelMeshVertex {
+            normal: [f32::NAN; 4],
+            ..vertex
+        };
+        assert!(matches!(
+            VoxelChunkMesh::from_parts(a, vec![bad_normal], vec![]),
+            Err(VoxelMeshError::Vertex)
+        ));
         assert!(matches!(
             VoxelChunkMesh::from_parts(a, vec![vertex], vec![0, 0, 1]),
             Err(VoxelMeshError::Indices)

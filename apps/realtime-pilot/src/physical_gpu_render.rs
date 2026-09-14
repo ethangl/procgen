@@ -97,9 +97,7 @@ fn initialize(
         label: Some("voxel direct render"),
         source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADER.into()),
     });
-    const LOCAL_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0=>Sint32x4,1=>Float32x4];
-    const HEIGHT_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0=>Sint32x4,1=>Float32x4,3=>Float32x4];
     let make_pipeline = |vertex_entry, fragment_entry, local| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -117,11 +115,7 @@ fn initialize(
                             size_of::<procgen_realtime_pilot::HeightVertex>() as u64
                         },
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: if local {
-                            &LOCAL_ATTRIBUTES
-                        } else {
-                            &HEIGHT_ATTRIBUTES
-                        },
+                        attributes: &TERRAIN_ATTRIBUTES,
                     },
                     wgpu::VertexBufferLayout {
                         array_stride: 16,

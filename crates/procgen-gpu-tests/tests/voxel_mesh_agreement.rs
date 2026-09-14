@@ -64,6 +64,17 @@ fn compare(cpu: &VoxelChunkMesh, gpu: &VoxelChunkMesh) {
             assert!((a[i] - b[i]).abs() <= tolerance, "{a:?} vs {b:?}");
         }
     }
+    for (a, b) in cpu.vertices().iter().zip(gpu.vertices()) {
+        for i in 0..3 {
+            // Five decimal digits for interpolation of identical density samples.
+            assert!(
+                (a.normal[i] - b.normal[i]).abs() <= 0.00001 * a.normal[i].abs().max(1.0),
+                "density normal {:?} vs {:?}",
+                a.normal,
+                b.normal
+            );
+        }
+    }
 }
 fn edges(mesh: &VoxelChunkMesh) -> BTreeMap<[u32; 2], (u32, i32)> {
     let mut edges = BTreeMap::new();
@@ -225,6 +236,7 @@ fn gpu_mesh_matches_reference_and_is_schedule_invariant() {
     }
     check_overflow(&gpu, &fixtures[3].1);
     check_shared_boundaries(&gpu);
+    check_normal_boundaries(&gpu);
     check_saved_field(&gpu);
 }
 
@@ -259,7 +271,8 @@ fn check_overflow(gpu: &Gpu, volume: &VoxelVolume) {
         let vertices = vec![
             VoxelMeshVertex {
                 anchor_m: [-37; 4],
-                offset_m: [-37.0; 4]
+                offset_m: [-37.0; 4],
+                normal: [-37.0; 4]
             };
             config.vertex_capacity as usize
         ];
@@ -317,6 +330,46 @@ impl Ord for Point {
             .find(|o| !o.is_eq())
             .unwrap_or(std::cmp::Ordering::Equal)
     }
+}
+
+fn check_normal_boundaries(gpu: &Gpu) {
+    let mut shared = BTreeMap::new();
+    let mut matches = 0;
+    for i in 0..8 {
+        // Translate the fixture to planetary coordinates without losing sub-meter
+        // roots: the field itself is evaluated relative to this integer center.
+        let a = address(
+            4_900_000 + (i & 1) * 32,
+            ((i >> 1) & 1) * 32,
+            ((i >> 2) & 1) * 32,
+            0,
+        );
+        let origin = a.origin();
+        let volume = fixture(a, |p| {
+            let q = Vec3::new(
+                (p[0] + origin.x_m - 4_900_032) as f32,
+                (p[1] + origin.y_m - 32) as f32,
+                (p[2] + origin.z_m - 32) as f32,
+            );
+            24.0 * 24.0 - q.length_squared()
+        });
+        let job = gpu.prepare(Source::Samples(&volume), CAPACITY);
+        gpu.dispatch(&[&job], false);
+        let mesh = gpu.audit(&job).mesh.unwrap();
+        compare(&build_voxel_chunk_mesh(&volume).unwrap(), &mesh);
+        for (p, v) in positions(&mesh).iter().zip(mesh.vertices()) {
+            let world = Point([
+                p[0] + f64::from(origin.x_m),
+                p[1] + f64::from(origin.y_m),
+                p[2] + f64::from(origin.z_m),
+            ]);
+            if let Some(previous) = shared.insert(world, v.normal) {
+                assert_eq!(previous, v.normal, "shared face/edge/corner normal");
+                matches += 1;
+            }
+        }
+    }
+    assert!(matches > 100, "curved shared boundaries exercised");
 }
 
 fn check_shared_boundaries(gpu: &Gpu) {

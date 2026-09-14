@@ -699,9 +699,10 @@ curtain along the join.
 
 Normals are generated with the immutable tile, retained in its vertex buffer,
 and interpolated for neutral lighting and the normal view. There are no noise
-evaluations in the draw shader. Local voxel shading still uses face normals;
-that remains a separate follow-up. This change does not move vertices, alter
-triangle indices, change either saved terrain preset, or affect CPU collision.
+evaluations in the draw shader. Local voxel shading retained face normals in this
+slice; the follow-up below smooths that surface. This change does not move
+vertices, alter triangle indices, change either saved terrain preset, or affect
+CPU collision.
 
 Each height vertex grows from 32 to 48 bytes. A tile occupies 58,608 bytes and a
 384-tile snapshot occupies 21.46 MiB, versus 14.31 MiB before normals. Existing
@@ -752,3 +753,68 @@ paused at missing collision coverage. This is an observed contact/coverage issue
 for the separate collision follow-up; completion of the visual route does not
 prove continuous contact. Windows/Vulkan validation of these normals remains
 pending; commands are in the Windows validation handoff.
+
+## Local voxel normals
+
+Regular voxel meshes now carry the outward density gradient at each surface
+vertex. Central differences use the six axis neighbors in the existing density
+halo. Edge roots interpolate the gradients at both endpoints with the same
+fraction as the position; exact-zero roots use the node gradient. Positive
+density is solid, so the outward gradient negates the density derivative.
+The renderer interpolates these gradients and normalizes them per fragment.
+Shared boundary samples therefore produce the same shading on adjacent uniform
+chunks. No new noise evaluations, density buffers, or compute passes are needed.
+
+A zero gradient has no direction and uses the triangle's face normal. Mixed-LOD
+transition meshes retain face normals because their sample stencil has no
+regular halo. The viewer's local patch uses uniform one-meter chunks. This slice
+does not change positions, indices, collision behavior, or either saved preset.
+
+Each voxel vertex grows from 32 to 48 bytes. The pool accounts for the larger
+format through the vertex type and retains its 300-slot, 512 MiB limit. A regular
+slot with capacity for 20,000 vertices adds 320,000 bytes. Height vertices and
+blend targets keep their existing sizes.
+
+The CPU tests check exact plane gradients and analytic quadratic gradients across
+chunk boundaries. Metal tests compare CPU/GPU gradients from identical density
+samples, check exact shared-boundary normals on a curved field at planetary
+coordinates, and retain replay, schedule, topology, overflow, transition, and
+travel checks. Each normal component permits a difference of 0.00001 times
+max(abs(CPU), 1), allowing five decimal digits for interpolation. Existing
+position and density tolerances are unchanged.
+
+Validation passed: all 89 pilot CPU tests, both Metal uniform mesh tests, all five
+streaming/transition tests, all three height tests, the compositor test, native
+build, formatting, and Clippy with warnings denied. The streaming shader test
+needed its shared frame definitions included, matching the render pipeline;
+its corrected validation passed. Repeated local travel peaked at 334.9 MiB
+(large preset) and 280.0 MiB (small preset), within the unchanged pool budget.
+
+Both 90-second native routes completed with exit code 0 on Apple M1 Max at
+2880 × 2000. Recordings are `/tmp/voxel-normals-large.csv` and
+`/tmp/voxel-normals-small.csv`, with adjacent PNGs and logs. Ground and walking
+captures show smooth local lighting in place of the previous triangle shading.
+Ridge silhouettes retain their existing geometry. No GPU stream failure or
+overflow was reported.
+
+| Measurement | 4,900 km | 300 km |
+| --- | ---: | ---: |
+| Frame p50 / p95 | 8.39 / 16.85 ms | 8.34 / 8.97 ms |
+| Maximum frame time | 579.93 ms | 124.66 ms |
+| Sampled height replacement p95 / max | 290.37 / 338.50 ms | 325.21 / 399.84 ms |
+| Largest sampled local publication | 219.41 ms | 252.61 ms |
+| Peak terrain buffers | 249.0 MiB | 295.5 MiB |
+| Peak terrain buffers plus blend targets | 446.7 MiB | 493.2 MiB |
+
+Percentiles use the same nearest-rank method as the height-normal slice. These
+serial native runs include startup and captures and do not isolate the cost of
+normal generation or drawing. Frame outliers and height replacements over
+250 ms remain. The larger vertex format raises terrain memory use; it remains
+within the existing allocation limits.
+
+The large walking capture shows collision coverage rebuilding; the small return
+capture did not repeat the earlier missing-coverage warning. These observations
+do not establish continuous contact or resolve the prior collision issue.
+Skirts, spatial detail changes, and collision coverage remain separate work.
+Windows/Vulkan validation is pending, with updated commands in the Windows
+validation handoff.

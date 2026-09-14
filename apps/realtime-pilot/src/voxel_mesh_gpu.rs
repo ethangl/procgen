@@ -101,7 +101,7 @@ pub struct VoxelMeshDraw {
 
 /// One chunk per bind group. Bindings: 0 parameters, 1 VoxelMeshGpuChunk record, 2 potentials,
 /// 3 scan scratch (vertex slots * 8 bytes), 4 block scratch (scan blocks * 16),
-/// 5 status (16), 6 vertices (capacity * 32), 7 indices (triangle capacity * 12),
+/// 5 status (16), 6 vertices (capacity * 48), 7 indices (triangle capacity * 12),
 /// 8 indirect draw (20). All but 0 are storage; 1/2 are read-only. Outputs also
 /// carry VERTEX, INDEX and INDIRECT usage respectively. Density comes directly
 /// from G1. Each entry point uses the same explicit layout.

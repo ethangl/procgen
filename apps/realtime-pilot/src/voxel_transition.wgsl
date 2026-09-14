@@ -1,6 +1,6 @@
 struct Parameters { capacity: u32, tetrahedra: u32, one: f32, zero: f32 }
 struct Node { position: vec4<i32>, samples: array<u32,8>, count: u32, pad0: u32, pad1: u32, pad2: u32 }
-struct Vertex { anchor: vec4<i32>, offset: vec4<f32> }
+struct Vertex { anchor: vec4<i32>, offset: vec4<f32>, normal: vec4<f32> }
 struct Draw { indices: u32, instances: u32, first_index: u32, base_vertex: i32, first_instance: u32 }
 @group(0) @binding(0) var<uniform> params: Parameters;
 @group(0) @binding(1) var<storage,read> nodes: array<Node>;
@@ -38,7 +38,7 @@ fn polygon(id: u32) -> Polygon {
 }
 fn vertex(root: vec2<u32>) -> Vertex {
     var a = nodes[root.x].position.xyz; var b = nodes[root.y].position.xyz;
-    if root.x == root.y { return Vertex(vec4<i32>(a,0),vec4<f32>(0.0)); }
+    if root.x == root.y { return Vertex(vec4<i32>(a,0),vec4<f32>(0.0),vec4<f32>(0.0)); }
     var da = value(root.x); var db = value(root.y);
     let swap = a.x > b.x || (a.x == b.x && (a.y > b.y || (a.y == b.y && a.z > b.z)));
     if swap { let p = a; a = b; b = p; let d = da; da = db; db = d; }
@@ -46,7 +46,7 @@ fn vertex(root: vec2<u32>) -> Vertex {
     let start = select(b,a,use_a); let end = select(a,b,use_a);
     let ratio = abs(select(db,da,use_a) / select(da,db,use_a));
     let fraction = ratio / f32_add(1.0,ratio,F32Arithmetic(params.one,params.zero));
-    return Vertex(vec4<i32>(start,0),vec4<f32>(fma(vec3<f32>(end-start),vec3<f32>(fraction),vec3<f32>(params.zero)),0.0));
+    return Vertex(vec4<i32>(start,0),vec4<f32>(fma(vec3<f32>(end-start),vec3<f32>(fraction),vec3<f32>(params.zero)),0.0),vec4<f32>(0.0));
 }
 @compute @workgroup_size(GROUP_SIZE)
 fn classify(@builtin(global_invocation_id) id: vec3<u32>) {

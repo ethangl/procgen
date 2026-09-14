@@ -113,8 +113,11 @@ patterns. CPU collision remains independent.
 
 Height tiles carry filtered field normals generated once with each tile. Neutral
 and normal views interpolate them across triangles and use the same normal at
-coincident tile boundaries. Skirts inherit their top edge's normal. Local voxel
-terrain still uses face normals; smoothing that surface is a separate slice.
+coincident tile boundaries. Skirts inherit their top edge's normal. Local uniform
+voxel meshes carry outward gradients from central differences in their existing
+density halo. The renderer interpolates and normalizes these gradients for smooth
+ground shading. Zero gradients and mixed-LOD transition meshes use face normals.
+Both vertex formats occupy 48 bytes; normal generation adds no voxel noise samples.
 
 Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
 retains complete mesh replacement and its 512 KiB per-frame upload limit. There
@@ -148,8 +151,9 @@ The surface-join follow-up adds three full-resolution RGBA16F/Depth32F layers:
 CSV (`surface_target_bytes`) report this texture payload separately from terrain
 buffers. At 2880 × 2000 it adds 197.8 MiB; at 2160 × 1500 it adds 111.2 MiB.
 These counts exclude driver padding and the viewer's other render targets.
-See [surface-join validation](../../docs/realtime-world-gpu-streaming.md#surface-join-follow-up)
-for current measurements; the original G5 timings above predate the compositor.
+See [local voxel normal validation](../../docs/realtime-world-gpu-streaming.md#local-voxel-normals)
+for current measurements; the original G5 timings above predate the compositor
+and both terrain normal updates. These follow-ups still need Windows/Vulkan validation.
 
 Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
 
