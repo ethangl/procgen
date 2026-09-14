@@ -7,143 +7,143 @@
     "octaves": [
       {
         "enabled": true,
-        "wavelength_m": 131072.0,
-        "amplitude_m": 4096.0,
-        "sharpness": 0.375,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "wavelength_m": 256000.0,
+        "amplitude_m": 3200.0,
+        "sharpness": -0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
         "ridge_erosion": 0.0
       },
       {
         "enabled": true,
-        "wavelength_m": 65536.0,
-        "amplitude_m": 4096.0,
-        "sharpness": -0.25,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
-        "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
-      },
-      {
-        "enabled": true,
-        "wavelength_m": 32768.0,
-        "amplitude_m": 4096.0,
-        "sharpness": -0.375,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
-        "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
-      },
-      {
-        "enabled": true,
-        "wavelength_m": 16384.0,
-        "amplitude_m": 2048.0,
+        "wavelength_m": 128000.0,
+        "amplitude_m": 3200.0,
         "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
+      },
+      {
+        "enabled": true,
+        "wavelength_m": 64000.0,
+        "amplitude_m": 3200.0,
+        "sharpness": -0.25,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
+        "altitude_erosion": 0.0,
+        "ridge_erosion": 0.0
+      },
+      {
+        "enabled": true,
+        "wavelength_m": 32000.0,
+        "amplitude_m": 1600.0,
+        "sharpness": -0.25,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
+        "altitude_erosion": 0.0,
+        "ridge_erosion": 0.0
+      },
+      {
+        "enabled": true,
+        "wavelength_m": 16000.0,
+        "amplitude_m": 800.0,
+        "sharpness": -0.125,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
+        "altitude_erosion": 0.0,
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 8192.0,
-        "amplitude_m": 1024.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 512.0,
+        "sharpness": 0.25,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 4096.0,
-        "amplitude_m": 512.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 256.0,
+        "sharpness": 0.25,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 2048.0,
-        "amplitude_m": 256.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 128.0,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 1024.0,
-        "amplitude_m": 128.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 64.0,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 512.0,
-        "amplitude_m": 64.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 32.0,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
-        "wavelength_m": 256.0,
-        "amplitude_m": 32.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "wavelength_m": 156.0,
+        "amplitude_m": 16.0,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 128.0,
-        "amplitude_m": 16.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 8.0,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 64.0,
-        "amplitude_m": 8.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "amplitude_m": 4.0,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       },
       {
         "enabled": true,
         "wavelength_m": 32.0,
-        "amplitude_m": 4.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
-        "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
-      },
-      {
-        "enabled": true,
-        "wavelength_m": 16.0,
         "amplitude_m": 2.0,
-        "sharpness": -0.5,
-        "perturbation": 0.15,
-        "slope_erosion": 0.15,
+        "sharpness": 0.5,
+        "perturbation": 0.0,
+        "slope_erosion": 0.0,
         "altitude_erosion": 0.0,
-        "ridge_erosion": 0.1
+        "ridge_erosion": 0.0
       }
     ]
   }

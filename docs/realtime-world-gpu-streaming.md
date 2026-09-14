@@ -1216,3 +1216,20 @@ Consolidation validation on macOS/Metal, 2026-09-14:
   image/text pairs. A final repeat of the interactive check was blocked when
   the desktop locked; the earlier manual checks and completed route are recorded
   above.
+
+
+### Save destination correction
+
+Save controls now overwrites the current loaded file. The path in the panel is
+read-only; Load and Save as open explicit path dialogs. A canceled or failed
+file action cannot change the Save target. This prevents stray text in a path
+field from silently redirecting a normal save. CLI file overrides still select
+the current file.
+
+The user's saved `planet-design-300km.jsonw` was recovered byte-for-byte into
+`planet-design-300km.json`. This is an explicit preset retune: the first five
+wavelengths are 256, 128, 64, 32, and 16 km; their amplitudes are 3,200, 3,200,
+3,200, 1,600, and 800 m. The finest band is 32 m, all warp and damping values
+are zero, and the seed, radius, and height bound remain unchanged. The saved
+156 m band is preserved exactly. Earlier route measurements above describe the
+previous preset, not this retune.

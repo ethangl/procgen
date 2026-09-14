@@ -100,7 +100,9 @@ carry their immutable field, so old completions cannot replace new support.
 **Save controls**, **Load**, and **Copy JSON** exchange a strict version-1 file
 containing seed, radius, height bound, and every octave value. Save writes the
 valid editable controls, including edits not yet displayed. It only runs on an
-explicit action. Camera and coloring remain viewer preferences. Loading validates
+explicit action and overwrites the current loaded file. The displayed path is
+read-only; Load and Save as use explicit path dialogs. Camera and coloring remain
+viewer preferences. Loading validates
 the entire design and applies it automatically. Status uses a fixed area, and
 editable controls have stable IDs so updates cannot interrupt typing.
 

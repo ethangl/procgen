@@ -24,9 +24,11 @@ complete design remains visible while its replacement builds on a worker.
 Height meshes, local voxels, field queries, and collision switch to the accepted
 design together. Edits do not reset the camera or its orientation.
 
-**Load** validates and applies a file. **Save controls** writes the valid editable
-controls to the displayed file path; **Copy JSON** copies the same complete
-design. Controls never save automatically. `--write-design PATH` explicitly
+**Load…** opens a path dialog, validates the file, and makes it the current design.
+**Save controls** overwrites that current file. Its path is read-only in the panel;
+use **Save as…** to choose a different destination. Only a successful Load or
+Save as changes the current file. **Copy JSON** copies the same complete design.
+Controls never save automatically. `--write-design PATH` explicitly
 writes the initial config and sets the viewer's save path. Camera, coloring,
 and control-panel state are not saved as generation data. Text inputs retain
 focus across validation and generation updates.
@@ -102,9 +104,10 @@ orbit distance or flight speed. The player has a 1.7 m eye height and walks at
 4 m/s. The panel distinguishes reference altitude, measured ground clearance,
 and the height-field estimate.
 
-A separate 300 km comparison preset preserves the local bands from 65.536 km
-through 16 m. Its broadest band is 131.072 km with 4,096 m amplitude; the height
-limit remains 12 km. The original `planet-design.json` is unchanged.
+The 300 km preset includes the user's saved octave tuning: the broadest band is
+256 km with 3,200 m amplitude, and the finest band is 32 m with 2 m amplitude.
+Warp and damping are zero in every band; the height bound remains 12 km.
+The original `planet-design.json` is unchanged.
 
 ```sh
 cargo run -p procgen-realtime-pilot -- \

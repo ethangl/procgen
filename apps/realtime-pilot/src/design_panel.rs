@@ -12,7 +12,8 @@ pub enum Tab {
 }
 pub struct DesignPanel {
     pub edits: DesignEdits,
-    pub path: String,
+    path: PathBuf,
+    file_action: Option<FileAction>,
     pub tab: Tab,
     notice: String,
 }
@@ -20,10 +21,8 @@ impl DesignPanel {
     pub fn new(config: PlanetDesignConfig, path: Option<PathBuf>) -> Self {
         Self {
             edits: DesignEdits::new(config),
-            path: path
-                .unwrap_or_else(|| PathBuf::from("planet-design.json"))
-                .display()
-                .to_string(),
+            path: path.unwrap_or_else(|| PathBuf::from("planet-design.json")),
+            file_action: None,
             tab: Tab::Status,
             notice: String::new(),
         }
@@ -52,32 +51,31 @@ impl DesignPanel {
             .show(ui, |ui| match self.tab {
                 Tab::Octaves => design_controls::octaves(ui, &mut self.edits.config),
                 Tab::Design => {
-                    ui.label("Design file");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.path)
-                            .id(egui::Id::new("planet-design-path")),
-                    );
+                    ui.label("Current design file");
+                    ui.label(
+                        self.path
+                            .file_name()
+                            .unwrap_or(self.path.as_os_str())
+                            .to_string_lossy(),
+                    )
+                    .on_hover_text(self.path.display().to_string());
                     ui.horizontal(|ui| {
-                        if ui.button("Load").clicked() {
-                            self.notice = match design_file::load(Path::new(&self.path)) {
-                                Ok(config) => {
-                                    self.edits.load(config);
-                                    "Loaded controls.".into()
-                                }
-                                Err(e) => e.to_string(),
-                            };
+                        if ui.button("Load…").clicked() {
+                            self.file_action =
+                                Some(FileAction::Load(self.path.display().to_string()));
                         }
                         if ui.button("Save controls").clicked() {
-                            self.notice = match self.edits.validated() {
-                                Ok(field) => {
-                                    match design_file::save(Path::new(&self.path), field.config()) {
-                                        Ok(()) => "Saved complete design.".into(),
-                                        Err(e) => e.to_string(),
-                                    }
-                                }
+                            self.notice = match self.save_to(&self.path) {
+                                Ok(()) => format!("Saved {}", self.path.display()),
                                 Err(e) => e,
                             };
                         }
+                        if ui.button("Save as…").clicked() {
+                            self.file_action =
+                                Some(FileAction::SaveAs(self.path.display().to_string()));
+                        }
+                    });
+                    ui.horizontal(|ui| {
                         if ui.button("Copy JSON").clicked() {
                             self.notice = match self.edits.validated() {
                                 Ok(field) => match design_file::encode(field.config()) {
@@ -101,6 +99,84 @@ impl DesignPanel {
                 }
                 Tab::Status => unreachable!("status panel is rendered by the inspector"),
             });
+        self.file_dialog(ui.ctx());
+    }
+    fn save_to(&self, path: &Path) -> Result<(), String> {
+        let field = self.edits.validated()?;
+        design_file::save(path, field.config()).map_err(|e| e.to_string())
+    }
+    fn apply_file_action(&mut self, action: &FileAction) -> Result<(), String> {
+        let path = PathBuf::from(action.path());
+        match action {
+            FileAction::Load(_) => {
+                let config = design_file::load(&path).map_err(|e| e.to_string())?;
+                self.edits.load(config);
+                self.notice = format!("Loaded {}", path.display());
+            }
+            FileAction::SaveAs(_) => {
+                self.save_to(&path)?;
+                self.notice = format!("Saved {}", path.display());
+            }
+        }
+        self.path = path;
+        Ok(())
+    }
+    fn file_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut action) = self.file_action.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut complete = false;
+        egui::Window::new(action.label())
+            .id(egui::Id::new("planet-design-file-dialog"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("File path");
+                ui.add(
+                    egui::TextEdit::singleline(action.path_mut())
+                        .id(egui::Id::new("planet-design-path"))
+                        .desired_width(420.0),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button(action.label()).clicked() {
+                        match self.apply_file_action(&action) {
+                            Ok(()) => complete = true,
+                            Err(e) => self.notice = e,
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        complete = true;
+                    }
+                });
+            });
+        if open && !complete {
+            self.file_action = Some(action);
+        }
+    }
+}
+
+enum FileAction {
+    Load(String),
+    SaveAs(String),
+}
+impl FileAction {
+    fn path(&self) -> &str {
+        match self {
+            Self::Load(path) | Self::SaveAs(path) => path,
+        }
+    }
+    fn path_mut(&mut self) -> &mut String {
+        match self {
+            Self::Load(path) | Self::SaveAs(path) => path,
+        }
+    }
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Load(_) => "Load design",
+            Self::SaveAs(_) => "Save design as",
+        }
     }
 }
 
@@ -130,6 +206,51 @@ mod tests {
         ctx.read_response(egui::Id::new("planet-design-seed"))
             .unwrap()
             .rect
+    }
+    #[test]
+    fn save_targets_loaded_file_until_load_or_save_as_succeeds() {
+        let directory =
+            std::env::temp_dir().join(format!("procgen-save-target-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let current = directory.join("planet-design-300km.json");
+        let other = directory.join("other.json");
+        let config = PlanetDesignConfig::starter(42);
+        design_file::save(&current, &config).unwrap();
+        let mut panel = DesignPanel::new(config, Some(current.clone()));
+        panel.tab = Tab::Design;
+        panel.edits.seed_text = "43".into();
+        // A draft destination (including stray movement text) cannot redirect Save.
+        panel.file_action = Some(FileAction::SaveAs(format!("{}w", current.display())));
+        panel.save_to(&panel.path).unwrap();
+        assert_eq!(design_file::load(&current).unwrap().seed, 43);
+        assert!(!current.with_extension("jsonw").exists());
+        assert!(
+            panel
+                .apply_file_action(&FileAction::Load(other.display().to_string()))
+                .is_err()
+        );
+        assert_eq!(panel.path, current);
+        panel
+            .apply_file_action(&FileAction::SaveAs(other.display().to_string()))
+            .unwrap();
+        assert_eq!(panel.path, other);
+        panel.edits.seed_text = "44".into();
+        panel.save_to(&panel.path).unwrap();
+        assert_eq!(design_file::load(&other).unwrap().seed, 44);
+        assert_eq!(design_file::load(&current).unwrap().seed, 43);
+        panel.edits.seed_text = "invalid".into();
+        assert!(
+            panel
+                .apply_file_action(&FileAction::SaveAs(current.display().to_string()))
+                .is_err()
+        );
+        assert_eq!(panel.path, other);
+        panel
+            .apply_file_action(&FileAction::Load(current.display().to_string()))
+            .unwrap();
+        assert_eq!(panel.path, current);
+        assert_eq!(panel.edits.seed_text, "43");
+        std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn typing_survives_validation_generation_and_file_notices_without_layout_shift() {
