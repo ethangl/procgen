@@ -113,11 +113,13 @@ cargo run -p procgen-realtime-pilot --no-default-features -- \
 
 GPU generation and incremental chunk replacement are required for the next
 phase. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
-The first slice supplies a WGSL density kernel and CPU/GPU agreement checks.
+G1 supplies a WGSL density kernel and CPU/GPU agreement checks. G2 adds bounded
+uniform-chunk meshing, deterministic scans, and GPU vertex/index/draw buffers.
 It runs on Metal on macOS and Vulkan on Windows/Linux:
 
 ```sh
 cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
+cargo test -p procgen-gpu-tests --test voxel_mesh_agreement -- --nocapture
 ```
 
 This checks real GPU chunk batches, shared halo/parent samples, repeated runs,
@@ -126,9 +128,13 @@ separate pipeline creation, dispatch/completion, CPU sampling, and audit readbac
 The test requires a compatible GPU; shader validation alone can run without one
 by filtering to `voxel_density_wgsl_validates_without_a_device`.
 
-The exploration viewer still uses CPU meshing. GPU meshing, persistent chunk
-buffers, and rendering integration are the next slices; this kernel alone does
-not shorten the viewer's complete mesh rebuild.
+The meshing audit checks topology, exact shared boundaries, replay order, capacity
+failures, and saved-terrain agreement with CPU extraction and collision. It feeds
+GPU density directly into extraction without an intermediate readback.
+
+The exploration viewer still uses CPU meshing. Mixed LOD and persistent chunk
+buffers are G3; rendering integration is G4. The isolated GPU kernels do not yet
+shorten the viewer's complete mesh rebuild.
 
 ## Run the original experiments
 

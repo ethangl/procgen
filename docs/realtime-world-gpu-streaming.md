@@ -1,8 +1,8 @@
 # Real-time pilot: GPU generation and incremental streaming
 
-Status: slice G1 has a working GPU density kernel; validation is recorded below.
-This replaces the CPU-only visual
-generation plan for the physical-planet pilot. The saved terrain settings are
+Status: G1 density and G2 uniform-chunk meshing run on the GPU. Validation is
+recorded below. The exploration viewer still uses the CPU path until G4.
+This replaces the CPU-only visual generation plan for the physical-planet pilot. The saved terrain settings are
 held fixed while this work proceeds. The earlier world pipeline is unrelated.
 
 ## Required architecture
@@ -119,6 +119,95 @@ chunks, shared uniform boundaries, output capacity failures, and repeated work
 must produce valid meshes. Check surface/CPU collision agreement with a stated
 geometric tolerance. Counts must come from deterministic scans rather than
 unordered append allocation. Overflow retains prior coverage.
+
+### G2 implementation
+
+The pilot now exports `build_voxel_chunk_mesh`, a parallel CPU reference, and
+`voxel_mesh_shader`, a four-pass WGSL implementation. A fixed six-tetrahedron
+(Freudenthal) split uses the same diagonal on shared uniform faces. Rust owns the
+tetrahedra and oriented sign-case rings; shader assembly emits those tables.
+The existing adaptive 24-tetrahedron extractor and collision path are unchanged.
+
+Vertices are shared through seven monotone edge slots and one exact-zero node
+slot per grid node. Zero endpoints resolve to the node slot; repeated roots are
+removed before triangulation. Isolated zero points or edges produce no triangles.
+An all-zero chunk is full and emits no mesh. No density epsilon changes the field.
+Vertices store an integer meter anchor relative to the chunk and a separate float
+offset. Interpolation starts at the endpoint nearest zero, so large world origins
+do not swallow small offsets. Vertices and indices have storage plus vertex/index
+buffer usage; indexed indirect draw arguments stay in a GPU buffer.
+
+The passes classify counts, scan 256-entry blocks, scan block totals, and emit
+vertices and indices at deterministic offsets. There are no append atomics.
+One bind group owns one chunk and uses eight storage bindings, with no optional
+GPU features. Source potentials come directly from G1's output buffer. Neither
+samples nor geometry return to the CPU between density and mesh dispatches.
+Device creation, dispatch, and audit readback live in `procgen-gpu-tests`; the
+pilot's packing and extraction modules have no wgpu or Bevy dependency.
+
+`VoxelMeshConfig` sets positive vertex and triangle capacities. The fixed upper
+bounds are 287,496 vertex candidates and 393,216 triangles per chunk. Scan scratch
+uses 2,317,952 bytes per chunk, including block totals and offsets. The audit's
+50,000-vertex/100,000-triangle slots use about 5.04 MiB each for density, scratch,
+mesh buffers and small records; worst-case slots use about 15.65 MiB. These exclude
+shared field parameters, pipeline objects, driver allocation, and audit readback.
+G3 must budget the number of resident and in-flight slots against these costs.
+
+Overflow records required counts, writes a zero indirect index count, and skips
+all vertex/index writes. Tests fill destination buffers with sentinels and prove
+that neither vertex nor index exhaustion changes them, including capacities one
+short of the required count. Exact-fit capacities succeed. The consumer must use
+an unpublished destination and retain the previous resident slot on failure;
+publication and replacement ownership arrive in G3.
+
+Run the meshing audit on Metal or Vulkan:
+
+```sh
+cargo test -p procgen-gpu-tests --test voxel_mesh_agreement -- --nocapture
+```
+
+Filter to `voxel_mesh_wgsl_validates_without_a_device` for Naga validation only.
+The device audit requires Metal on macOS and Vulkan elsewhere. It checks empty,
+full, all-zero, axis/oblique planes, exact-zero contacts, closed outward-facing
+spheres, large origins, coarse spacing, the final partial scan block, worst-case
+checkerboard terrain, overflow, and the saved design. Eight neighboring chunks
+must agree exactly on shared face/edge/corner geometry. Repeated work, reversed
+chunk order, interleaved passes, and sequential passes must reproduce exact GPU
+vertices and indices. CPU extraction is also checked across Rayon schedules.
+
+With identical input potentials, CPU/GPU indices and counts are exact; vertex
+positions allow 0.00001 times sample spacing for float interpolation. With GPU
+density feeding GPU extraction, 256 surface probes in the saved +X landing chunk
+show a maximum 0.000900 m difference from the same mesh built with CPU density,
+within G1's 0.02 m surface bound. The current CPU collision mesh differs by up to
+0.122281 m, within this slice's quarter-voxel (0.25 m) geometric acceptance bound.
+The collision comparison uses an independent f64 axis-ray probe of both meshes:
+the existing f32 collision ray query can miss an exact triangle edge. This is a
+geometry comparison, not a test of that query's edge behavior. The measured
+interpolation difference applies to this patch, not every possible field. G4
+must check visible ground contact when connecting the new topology to walking.
+
+On Apple M1 Max/Metal, the saved chunk produces 4,889 vertices and 9,496 triangles.
+The checkerboard reaches the exact 393,216-triangle bound, with 137,312 vertices.
+Timing measures queue submission through completion, excluding pipeline creation,
+buffer allocation, and readback. Local single-chunk mesh runs generally take
+about 2–6 ms once warm; cold submissions can take longer. The CPU reference takes
+about 2 ms for simple chunks and 12 ms for the checkerboard, so this slice does
+not claim that isolated small mesh jobs always run faster on the GPU. The GPU
+path avoids future CPU geometry transfer and composes directly with GPU density.
+A warm saved-chunk density-plus-mesh dispatch measured 2.66 ms, versus 22.92 ms
+for CPU sampling plus the new CPU extractor; mesh audit readback added 5.77 ms.
+A warm 13-chunk fixture batch, including the checkerboard, took 9.94 ms with each
+chunk's passes adjacent and 28.75 ms with passes interleaved across chunks. Both
+schedules returned identical output. These are local observations, not budgets.
+Pipeline creation measured 264 ms cold and about 4 ms with the driver cache warm.
+Vulkan execution remains pending on the Windows host. These checks do not measure
+viewer frame rate: mixed LOD, persistent residency, and rendering remain G3/G4.
+
+Validation passes both Metal density/meshing suites, 76 pilot tests without the
+inspector and 77 with it, Clippy for both pilot feature configurations and the GPU
+test crate, the native build, formatting, and diff checks. `planet-design.json`
+has no changes.
 
 ## G3: mixed LOD and incremental residency
 

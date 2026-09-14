@@ -17,6 +17,14 @@ pub fn request_device_for_backends(
     label: &str,
     backends: wgpu::Backends,
 ) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
+    request_device_with_limits(label, backends, wgpu::Limits::downlevel_defaults())
+}
+
+pub fn request_device_with_limits(
+    label: &str,
+    backends: wgpu::Backends,
+    required_limits: wgpu::Limits,
+) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends,
         ..Default::default()
@@ -36,7 +44,7 @@ pub fn request_device_for_backends(
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
+        required_limits,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         trace: wgpu::Trace::Off,

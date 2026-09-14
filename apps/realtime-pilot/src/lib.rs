@@ -31,10 +31,13 @@ mod usable;
 mod volume;
 mod voxel_address;
 mod voxel_audit;
+mod voxel_chunk_mesh;
 mod voxel_collision;
 mod voxel_collision_index;
 mod voxel_density;
 mod voxel_gpu;
+mod voxel_mesh_gpu;
+mod voxel_mesh_topology;
 mod voxel_residency;
 mod voxel_selection;
 mod voxel_surface;
@@ -146,4 +149,12 @@ pub use physical_audit::{
 
 pub use meter_position::MeterPosition;
 
+pub use voxel_chunk_mesh::{
+    VoxelChunkMesh, VoxelMeshError, VoxelMeshVertex, build_voxel_chunk_mesh,
+};
 pub use voxel_gpu::{VoxelGpuChunk, VoxelGpuParameters, voxel_density_shader};
+pub use voxel_mesh_gpu::{
+    VOXEL_MESH_SCAN_BLOCKS, VOXEL_MESH_WORKGROUP_SIZE, VoxelMeshConfig, VoxelMeshDraw,
+    VoxelMeshGpuParameters, VoxelMeshStatus, voxel_mesh_shader,
+};
+pub use voxel_mesh_topology::{VOXEL_MESH_MAX_TRIANGLES, VOXEL_MESH_VERTEX_SLOTS};

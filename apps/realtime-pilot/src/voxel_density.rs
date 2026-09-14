@@ -33,6 +33,18 @@ pub struct VoxelVolume {
     potentials: Vec<f32>,
 }
 impl VoxelVolume {
+    /// Construct a sampled volume, including GPU audit readback, in halo-grid order.
+    pub fn from_potentials(
+        address: VoxelChunkAddress,
+        potentials: Vec<f32>,
+    ) -> Result<Self, VoxelVolumeError> {
+        let result = Self {
+            address,
+            potentials,
+        };
+        result.validate()?;
+        Ok(result)
+    }
     #[cfg(test)]
     pub(crate) fn fixture(
         address: VoxelChunkAddress,
