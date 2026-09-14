@@ -400,8 +400,8 @@ It changes a file only when Save controls or `--write-design` is requested.
 `--backend cpu` remains an explicit visual audit with a fixed design per run.
 The original `--stream` experiment remains separate.
 
-**Orbit** resets to three reference radii from the center. Left drag rotates the
-view; scroll changes clearance. **Descend continuously** follows the current
+**Orbit** resets to three reference radii from the center. Left drag uses the
+current screen up/right axes to rotate the view; scroll changes clearance. **Descend continuously** follows the current
 radial direction toward the ground without a teleport, then switches to flight.
 **Go to ground** is a direct shortcut to about five meters above the same radial
 terrain location. In flight, W/A/S/D move along the view, E/Q move radially, right

@@ -107,7 +107,8 @@ cargo run -p procgen-realtime-pilot -- \
 Use **Descend continuously** to travel from orbit or **Go to ground** for a direct
 shortcut. **Walk** lands on independent one-meter collision support. W/A/S/D
 move, right drag looks around, and E/Q move up/down in flight. Scroll changes
-orbit distance or flight speed. The player has a 1.7 m eye height and walks at
+orbit distance or flight speed. In Orbit, left drag rotates around the current
+screen up/right axes, including across the poles. The player has a 1.7 m eye height and walks at
 4 m/s. The panel distinguishes reference altitude, measured ground clearance,
 and the height-field estimate.
 
