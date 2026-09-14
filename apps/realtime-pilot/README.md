@@ -113,9 +113,12 @@ it for unrestricted terrain inspection. This checks the endpoint only: fast
 lateral flight can cross a ridge. It provides no walking, swept collision,
 gravity, or water contact. Camera preferences are not saved in design files.
 
-The GPU draws up to 384 height tiles with 64 by 64 quads each. The existing
-one-meter refinement target, increased distant detail, stitched edges, filtered
-normals, colors, and 250 ms replacement fades are unchanged. Height generation
+The GPU draws up to 384 height tiles with 64 by 64 quads each. The
+one-meter refinement target, stitched edges, colors, and 250 ms replacement
+fades remain. Filtering now follows the selected tile layout and retains fine
+distant bands. Unchanged tiles reuse their GPU buffers during movement; changed
+neighbors rebuild only affected identities. See [height tile reuse](../../docs/realtime-world-height-reuse.md)
+for the filtering change, shared normals, and validation. Height generation
 keeps at most two batches of 32 tiles in flight. The viewer no longer creates
 voxel geometry, CPU collision meshes, or a collision worker. Previous/current
 height surfaces need two RGBA16F/Depth32F layers, or 24 bytes per physical pixel:
@@ -145,6 +148,8 @@ The CSV now reports height generation, buffer/target bytes, camera position,
 `terrain_clearance_m`, and `altitude_protection`. Voxel and collision columns
 have been removed. `gpu_stats_fresh` is false when the last GPU-statistics
 snapshot is reused because its lock is busy; camera clearance stays current.
+`height_generated_tiles` and `height_reused_tiles` count cumulative tile work
+for the current design.
 `height_build_ms` measures preparation, submission waits, and GPU completion;
 `height_wait_ms` measures waiting for the preceding fade. These are elapsed
 times, not GPU timestamps. Live navigation is disabled during recorded runs.

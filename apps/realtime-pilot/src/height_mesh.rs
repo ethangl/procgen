@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use procgen_cubesphere::{TILE_QUADS, vertex_spacing};
 use rayon::prelude::*;
 pub const HEIGHT_TILE_BYTES: u64 = HEIGHT_VERTEX_COUNT as u64 * size_of::<HeightVertex>() as u64;
-/// Central differences resolve the filtered field, down to the finest voxel.
+/// Central differences of the locally fixed-band field, down to one meter.
 pub(crate) const HEIGHT_NORMAL_MIN_STEP_M: f32 = 1.0;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -17,11 +17,7 @@ pub struct HeightVertex {
     /// Unit outward normal; w is the surface altitude in meters, before any draw-time bias.
     pub normal: [f32; 4],
 }
-pub fn height_tile_vertices(
-    field: &PlanetDesignField,
-    tile: HeightTile,
-    filter: HeightFilter,
-) -> Vec<HeightVertex> {
+pub fn height_tile_vertices(field: &PlanetDesignField, tile: HeightTile) -> Vec<HeightVertex> {
     let address = tile.address();
     let radius = field.config().radius_m;
     let spacing = vertex_spacing(address.level()) * radius * (TILE_QUADS / HEIGHT_QUADS) as f32;
@@ -36,13 +32,14 @@ pub fn height_tile_vertices(
                 )
                 .unwrap()
                 .direction();
-            let surface_height = field.height(d, filter.spacing_m(d, radius));
+            let footprint = tile.footprint_m([x, y], radius);
+            let surface_height = field.height(d, footprint);
             let mut result = HeightVertex {
                 anchor: [0, 0, 0, address.level() as i32],
                 offset: [0.0, 0.0, 0.0, spacing],
                 normal: [0.0; 4],
             };
-            let n = height_normal(field, d, filter, surface_height);
+            let n = height_normal(field, d, footprint, surface_height);
             result.normal = [n.x, n.y, n.z, surface_height];
             for (axis, value) in [d.x, d.y, d.z].into_iter().enumerate() {
                 result.anchor[axis] = (value * radius).floor() as i32;
@@ -57,17 +54,15 @@ pub fn height_tile_vertices(
 fn height_normal(
     field: &PlanetDesignField,
     direction: procgen_core::Vec3,
-    filter: HeightFilter,
+    footprint: f32,
     height: f32,
 ) -> procgen_core::Vec3 {
     use procgen_core::Vec3;
     let radius = field.config().radius_m;
-    let step = filter
-        .spacing_m(direction, radius)
-        .max(HEIGHT_NORMAL_MIN_STEP_M);
+    let step = footprint.max(HEIGHT_NORMAL_MIN_STEP_M);
     let sample = |d: Vec3| {
         let d = d.normalized();
-        field.height(d, filter.spacing_m(d, radius))
+        field.height(d, footprint)
     };
     let derivative = |axis| {
         let delta = axis * (step / radius);
@@ -100,44 +95,6 @@ pub fn height_indices() -> Vec<u32> {
     result
 }
 
-/// One continuous footprint shared by every tile in a published surface.
-/// Filtering depends on distance, not tile ownership, so adjacent tile levels
-/// cannot disagree on the height at the same direction.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-pub struct HeightFilter {
-    pub surface_m: [f32; 3],
-    pub clearance_m: f32,
-}
-impl HeightFilter {
-    pub fn new(field: &PlanetDesignField, eye: crate::VoxelPosition) -> Self {
-        let p = procgen_core::Vec3::new(eye.x_m as f32, eye.y_m as f32, eye.z_m as f32);
-        let d = if p.length_squared() == 0.0 {
-            procgen_core::Vec3::X
-        } else {
-            p.normalized()
-        };
-        let surface = d * field.config().radius_m;
-        Self {
-            surface_m: [surface.x, surface.y, surface.z],
-            clearance_m: (p.length() - field.config().radius_m - field.height(d, 0.0)).max(0.0),
-        }
-    }
-    pub fn spacing_m(self, direction: procgen_core::Vec3, radius: f32) -> f32 {
-        let center =
-            procgen_core::Vec3::new(self.surface_m[0], self.surface_m[1], self.surface_m[2]);
-        ((direction * radius - center)
-            .length()
-            .hypot(self.clearance_m)
-            / HEIGHT_FILTER_DISTANCE_RATIO)
-            .max(HEIGHT_FILTER_MIN_M)
-    }
-}
-/// Distance divided by this ratio gives the nominal sample footprint in meters.
-/// Larger ratios retain smaller features; one doubling retains one finer octave.
-pub const HEIGHT_FILTER_DISTANCE_RATIO: f32 = 512.0;
-pub const HEIGHT_FILTER_MIN_M: f32 = 0.25;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,20 +124,8 @@ mod tests {
             config.octaves[0].amplitude_m = amplitude;
             let field = config.validate().unwrap();
             for d in directions {
-                let filter = HeightFilter {
-                    surface_m: [
-                        d.x * config.radius_m,
-                        d.y * config.radius_m,
-                        d.z * config.radius_m,
-                    ],
-                    clearance_m: 0.0,
-                };
-                let n = height_normal(
-                    &field,
-                    d,
-                    filter,
-                    field.height(d, filter.spacing_m(d, config.radius_m)),
-                );
+                let footprint = 0.25;
+                let n = height_normal(&field, d, footprint, field.height(d, footprint));
                 assert!(n.is_finite() && (n.length() - 1.0).abs() < 0.00001);
                 assert!(n.dot(d) > 0.0, "outward on every cube face");
                 if amplitude == 0.0 {
@@ -193,8 +138,7 @@ mod tests {
                     let v = d.cross(u);
                     let surface = |t: Vec3| {
                         let q = (d + t * (8.0 / config.radius_m)).normalized();
-                        let r = f64::from(config.radius_m)
-                            + f64::from(field.height(q, filter.spacing_m(q, config.radius_m)));
+                        let r = f64::from(config.radius_m) + f64::from(field.height(q, footprint));
                         [f64::from(q.x) * r, f64::from(q.y) * r, f64::from(q.z) * r]
                     };
                     for tangent in [u, v] {

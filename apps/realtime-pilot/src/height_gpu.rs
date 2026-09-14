@@ -21,14 +21,18 @@ pub fn height_shader() -> String {
         )
     })
     .collect();
+    let edge_constants = format!(
+        "const HEIGHT_FINEST_LEVEL: u32 = {}u;\n{edge_constants}",
+        procgen_cubesphere::MAX_TILE_LEVEL
+    );
     format!(
-        "{edge_constants}{}\n{}\nconst HEIGHT_VERTEX_COUNT: u32 = {}u;\nconst HEIGHT_QUADS: u32 = {}u;\nconst HEIGHT_SIDE: u32 = {}u;\nconst HEIGHT_FILTER_DISTANCE_RATIO: f32 = {:?};\nconst HEIGHT_FILTER_MIN_M: f32 = {:?};\nconst HEIGHT_NORMAL_MIN_STEP_M: f32 = {:?};\n{}",
+        "{edge_constants}{}\n{}\nconst HEIGHT_VERTEX_COUNT: u32 = {}u;\nconst HEIGHT_QUADS: u32 = {}u;\nconst HEIGHT_SIDE: u32 = {}u;\nconst HEIGHT_DETAIL_RATIO: f32 = {:?};\nconst HEIGHT_FILTER_MIN_M: f32 = {:?};\nconst HEIGHT_NORMAL_MIN_STEP_M: f32 = {:?};\n{}",
         voxel_density_shader(),
         procgen_cubesphere::MAPPING_WGSL_SOURCE,
         HEIGHT_VERTEX_COUNT,
         crate::HEIGHT_QUADS,
         crate::HEIGHT_SIDE,
-        crate::HEIGHT_FILTER_DISTANCE_RATIO,
+        crate::HEIGHT_DETAIL_RATIO,
         crate::HEIGHT_FILTER_MIN_M,
         crate::height_mesh::HEIGHT_NORMAL_MIN_STEP_M,
         include_str!("height_gpu.wgsl")
@@ -74,7 +78,6 @@ impl HeightGpuMesher {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         tiles: &[HeightTile],
-        filter: crate::HeightFilter,
     ) -> Vec<wgpu::Buffer> {
         assert!(
             !tiles.is_empty() && tiles.len() <= HEIGHT_GPU_BATCH_TILES,
@@ -92,19 +95,10 @@ impl HeightGpuMesher {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let filter = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("height filter"),
-            contents: bytemuck::bytes_of(&filter),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("physical height tile"),
             layout: &self.pipeline.get_bind_group_layout(1),
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: filter.as_entire_binding(),
-                },
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: address.as_entire_binding(),

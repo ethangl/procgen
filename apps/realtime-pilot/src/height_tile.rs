@@ -1,5 +1,5 @@
-//! Mesh identity includes the edges shared with a coarser neighbor.
-use procgen_cubesphere::{FaceEdge, TILE_QUADS, TileAddress};
+//! Stable mesh identity includes stitching and the shared detail at tile corners.
+use procgen_cubesphere::{FaceEdge, MAX_TILE_LEVEL, TILE_QUADS, TileAddress};
 
 // Use every canonical grid sample so distant geometry retains smaller features.
 pub const HEIGHT_QUADS: u32 = TILE_QUADS;
@@ -10,10 +10,13 @@ pub const HEIGHT_VERTEX_COUNT: u32 = HEIGHT_SIDE * HEIGHT_SIDE;
 pub struct HeightTile {
     address: TileAddress,
     coarse_edges: u32,
+    /// Tile widths in finest-level units, lower-left/right then upper-left/right.
+    pub(crate) corner_spans: [u32; 4],
 }
 impl HeightTile {
     /// Neighbors must differ by at most one level. Mark only edges whose
     /// neighbor is one level coarser; coverage selection maintains this rule.
+    /// Complete layouts must use `select_height_coverage` to resolve shared corners.
     pub fn new(address: TileAddress, coarse_edges: impl IntoIterator<Item = FaceEdge>) -> Self {
         let coarse_edges = coarse_edges
             .into_iter()
@@ -22,9 +25,24 @@ impl HeightTile {
             address.level() > 0 || coarse_edges == 0,
             "root has no coarser neighbor"
         );
+        let span = 1 << (MAX_TILE_LEVEL - address.level());
+        let corner_spans = [
+            [FaceEdge::Left, FaceEdge::Bottom],
+            [FaceEdge::Right, FaceEdge::Bottom],
+            [FaceEdge::Left, FaceEdge::Top],
+            [FaceEdge::Right, FaceEdge::Top],
+        ]
+        .map(|edges| {
+            span * if edges.into_iter().any(|e| coarse_edges & edge_bit(e) != 0) {
+                2
+            } else {
+                1
+            }
+        });
         Self {
             address,
             coarse_edges,
+            corner_spans,
         }
     }
     pub fn address(self) -> TileAddress {
@@ -32,9 +50,22 @@ impl HeightTile {
     }
 
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_words(self) -> [u32; 8] {
+    pub(crate) fn gpu_words(self) -> [u32; 12] {
         let [face, level, x, y] = self.address.gpu_words();
-        [face, level, x, y, self.coarse_edges, 0, 0, 0]
+        [
+            face,
+            level,
+            x,
+            y,
+            self.coarse_edges,
+            0,
+            0,
+            0,
+            self.corner_spans[0],
+            self.corner_spans[1],
+            self.corner_spans[2],
+            self.corner_spans[3],
+        ]
     }
 
     pub(crate) fn grid_coordinates(self, vertex: u32) -> [u32; 2] {

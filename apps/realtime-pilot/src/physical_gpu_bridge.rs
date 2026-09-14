@@ -1,7 +1,7 @@
 //! Renderer-owned messages, immutable snapshots, and visual transition settings.
 use bevy::prelude::Resource;
 use procgen_realtime_pilot::HeightTile;
-use procgen_realtime_pilot::{HeightFilter, MeterPosition, PlanetDesignField};
+use procgen_realtime_pilot::{MeterPosition, PlanetDesignField};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, mpsc},
@@ -11,7 +11,6 @@ pub const SURFACE_BLEND_SECONDS: f32 = 0.25;
 pub struct HeightFrame {
     pub tiles: BTreeMap<HeightTile, Arc<wgpu::Buffer>>,
     pub born: f32,
-    pub filter: HeightFilter,
 }
 pub struct HeightSubmission {
     pub commands: wgpu::CommandBuffer,
@@ -38,6 +37,8 @@ pub struct GpuCamera {
 pub struct GpuStats {
     pub status: String,
     pub height_tiles: usize,
+    pub height_generated_tiles: u64,
+    pub height_reused_tiles: u64,
     pub height_bytes: u64,
     pub surface_target_bytes: u64,
     pub height_update_ms: f64,

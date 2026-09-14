@@ -21,14 +21,6 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
         let json: serde_json::Value = serde_json::from_str(source).unwrap();
         let config: PlanetDesignConfig = serde_json::from_value(json["design"].clone()).unwrap();
         let field = config.validate().unwrap();
-        let filter = HeightFilter::new(
-            &field,
-            VoxelPosition {
-                x_m: config.radius_m as i32,
-                y_m: 0,
-                z_m: 0,
-            },
-        );
         let mesher = HeightGpuMesher::new(&device, &field);
         let tiles = [
             TileAddress::root(CubeFace::PositiveX),
@@ -40,7 +32,7 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
             let mut encoder = device.create_command_encoder(&Default::default());
             let buffers: Vec<_> = tiles
                 .chunks(HEIGHT_GPU_BATCH_TILES)
-                .flat_map(|batch| mesher.encode_batch(&device, &mut encoder, batch, filter))
+                .flat_map(|batch| mesher.encode_batch(&device, &mut encoder, batch))
                 .collect();
             queue.submit([encoder.finish()]);
             buffers
@@ -80,7 +72,7 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                 replay[audited.len() - 1 - i],
                 "tile schedule invariance"
             );
-            let cpu = height_tile_vertices(&field, tile, filter);
+            let cpu = height_tile_vertices(&field, tile);
             for (a, b) in first[i].iter().zip(cpu) {
                 assert!(a.normal[3].is_finite() && a.normal[3].abs() <= config.height_limit_m);
                 let radius = (0..3)
@@ -132,21 +124,6 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                 values[0][(y * HEIGHT_SIDE + HEIGHT_QUADS) as usize],
                 values[1][(y * HEIGHT_SIDE) as usize]
             );
-        }
-        let mixed = [tiles[1], tiles[1].children().unwrap()[0]];
-        let joined = dispatch(&mixed);
-        for y in 0..=HEIGHT_QUADS / 2 {
-            for x in 0..=HEIGHT_QUADS / 2 {
-                let a = joined[0][(y * HEIGHT_SIDE + x) as usize];
-                let b = joined[1][(y * 2 * HEIGHT_SIDE + x * 2) as usize];
-                assert_eq!(&a.anchor[..3], &b.anchor[..3], "shared coarse/fine anchor");
-                assert_eq!(
-                    &a.offset[..3],
-                    &b.offset[..3],
-                    "continuous filter at coarse/fine sample"
-                );
-                assert_eq!(a.normal, b.normal, "shared coarse/fine normal");
-            }
         }
         // Cube edges and corners share lighting as well as position.
         let roots = CubeFace::ALL.map(TileAddress::root);

@@ -65,7 +65,7 @@ pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> 
             leaves.extend(tile.children().unwrap());
         }
     }
-    leaves
+    let mut tiles: Vec<_> = leaves
         .iter()
         .map(|&tile| {
             HeightTile::new(
@@ -76,7 +76,9 @@ pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> 
                 }),
             )
         })
-        .collect()
+        .collect();
+    crate::height_detail::share_detail(&mut tiles);
+    tiles
 }
 
 // Start with six roots and admit each split together with its required neighbor

@@ -1,7 +1,8 @@
 # Real-time pilot: GPU generation and incremental streaming
 
 Current viewer: [GPU height terrain, oceans, and flight](realtime-world-flight-viewer.md).
-Runtime local voxels, walking, and collision have been removed. The implementation
+[Height tile reuse](realtime-world-height-reuse.md) removes camera-dependent
+mesh invalidation. Runtime local voxels, walking, and collision have been removed. The implementation
 sequence and measurements below describe the earlier voxel pilot; its reusable
 generation code and explicit CPU/GPU audits remain.
 

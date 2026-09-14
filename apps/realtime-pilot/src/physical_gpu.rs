@@ -80,10 +80,6 @@ fn generate_revision(
     let mut heights = crate::physical_height::HeightStream::new(device, bridge);
     let mut selected_at = None;
     let mut height_target = Vec::new();
-    let mut height_filter = procgen_realtime_pilot::HeightFilter::new(
-        &bridge.design.field,
-        bridge.shared.camera.lock().unwrap().eye.anchor(),
-    );
     let mut stats = GpuStats::default();
     let mut report = Instant::now();
     while !stop.load(Ordering::Relaxed) {
@@ -103,15 +99,11 @@ fn generate_revision(
         if selected_at.is_none_or(|p| camera.eye.relative_to(p).length() > threshold) {
             let start = Instant::now();
             height_target = select_height_coverage(&bridge.design.field, camera.eye.anchor());
-            height_filter = procgen_realtime_pilot::HeightFilter::new(
-                &bridge.design.field,
-                camera.eye.anchor(),
-            );
             selected_at = Some(camera.eye.anchor());
             stats.selection_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
         let replacing = bridge.shared.designs.lock().unwrap().request.is_some();
-        heights.update(device, bridge, &height_target, height_filter, !replacing);
+        heights.update(device, bridge, &height_target, !replacing);
         if !offered && heights.ready() {
             let publication = DisplayedDesign {
                 revision,
@@ -126,6 +118,8 @@ fn generate_revision(
             stats.status = "GPU height terrain resident".into();
             let mut output = bridge.design.output.lock().unwrap();
             stats.height_tiles = output.height.as_ref().map_or(0, |h| h.tiles.len());
+            stats.height_generated_tiles = output.stats.height_generated_tiles;
+            stats.height_reused_tiles = output.stats.height_reused_tiles;
             stats.height_update_ms = output.stats.height_update_ms;
             stats.height_build_ms = output.stats.height_build_ms;
             stats.height_wait_ms = output.stats.height_wait_ms;
