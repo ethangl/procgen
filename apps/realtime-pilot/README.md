@@ -5,26 +5,38 @@ separate application. It uses `procgen-core` and the CPU gradient-noise primitiv
 from `procgen-noise`, plus cube-face geometry from `procgen-cubesphere`.
 It does not use the existing world pipeline or viewer.
 
-## Physical planet and octave editor
+## GPU orbit and descent viewer
 
 ```sh
-cargo run -p procgen-realtime-pilot -- --design
+cargo run -p procgen-realtime-pilot
 ```
 
-This mode uses meters and starts with a 2,000 km radius. Edit the radius and
-individual noise bands, switch between **Planet** and **Local patch**, and use
-**Solo** to inspect a band. **Auto apply** regenerates after edits. The octave
-panel shows which bands the current preview resolution can display.
+The default viewer loads the repository's `planet-design-300km.json` with its
+saved seed, 300 km radius, and complete octave stack. `--design-file PATH`
+overrides that file. `--seed U64` explicitly selects the unchanged starter
+preset. The old `--design` and `--explore` flags remain optional aliases.
 
-Use **Save controls** or **Copy JSON** to share exact generation settings. Load a
-saved design with `--design --design-file PATH`. Use `--design --check` for a
-headless report; `--write-design PATH` saves the config. Run `--design --help`
-for patch and solo options. With auto apply disabled, press Generate after Load.
+Use **Design** for radius, height bound, seed, and file actions, and **Octaves**
+for enable state, wavelength, amplitude, sharpness, warp, and all damping values.
+Valid edits apply 350 ms after the last edit. Rapid edits coalesce. An edit,
+including an invalid draft, invalidates older unpublished results. The last
+complete design remains visible while its replacement builds on a worker.
+Height meshes, local voxels, field queries, and collision switch to the accepted
+design together. Edits do not reset the camera or its orientation.
 
-This is a coarse height preview, with no height exaggeration. The headless chunk
-audit below samples one-meter voxels. A headless travel audit also exercises
-bounded density residency. The exploration mode below connects these stages; `--stream`
-still runs the earlier radius-4 experiment. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
+**Load** validates and applies a file. **Save controls** writes the valid editable
+controls to the displayed file path; **Copy JSON** copies the same complete
+design. Controls never save automatically. `--write-design PATH` explicitly
+writes the initial config and sets the viewer's save path. Camera, coloring,
+and control-panel state are not saved as generation data. Text inputs retain
+focus across validation and generation updates.
+
+The separate noise-preview and local-volume editing windows have been removed.
+CPU generation and headless captures remain. `--check` still provides the
+height-preview audit, including `--patch-span`, `--solo`, and `--preview-quads`;
+these options do not select a visual preview. Run `--design --help` for all
+physical-design options. `--planet`, `--stream`, and stress/replay modes remain
+separate experiments. See [physical scale and octree LOD](../../docs/realtime-world-planet-scale.md).
 
 ## Octree chunk audit
 
@@ -54,8 +66,7 @@ Defaults allow 512 leaf addresses and two workers, with density allocated within
 cap is 84.1 MiB, excluding metadata, worker runtime, and the audit's one reference
 volume. Every checked density must match canonical CPU sampling exactly.
 
-This exercises slice 2b's residency owner. The current editor still shows height
-previews; the surface audit below exercises slice 2c.
+This exercises slice 2b's residency owner; the surface audit below exercises slice 2c.
 See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2b-camera-driven-residency-implemented).
 
 ## Voxel surface and collision audit
@@ -73,8 +84,8 @@ terrain band stack and unsaturated values; the existing density view still clamp
 to +/-4 m. Collision owns a separate 96 m support box with one-meter source cells.
 
 This is a CPU/headless surface baseline. It uses more triangles than the original
-QEF mesh and reports mesh storage separately from density residency. The editor
-and old `--stream` mode are unchanged; the exploration mode implements slice 3.
+QEF mesh and reports mesh storage separately from density residency. The old
+`--stream` experiment remains separate.
 See the [phase document](../../docs/realtime-world-planet-scale.md#slice-2c-voxel-meshes-and-nearby-collision-implemented).
 
 ## Physical exploration
@@ -101,7 +112,7 @@ cargo run -p procgen-realtime-pilot -- \
 ```
 
 The viewer loads your saved octave settings and uses GPU exploration by default.
-Edit and save in the `--design` editor, then launch exploration again. Height
+Live edits use the same viewer and do not require a restart. Height
 coloring is the default; Neutral, LOD, and Normals remain available. Density and mesh generation run on
 Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
 preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
@@ -138,7 +149,8 @@ ground shading. Zero gradients and mixed-LOD transition meshes use face normals.
 Both vertex formats occupy 48 bytes; normal generation adds no voxel noise samples.
 
 Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
-retains complete mesh replacement and its 512 KiB per-frame upload limit. There
+retains complete mesh replacement and its 512 KiB per-frame upload limit. Its
+design is fixed for each run; live editing belongs to the GPU viewer. There
 is no automatic backend fallback.
 
 Record the fixed 90-second native orbit/descent/walk/flight route:
@@ -232,32 +244,11 @@ implementation; the inspector enables it, and the audits use the same encoder
 as the residency owner. Native-device tests also check deferred submission,
 draw leases through slot retirement, and timestamp validity.
 
-## Run the original experiments
+## Original local-field diagnostics
 
-```sh
-cargo run -p procgen-realtime-pilot -- --seed 42
-```
-
-Select a preset, edit its controls, and press **Generate**. Sampling runs on a
-worker and uses parallel columns. The inspector keeps showing the previous
-volume until the result arrives. A notice identifies unapplied controls.
-Move the three slice sliders to inspect the sampled volume without regenerating.
-
-The four panels show base height, an XY density cut, an XZ density cut, and a
-ZY density cut. Brown is solid; blue is air. Light pixels are near zero density.
-The height panel excludes caves and 3D detail. Colors saturate outside their
-display range; the stored values are unchanged.
-
-The diagnostic contains 64 samples per axis, including both ends of a local
-box from -1 to +1. These are **local model lengths**, not planet meters. Y is
-up only in this Cartesian experiment. The box is a view into the field and
-can crop terrain at extreme settings; it is not the spherical voxel
-band described below. Surface queries support X/Z and density queries support XYZ within
-plus or minus 8 model lengths. Invalid inputs return typed errors.
-
-Three presets cover rounded hills, ridged mountains, and broad basins. Use
-seed 42 for the initial comparison. The full seed and resolved parameters are
-printed after each interactive generation.
+The removed local editing window used six-band model-space terrain. Its reusable
+field, presets, volume sampling, and four-panel PPM captures remain available
+through the headless command below. Other spherical experiments are unchanged.
 
 ## Headless captures
 

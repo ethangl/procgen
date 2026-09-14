@@ -150,7 +150,14 @@ pub(super) fn movement(
     if (state.walker.is_some() || state.landing || state.clearance_estimate() < 32.0)
         && !state.collision_busy
         && let Some(request) = state.collision.request(position, forecast)
-        && state.jobs.collision.try_send(request).is_ok()
+        && state
+            .jobs
+            .collision
+            .try_send(crate::physical_jobs::CollisionRequest {
+                field: std::sync::Arc::clone(&state.field),
+                position: request,
+            })
+            .is_ok()
     {
         state.collision_busy = true;
     }

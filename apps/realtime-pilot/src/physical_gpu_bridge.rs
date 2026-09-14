@@ -94,20 +94,103 @@ pub struct GpuBridge {
     pub submissions: Arc<Mutex<std::sync::mpsc::Receiver<TerrainSubmission>>>,
     pub submit: std::sync::mpsc::Sender<TerrainSubmission>,
     pub start: Instant,
-    pub field: Arc<PlanetDesignField>,
+    pub display: Arc<Mutex<DisplayedDesign>>,
+    pub designs: Arc<Mutex<DesignExchange>>,
     pub camera: Arc<Mutex<GpuCamera>>,
-    pub output: Arc<Mutex<GpuOutput>>,
 }
 impl GpuBridge {
     pub fn new(field: Arc<PlanetDesignField>, camera: GpuCamera) -> Self {
         let (submit, submissions) = std::sync::mpsc::channel();
+        let output = Arc::new(Mutex::new(GpuOutput::default()));
         Self {
+            display: Arc::new(Mutex::new(DisplayedDesign {
+                revision: 0,
+                field: Arc::clone(&field),
+                output: Arc::clone(&output),
+            })),
+            designs: Arc::new(Mutex::new(DesignExchange::default())),
             start: Instant::now(),
             submit,
             submissions: Arc::new(Mutex::new(submissions)),
-            field,
             camera: Arc::new(Mutex::new(camera)),
-            output: Arc::new(Mutex::new(GpuOutput::default())),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct DisplayedDesign {
+    pub revision: u64,
+    pub field: Arc<PlanetDesignField>,
+    pub output: Arc<Mutex<GpuOutput>>,
+}
+pub struct DesignRequest {
+    pub revision: u64,
+    pub field: Arc<PlanetDesignField>,
+}
+pub struct DesignPublication {
+    pub design: DisplayedDesign,
+    pub collision: Option<crate::physical_jobs::CollisionResult>,
+}
+#[derive(Default)]
+pub struct DesignExchange {
+    pub failure: Option<String>,
+    revision: u64,
+    pub request: Option<DesignRequest>,
+    ready: Option<DesignPublication>,
+}
+impl DesignExchange {
+    pub fn invalidate(&mut self, revision: u64) {
+        self.revision = revision;
+        self.request = None;
+        self.ready = None;
+    }
+    pub fn publish(&mut self, publication: DesignPublication) -> bool {
+        if publication.design.revision != self.revision {
+            return false;
+        }
+        self.ready = Some(publication);
+        true
+    }
+    pub fn take_ready(&mut self) -> Option<DesignPublication> {
+        self.ready.take()
+    }
+}
+
+/// One worker-owned generation. Shared renderer state never retains retired designs.
+pub struct GpuGeneration {
+    pub shared: GpuBridge,
+    pub design: DisplayedDesign,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn publication(revision: u64) -> DesignPublication {
+        DesignPublication {
+            design: DisplayedDesign {
+                revision,
+                field: Arc::new(
+                    procgen_realtime_pilot::PlanetDesignConfig::starter(revision)
+                        .validate()
+                        .unwrap(),
+                ),
+                output: Arc::new(Mutex::new(GpuOutput::default())),
+            },
+            collision: None,
+        }
+    }
+    #[test]
+    fn edits_discard_completed_and_in_flight_generations_even_after_reverting() {
+        let mut exchange = DesignExchange::default();
+        exchange.invalidate(1);
+        assert!(exchange.publish(publication(1)));
+        exchange.invalidate(2);
+        assert!(exchange.take_ready().is_none());
+        assert!(!exchange.publish(publication(1)));
+        exchange.invalidate(3);
+        assert!(!exchange.publish(publication(2)));
+        assert!(exchange.publish(publication(3)));
+        assert_eq!(exchange.take_ready().unwrap().design.field.config().seed, 3);
+        assert!(exchange.take_ready().is_none());
     }
 }

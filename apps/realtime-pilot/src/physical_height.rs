@@ -1,7 +1,7 @@
 //! Immutable height tile cache with bounded batch overlap and atomic publication.
 pub const HEIGHT_BATCHES_IN_FLIGHT: usize = 2;
 use crate::physical_gpu_bridge::{
-    GpuBridge, HeightFrame, HeightSubmission, SURFACE_BLEND_SECONDS, TerrainSubmission,
+    GpuGeneration, HeightFrame, HeightSubmission, SURFACE_BLEND_SECONDS, TerrainSubmission,
 };
 use procgen_realtime_pilot::HeightTile;
 use procgen_realtime_pilot::{
@@ -45,9 +45,9 @@ pub struct HeightStream {
     pending: Option<Pending>,
 }
 impl HeightStream {
-    pub fn new(device: &wgpu::Device, bridge: &GpuBridge) -> Self {
+    pub fn new(device: &wgpu::Device, bridge: &GpuGeneration) -> Self {
         Self {
-            mesher: HeightGpuMesher::new(device, &bridge.field),
+            mesher: HeightGpuMesher::new(device, &bridge.design.field),
             current: None,
             pending: None,
         }
@@ -55,24 +55,25 @@ impl HeightStream {
     pub fn update(
         &mut self,
         device: &wgpu::Device,
-        bridge: &GpuBridge,
+        bridge: &GpuGeneration,
         target: &[HeightTile],
         filter: HeightFilter,
+        admit: bool,
     ) {
         let blend_complete = self.current.as_ref().is_none_or(|current| {
-            current.born + SURFACE_BLEND_SECONDS <= bridge.start.elapsed().as_secs_f32()
+            current.born + SURFACE_BLEND_SECONDS <= bridge.shared.start.elapsed().as_secs_f32()
         });
         if blend_complete {
-            bridge.output.lock().unwrap().previous_height = None;
+            bridge.design.output.lock().unwrap().previous_height = None;
         }
         if let Some(pending) = &mut self.pending {
             pending.poll();
             if pending.ready_at.is_some() && blend_complete {
                 let pending = self.pending.take().unwrap();
                 let mut frame = pending.frame;
-                frame.born = bridge.start.elapsed().as_secs_f32();
+                frame.born = bridge.shared.start.elapsed().as_secs_f32();
                 let frame = Arc::new(frame);
-                let mut output = bridge.output.lock().unwrap();
+                let mut output = bridge.design.output.lock().unwrap();
                 output.previous_height = self.current.replace(Arc::clone(&frame));
                 output.height = Some(frame);
                 let ready = pending.ready_at.unwrap();
@@ -83,6 +84,9 @@ impl HeightStream {
             }
         }
         if self.pending.is_none() {
+            if !admit {
+                return;
+            }
             if let Some(current) = &self.current
                 && current.filter == filter
                 && current.tiles.keys().copied().eq(target.iter().copied())
@@ -131,6 +135,7 @@ impl HeightStream {
                 .extend(batch.into_iter().zip(buffers.into_iter().map(Arc::new)));
             let (completed, receipt) = mpsc::channel();
             bridge
+                .shared
                 .submit
                 .send(TerrainSubmission::Height(HeightSubmission {
                     commands: encoder.finish(),
@@ -141,9 +146,17 @@ impl HeightStream {
         }
     }
 
-    pub fn allocated_bytes(&self, bridge: &GpuBridge) -> u64 {
+    pub fn idle(&self) -> bool {
+        self.pending.is_none()
+    }
+
+    pub fn ready(&self) -> bool {
+        self.current.is_some()
+    }
+
+    pub fn allocated_bytes(&self, bridge: &GpuGeneration) -> u64 {
         // Count shared immutable tiles once across current, previous and pending.
-        let output = bridge.output.lock().unwrap();
+        let output = bridge.design.output.lock().unwrap();
         let mut allocations = std::collections::BTreeSet::new();
         for frame in self
             .current

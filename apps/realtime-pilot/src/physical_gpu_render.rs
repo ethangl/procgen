@@ -57,6 +57,7 @@ impl Plugin for GpuTerrainPlugin {
 struct GpuTerrainLabel;
 #[derive(Resource)]
 struct GpuDraw {
+    field: Arc<procgen_realtime_pilot::PlanetDesignField>,
     frame: Option<Arc<DrawFrame>>,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
@@ -171,6 +172,7 @@ fn initialize(
         usage: wgpu::BufferUsages::INDEX,
     });
     commands.insert_resource(GpuDraw {
+        field: Arc::clone(&bridge.display.lock().unwrap().field),
         height_pipeline: make_pipeline("height_vertex", "height_fragment", false),
         compositor: SurfaceCompositor::new(device, &layout),
         height_indices,
@@ -221,17 +223,12 @@ fn prepare(
     ) {
         submission.submit(&queue);
     }
-    let Ok(mut output) = bridge.output.try_lock() else {
+    let displayed = bridge.display.lock().unwrap().clone();
+    let Ok(mut output) = displayed.output.try_lock() else {
         return;
     };
-    if let Some(frame) = &output.frame
-        && draw
-            .frame
-            .as_ref()
-            .is_none_or(|old| !Arc::ptr_eq(old, frame))
-    {
-        draw.frame = Some(Arc::clone(frame));
-    }
+    draw.field = displayed.field;
+    draw.frame = output.frame.clone();
     draw.height = output.height.clone();
     draw.previous_height = output.previous_height.clone();
     output.stats.scheduler_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -279,7 +276,7 @@ impl ViewNode for GpuTerrainNode {
             u32::from(draw.previous_height.is_some()),
             0,
         ]));
-        let field = &world.resource::<GpuBridge>().field;
+        let field = &draw.field;
         uniform[144..160].copy_from_slice(bytemuck::cast_slice(&[
             field.config().radius_m,
             field.config().height_limit_m,
@@ -347,7 +344,7 @@ impl ViewNode for GpuTerrainNode {
             if let Some(height) = height {
                 pass.set_pipeline(&draw.height_pipeline);
                 for (tile, buffer) in &height.tiles {
-                    let field = &world.resource::<GpuBridge>().field;
+                    let field = &draw.field;
                     let radius = field.config().radius_m;
                     let address = tile.address();
                     let d = address
@@ -434,7 +431,13 @@ impl ViewNode for GpuTerrainNode {
         viewport(&mut pass);
         draw.compositor.draw(&mut pass, &surfaces.0, &draw.group);
         drop(pass);
-        if let Ok(mut output) = world.resource::<GpuBridge>().output.try_lock() {
+        let displayed = world
+            .resource::<GpuBridge>()
+            .display
+            .lock()
+            .unwrap()
+            .clone();
+        if let Ok(mut output) = displayed.output.try_lock() {
             output.stats.surface_target_bytes = surfaces.0.bytes();
             output.stats.drawn = drawn;
             output.stats.draw_ms = start.elapsed().as_secs_f64() * 1000.0;

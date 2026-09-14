@@ -24,7 +24,8 @@ pub(super) fn panel(
                 ui.disable();
             }
             ui.heading("Physical planet");
-            ui.label(&state.path);
+            ui.label("Orbit / descent · live terrain controls");
+            if state.gpu.is_some() { state.editor.tabs(ui); }
             ui.label(format!("Radius: {:.1} km", state.field.config().radius_m / 1000.0));
             ui.separator();
             ui.horizontal(|ui| {
@@ -60,6 +61,12 @@ pub(super) fn panel(
             ui.label(format!("Flight speed factor: {:.2}×", state.speed_factor));
             ui.label(format!("Player: {PLAYER_EYE_M:.1} m eye · {PLAYER_SPEED_MPS:.1} m/s walking"));
             ui.separator();
+            if state.gpu.is_some() && state.editor.tab != crate::design_panel::Tab::Status {
+                let revision = state.revision;
+                let failure = state.gpu.as_ref().unwrap().designs.lock().unwrap().failure.clone();
+                state.editor.controls(ui, revision, failure.as_deref());
+                return;
+            }
             let altitude = state.eye.altitude_m(state.field.config().radius_m);
             ui.label(if altitude.abs() < 10_000.0 {
                 format!("Reference altitude: {altitude:.2} m")
@@ -95,7 +102,8 @@ pub(super) fn panel(
             ui.separator();
             if let Some(bridge) = &state.gpu {
                 ui.label("Backend: GPU · height tiles + local voxels");
-                if let Ok(output) = bridge.output.try_lock() {
+                let displayed = bridge.display.lock().unwrap().clone();
+                if let Ok(output) = displayed.output.try_lock() {
                     let s = &output.stats;
                     ui.label(&s.status);
                     ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
@@ -144,6 +152,12 @@ pub(super) fn panel(
                 state.peak_upload_ms = 0.0;
             }
         });
+    if state.editor.edits.observe(std::time::Instant::now()) {
+        let revision = state.editor.edits.revision();
+        if let Some(bridge) = &state.gpu {
+            bridge.designs.lock().unwrap().invalidate(revision);
+        }
+    }
     let left = (panel.response.rect.width() * ctx.pixels_per_point()).round() as u32;
     let size = UVec2::new(
         window.physical_width().saturating_sub(left),

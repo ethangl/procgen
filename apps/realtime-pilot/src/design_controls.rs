@@ -1,76 +1,11 @@
 use bevy_egui::egui;
-use procgen_realtime_pilot::{
-    DesignPreviewConfig, MAX_DESIGN_OCTAVES, NoiseConfig, OctaveConfig, PlanetDesignConfig,
-    PreviewArea, PreviewBands,
-};
+use procgen_realtime_pilot::{MAX_DESIGN_OCTAVES, NoiseConfig, OctaveConfig, PlanetDesignConfig};
 
 pub fn distance(meters: f32) -> String {
     if meters.abs() >= 1000.0 {
         format!("{:.2} km", meters / 1000.0)
     } else {
         format!("{meters:.2} m")
-    }
-}
-
-// Auto IDs include the parent's widget position. These sections follow changing
-// status/validation labels, so give their child IDs an independent stable root.
-pub fn preview(ui: &mut egui::Ui, config: &mut DesignPreviewConfig) {
-    ui.scope_builder(
-        egui::UiBuilder::new().id("planet-design-preview-controls"),
-        |ui| {
-            preview_controls(ui, config);
-        },
-    );
-}
-
-fn preview_controls(ui: &mut egui::Ui, config: &mut DesignPreviewConfig) {
-    ui.horizontal(|ui| {
-        if ui
-            .selectable_label(matches!(config.area, PreviewArea::Planet), "Planet")
-            .clicked()
-        {
-            config.area = PreviewArea::Planet;
-        }
-        if ui
-            .selectable_label(
-                matches!(config.area, PreviewArea::Patch { .. }),
-                "Local patch",
-            )
-            .clicked()
-        {
-            config.area = PreviewArea::Patch {
-                latitude_deg: 0.0,
-                longitude_deg: 0.0,
-                span_m: 16_384.0,
-            };
-        }
-    });
-    if let PreviewArea::Patch {
-        latitude_deg,
-        longitude_deg,
-        span_m,
-    } = &mut config.area
-    {
-        ui.add(egui::Slider::new(latitude_deg, -90.0..=90.0).text("Latitude"));
-        ui.add(egui::Slider::new(longitude_deg, -180.0..=180.0).text("Longitude"));
-        ui.add(
-            egui::Slider::new(span_m, DesignPreviewConfig::PATCH_SPAN_RANGE)
-                .logarithmic(true)
-                .text("Span (m)"),
-        );
-    }
-    egui::ComboBox::from_label("Preview quads")
-        .selected_text(config.quads.to_string())
-        .show_ui(ui, |ui| {
-            for count in [32, 64, 128, 256] {
-                ui.selectable_value(&mut config.quads, count, count.to_string());
-            }
-        });
-    if ui
-        .selectable_label(config.bands == PreviewBands::Combined, "Combined terrain")
-        .clicked()
-    {
-        config.bands = PreviewBands::Combined;
     }
 }
 
@@ -108,35 +43,20 @@ fn planet_controls(ui: &mut egui::Ui, config: &mut PlanetDesignConfig) {
     ui.label("Elevation zero is the reference sphere.");
 }
 
-pub fn octaves(
-    ui: &mut egui::Ui,
-    config: &mut PlanetDesignConfig,
-    bands: &mut PreviewBands,
-    weights: &[f32],
-) {
+pub fn octaves(ui: &mut egui::Ui, config: &mut PlanetDesignConfig) {
     ui.heading("Octaves · broad to fine");
-    ui.label("Solo evaluates a band alone, without earlier feedback. Values below are editable; Generate applies them.");
+    ui.label("Valid edits apply automatically after a short pause.");
     for (i, o) in config.octaves.iter_mut().enumerate() {
         ui.scope_builder(
             egui::UiBuilder::new().id(("planet-design-octave", i)),
             |ui| {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut o.enabled, format!("{i}"));
-                    if ui
-                        .selectable_label(*bands == PreviewBands::Only(i), "Solo")
-                        .clicked()
-                    {
-                        *bands = PreviewBands::Only(i);
-                    }
                     ui.label(format!(
                         "{} · {} high",
                         distance(o.wavelength_m),
                         distance(o.amplitude_m)
                     ));
-                });
-                ui.small(match weights.get(i) {
-                    Some(weight) => format!("Applied preview weight: {:.0}%", weight * 100.0),
-                    None => "Preview weight not available yet".into(),
                 });
                 egui::CollapsingHeader::new("Edit band")
                     .id_salt(i)
@@ -198,9 +118,6 @@ pub fn octaves(
         .clicked()
     {
         config.octaves.pop();
-        if matches!(*bands, PreviewBands::Only(i) if i >= config.octaves.len()) {
-            *bands = PreviewBands::Combined;
-        }
     }
 }
 

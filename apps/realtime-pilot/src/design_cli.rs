@@ -11,7 +11,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let mut seed = None;
     let mut path = None;
     let mut output = None;
-    let mut mode = DesignMode::Editor;
+    let mut mode = None;
     let mut chunk_lod = None;
     let mut chunk_point = None;
     let mut preview_explicit = false;
@@ -46,12 +46,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                     args.next().ok_or("--write-design needs a path")?,
                 ))
             }
-            "--check-explore" => mode.set(DesignMode::ExplorationAudit)?,
-            "--explore" => mode.set(DesignMode::Explore)?,
-            "--check" => mode.set(DesignMode::PreviewAudit)?,
-            "--check-chunks" => mode.set(DesignMode::ChunkAudit)?,
-            "--check-residency" => mode.set(DesignMode::ResidencyAudit)?,
-            "--check-surfaces" => mode.set(DesignMode::SurfaceAudit)?,
+            "--check-explore" => set_mode(&mut mode, DesignMode::ExplorationAudit)?,
+            "--explore" => set_mode(&mut mode, DesignMode::Explore)?,
+            "--check" => set_mode(&mut mode, DesignMode::PreviewAudit)?,
+            "--check-chunks" => set_mode(&mut mode, DesignMode::ChunkAudit)?,
+            "--check-residency" => set_mode(&mut mode, DesignMode::ResidencyAudit)?,
+            "--check-surfaces" => set_mode(&mut mode, DesignMode::SurfaceAudit)?,
             "--chunk-lod" => {
                 chunk_lod = Some(args.next().ok_or("--chunk-lod needs an integer")?.parse()?)
             }
@@ -95,7 +95,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nPreview: --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second native route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens the physical planet and octave editor. --write-design saves the full config."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nPhysical exploration: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second native route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU orbit/descent exploration with live octave controls and planet-design-300km.json. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
                 );
                 return Ok(());
             }
@@ -106,6 +106,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+    let mode = mode.unwrap_or(DesignMode::Explore);
     if matches!(
         mode,
         DesignMode::Explore
@@ -134,7 +135,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     }
     let config = match &path {
         Some(p) => crate::design_file::load(p)?,
-        None => PlanetDesignConfig::starter(seed.unwrap_or(42)),
+        None if seed.is_some() => PlanetDesignConfig::starter(seed.unwrap()),
+        None => {
+            let default_path = default_design_path();
+            let config = crate::design_file::load(&default_path)?;
+            path = Some(default_path);
+            config
+        }
     };
     let field = config.validate()?;
     if mode == DesignMode::ExplorationAudit {
@@ -236,9 +243,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             let record = record
                 .map(crate::physical_record::PhysicalRecord::new)
                 .transpose()?;
-            crate::physical_inspector::run(config, path, backend, record);
-        } else {
-            crate::design_inspector::run(config, preview, output.or(path));
+            crate::physical_inspector::run(config, output.or(path), backend, record);
         }
         Ok(())
     }
@@ -248,7 +253,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DesignMode {
-    Editor,
     Explore,
     ExplorationAudit,
     PreviewAudit,
@@ -256,12 +260,47 @@ enum DesignMode {
     ResidencyAudit,
     SurfaceAudit,
 }
-impl DesignMode {
-    fn set(&mut self, mode: Self) -> Result<(), Box<dyn Error>> {
-        if *self != Self::Editor {
-            return Err("select only one design mode".into());
+fn set_mode(selected: &mut Option<DesignMode>, mode: DesignMode) -> Result<(), Box<dyn Error>> {
+    if selected.is_some() {
+        return Err("select only one design mode".into());
+    }
+    *selected = Some(mode);
+    Ok(())
+}
+
+fn default_design_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../planet-design-300km.json")
+}
+
+/// Keep the earlier explicitly selected experiments on their existing parser.
+pub fn selected(args: impl Iterator<Item = String>) -> bool {
+    let args: Vec<_> = args.collect();
+    args.iter().any(|a| a == "--design")
+        || !args.iter().any(|a| {
+            matches!(
+                a.as_str(),
+                "--planet" | "--stream" | "--sweep" | "--capture"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn default_launch_and_file_overrides_use_exploration() {
+        for args in [
+            vec![],
+            vec!["--design-file", "custom.json"],
+            vec!["--backend", "cpu"],
+            vec!["--seed", "7"],
+        ] {
+            assert!(selected(args.into_iter().map(str::to_owned)));
         }
-        *self = mode;
-        Ok(())
+        for mode in ["--planet", "--stream", "--sweep", "--capture"] {
+            assert!(!selected([mode.to_owned()].into_iter()));
+        }
+        let config = crate::design_file::load(&default_design_path()).unwrap();
+        assert_eq!(config.radius_m, 300_000.0);
     }
 }

@@ -52,7 +52,8 @@ struct Inspector {
     gpu: Option<GpuBridge>,
     field: Arc<PlanetDesignField>,
     jobs: Jobs,
-    path: String,
+    editor: crate::design_panel::DesignPanel,
+    revision: u64,
     eye: MeterPosition,
     rotation: Quat,
     mode: Navigation,
@@ -148,69 +149,97 @@ impl Inspector {
         self.face_horizon();
     }
 }
+impl Inspector {
+    fn new(
+        config: PlanetDesignConfig,
+        path: Option<PathBuf>,
+        backend: ExplorationBackend,
+        record: Option<crate::physical_record::PhysicalRecord>,
+    ) -> Self {
+        let field = Arc::new(config.validate().expect("validated design"));
+        let radius = field.config().radius_m;
+        let mut state = Inspector {
+            record,
+            gpu: None,
+            jobs: Jobs::start(Arc::clone(&field), backend),
+            field,
+            editor: crate::design_panel::DesignPanel::new(config, path),
+            revision: 0,
+            eye: MeterPosition::new(
+                VoxelPosition {
+                    x_m: (radius * 3.0) as i32,
+                    y_m: 0,
+                    z_m: 0,
+                },
+                procgen_core::Vec3::ZERO,
+            ),
+            rotation: Quat::IDENTITY,
+            mode: Navigation::Orbit,
+            walker: None,
+            landing: false,
+            descent: false,
+            speed_factor: 1.0,
+            coloring: Coloring::default(),
+            collision: PhysicalCollision::default(),
+            motion: MotionOutcome::Idle,
+            collision_busy: false,
+            collision_seconds: 0.0,
+            terrain_busy: true,
+            last_request: None,
+            staging: None,
+            active: Vec::new(),
+            retiring: false,
+            generation_seconds: 0.0,
+            source_bytes: 0,
+            mesh_bytes: 0,
+            display_bytes: 0,
+            triangles: 0,
+            upload_bytes: 0,
+            upload_ms: 0.0,
+            peak_upload_ms: 0.0,
+            frame_ms: 0.0,
+            peak_frame_ms: 0.0,
+            query_ms: 0.0,
+            ground_clearance: None,
+            last_query: Instant::now(),
+            status: "Building distant overview…".into(),
+        };
+        state.face_ground();
+        if backend == ExplorationBackend::Gpu {
+            state.gpu = Some(GpuBridge::new(
+                Arc::clone(&state.field),
+                GpuCamera { eye: state.eye },
+            ));
+            state.status = "GPU exploration · collision uses the CPU reference".into();
+        }
+        state
+    }
+    fn receive_collision(
+        &mut self,
+        field: Arc<PlanetDesignField>,
+        result: Result<crate::physical_jobs::CollisionResult, String>,
+    ) {
+        self.collision_busy = false;
+        if !Arc::ptr_eq(&field, &self.field) {
+            return;
+        }
+        match result {
+            Ok(result) => {
+                self.collision_seconds = result.seconds;
+                self.collision
+                    .install(result.patch, self.collision_position());
+            }
+            Err(e) => self.status = e,
+        }
+    }
+}
 pub fn run(
     config: PlanetDesignConfig,
     path: Option<PathBuf>,
     backend: ExplorationBackend,
     record: Option<crate::physical_record::PhysicalRecord>,
 ) {
-    let field = Arc::new(config.validate().expect("validated design"));
-    let radius = field.config().radius_m;
-    let mut state = Inspector {
-        record,
-        gpu: None,
-        jobs: Jobs::start(Arc::clone(&field), backend),
-        field,
-        path: path
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "Starter design".into()),
-        eye: MeterPosition::new(
-            VoxelPosition {
-                x_m: (radius * 3.0) as i32,
-                y_m: 0,
-                z_m: 0,
-            },
-            procgen_core::Vec3::ZERO,
-        ),
-        rotation: Quat::IDENTITY,
-        mode: Navigation::Orbit,
-        walker: None,
-        landing: false,
-        descent: false,
-        speed_factor: 1.0,
-        coloring: Coloring::default(),
-        collision: PhysicalCollision::default(),
-        motion: MotionOutcome::Idle,
-        collision_busy: false,
-        collision_seconds: 0.0,
-        terrain_busy: true,
-        last_request: None,
-        staging: None,
-        active: Vec::new(),
-        retiring: false,
-        generation_seconds: 0.0,
-        source_bytes: 0,
-        mesh_bytes: 0,
-        display_bytes: 0,
-        triangles: 0,
-        upload_bytes: 0,
-        upload_ms: 0.0,
-        peak_upload_ms: 0.0,
-        frame_ms: 0.0,
-        peak_frame_ms: 0.0,
-        query_ms: 0.0,
-        ground_clearance: None,
-        last_query: Instant::now(),
-        status: "Building distant overview…".into(),
-    };
-    state.face_ground();
-    if backend == ExplorationBackend::Gpu {
-        state.gpu = Some(GpuBridge::new(
-            Arc::clone(&state.field),
-            GpuCamera { eye: state.eye },
-        ));
-        state.status = "GPU exploration · collision uses the CPU reference".into();
-    }
+    let state = Inspector::new(config, path, backend, record);
     let gpu = state.gpu.clone();
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -242,6 +271,7 @@ pub fn run(
         .add_systems(
             Update,
             (
+                apply_design,
                 receive,
                 record_route,
                 navigation::movement,
@@ -315,6 +345,34 @@ fn setup(
 }
 #[derive(Resource)]
 struct TerrainMaterial(Handle<StandardMaterial>);
+fn apply_design(mut state: NonSendMut<Inspector>) {
+    let Some(bridge) = state.gpu.clone() else {
+        return;
+    };
+    if let Some((revision, field)) = state.editor.edits.request(Instant::now()) {
+        bridge.designs.lock().unwrap().request =
+            Some(crate::physical_gpu_bridge::DesignRequest { revision, field });
+    }
+    let ready = bridge.designs.lock().unwrap().take_ready();
+    if let Some(publication) = ready {
+        state.field = Arc::clone(&publication.design.field);
+        state.revision = publication.design.revision;
+        // Field, render buffers and collision change together. Never reuse old support.
+        state.collision = PhysicalCollision::default();
+        state.ground_clearance = None;
+        state.collision_seconds = 0.0;
+        if let Some(result) = publication.collision {
+            state.collision_seconds = result.seconds;
+            let position = state.collision_position();
+            state.collision.install(result.patch, position);
+        }
+        *bridge.display.lock().unwrap() = publication.design;
+        info!(
+            "Applied design revision {} at {:?}",
+            state.revision, state.eye
+        );
+    }
+}
 fn receive(mut state: NonSendMut<Inspector>) {
     if state.gpu.is_none() && state.staging.is_none() && !state.retiring {
         match state.jobs.surfaces.try_recv() {
@@ -334,19 +392,8 @@ fn receive(mut state: NonSendMut<Inspector>) {
             Err(TryRecvError::Empty) => {}
         }
     }
-    match state.jobs.patches.try_recv() {
-        Ok(Ok(result)) => {
-            state.collision_busy = false;
-            state.collision_seconds = result.seconds;
-            let position = state.collision_position();
-            state.collision.install(result.patch, position);
-        }
-        Ok(Err(e)) => {
-            state.collision_busy = false;
-            state.status = e;
-        }
-        Err(TryRecvError::Disconnected) => state.status = "Collision worker stopped.".into(),
-        Err(TryRecvError::Empty) => {}
+    if let Ok((field, result)) = state.jobs.patches.try_recv() {
+        state.receive_collision(field, result);
     }
 }
 fn record_route(
@@ -407,10 +454,11 @@ fn record_frame(mut state: NonSendMut<Inspector>, time: Res<Time<Real>>) {
             build_seconds: state.collision_seconds,
             motion: state.motion,
         };
-        let output = state
+        let displayed = state
             .gpu
             .as_ref()
-            .and_then(|bridge| bridge.output.try_lock().ok());
+            .map(|bridge| bridge.display.lock().unwrap().clone());
+        let output = displayed.as_ref().and_then(|d| d.output.try_lock().ok());
         record
             .write(
                 time.delta_secs() * 1000.0,
@@ -575,5 +623,86 @@ fn position_scene(
     for (origin, mut transform) in &mut terrain {
         let p = origin.0.relative_to(anchor);
         transform.translation = Vec3::new(p.x_m as f32, p.y_m as f32, p.z_m as f32);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physical_gpu_bridge::{DesignPublication, DisplayedDesign, GpuOutput};
+    use std::sync::{Mutex, atomic::AtomicBool};
+
+    #[test]
+    fn publication_switches_design_and_collision_without_moving_camera() {
+        let mut config = PlanetDesignConfig::starter(42);
+        config.radius_m = 300_000.0;
+        config.octaves.iter_mut().for_each(|o| o.enabled = false);
+        let mut state = Inspector::new(config.clone(), None, ExplorationBackend::Gpu, None);
+        state.near_ground();
+        let old_field = Arc::clone(&state.field);
+        let eye = state.eye;
+        let rotation = state.rotation;
+        let old_patch = procgen_realtime_pilot::VoxelCollision::build(
+            &old_field,
+            eye.anchor(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        state.collision.install(old_patch, eye);
+        state.editor.edits.seed_text = "43".into();
+        state.editor.edits.observe(Instant::now());
+        let revision = state.editor.edits.revision();
+        let field = Arc::new(state.editor.edits.validated().unwrap());
+        let patch = procgen_realtime_pilot::VoxelCollision::build(
+            &field,
+            eye.anchor(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let output = Arc::new(Mutex::new(GpuOutput::default()));
+        let bridge = state.gpu.as_ref().unwrap().clone();
+        bridge.designs.lock().unwrap().invalidate(revision);
+        assert!(bridge.designs.lock().unwrap().publish(DesignPublication {
+            design: DisplayedDesign {
+                revision,
+                field: Arc::clone(&field),
+                output: Arc::clone(&output)
+            },
+            collision: Some(crate::physical_jobs::CollisionResult {
+                patch,
+                seconds: 1.0
+            }),
+        }));
+        let mut app = App::new();
+        app.insert_non_send_resource(state)
+            .add_systems(Update, apply_design);
+        app.update();
+        let mut state = app.world_mut().non_send_resource_mut::<Inspector>();
+        assert_eq!(state.eye, eye);
+        assert_eq!(state.rotation, rotation);
+        assert!(Arc::ptr_eq(&state.field, &field));
+        assert!(Arc::ptr_eq(&bridge.display.lock().unwrap().output, &output));
+        assert!(state.collision.covers(eye));
+        let stale_patch = procgen_realtime_pilot::VoxelCollision::build(
+            &old_field,
+            eye.anchor(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        state.receive_collision(
+            Arc::clone(&old_field),
+            Ok(crate::physical_jobs::CollisionResult {
+                patch: stale_patch,
+                seconds: 99.0,
+            }),
+        );
+        assert_eq!(
+            state.collision_seconds, 1.0,
+            "old successful jobs cannot replace current support"
+        );
+        state.status = "current".into();
+        state.receive_collision(old_field, Err("obsolete collision failure".into()));
+        assert_eq!(state.status, "current");
+        assert!(state.collision.covers(eye));
     }
 }
