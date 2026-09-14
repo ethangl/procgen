@@ -1,4 +1,4 @@
-//! Fixed native orbit/descent/flight route and frame measurements.
+//! Native flight and fixed-view visibility routes with frame measurements.
 use crate::physical_gpu_bridge::GpuStats;
 use procgen_realtime_pilot::MeterPosition;
 use std::{
@@ -15,6 +15,17 @@ pub struct PhysicalRecord {
     phase: usize,
     capture: usize,
     last_stats: GpuStats,
+    route: RecordRoute,
+}
+#[derive(Clone, Copy)]
+enum RecordRoute {
+    Flight,
+    Visibility,
+}
+#[derive(Clone, Copy)]
+pub enum RecordView {
+    Down,
+    Horizon,
 }
 #[derive(Clone, Copy)]
 pub enum RouteAction {
@@ -24,6 +35,7 @@ pub enum RouteAction {
     Fly,
     Orbit,
     Finish,
+    View { clearance_m: f32, view: RecordView },
 }
 const STAGES: [(f64, RouteAction); 6] = [
     (5., RouteAction::Descend),
@@ -34,12 +46,63 @@ const STAGES: [(f64, RouteAction); 6] = [
     (90., RouteAction::Finish),
 ];
 
+const VISIBILITY_STAGES: [(f64, RouteAction); 5] = [
+    (
+        3.,
+        RouteAction::View {
+            clearance_m: 5.,
+            view: RecordView::Down,
+        },
+    ),
+    (
+        11.,
+        RouteAction::View {
+            clearance_m: 5.,
+            view: RecordView::Horizon,
+        },
+    ),
+    (
+        19.,
+        RouteAction::View {
+            clearance_m: 500.,
+            view: RecordView::Down,
+        },
+    ),
+    (
+        27.,
+        RouteAction::View {
+            clearance_m: 500.,
+            view: RecordView::Horizon,
+        },
+    ),
+    (35., RouteAction::Finish),
+];
+impl RecordRoute {
+    fn stages(self) -> &'static [(f64, RouteAction)] {
+        match self {
+            Self::Flight => &STAGES,
+            Self::Visibility => &VISIBILITY_STAGES,
+        }
+    }
+    fn captures(self) -> &'static [f64] {
+        match self {
+            Self::Flight => &[4., 25., 55., 73., 83., 89.],
+            Self::Visibility => &[10., 18., 26., 34.],
+        }
+    }
+}
 impl PhysicalRecord {
     pub fn new(path: PathBuf) -> io::Result<Self> {
+        Self::with_route(path, RecordRoute::Flight)
+    }
+    pub fn visibility(path: PathBuf) -> io::Result<Self> {
+        Self::with_route(path, RecordRoute::Visibility)
+    }
+    fn with_route(path: PathBuf, route: RecordRoute) -> io::Result<Self> {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -48,10 +111,11 @@ impl PhysicalRecord {
             phase: 0,
             capture: 0,
             last_stats: GpuStats::default(),
+            route,
         })
     }
     pub fn action(&mut self) -> Option<RouteAction> {
-        if let Some(&(at, action)) = STAGES.get(self.phase)
+        if let Some(&(at, action)) = self.route.stages().get(self.phase)
             && self.start.elapsed().as_secs_f64() >= at
         {
             self.phase += 1;
@@ -70,10 +134,10 @@ impl PhysicalRecord {
         matches!(self.current_action(), Some(RouteAction::Rise))
     }
     fn current_action(&self) -> Option<RouteAction> {
-        self.phase.checked_sub(1).map(|i| STAGES[i].1)
+        self.phase.checked_sub(1).map(|i| self.route.stages()[i].1)
     }
     pub fn screenshot(&mut self) -> Option<PathBuf> {
-        let times = [4., 25., 55., 73., 83., 89.];
+        let times = self.route.captures();
         if let Some(&at) = times.get(self.capture)
             && self.start.elapsed().as_secs_f64() >= at
         {
@@ -99,7 +163,7 @@ impl PhysicalRecord {
         let p = eye.anchor();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -116,7 +180,9 @@ impl PhysicalRecord {
             stats.height_build_ms,
             stats.height_wait_ms,
             stats.height_generated_tiles,
-            stats.height_reused_tiles
+            stats.height_reused_tiles,
+            stats.height_drawn_tiles,
+            stats.height_tested_tiles
         )
     }
     pub fn finish(&mut self) -> io::Result<()> {
@@ -146,6 +212,37 @@ mod tests {
             assert_eq!(record.forward(), forward, "at {seconds} seconds");
             assert_eq!(record.rising(), rising, "at {seconds} seconds");
         }
+        drop(record);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn visibility_route_changes_view_without_flight_input() {
+        let path = std::env::temp_dir().join(format!(
+            "procgen-visibility-record-{}.csv",
+            std::process::id()
+        ));
+        let mut record = PhysicalRecord::visibility(path.clone()).unwrap();
+        let mut clearances = Vec::new();
+        for seconds in [3, 11, 19, 27] {
+            record.start = Instant::now() - std::time::Duration::from_secs(seconds);
+            let Some(RouteAction::View { clearance_m, .. }) = record.action() else {
+                panic!("expected a fixed view");
+            };
+            clearances.push(clearance_m);
+            assert!(
+                !record.forward() && !record.rising(),
+                "fixed views must not move"
+            );
+        }
+        assert_eq!(
+            clearances[0], clearances[1],
+            "first comparison shares one altitude"
+        );
+        assert_eq!(
+            clearances[2], clearances[3],
+            "second comparison shares one altitude"
+        );
+        assert!(clearances[2] > clearances[0]);
         drop(record);
         std::fs::remove_file(path).unwrap();
     }

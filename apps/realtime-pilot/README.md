@@ -692,3 +692,6 @@ Recordings save a separate `.view.json`; generation cases and
 camera paths keep their existing formats. See
 [surface quality](../../docs/realtime-world-surface-quality.md) for the normal
 contract, memory cost, comparison procedure, and findings.
+
+See [terrain draw visibility](../../docs/realtime-world-visibility.md) for radial tile bounds, near-first drawing,
+and the fixed down/horizon recording route.

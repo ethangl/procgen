@@ -6,7 +6,7 @@ use crate::physical_surface_layers::{
     TERRAIN_SHADER,
 };
 use bevy::{
-    camera::primitives::{Aabb, Frustum},
+    camera::primitives::Frustum,
     core_pipeline::core_3d::graph::{Core3d, Node3d},
     ecs::query::QueryItem,
     prelude::*,
@@ -306,6 +306,8 @@ impl ViewNode for GpuTerrainNode {
                 );
             }
         };
+        let mut drawn_tiles = 0;
+        let mut tested_tiles = 0;
         for (height, layer) in [
             (&draw.previous_height, SurfaceLayer::PreviousHeight),
             (&draw.height, SurfaceLayer::CurrentHeight),
@@ -327,37 +329,21 @@ impl ViewNode for GpuTerrainNode {
             pass.set_index_buffer(draw.height_indices.slice(..), wgpu::IndexFormat::Uint32);
             if let Some(height) = height {
                 pass.set_pipeline(&draw.height_pipeline);
-                for (tile, buffer) in &height.tiles {
-                    let field = &draw.field;
-                    let radius = field.config().radius_m;
-                    let address = tile.address();
-                    let d = address
-                        .grid_vertex(
-                            procgen_cubesphere::TILE_QUADS / 2,
-                            procgen_cubesphere::TILE_QUADS / 2,
-                        )
-                        .unwrap()
-                        .direction();
-                    let center = Vec3::new(d.x, d.y, d.z) * radius
-                        - Vec3::new(
-                            settings.anchor[0] as f32,
-                            settings.anchor[1] as f32,
-                            settings.anchor[2] as f32,
-                        );
-                    let width = procgen_cubesphere::vertex_spacing(address.level())
-                        * radius
-                        * procgen_cubesphere::TILE_QUADS as f32;
-                    let bounds = Aabb {
-                        center: center.into(),
-                        half_extents: Vec3::splat(width + field.config().height_limit_m * 2.0)
-                            .into(),
-                    };
-                    if !frustum.intersects_obb_identity(&bounds) {
-                        continue;
-                    }
-
-                    pass.set_vertex_buffer(0, buffer.slice(..));
+                tested_tiles += height.tiles.len();
+                let mut visible: Vec<_> = height
+                    .tiles
+                    .values()
+                    .filter_map(|tile| {
+                        tile.bounds
+                            .visible_distance(frustum, settings.anchor, eye)
+                            .map(|distance| (distance, tile))
+                    })
+                    .collect();
+                visible.sort_by(|a, b| a.0.total_cmp(&b.0));
+                for (_, tile) in visible {
+                    pass.set_vertex_buffer(0, tile.buffer.slice(..));
                     pass.draw_indexed(0..draw.height_index_count, 0, 0..1);
+                    drawn_tiles += 1;
                 }
             }
         }
@@ -383,6 +369,8 @@ impl ViewNode for GpuTerrainNode {
         if let Ok(mut output) = displayed.output.try_lock() {
             output.stats.surface_target_bytes = surfaces.0.bytes();
             output.stats.draw_ms = start.elapsed().as_secs_f64() * 1000.0;
+            output.stats.height_drawn_tiles = drawn_tiles;
+            output.stats.height_tested_tiles = tested_tiles;
         }
         Ok(())
     }

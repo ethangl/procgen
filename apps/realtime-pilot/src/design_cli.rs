@@ -7,6 +7,7 @@ use std::{error::Error, path::PathBuf};
 pub fn run() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut record = None;
+    let mut visibility_record = None;
     let mut backend = None;
     let mut seed = None;
     let mut path = None;
@@ -26,6 +27,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             "--explore-record" => {
                 record = Some(PathBuf::from(
                     args.next().ok_or("--explore-record needs a CSV path")?,
+                ))
+            }
+            "--visibility-record" => {
+                visibility_record = Some(PathBuf::from(
+                    args.next().ok_or("--visibility-record needs a CSV path")?,
                 ))
             }
             "--backend" => {
@@ -95,7 +101,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nOrbit and flight: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second orbit/descent/flight route and six screenshots. --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU height terrain with live octave controls, oceans, and planet-design-300km.json. Unchanged height tiles retain their GPU buffers during movement. Orbit and free flight replace walking and runtime voxels/collision. Optional radial camera protection keeps 5 m terrain clearance; it is not swept collision. Sea level in the Design tab updates immediately; Save controls writes terrain and ocean settings. Oceans are visual only on the GPU backend. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
+                    "--design [--seed U64 | --design-file FILE] [--write-design FILE] [--check]\nHeadless preview (--check only): --patch-span METERS --solo INDEX --preview-quads 16|32|64|128|256\nChunk audit: --check-chunks [--chunk-lod 0..{VOXEL_ROOT_LOD}] [--chunk-point X,Y,Z] (integer meters).\nResidency audit: --check-residency (orbit, ground, rapid travel, revisit).\nSurface audit: --check-surfaces (resident chunk meshes, mixed LOD seams, fine collision).\nOrbit and flight: --explore [--backend gpu|cpu] (GPU by default; CPU audit explicit); --explore-record FILE.csv records a 90-second orbit/descent/flight route and six screenshots. --visibility-record FILE.csv records fixed down/horizon views at 5 m and 500 m clearance (35 seconds, four screenshots). --check-explore for a headless coverage and walking audit.\nWithout a mode flag, opens GPU height terrain with live octave controls, oceans, and planet-design-300km.json. Unchanged height tiles retain their GPU buffers during movement. Orbit and free flight replace walking and runtime voxels/collision. Optional radial camera protection keeps 5 m terrain clearance; it is not swept collision. Sea level in the Design tab updates immediately; Save controls writes terrain and ocean settings. Oceans are visual only on the GPU backend. --design and --explore remain optional aliases. --seed selects the starter design. --write-design saves the full config.\nOther experiments: --planet [--check], --stream [--preset hills|ridges|basins] [--record CSV], --sweep DIRECTORY, --capture DIRECTORY. Use --stream --help for experiment options."
                 );
                 return Ok(());
             }
@@ -121,11 +127,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if mode != DesignMode::ChunkAudit && (chunk_lod.is_some() || chunk_point.is_some()) {
         return Err("--chunk-lod/--chunk-point require --check-chunks".into());
     }
-    if record.is_some() && backend.as_deref() == Some("cpu") {
-        return Err("--explore-record requires the GPU exploration backend".into());
+    if record.is_some() && visibility_record.is_some() {
+        return Err("select one recording route".into());
     }
-    if record.is_some() && mode != DesignMode::Explore {
-        return Err("--explore-record requires --explore".into());
+    let recording = record.is_some() || visibility_record.is_some();
+    if recording && backend.as_deref() == Some("cpu") {
+        return Err("recording requires the GPU exploration backend".into());
+    }
+    if recording && mode != DesignMode::Explore {
+        return Err("recording requires --explore".into());
     }
     if backend.is_some() && mode != DesignMode::Explore {
         return Err("--backend requires --explore".into());
@@ -246,9 +256,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 "cpu" => crate::physical_gpu_bridge::ExplorationBackend::Cpu,
                 _ => unreachable!("validated backend"),
             };
-            let record = record
-                .map(crate::physical_record::PhysicalRecord::new)
-                .transpose()?;
+            let record = match visibility_record {
+                Some(path) => Some(crate::physical_record::PhysicalRecord::visibility(path)?),
+                None => record
+                    .map(crate::physical_record::PhysicalRecord::new)
+                    .transpose()?,
+            };
             crate::physical_inspector::run(document, output.or(path), backend, record);
         }
         Ok(())

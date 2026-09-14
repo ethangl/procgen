@@ -107,3 +107,6 @@ Headless height-preview and one-meter chunk audits passed. Pilot and affected
 GPU-test Clippy checks passed with warnings denied; formatting and diff checks
 passed. This change still needs a Windows/Vulkan native run. The clearance
 check is not a rendered-triangle or swept-collision guarantee.
+
+See [terrain draw visibility](realtime-world-visibility.md) for radial tile bounds, near-first drawing,
+and the fixed down/horizon recording route.
