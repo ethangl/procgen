@@ -10,7 +10,25 @@ use std::{
 use bytemuck::Pod;
 
 pub fn request_device(label: &str) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
+    request_device_for_backends(label, wgpu::Backends::all())
+}
+
+pub fn request_device_for_backends(
+    label: &str,
+    backends: wgpu::Backends,
+) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
+    request_device_with_limits(label, backends, wgpu::Limits::downlevel_defaults())
+}
+
+pub fn request_device_with_limits(
+    label: &str,
+    backends: wgpu::Backends,
+    required_limits: wgpu::Limits,
+) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends,
+        ..Default::default()
+    });
     let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
@@ -26,7 +44,7 @@ pub fn request_device(label: &str) -> Option<(wgpu::AdapterInfo, wgpu::Device, w
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
+        required_limits,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         trace: wgpu::Trace::Off,

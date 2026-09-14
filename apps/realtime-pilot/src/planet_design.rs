@@ -147,6 +147,10 @@ pub struct PlanetDesignField {
     key: u32,
 }
 impl PlanetDesignField {
+    pub(crate) fn noise_key(&self) -> u32 {
+        self.key
+    }
+
     pub fn config(&self) -> &PlanetDesignConfig {
         &self.config
     }

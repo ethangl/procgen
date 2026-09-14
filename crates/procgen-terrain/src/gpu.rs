@@ -50,6 +50,8 @@ pub const TERRAIN_WGSL_DERIVATIVE_ABSOLUTE_TOLERANCE: f32 = 4.0e-2;
 pub const TERRAIN_WGSL_SOURCE: &str = concat!(
     include_str!("../../procgen-core/wgsl/hash.wgsl"),
     "\n",
+    include_str!("../../procgen-core/wgsl/arithmetic.wgsl"),
+    "\n",
     include_str!("../../procgen-noise/wgsl/noise.wgsl"),
     "\n",
     include_str!("../../procgen-cubesphere/wgsl/mapping.wgsl"),

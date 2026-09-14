@@ -91,16 +91,46 @@ orbit distance or flight speed. The player has a 1.7 m eye height and walks at
 4 m/s. The panel distinguishes reference altitude, measured ground clearance,
 and the height-field estimate.
 
-The viewer loads your saved octave settings. Edit and save in the existing
-`--design` editor, then launch exploration again. Neutral, LOD-color, and normal
-views are available. A complete old mesh stays visible until a replacement is
-fully uploaded. Upload admission is capped at 512 KiB per frame; collision
-builds and replaces independently. Selection shares refinement across octants
-at camera boundaries. The retuned 4,900 km preset builds about 5.5 million ground
-triangles in 37 seconds on the tested M1 Max, with 83.7 MiB of source density and
-320 MiB of allocated CPU mesh payload. Visual LOD can lag travel. The leaf cap
-does not guarantee one-meter visual spacing everywhere in the collision cube. Replacement pops and further
-geometry filtering remain open; Windows/Vulkan validation is pending.
+A separate 300 km comparison preset preserves the local bands from 65.536 km
+through 16 m. Its broadest band is 131.072 km with 4,096 m amplitude; the height
+limit remains 12 km. The original `planet-design.json` is unchanged.
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design-300km.json
+```
+
+The viewer loads your saved octave settings and uses GPU exploration by default.
+Edit and save in the `--design` editor, then launch exploration again. Neutral,
+LOD-color, and normal views are available. Density and mesh generation run on
+Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
+preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
+planet coverage and 125 one-meter voxel chunks around nearby ground. Height
+filtering is continuous across tiles; skirts and a 16 m overlap cover the
+surface joins. CPU collision remains independent.
+
+Use `--backend cpu` with `--explore` for the canonical CPU visual audit. That mode
+retains complete mesh replacement and its 512 KiB per-frame upload limit. There
+is no automatic backend fallback.
+
+Record the fixed 90-second native orbit/descent/walk/flight route:
+
+```sh
+cargo run -p procgen-realtime-pilot -- \
+  --design --explore --design-file planet-design.json --backend gpu \
+  --explore-record g5-route.csv
+```
+
+This writes frame/stage timings and six adjacent PNG captures, then exits. Live
+navigation and movement input are disabled during recorded runs.
+The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
+records Metal measurements and remaining limits. The voxel pool is capped at
+300 allocations and 512 MiB; each height snapshot is at most 14.31 MiB.
+Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
+preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
+after initial coverage stayed below 250 ms; initial coverage and height updates
+can slightly exceed it. The render overlap is not a watertight mesh export. Windows/Vulkan execution
+remains to be checked on that host.
 
 Run the same closed-coverage, walking, and collision-handoff audit without a GPU:
 
@@ -108,6 +138,42 @@ Run the same closed-coverage, walking, and collision-handoff audit without a GPU
 cargo run -p procgen-realtime-pilot --no-default-features -- \
   --design --design-file planet-design.json --check-explore
 ```
+
+## GPU generation work
+
+GPU generation and incremental chunk replacement are integrated. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
+G1 supplies a WGSL density kernel and CPU/GPU agreement checks. G2 adds bounded
+uniform-chunk meshing, deterministic scans, and GPU vertex/index/draw buffers.
+G3 adds 2:1 transitions and bounded incremental GPU residency. G4 connects these
+buffers to the exploration viewer and keeps preparation off the render thread.
+G5 adds filtered GPU height tiles, bounded local voxels, and short visual transitions.
+It runs on Metal on macOS and Vulkan on Windows/Linux:
+
+```sh
+cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
+cargo test -p procgen-gpu-tests --test voxel_mesh_agreement -- --nocapture
+cargo test -p procgen-gpu-tests --test voxel_streaming_agreement -- --nocapture --test-threads=1
+cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
+```
+
+This checks real GPU chunk batches, shared halo/parent samples, repeated runs,
+and CPU agreement using the saved preset and radius/control extremes. Timings
+separate pipeline creation, dispatch/completion, CPU sampling, and audit readback.
+The test requires a compatible GPU; shader validation alone can run without one
+by filtering to `voxel_density_wgsl_validates_without_a_device`.
+
+The meshing audit checks topology, exact shared boundaries, replay order, capacity
+failures, and saved-terrain agreement with CPU extraction and collision. It feeds
+GPU density directly into extraction without an intermediate readback.
+
+The streaming audit checks mixed-LOD seams, local publication, slot reuse,
+cancellation, retirement, overflow, memory limits, and a fixed route through the
+saved terrain. Normal generation reads back eight bytes of overflow flags and,
+when supported, 32 bytes of stage timestamps per job. Visual samples, vertices,
+indices, and draw counts remain on the GPU. The `gpu` feature owns the wgpu
+implementation; the inspector enables it, and the audits use the same encoder
+as the residency owner. Native-device tests also check deferred submission,
+draw leases through slot retirement, and timestamp validity.
 
 ## Run the original experiments
 

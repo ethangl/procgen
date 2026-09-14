@@ -39,5 +39,7 @@ pub const NOISE_DERIVATIVE_ANGLE_TOLERANCE: f32 = 1.0e-3;
 pub const WGSL_SOURCE: &str = concat!(
     include_str!("../../procgen-core/wgsl/hash.wgsl"),
     "\n",
+    include_str!("../../procgen-core/wgsl/arithmetic.wgsl"),
+    "\n",
     include_str!("../wgsl/noise.wgsl")
 );

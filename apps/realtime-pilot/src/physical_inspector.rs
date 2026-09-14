@@ -1,21 +1,24 @@
 //! Native physical exploration. Geometry and movement remain library consumers.
+#[path = "physical_inspector_ui.rs"]
+mod ui;
 use crate::{
+    physical_gpu_bridge::{ExplorationBackend, GpuBridge, GpuCamera},
+    physical_gpu_render::{GpuTerrainPlugin, GpuView},
     physical_jobs::{Jobs, TerrainKind, TerrainRequest, TerrainResult},
     physical_render::{Coloring, PhysicalUploads, UPLOAD_LIMIT, core, vector},
 };
 use bevy::{
-    camera::{CameraOutputMode, Viewport, visibility::RenderLayers},
+    camera::{CameraOutputMode, visibility::RenderLayers},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     prelude::*,
     render::render_resource::BlendState,
-    window::PrimaryWindow,
 };
 use bevy_egui::{
-    EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui,
+    EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext,
 };
 use procgen_realtime_pilot::{
-    MeterPosition, PLAYER_EYE_M, PLAYER_SPEED_MPS, PhysicalWalker, PlanetDesignConfig,
-    PlanetDesignField, VoxelCollision, VoxelPosition,
+    MeterPosition, PhysicalWalker, PlanetDesignConfig, PlanetDesignField, VoxelCollision,
+    VoxelPosition,
 };
 use std::{
     path::PathBuf,
@@ -44,6 +47,8 @@ struct PhysicalCamera;
 const MAX_ORBIT_CLEARANCE_RADII: f32 = 6.0;
 
 struct Inspector {
+    record: Option<crate::physical_record::PhysicalRecord>,
+    gpu: Option<GpuBridge>,
     field: Arc<PlanetDesignField>,
     jobs: Jobs,
     path: String,
@@ -134,11 +139,18 @@ impl Inspector {
         self.face_horizon();
     }
 }
-pub fn run(config: PlanetDesignConfig, path: Option<PathBuf>) {
+pub fn run(
+    config: PlanetDesignConfig,
+    path: Option<PathBuf>,
+    backend: ExplorationBackend,
+    record: Option<crate::physical_record::PhysicalRecord>,
+) {
     let field = Arc::new(config.validate().expect("validated design"));
     let radius = field.config().radius_m;
     let mut state = Inspector {
-        jobs: Jobs::start(Arc::clone(&field)),
+        record,
+        gpu: None,
+        jobs: Jobs::start(Arc::clone(&field), backend),
         field,
         path: path
             .map(|p| p.display().to_string())
@@ -182,29 +194,52 @@ pub fn run(config: PlanetDesignConfig, path: Option<PathBuf>) {
         status: "Building distant overview…".into(),
     };
     state.face_ground();
-    App::new()
-        .insert_non_send_resource(state)
+    if backend == ExplorationBackend::Gpu {
+        state.gpu = Some(GpuBridge::new(
+            Arc::clone(&state.field),
+            GpuCamera { eye: state.eye },
+        ));
+        state.status = "GPU exploration · collision uses the CPU reference".into();
+    }
+    let gpu = state.gpu.clone();
+    let plugins = DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Real-time world pilot — physical exploration".into(),
+            resolution: (1440, 1000).into(),
+            ..default()
+        }),
+        ..default()
+    });
+    // Keep the render queue on the event-loop thread. GPU generation remains
+    // asynchronous; the pipelined renderer can stall during macOS teardown.
+    let plugins = if backend == ExplorationBackend::Gpu {
+        plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
+    } else {
+        plugins
+    };
+    let mut app = App::new();
+    app.insert_non_send_resource(state)
         .insert_resource(ClearColor(Color::srgb(0.025, 0.03, 0.04)))
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
             brightness: 500.0,
             ..default()
         })
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Real-time world pilot — physical exploration".into(),
-                resolution: (1440, 1000).into(),
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(plugins)
         .add_plugins((EguiPlugin::default(), PhysicalUploads::default()))
         .add_systems(Startup, setup)
-        .add_systems(Update, (receive, movement, stream, position_scene).chain())
-        .add_systems(EguiPrimaryContextPass, ui)
-        .run();
+        .add_systems(
+            Update,
+            (receive, record_route, movement, stream, position_scene).chain(),
+        )
+        .add_systems(EguiPrimaryContextPass, ui::panel);
+    if let Some(bridge) = gpu {
+        app.add_plugins(GpuTerrainPlugin(bridge));
+    }
+    app.run();
 }
 fn setup(
+    state: NonSend<Inspector>,
     mut commands: Commands,
     mut settings: ResMut<EguiGlobalSettings>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -224,7 +259,7 @@ fn setup(
             ..default()
         },
     ));
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
         PhysicalCamera,
         bevy::camera::Exposure::OVERCAST,
@@ -236,6 +271,16 @@ fn setup(
         }),
         Transform::default(),
     ));
+    if state.gpu.is_some() {
+        camera.insert((
+            bevy::render::view::Hdr,
+            Msaa::Off,
+            GpuView {
+                anchor: [0; 4],
+                coloring: 0,
+            },
+        ));
+    }
     commands.spawn((
         DirectionalLight {
             illuminance: 25000.0,
@@ -252,7 +297,7 @@ fn setup(
 #[derive(Resource)]
 struct TerrainMaterial(Handle<StandardMaterial>);
 fn receive(mut state: NonSendMut<Inspector>) {
-    if state.staging.is_none() && !state.retiring {
+    if state.gpu.is_none() && state.staging.is_none() && !state.retiring {
         match state.jobs.surfaces.try_recv() {
             Ok(Ok(result)) => {
                 state.terrain_busy = false;
@@ -289,6 +334,57 @@ fn receive(mut state: NonSendMut<Inspector>) {
         Err(TryRecvError::Empty) => {}
     }
 }
+fn record_route(
+    mut state: NonSendMut<Inspector>,
+    time: Res<Time<Real>>,
+    mut commands: Commands,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if let Some(mut record) = state.record.take() {
+        use crate::physical_record::RouteAction;
+        match record.action() {
+            Some(RouteAction::Descend) => {
+                state.descent = true;
+                state.face_ground();
+            }
+            Some(RouteAction::Ground) => state.near_ground(),
+            Some(RouteAction::Walk) => {
+                state.landing = true;
+            }
+            Some(RouteAction::Fly) => {
+                state.walker = None;
+                state.landing = false;
+                state.mode = Navigation::Fly;
+            }
+            Some(RouteAction::Orbit) => state.orbit(),
+            Some(RouteAction::Finish) => {
+                record.finish().expect("write route CSV");
+                exit.write(AppExit::Success);
+            }
+            None => {}
+        }
+        if let Some(path) = record.screenshot() {
+            use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(path));
+        }
+        if let Some(bridge) = &state.gpu
+            && let Ok(output) = bridge.output.try_lock()
+        {
+            record
+                .write(
+                    time.delta_secs() * 1000.0,
+                    &output.stats,
+                    state.eye,
+                    state.mode == Navigation::Walk,
+                    state.collision.is_some(),
+                )
+                .expect("write route CSV");
+        }
+        state.record = Some(record);
+    }
+}
 fn movement(
     mut state: NonSendMut<Inspector>,
     time: Res<Time<Real>>,
@@ -301,8 +397,8 @@ fn movement(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    let keyboard_blocked = ctx.wants_keyboard_input();
-    let pointer_blocked = ctx.wants_pointer_input();
+    let keyboard_blocked = state.record.is_some() || ctx.wants_keyboard_input();
+    let pointer_blocked = state.record.is_some() || ctx.wants_pointer_input();
     let dt = time.delta_secs().min(0.05);
     state.frame_ms = state.frame_ms * 0.95 + time.delta_secs() * 1000.0 * 0.05;
     state.peak_frame_ms = state.peak_frame_ms.max(time.delta_secs() * 1000.0);
@@ -362,11 +458,14 @@ fn movement(
             0.0
         }
     };
-    let input = Vec3::new(
+    let mut input = Vec3::new(
         key(KeyCode::KeyD) - key(KeyCode::KeyA),
         key(KeyCode::KeyE) - key(KeyCode::KeyQ),
         key(KeyCode::KeyS) - key(KeyCode::KeyW),
     );
+    if state.record.as_ref().is_some_and(|r| r.moving()) {
+        input.z = -1.0;
+    }
     if state.mode == Navigation::Fly && input != Vec3::ZERO {
         state.descent = false;
         let clearance = state.clearance_estimate();
@@ -473,6 +572,9 @@ fn stream(
     mut materials: ResMut<Assets<StandardMaterial>>,
     bridge: Res<PhysicalUploads>,
 ) {
+    if state.gpu.is_some() {
+        return;
+    }
     let start = Instant::now();
     state.upload_bytes = 0;
     let mut receipts = bridge.0.lock().unwrap();
@@ -583,11 +685,27 @@ fn stream(
 }
 fn position_scene(
     state: NonSend<Inspector>,
-    mut camera: Query<(&mut Transform, &mut Projection), With<PhysicalCamera>>,
+    mut camera: Query<
+        (&mut Transform, &mut Projection, Option<&mut GpuView>),
+        With<PhysicalCamera>,
+    >,
     mut terrain: Query<(&WorldOrigin, &mut Transform), Without<PhysicalCamera>>,
 ) {
     let anchor = state.eye.anchor();
-    for (mut transform, mut projection) in &mut camera {
+    if let Some(bridge) = &state.gpu
+        && let Ok(mut camera) = bridge.camera.try_lock()
+    {
+        *camera = GpuCamera { eye: state.eye };
+    }
+    for (mut transform, mut projection, gpu) in &mut camera {
+        if let Some(mut gpu) = gpu {
+            gpu.anchor = [anchor.x_m, anchor.y_m, anchor.z_m, 0];
+            gpu.coloring = match state.coloring {
+                Coloring::Neutral => 0,
+                Coloring::Lod => 1,
+                Coloring::Normals => 2,
+            };
+        }
         *transform = Transform::from_translation(vector(state.eye.relative_to(anchor)))
             .with_rotation(state.rotation);
         if let Projection::Perspective(p) = &mut *projection {
@@ -598,118 +716,4 @@ fn position_scene(
         let p = origin.0.relative_to(anchor);
         transform.translation = Vec3::new(p.x_m as f32, p.y_m as f32, p.z_m as f32);
     }
-}
-fn ui(
-    mut contexts: EguiContexts,
-    mut state: NonSendMut<Inspector>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    mut cameras: Query<&mut Camera, With<PhysicalCamera>>,
-) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    let panel = egui::SidePanel::left("physical-exploration")
-        .exact_width(340.0)
-        .show(ctx, |ui| {
-            ui.heading("Physical planet");
-            ui.label(&state.path);
-            ui.label(format!("Radius: {:.1} km", state.field.config().radius_m / 1000.0));
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Orbit").clicked() { state.orbit(); }
-                if ui.button("Fly").clicked() {
-                    state.mode = Navigation::Fly;
-                    state.walker = None;
-                    state.landing = false;
-                    state.descent = false;
-                }
-                if ui.button("Go to ground").clicked() { state.near_ground(); }
-            });
-            ui.horizontal(|ui| {
-                let label = if state.descent { "Stop descent" } else { "Descend continuously" };
-                if ui.button(label).clicked() {
-                    state.descent = !state.descent;
-                    state.walker = None;
-                    state.landing = false;
-                    state.mode = Navigation::Orbit;
-                    state.face_ground();
-                }
-                if ui.add_enabled(state.clearance_estimate() < 20.0, egui::Button::new("Walk")).clicked() {
-                    state.descent = false;
-                    state.landing = true;
-                }
-            });
-            ui.label(match state.mode {
-                Navigation::Orbit => "Orbit: drag left · scroll to descend",
-                Navigation::Fly => "Fly: W A S D · E / Q up / down",
-                Navigation::Walk => "Walk: W A S D",
-            });
-            ui.label("Hold right mouse to look · scroll adjusts flight speed");
-            ui.label(format!("Flight speed factor: {:.2}×", state.speed_factor));
-            ui.label(format!("Player: {PLAYER_EYE_M:.1} m eye · {PLAYER_SPEED_MPS:.1} m/s walking"));
-            ui.separator();
-            let altitude = state.eye.altitude_m(state.field.config().radius_m);
-            ui.label(if altitude.abs() < 10_000.0 {
-                format!("Reference altitude: {altitude:.2} m")
-            } else {
-                format!("Reference altitude: {:.3} km", altitude / 1000.0)
-            });
-            ui.label(match state.ground_clearance {
-                Some(m) => format!("Ground clearance (collision): {m:.2} m"),
-                None => "Ground clearance (collision): unavailable".into(),
-            });
-            ui.label(format!("Field clearance estimate: {:.2} m", state.clearance_estimate()));
-            ui.label(if state.collision_busy {
-                "Nearby collision: building"
-            } else if state.collision.is_some() {
-                "Nearby collision: retained"
-            } else {
-                "Nearby collision: outside ground range"
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut state.coloring, Coloring::Neutral, "Neutral");
-                ui.selectable_value(&mut state.coloring, Coloring::Lod, "LOD");
-                ui.selectable_value(&mut state.coloring, Coloring::Normals, "Normals");
-            });
-            ui.label("LOD 0 (red) = 1 m. Each level doubles spacing.");
-            ui.separator();
-            ui.label(&state.status);
-            ui.label(format!("{} displayed triangles", state.triangles));
-            if let Some(staging) = &state.staging {
-                ui.label(format!("{} upload pieces remaining", staging.result.packed.pieces.len()));
-            }
-            ui.label(format!("Generation: {:.2} s · collision: {:.2} s", state.generation_seconds, state.collision_seconds));
-            ui.label(format!("Frame: {:.1} ms · peak {:.1} ms", state.frame_ms, state.peak_frame_ms));
-            ui.label(format!("Upload: {:.0} KiB · CPU {:.2} ms · peak {:.2} ms", state.upload_bytes as f32 / 1024.0, state.upload_ms, state.peak_upload_ms));
-            ui.label(format!("Walk update: {:.3} ms", state.query_ms));
-            for (label, bytes) in [
-                ("Build source", state.source_bytes),
-                ("Build mesh", state.mesh_bytes),
-                ("Displayed buffers", state.display_bytes),
-                ("Collision", state.collision.as_ref().map_or(0, VoxelCollision::payload_bytes)),
-            ] {
-                ui.label(format!("{label}: {:.1} MiB", bytes as f32 / 1048576.0));
-            }
-            ui.label("Payload counters exclude allocator and driver overhead. One replacement at a time; 512 KiB upload per frame.");
-            if ui.button("Reset timing peaks").clicked() {
-                state.peak_frame_ms = 0.0;
-                state.peak_upload_ms = 0.0;
-            }
-        });
-    let window = windows.single()?;
-    let left = (panel.response.rect.width() * ctx.pixels_per_point()).round() as u32;
-    let size = UVec2::new(
-        window.physical_width().saturating_sub(left),
-        window.physical_height(),
-    );
-    for mut camera in &mut cameras {
-        camera.is_active = size.min_element() > 0;
-        if camera.is_active {
-            camera.viewport = Some(Viewport {
-                physical_position: UVec2::new(left, 0),
-                physical_size: size,
-                ..default()
-            });
-        }
-    }
-    Ok(())
 }

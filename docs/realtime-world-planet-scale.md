@@ -9,6 +9,11 @@ viewer, precise physical points, bounded complete mesh replacement, and walking.
 Generation latency and Windows/Vulkan validation remain open. This phase belongs
 only to the independent real-time pilot.
 
+GPU generation is now required for visual terrain. The next implementation
+sequence is [GPU generation and incremental streaming](realtime-world-gpu-streaming.md).
+The complete CPU mesh path below remains the reference baseline, not the target
+architecture for normal exploration.
+
 ## Requirements and source evidence
 
 - Give planet radius, elevation, feature wavelength, and local detail independent

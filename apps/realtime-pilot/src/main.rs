@@ -10,9 +10,15 @@ mod display;
 #[cfg(feature = "inspector")]
 mod inspector;
 #[cfg(feature = "inspector")]
+mod physical_gpu;
+#[cfg(feature = "inspector")]
+mod physical_gpu_render;
+#[cfg(feature = "inspector")]
 mod physical_inspector;
 #[cfg(feature = "inspector")]
 mod physical_jobs;
+#[cfg(feature = "inspector")]
+mod physical_record;
 #[cfg(feature = "inspector")]
 mod physical_render;
 #[cfg(feature = "inspector")]
@@ -318,3 +324,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
+
+#[cfg(feature = "inspector")]
+mod physical_height;
+
+#[cfg(feature = "inspector")]
+mod physical_gpu_bridge;

@@ -37,52 +37,45 @@ fn lattice_gradient(key: u32, cell: vec3<i32>) -> vec3<f32> {
     return GRADIENTS[index];
 }
 
-fn axis_weights(value: f32) -> AxisWeights {
-    let fade = value * value * value * (value * (value * 6.0 - 15.0) + 10.0);
-    let fade_derivative = 30.0 * value * value * (value * (value - 2.0) + 1.0);
-    return AxisWeights(
-        vec2(1.0 - fade, fade),
-        vec2(-fade_derivative, fade_derivative),
-    );
+fn axis_weights(value: f32, math: F32Arithmetic) -> AxisWeights {
+    let polynomial = f32_add(f32_mul(value, f32_add(f32_mul(value, 6.0, math), -15.0, math), math), 10.0, math);
+    let fade = f32_mul(f32_mul(f32_mul(value, value, math), value, math), polynomial, math);
+    let derivative_polynomial = f32_add(f32_mul(value, f32_add(value, -2.0, math), math), 1.0, math);
+    let fade_derivative = f32_mul(f32_mul(f32_mul(30.0, value, math), value, math), derivative_polynomial, math);
+    return AxisWeights(vec2(f32_add(1.0, -fade, math), fade), vec2(-fade_derivative, fade_derivative));
 }
 
 fn gradient_noise_3d(key: u32, position: vec3<f32>) -> ScalarFieldSample3 {
+    return gradient_noise_3d_with_arithmetic(key, position, F32Arithmetic(1.0, 0.0));
+}
+
+// math.one must be 1.0 and math.zero must be 0.0, supplied through a buffer
+// when preserving f32 operation boundaries against backend reassociation.
+fn gradient_noise_3d_with_arithmetic(key: u32, position: vec3<f32>, math: F32Arithmetic) -> ScalarFieldSample3 {
     let cell = vec3<i32>(floor(position));
     let offset = position - vec3<f32>(cell);
-    let wx = axis_weights(offset.x);
-    let wy = axis_weights(offset.y);
-    let wz = axis_weights(offset.z);
+    let wx = axis_weights(offset.x, math);
+    let wy = axis_weights(offset.y, math);
+    let wz = axis_weights(offset.z, math);
     var value = 0.0;
     var derivative = vec3(0.0);
-
     for (var corner_z = 0u; corner_z < 2u; corner_z++) {
         for (var corner_y = 0u; corner_y < 2u; corner_y++) {
             for (var corner_x = 0u; corner_x < 2u; corner_x++) {
                 let corner = vec3(corner_x, corner_y, corner_z);
                 let gradient = lattice_gradient(key, cell + vec3<i32>(corner));
                 let displacement = offset - vec3<f32>(corner);
-                // Keep these scalar operations explicit so a builtin cannot
-                // introduce a different contraction policy than canonical Rust.
-                let contribution = gradient.x * displacement.x
-                    + gradient.y * displacement.y
-                    + gradient.z * displacement.z;
-                let weight = wx.weight[corner_x]
-                    * wy.weight[corner_y]
-                    * wz.weight[corner_z];
-                value += contribution * weight;
-                derivative = derivative
-                    + gradient * weight
-                    + vec3(
-                        wx.derivative[corner_x]
-                            * wy.weight[corner_y]
-                            * wz.weight[corner_z],
-                        wx.weight[corner_x]
-                            * wy.derivative[corner_y]
-                            * wz.weight[corner_z],
-                        wx.weight[corner_x]
-                            * wy.weight[corner_y]
-                            * wz.derivative[corner_z],
-                    ) * contribution;
+                let contribution = f32_add(f32_add(
+                    f32_mul(gradient.x, displacement.x, math),
+                    f32_mul(gradient.y, displacement.y, math), math),
+                    f32_mul(gradient.z, displacement.z, math), math);
+                let weight = f32_mul(f32_mul(wx.weight[corner_x], wy.weight[corner_y], math), wz.weight[corner_z], math);
+                value = f32_add(value, f32_mul(contribution, weight, math), math);
+                derivative = f32_scale_add(vec3(
+                    f32_mul(f32_mul(wx.derivative[corner_x], wy.weight[corner_y], math), wz.weight[corner_z], math),
+                    f32_mul(f32_mul(wx.weight[corner_x], wy.derivative[corner_y], math), wz.weight[corner_z], math),
+                    f32_mul(f32_mul(wx.weight[corner_x], wy.weight[corner_y], math), wz.derivative[corner_z], math),
+                ), contribution, f32_scale_add(gradient, weight, derivative, math), math);
             }
         }
     }

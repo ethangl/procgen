@@ -6,9 +6,12 @@ rust-version.workspace = true
 
 [features]
 default = ["inspector"]
-inspector = ["dep:bevy", "dep:bevy_egui"]
+gpu = ["dep:wgpu"]
+inspector = ["gpu", "dep:bevy", "dep:bevy_egui"]
 
 [dependencies]
+wgpu = { version = "27.0.1", optional = true, default-features = false, features = ["metal", "vulkan", "std", "wgsl"] }
+bytemuck = { version = "1.24", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 procgen-core = { path = "../../crates/procgen-core" }
