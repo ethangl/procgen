@@ -1095,3 +1095,58 @@ binary tests, native build, formatting, and affected Clippy checks pass.
 Implementation of the planned branch slices is complete. Windows/Vulkan
 validation remains in the handoff; the frame outliers above remain explicit
 performance limits for subsequent work.
+
+### More distant terrain detail
+
+The height grid now uses 64 by 64 quads per tile instead of 32 by 32. The
+384-tile cap and balanced edge stitching remain. This halves vertex spacing at
+the same tile level and raises the maximum triangle count from 786,432 to
+3,145,728 per snapshot, before stitched-edge degenerates and view culling.
+Near the ground, selection stops refining when height spacing reaches one meter;
+the local voxel grid still has one-meter spacing.
+
+The continuous height filter now uses distance divided by 512 instead of 128.
+At a given distance it retains wavelengths four times smaller, equivalent to
+two finer bands when octave wavelengths halve. This is separate from the mesh's
+one-level increase in linear resolution. For example, at 600 km clearance above
+the surface projection, the filter footprint is about 1.17 km instead of
+4.69 km. A 300 km planet's saved 8.192 km band is fully retained there; before
+this change it was absent. The same filter applies to height and normal sampling
+and stays continuous across tile boundaries. Saved noise settings are unchanged.
+
+Each tile now occupies 202,800 bytes for 4,225 vertices. One full snapshot uses
+74.27 MiB; current, previous, and pending snapshots can retain 222.80 MiB. Two
+32-tile GPU batches add at most 12.38 MiB of temporary output. The local voxel
+pool's 512 MiB budget and the viewport-dependent compositor allocations are
+separate from these bounds.
+
+The M1 Max/Metal routes on 2026-09-14 completed with six captures each and no GPU
+stream errors. Orbit captures show finer ridges and valleys, including on the
+lit hemisphere; ground captures retain continuous coverage. The comparison
+below uses the preceding latency slice's recordings and the same saved presets:
+
+| Metric | 4,900 km before / after | 300 km before / after |
+|---|---:|---:|
+| Median completed height build | 66.36 / 147.92 ms | 105.88 / 162.51 ms |
+| Maximum completed height build, including startup | 144.71 / 235.24 ms | 156.88 / 286.72 ms |
+| Descent frame p95 | 8.93 / 17.23 ms | 17.87 / 17.31 ms |
+| Walking frame p95 | 17.46 / 9.18 ms | 18.07 / 18.36 ms |
+| Flight frame p95 | 17.66 / 8.79 ms | 19.36 / 21.10 ms |
+| Return-to-orbit frame p95 | 17.82 / 8.80 ms | 18.06 / 17.80 ms |
+| Peak retained terrain buffers | 252.99 / 409.40 MiB | 309.96 / 475.33 MiB |
+
+Height builds cost more. Frame pacing still varies between roughly 8.3 and
+16.7 ms across desktop runs, so the faster rows do not establish a rendering
+speedup. The small-preset run also had a 503.86 ms startup frame at 0.802 seconds;
+its largest later frame was 81.78 ms during descent. The large-preset maximum
+was 84.15 ms. All 1,719 large-preset and 831 small-preset walking updates were
+`Advanced` with collision coverage. Raw evidence is in
+`/tmp/height-detail-{large,small}.csv`, adjacent logs and PNGs; the comparison
+uses `/tmp/height-latency-final-{large,small}.csv`.
+
+All 94 CPU tests and three height GPU tests pass, including the denser grid's
+stitched seams and exact replay after reordered submissions. Maximum CPU/GPU
+position differences were 1.612976 m (large) and 0.152100 m (small), and normal
+vector differences were 0.046563 and 0.038663. Existing tolerances are unchanged.
+The native build, pilot Clippy checks, and formatting pass. Windows/Vulkan
+validation of these detail settings remains pending.

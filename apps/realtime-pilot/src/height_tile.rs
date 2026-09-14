@@ -1,7 +1,8 @@
 //! Mesh identity includes the edges shared with a coarser neighbor.
 use procgen_cubesphere::{FaceEdge, TILE_QUADS, TileAddress};
 
-pub const HEIGHT_QUADS: u32 = TILE_QUADS / 2;
+// Use every canonical grid sample so distant geometry retains smaller features.
+pub const HEIGHT_QUADS: u32 = TILE_QUADS;
 pub const HEIGHT_SIDE: u32 = HEIGHT_QUADS + 1;
 pub const HEIGHT_VERTEX_COUNT: u32 = HEIGHT_SIDE * HEIGHT_SIDE;
 

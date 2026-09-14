@@ -204,7 +204,8 @@ summaries; no branch, commit or push was made for this validation.
 
 The results above predate the smooth surface compositor, height-surface normals,
 local voxel normals, height coloring, collision continuity, and stitched height
-tiles, bounded height batch overlap, and background PNG encoding. Run the render
+tiles, bounded height batch overlap, background PNG encoding, and the denser
+64-quad height grids with two more distance-filtered octave bands. Run the render
 and terrain tests, then repeat the two routes from the repository root:
 
 ```powershell

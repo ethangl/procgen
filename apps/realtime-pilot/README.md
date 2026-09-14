@@ -105,15 +105,18 @@ Edit and save in the `--design` editor, then launch exploration again. Height
 coloring is the default; Neutral, LOD, and Normals remain available. Density and mesh generation run on
 Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
 preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
-planet coverage and 125 one-meter voxel chunks around nearby ground. Height
-filtering is continuous across tiles. Adjacent tile levels differ by at most one;
+planet coverage and 125 one-meter voxel chunks around nearby ground. Each height
+tile has 64 by 64 quads. The distance filter retains terrain wavelengths four
+times smaller than the original G5 setting: two more bands for an octave stack
+whose wavelengths halve each octave. Height filtering is continuous across
+tiles. Adjacent tile levels differ by at most one;
 fine edges share coarse vertices, so no skirts are needed. A 16 m overlap joins
 height coverage to local voxels. The GPU viewer blends separately depth-tested height and voxel
 layers across the overlap and during height replacement, without pixel discard
 patterns. Height generation keeps at most two batches of 32 tiles in flight.
 Each batch uses one compute pass and device copies into reusable tile buffers.
 It can build during the current fade; publication waits for the fade to finish.
-Temporary batch outputs add at most 3.19 MiB, outside the retained terrain counters.
+Temporary batch outputs add at most 12.38 MiB, outside the retained terrain counters.
 CPU collision remains independent. Nearby collision retains its current
 patch while a replacement builds. Walking forecasts one second of movement and
 gravity to request coverage early, including during falls; a late build stops
@@ -162,7 +165,10 @@ can have valid collision coverage without being grounded. Live
 navigation and movement input are disabled during recorded runs.
 The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
 records Metal measurements and remaining limits. The voxel pool is capped at
-300 allocations and 512 MiB; each height snapshot is at most 19.14 MiB with normals after skirt removal.
+300 allocations and 512 MiB; each height snapshot is at most 74.27 MiB. Current,
+previous, and pending height snapshots can retain up to 222.80 MiB together.
+See [distant detail measurements](../../docs/realtime-world-gpu-streaming.md#more-distant-terrain-detail)
+for the current grid and filter costs.
 The original G5 Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
 preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
 after initial coverage stayed below 250 ms; initial coverage and height updates

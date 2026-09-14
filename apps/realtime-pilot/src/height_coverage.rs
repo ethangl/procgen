@@ -48,7 +48,7 @@ pub fn select_height_coverage(field: &PlanetDesignField, eye: VoxelPosition) -> 
                 let width = vertex_spacing(tile.level()) * radius * TILE_QUADS as f32;
                 let lateral = ((center - surface).length() - width).max(0.0);
                 let distance = lateral.hypot(clearance.max(0.0));
-                // A 32-quad tile should span a small view angle in orbit too.
+                // A tile should span a small view angle in orbit too.
                 // Camera priority and the fixed tile cap still bound refinement.
                 (distance < 8.0 * width).then_some((distance / width, tile))
             })

@@ -133,7 +133,9 @@ impl HeightFilter {
             .max(HEIGHT_FILTER_MIN_M)
     }
 }
-pub const HEIGHT_FILTER_DISTANCE_RATIO: f32 = 128.0;
+/// Distance divided by this ratio gives the nominal sample footprint in meters.
+/// Larger ratios retain smaller features; one doubling retains one finer octave.
+pub const HEIGHT_FILTER_DISTANCE_RATIO: f32 = 512.0;
 pub const HEIGHT_FILTER_MIN_M: f32 = 0.25;
 
 #[cfg(test)]
