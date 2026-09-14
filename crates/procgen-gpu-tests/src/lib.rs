@@ -10,7 +10,17 @@ use std::{
 use bytemuck::Pod;
 
 pub fn request_device(label: &str) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
+    request_device_for_backends(label, wgpu::Backends::all())
+}
+
+pub fn request_device_for_backends(
+    label: &str,
+    backends: wgpu::Backends,
+) -> Option<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends,
+        ..Default::default()
+    });
     let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,

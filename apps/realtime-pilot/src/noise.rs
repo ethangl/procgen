@@ -9,11 +9,11 @@ const LACUNARITY: f32 = 2.0;
 
 // Fixed moments of the normalized basis, measured over a spatial reference
 // distribution (see the relief report). Never fit these to a generated world.
-const BASIS_STD_DEV: f32 = 0.135;
-const ABS_MEAN: f32 = 0.110;
-const ABS_STD_DEV: f32 = 0.078;
-const SQUARE_MEAN: f32 = 0.0182;
-const SQUARE_STD_DEV: f32 = 0.0226;
+pub(crate) const BASIS_STD_DEV: f32 = 0.135;
+pub(crate) const ABS_MEAN: f32 = 0.110;
+pub(crate) const ABS_STD_DEV: f32 = 0.078;
+pub(crate) const SQUARE_MEAN: f32 = 0.0182;
+pub(crate) const SQUARE_STD_DEV: f32 = 0.0226;
 
 /// Dimensionless shape controls, except wavelength (a model length).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

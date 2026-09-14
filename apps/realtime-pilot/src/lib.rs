@@ -1,4 +1,4 @@
-//! CPU field experiment for the independent real-time world pilot.
+//! CPU reference and GPU field contracts for the independent real-time world pilot.
 //! Rendering is confined to the binary; these modules use no engine types.
 
 mod collision;
@@ -34,6 +34,7 @@ mod voxel_audit;
 mod voxel_collision;
 mod voxel_collision_index;
 mod voxel_density;
+mod voxel_gpu;
 mod voxel_residency;
 mod voxel_selection;
 mod voxel_surface;
@@ -144,3 +145,5 @@ pub use physical_audit::{
 };
 
 pub use meter_position::MeterPosition;
+
+pub use voxel_gpu::{VoxelGpuChunk, VoxelGpuParameters, voxel_density_shader};

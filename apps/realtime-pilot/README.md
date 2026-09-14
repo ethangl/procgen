@@ -109,6 +109,27 @@ cargo run -p procgen-realtime-pilot --no-default-features -- \
   --design --design-file planet-design.json --check-explore
 ```
 
+## GPU generation work
+
+GPU generation and incremental chunk replacement are required for the next
+phase. See the [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md).
+The first slice supplies a WGSL density kernel and CPU/GPU agreement checks.
+It runs on Metal on macOS and Vulkan on Windows/Linux:
+
+```sh
+cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
+```
+
+This checks real GPU chunk batches, shared halo/parent samples, repeated runs,
+and CPU agreement using the saved preset and radius/control extremes. Timings
+separate pipeline creation, dispatch/completion, CPU sampling, and audit readback.
+The test requires a compatible GPU; shader validation alone can run without one
+by filtering to `voxel_density_wgsl_validates_without_a_device`.
+
+The exploration viewer still uses CPU meshing. GPU meshing, persistent chunk
+buffers, and rendering integration are the next slices; this kernel alone does
+not shorten the viewer's complete mesh rebuild.
+
 ## Run the original experiments
 
 ```sh

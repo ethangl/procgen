@@ -13,6 +13,8 @@ use std::{
 /// Positive solid, negative air. This is a clamped density, not a signed distance.
 pub const VOXEL_DENSITY_LIMIT_M: f32 = 4.0;
 pub const VOXEL_DENSITY_BYTES: usize = VOXEL_SAMPLE_COUNT * std::mem::size_of::<f32>();
+pub(crate) const SQRT_SEED: u32 = 0x5f375a86;
+pub(crate) const SQRT_ITERATIONS: u32 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VoxelVolumeError;
@@ -63,7 +65,7 @@ impl VoxelVolume {
             .clamp(-VOXEL_DENSITY_LIMIT_M, VOXEL_DENSITY_LIMIT_M)
     }
     /// Unsaturated potential preserves edge interpolation at coarse spacing.
-    pub(crate) fn potential(&self, index: VoxelSampleIndex) -> f32 {
+    pub fn potential(&self, index: VoxelSampleIndex) -> f32 {
         self.potentials[index.linear()]
     }
     pub fn samples(&self) -> impl Iterator<Item = (VoxelPosition, f32)> + '_ {
@@ -127,26 +129,41 @@ fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {
     // All root and halo coordinates fit exactly in f32 at their LOD spacing.
     let p = position.as_vec3();
     let radius = field.config().radius_m;
-    let altitude = radial_altitude(p, radius);
+    let distance = voxel_sqrt(p.length_squared());
+    let altitude = radial_altitude(p, radius, distance);
     // The center is strictly interior and has no surface direction. Everywhere
     // else retain the unsaturated potential for coarse edge interpolation.
     let height = if p == Vec3::ZERO {
         0.0
     } else {
-        field.height(p.normalized(), 0.0)
+        field.height(p * distance.recip(), 0.0)
     };
     height - altitude
 }
 
 /// Avoid subtracting two rounded planet radii. Compensated squared products
 /// retain the small radial residual; division uses the well-conditioned sum.
-/// Uses only f32 and ordinary operations so a future WGSL mirror can match it.
-fn radial_altitude(p: Vec3, radius: f32) -> f32 {
+/// Uses only f32; the WGSL mirror preserves the same operation boundaries.
+fn radial_altitude(p: Vec3, radius: f32, distance: f32) -> f32 {
     let difference = square(p.x)
         .add(square(p.y))
         .add(square(p.z))
         .add(square(radius).neg());
-    (difference.high + difference.low) / (p.length() + radius)
+    (difference.high + difference.low) / (distance + radius)
+}
+
+/// Fixed polynomial iteration shared with WGSL: no backend sqrt intrinsic
+/// determines the direction that selects integer noise lattice cells.
+fn voxel_sqrt(value: f32) -> f32 {
+    if value == 0.0 {
+        return 0.0;
+    }
+    let mut inverse = f32::from_bits(SQRT_SEED - (value.to_bits() >> 1));
+    for _ in 0..SQRT_ITERATIONS {
+        inverse *= 1.5 - ((0.5 * value) * inverse) * inverse;
+    }
+    let root = value * inverse;
+    (-root.mul_add(root, -value)).mul_add(0.5 * inverse, root)
 }
 #[derive(Clone, Copy)]
 struct Compensated {
@@ -189,6 +206,24 @@ fn square(value: f32) -> Compensated {
 mod tests {
     use super::*;
     use crate::{ChunkIndex, PlanetDesignConfig};
+
+    #[test]
+    fn polynomial_root_matches_independent_oracle_across_voxel_coordinate_scales() {
+        assert_eq!(voxel_sqrt(0.0), 0.0);
+        for exponent in 0..=48 {
+            for fraction in 0..128 {
+                let value = 2.0_f32.powi(exponent) * (1.0 + fraction as f32 / 128.0);
+                let expected = (value as f64).sqrt();
+                // One f32 relative epsilon covers final rounding; the f64
+                // oracle is independent of the fixed polynomial iteration.
+                assert!(
+                    (voxel_sqrt(value) as f64 - expected).abs() <= f32::EPSILON as f64 * expected
+                );
+                assert_eq!(voxel_sqrt(value * 4.0), voxel_sqrt(value) * 2.0);
+            }
+        }
+    }
+
     #[test]
     fn meter_altitudes_survive_large_radii_and_oblique_positions() {
         // f64 is an independent test oracle only. Two millimeters covers f32
@@ -205,9 +240,12 @@ mod tests {
                         ((p.x as f64).powi(2) + (p.y as f64).powi(2) + (p.z as f64).powi(2)).sqrt()
                             - radius as f64;
                     assert!(
-                        (radial_altitude(p, radius) as f64 - expected).abs() < 0.002,
+                        (radial_altitude(p, radius, voxel_sqrt(p.length_squared())) as f64
+                            - expected)
+                            .abs()
+                            < 0.002,
                         "radius={radius} offset={offset} expected={expected} got={}",
-                        radial_altitude(p, radius)
+                        radial_altitude(p, radius, voxel_sqrt(p.length_squared()))
                     );
                 }
             }

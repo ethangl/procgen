@@ -16,6 +16,8 @@ wgpu = { version = "27.0.1", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+procgen-realtime-pilot = { path = "../../apps/realtime-pilot", default-features = false }
+serde_json = "1"
 procgen-core = { path = "../procgen-core" }
 procgen-cubesphere = { path = "../procgen-cubesphere" }
 procgen-noise = { path = "../procgen-noise" }
