@@ -4,6 +4,7 @@ mod navigation;
 #[path = "physical_inspector_ui.rs"]
 mod ui;
 use crate::{
+    physical_capture::CaptureWrites,
     physical_gpu_bridge::{ExplorationBackend, GpuBridge, GpuCamera},
     physical_gpu_render::{GpuTerrainPlugin, GpuView},
     physical_jobs::{Jobs, TerrainKind, TerrainRequest, TerrainResult},
@@ -228,6 +229,7 @@ pub fn run(
     };
     let mut app = App::new();
     app.insert_non_send_resource(state)
+        .init_resource::<CaptureWrites>()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.03, 0.04)))
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
@@ -351,7 +353,20 @@ fn record_route(
     mut state: NonSendMut<Inspector>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    mut captures: ResMut<CaptureWrites>,
 ) {
+    match captures.poll() {
+        Err(error) => {
+            error!("Cannot save route capture: {error}");
+            exit.write(AppExit::error());
+            return;
+        }
+        Ok(true) if captures.finishing => {
+            exit.write(AppExit::Success);
+            return;
+        }
+        _ => {}
+    }
     if let Some(mut record) = state.record.take() {
         use crate::physical_record::RouteAction;
         match record.action() {
@@ -371,16 +386,13 @@ fn record_route(
             Some(RouteAction::Orbit) => state.orbit(),
             Some(RouteAction::Finish) => {
                 record.finish().expect("write route CSV");
-                exit.write(AppExit::Success);
+                captures.finishing = true;
                 return;
             }
             None => {}
         }
         if let Some(path) = record.screenshot() {
-            use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path));
+            captures.request(&mut commands, path);
         }
         state.record = Some(record);
     }

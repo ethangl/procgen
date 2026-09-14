@@ -10,6 +10,8 @@ mod display;
 #[cfg(feature = "inspector")]
 mod inspector;
 #[cfg(feature = "inspector")]
+mod physical_capture;
+#[cfg(feature = "inspector")]
 mod physical_color;
 #[cfg(feature = "inspector")]
 mod physical_gpu;

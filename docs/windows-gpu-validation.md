@@ -203,13 +203,16 @@ summaries; no branch, commit or push was made for this validation.
 ## Surface cleanup: Windows validation pending
 
 The results above predate the smooth surface compositor, height-surface normals,
-local voxel normals, height coloring, and collision continuity. Run the render
+local voxel normals, height coloring, collision continuity, and stitched height
+tiles, bounded height batch overlap, and background PNG encoding. Run the render
 and terrain tests, then repeat the two routes from the repository root:
 
 ```powershell
 $env:WGPU_BACKEND = "vulkan"
 $env:RUST_LOG = "warn,bevy_render::renderer=info"
 cargo test -p procgen-realtime-pilot --no-default-features physical_collision -- --nocapture
+cargo test -p procgen-realtime-pilot --no-default-features height_ -- --nocapture
+cargo test -p procgen-realtime-pilot --bin procgen-realtime-pilot physical_ -- --nocapture
 cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
 cargo test -p procgen-gpu-tests --test voxel_mesh_agreement --test voxel_streaming_agreement -- --nocapture --test-threads=1
 cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --test-threads=1
@@ -223,7 +226,8 @@ ridge edges, ground views, and return to orbit for stipple, missing coverage, or
 stale surfaces. Check for smooth distant shading and lighting seams across tile
 edges, smooth ground shading, and lighting seams across local chunk boundaries.
 The viewer now starts in Height mode. Check that its kilometer legend stays
-fixed during travel and that tile skirts have no artificial color bands. Switch
+fixed during travel and that LOD joins have no cracks or vertical curtains.
+Height skirts have been removed; the surface uses balanced, stitched tile edges. Switch
 to Neutral and back once in an interactive run. Record results here. Existing
 position and density tolerances are unchanged.
 Height normals permit a vector difference of 0.05. Voxel normal components from
@@ -241,3 +245,13 @@ is false. Do not infer uninterrupted contact from the GPU `status` column.
 `gpu_stats_fresh` is false on rows that retain the last GPU-statistics snapshot
 because its lock was busy. Collision results on those rows are current and must
 be included when counting movement failures.
+
+
+The latency follow-up keeps at most two 32-tile height batches in flight and can
+build during the preceding fade. CSV columns `height_build_ms` and
+`height_wait_ms` separate build time from the wait to publish after that fade.
+Report both, plus the existing total `height_update_ms`. They are elapsed times,
+not GPU execution timestamps. PNG encoding now runs on the I/O pool; verify all
+six images exist after each clean route exit. Compare frame p95/p99 by route phase
+and report capture windows separately (4, 25, 55, 73, 83, and 89 seconds). Keep
+startup and capture outliers visible rather than dropping them from the report.

@@ -1,11 +1,9 @@
 //! Canonical filtered height tiles. The CPU path serves reproducible audits.
 use crate::PlanetDesignField;
+use crate::height_tile::{HEIGHT_QUADS, HEIGHT_SIDE, HEIGHT_VERTEX_COUNT, HeightTile};
 use bytemuck::{Pod, Zeroable};
-use procgen_cubesphere::{TILE_QUADS, TileAddress, vertex_spacing};
+use procgen_cubesphere::{TILE_QUADS, vertex_spacing};
 use rayon::prelude::*;
-pub const HEIGHT_QUADS: u32 = TILE_QUADS / 2;
-pub const HEIGHT_SIDE: u32 = HEIGHT_QUADS + 1;
-pub const HEIGHT_VERTEX_COUNT: u32 = HEIGHT_SIDE * HEIGHT_SIDE + 4 * HEIGHT_SIDE;
 pub const HEIGHT_TILE_BYTES: u64 = HEIGHT_VERTEX_COUNT as u64 * size_of::<HeightVertex>() as u64;
 /// Central differences resolve the filtered field, down to the finest voxel.
 pub(crate) const HEIGHT_NORMAL_MIN_STEP_M: f32 = 1.0;
@@ -16,33 +14,22 @@ pub struct HeightVertex {
     pub anchor: [i32; 4],
     /// Radial residual and height displacement; w is the sample spacing.
     pub offset: [f32; 4],
-    /// Unit outward normal; w is the surface altitude in meters, including on skirts.
+    /// Unit outward normal; w is the surface altitude in meters, before any draw-time bias.
     pub normal: [f32; 4],
 }
 pub fn height_tile_vertices(
     field: &PlanetDesignField,
-    tile: TileAddress,
+    tile: HeightTile,
     filter: HeightFilter,
 ) -> Vec<HeightVertex> {
+    let address = tile.address();
     let radius = field.config().radius_m;
-    let spacing = vertex_spacing(tile.level()) * radius * (TILE_QUADS / HEIGHT_QUADS) as f32;
+    let spacing = vertex_spacing(address.level()) * radius * (TILE_QUADS / HEIGHT_QUADS) as f32;
     (0..HEIGHT_VERTEX_COUNT)
         .into_par_iter()
         .map(|i| {
-            let (x, y, skirt) = if i < HEIGHT_SIDE * HEIGHT_SIDE {
-                (i % HEIGHT_SIDE, i / HEIGHT_SIDE, false)
-            } else {
-                let edge = (i - HEIGHT_SIDE * HEIGHT_SIDE) / HEIGHT_SIDE;
-                let along = (i - HEIGHT_SIDE * HEIGHT_SIDE) % HEIGHT_SIDE;
-                let (x, y) = match edge {
-                    0 => (0, along),
-                    1 => (HEIGHT_QUADS, along),
-                    2 => (along, 0),
-                    _ => (along, HEIGHT_QUADS),
-                };
-                (x, y, true)
-            };
-            let d = tile
+            let [x, y] = tile.grid_coordinates(i);
+            let d = address
                 .grid_vertex(
                     x * (TILE_QUADS / HEIGHT_QUADS),
                     y * (TILE_QUADS / HEIGHT_QUADS),
@@ -50,23 +37,17 @@ pub fn height_tile_vertices(
                 .unwrap()
                 .direction();
             let surface_height = field.height(d, filter.spacing_m(d, radius));
-            let h = if skirt {
-                -field.config().height_limit_m - spacing * 2.0
-            } else {
-                surface_height
-            };
             let mut result = HeightVertex {
-                anchor: [0, 0, 0, tile.level() as i32],
+                anchor: [0, 0, 0, address.level() as i32],
                 offset: [0.0, 0.0, 0.0, spacing],
                 normal: [0.0; 4],
             };
-            // Skirts inherit their top vertex's normal, avoiding dark curtains.
             let n = height_normal(field, d, filter, surface_height);
             result.normal = [n.x, n.y, n.z, surface_height];
             for (axis, value) in [d.x, d.y, d.z].into_iter().enumerate() {
                 result.anchor[axis] = (value * radius).floor() as i32;
                 result.offset[axis] =
-                    value.mul_add(radius, -(result.anchor[axis] as f32)) + value * h;
+                    value.mul_add(radius, -(result.anchor[axis] as f32)) + value * surface_height;
             }
             result
         })
@@ -100,7 +81,7 @@ fn height_normal(
     let tangent = gradient - direction * gradient.dot(direction);
     (direction - tangent * (radius / (radius + height))).normalized()
 }
-/// Fixed shared grid plus radial skirts below the validated height envelope.
+/// Shared grid; stitched edge vertices collapse redundant triangles in place.
 pub fn height_indices() -> Vec<u32> {
     let mut result = Vec::new();
     for y in 0..HEIGHT_QUADS {
@@ -114,18 +95,6 @@ pub fn height_indices() -> Vec<u32> {
                 a + HEIGHT_SIDE + 1,
                 a + HEIGHT_SIDE,
             ]);
-        }
-    }
-    for edge in 0..4 {
-        for along in 0..HEIGHT_QUADS {
-            let top = |i| match edge {
-                0 => i * HEIGHT_SIDE,
-                1 => i * HEIGHT_SIDE + HEIGHT_QUADS,
-                2 => i,
-                _ => HEIGHT_QUADS * HEIGHT_SIDE + i,
-            };
-            let a = HEIGHT_SIDE * HEIGHT_SIDE + edge * HEIGHT_SIDE + along;
-            result.extend([top(along), top(along + 1), a + 1, top(along), a + 1, a]);
         }
     }
     result

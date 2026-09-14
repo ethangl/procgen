@@ -185,6 +185,8 @@ fn generate(
             let mut output = bridge.output.lock().unwrap();
             stats.height_tiles = output.height.as_ref().map_or(0, |h| h.tiles.len());
             stats.height_update_ms = output.stats.height_update_ms;
+            stats.height_build_ms = output.stats.height_build_ms;
+            stats.height_wait_ms = output.stats.height_wait_ms;
             stats.scheduler_ms = output.stats.scheduler_ms;
             stats.draw_ms = output.stats.draw_ms;
             stats.surface_target_bytes = output.stats.surface_target_bytes;

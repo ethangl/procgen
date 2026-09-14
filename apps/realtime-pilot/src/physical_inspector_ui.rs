@@ -99,6 +99,7 @@ pub(super) fn panel(
                     let s = &output.stats;
                     ui.label(&s.status);
                     ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
+                    ui.label(format!("Height build {:.1} ms · blend wait {:.1} ms",s.height_build_ms,s.height_wait_ms));
                     ui.label(format!("Chunks: {} resident / {} target · {} pending · {} retiring",s.resident,s.target,s.in_flight,s.retiring));
                     ui.label(format!("{} visible chunks · finest spacing {} m",s.drawn,s.finest_spacing_m.map(|s|s.to_string()).unwrap_or_else(|| "pending".into())));
                     ui.label(format!("Terrain buffers: {:.1} MiB",s.bytes as f64/1048576.0));

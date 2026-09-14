@@ -30,7 +30,7 @@ fn local_weight(p: vec3<f32>) -> f32 {
     out.clip = frame.clip * vec4(out.position,1.0);
     out.lod = u32(max(0.0,ceil(log2(offset.w))));
     out.normal = normal.xyz;
-    // Skirts retain their top altitude, independent of the overlap depth bias.
+    // Color follows field altitude, independent of the overlap depth bias.
     out.altitude_m = normal.w;
     return out;
 }

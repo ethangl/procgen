@@ -106,10 +106,15 @@ coloring is the default; Neutral, LOD, and Normals remain available. Density and
 Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
 preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
 planet coverage and 125 one-meter voxel chunks around nearby ground. Height
-filtering is continuous across tiles; skirts and a 16 m overlap cover the
-surface joins. The GPU viewer blends separately depth-tested height and voxel
+filtering is continuous across tiles. Adjacent tile levels differ by at most one;
+fine edges share coarse vertices, so no skirts are needed. A 16 m overlap joins
+height coverage to local voxels. The GPU viewer blends separately depth-tested height and voxel
 layers across the overlap and during height replacement, without pixel discard
-patterns. CPU collision remains independent. Nearby collision retains its current
+patterns. Height generation keeps at most two batches of 32 tiles in flight.
+Each batch uses one compute pass and device copies into reusable tile buffers.
+It can build during the current fade; publication waits for the fade to finish.
+Temporary batch outputs add at most 3.19 MiB, outside the retained terrain counters.
+CPU collision remains independent. Nearby collision retains its current
 patch while a replacement builds. Walking forecasts one second of movement and
 gravity to request coverage early, including during falls; a late build stops
 movement at the coverage boundary and resumes it when support arrives.
@@ -119,11 +124,11 @@ height limit, measured above the reference radius. The legend shows kilometers;
 zero is the reference sphere, not a generated sea level. Colors indicate altitude
 only. Both surfaces use the same palette and range, with terrain lighting. GPU
 view changes require no regeneration. The CPU audit uses the same palette when
-packing its mesh. Skirts inherit their top edge's altitude as well as its normal.
+packing its mesh.
 
 Height tiles carry filtered field normals generated once with each tile. Neutral
 and normal views interpolate them across triangles and use the same normal at
-coincident tile boundaries. Skirts inherit their top edge's normal. Local uniform
+coincident tile boundaries. Local uniform
 voxel meshes carry outward gradients from central differences in their existing
 density halo. The renderer interpolates and normalizes these gradients for smooth
 ground shading. Zero gradients and mixed-LOD transition meshes use face normals.
@@ -142,6 +147,10 @@ cargo run -p procgen-realtime-pilot -- \
 ```
 
 This writes frame/stage timings and six adjacent PNG captures, then exits.
+PNG encoding runs off the main thread; clean exit waits for every image to save.
+`height_build_ms` measures preparation, submission waits, and GPU completion.
+`height_wait_ms` is the completed surface's wait for the preceding fade;
+`height_update_ms` includes both. These are elapsed times, not GPU timestamps.
 Collision columns include `collision_building`, `collision_seconds`, `grounded`,
 and `motion` after movement each frame. `gpu_stats_fresh` is false when the
 recorder retains the last GPU-statistics snapshot because its lock is busy;
@@ -153,7 +162,7 @@ can have valid collision coverage without being grounded. Live
 navigation and movement input are disabled during recorded runs.
 The [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md#g5-distant-coverage-filtering-and-final-budgets)
 records Metal measurements and remaining limits. The voxel pool is capped at
-300 allocations and 512 MiB; each height snapshot is at most 21.46 MiB with normals.
+300 allocations and 512 MiB; each height snapshot is at most 19.14 MiB with normals after skirt removal.
 The original G5 Metal routes peaked at 191 MiB for the large preset and 229 MiB for the small
 preset. Frame-time p95 stayed below 9 ms and 14 ms, respectively. Local updates
 after initial coverage stayed below 250 ms; initial coverage and height updates

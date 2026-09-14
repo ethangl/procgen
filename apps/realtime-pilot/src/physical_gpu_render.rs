@@ -217,7 +217,7 @@ fn prepare(
         procgen_realtime_pilot::LOCAL_GPU_WORLD_CONFIG
             .stream
             .max_in_flight
-            + 1,
+            + crate::physical_height::HEIGHT_BATCHES_IN_FLIGHT,
     ) {
         submission.submit(&queue);
     }
@@ -349,7 +349,8 @@ impl ViewNode for GpuTerrainNode {
                 for (tile, buffer) in &height.tiles {
                     let field = &world.resource::<GpuBridge>().field;
                     let radius = field.config().radius_m;
-                    let d = tile
+                    let address = tile.address();
+                    let d = address
                         .grid_vertex(
                             procgen_cubesphere::TILE_QUADS / 2,
                             procgen_cubesphere::TILE_QUADS / 2,
@@ -362,7 +363,7 @@ impl ViewNode for GpuTerrainNode {
                             settings.anchor[1] as f32,
                             settings.anchor[2] as f32,
                         );
-                    let width = procgen_cubesphere::vertex_spacing(tile.level())
+                    let width = procgen_cubesphere::vertex_spacing(address.level())
                         * radius
                         * procgen_cubesphere::TILE_QUADS as f32;
                     let bounds = Aabb {
