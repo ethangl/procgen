@@ -125,6 +125,8 @@ fn generate_revision(
             stats.height_wait_ms = output.stats.height_wait_ms;
             stats.scheduler_ms = output.stats.scheduler_ms;
             stats.draw_ms = output.stats.draw_ms;
+            stats.height_drawn_tiles = output.stats.height_drawn_tiles;
+            stats.height_tested_tiles = output.stats.height_tested_tiles;
             stats.surface_target_bytes = output.stats.surface_target_bytes;
             output.stats = stats.clone();
             report = Instant::now();

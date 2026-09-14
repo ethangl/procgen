@@ -107,6 +107,10 @@ drag looks around, and E/Q move radially up/down. Scroll changes orbit distance
 or flight speed. In Orbit, left drag rotates around the current screen axes,
 including across the poles.
 
+Flight speed increases smoothly with terrain clearance above the 64 m ground
+band. The panel shows speed in m/s as well as the scroll multiplier. Crossing
+the design's maximum terrain altitude no longer abruptly slows movement.
+
 **Keep camera 5 m above terrain** is enabled by default. It samples the canonical
 height field at the camera direction and raises a low camera radially. Disable
 it for unrestricted terrain inspection. This checks the endpoint only: fast
@@ -692,3 +696,6 @@ Recordings save a separate `.view.json`; generation cases and
 camera paths keep their existing formats. See
 [surface quality](../../docs/realtime-world-surface-quality.md) for the normal
 contract, memory cost, comparison procedure, and findings.
+
+See [terrain draw visibility](../../docs/realtime-world-visibility.md) for radial tile bounds, near-first drawing,
+and the fixed down/horizon recording route.

@@ -8,8 +8,12 @@ use std::{
     time::Instant,
 };
 pub const SURFACE_BLEND_SECONDS: f32 = 0.25;
+pub struct ResidentHeightTile {
+    pub buffer: wgpu::Buffer,
+    pub bounds: crate::physical_visibility::HeightBounds,
+}
 pub struct HeightFrame {
-    pub tiles: BTreeMap<HeightTile, Arc<wgpu::Buffer>>,
+    pub tiles: BTreeMap<HeightTile, Arc<ResidentHeightTile>>,
     pub born: f32,
 }
 pub struct HeightSubmission {
@@ -37,6 +41,8 @@ pub struct GpuCamera {
 pub struct GpuStats {
     pub status: String,
     pub height_tiles: usize,
+    pub height_drawn_tiles: usize,
+    pub height_tested_tiles: usize,
     pub height_generated_tiles: u64,
     pub height_reused_tiles: u64,
     pub height_bytes: u64,

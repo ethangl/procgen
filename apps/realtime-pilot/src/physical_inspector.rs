@@ -384,6 +384,22 @@ fn record_route(
                 state.mode = Navigation::Fly;
             }
             Some(RouteAction::Orbit) => state.orbit(),
+            Some(RouteAction::View { clearance_m, view }) => {
+                state.descent = false;
+                state.mode = Navigation::Fly;
+                state.set_radial(clearance_m);
+                let up = state.up();
+                // Fixed tangent makes repeat views independent of the previous rotation.
+                let tangent = (Vec3::Y - up * up.y).normalize();
+                state.rotation = match view {
+                    crate::physical_record::RecordView::Down => {
+                        Transform::IDENTITY.looking_to(-up, tangent).rotation
+                    }
+                    crate::physical_record::RecordView::Horizon => {
+                        Transform::IDENTITY.looking_to(tangent, up).rotation
+                    }
+                };
+            }
             Some(RouteAction::Finish) => {
                 record.finish().expect("write route CSV");
                 captures.finishing = true;

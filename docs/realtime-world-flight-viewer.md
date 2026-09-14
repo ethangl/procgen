@@ -46,6 +46,13 @@ Orbit dragging uses the current screen axes. Right drag looks around. In flight,
 W/A/S/D move, E/Q move radially up/down, and scroll changes speed. Continuous
 descent and Go to ground still place the camera near the surface.
 
+Base flight speed stays at 8 m/s through 64 m terrain clearance, then increases
+continuously by 0.6 m/s per meter of additional clearance, capped at 2,000,000
+m/s before the scroll multiplier. The panel shows the resulting speed. Speed
+does not depend on the design's height limit: the former switch at that limit
+plus 100 m could slow high-altitude flight by more than 100 times during descent.
+Movement-system tests exercise all six keys on both sides of that old boundary.
+
 **Keep camera 5 m above terrain** is enabled by default and is a viewer-only
 preference. The library samples the canonical full-detail height at the camera
 direction and raises a low camera radially. Each frame checks the endpoint;
@@ -107,3 +114,6 @@ Headless height-preview and one-meter chunk audits passed. Pilot and affected
 GPU-test Clippy checks passed with warnings denied; formatting and diff checks
 passed. This change still needs a Windows/Vulkan native run. The clearance
 check is not a rendered-triangle or swept-collision guarantee.
+
+See [terrain draw visibility](realtime-world-visibility.md) for radial tile bounds, near-first drawing,
+and the fixed down/horizon recording route.

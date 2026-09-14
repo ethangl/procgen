@@ -1,7 +1,7 @@
 //! Immutable height tile cache with bounded batch overlap and atomic publication.
 pub const HEIGHT_BATCHES_IN_FLIGHT: usize = 2;
 use crate::physical_gpu_bridge::{
-    GpuGeneration, HeightFrame, HeightSubmission, SURFACE_BLEND_SECONDS,
+    GpuGeneration, HeightFrame, HeightSubmission, ResidentHeightTile, SURFACE_BLEND_SECONDS,
 };
 use procgen_realtime_pilot::HeightTile;
 use procgen_realtime_pilot::{HEIGHT_GPU_BATCH_TILES, HEIGHT_TILE_BYTES, HeightGpuMesher};
@@ -122,7 +122,13 @@ impl HeightStream {
             pending
                 .frame
                 .tiles
-                .extend(batch.into_iter().zip(buffers.into_iter().map(Arc::new)));
+                .extend(batch.into_iter().zip(buffers).map(|(tile, buffer)| {
+                    let bounds = crate::physical_visibility::HeightBounds::new(
+                        tile.address(),
+                        &bridge.design.field,
+                    );
+                    (tile, Arc::new(ResidentHeightTile { buffer, bounds }))
+                }));
             let (completed, receipt) = mpsc::channel();
             bridge
                 .shared

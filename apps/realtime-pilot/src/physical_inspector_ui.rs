@@ -49,7 +49,7 @@ pub(super) fn panel(
                 Navigation::Fly => "Fly: W A S D · E / Q up / down",
             });
             ui.label("Hold right mouse to look · scroll adjusts flight speed");
-            ui.label(format!("Flight speed factor: {:.2}×", state.speed_factor));
+            ui.label(format!("Flight speed: {:.1} m/s ({:.2}×)", super::navigation::flight_speed_mps(state.clearance_estimate(), state.speed_factor), state.speed_factor));
             ui.checkbox(&mut state.keep_above_terrain, format!("Keep camera {CAMERA_CLEARANCE_M:.0} m above terrain"));
             ui.separator();
             if state.gpu.is_some() && state.editor.tab != crate::design_panel::Tab::Status {
@@ -89,6 +89,7 @@ pub(super) fn panel(
                     let s = &output.stats;
                     ui.label(&s.status);
                     ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
+                    ui.label(format!("Drawn tiles: {} / {} across active snapshots", s.height_drawn_tiles, s.height_tested_tiles));
                     ui.label(format!("Tile work: {} generated · {} reused",s.height_generated_tiles,s.height_reused_tiles));
                     ui.label(format!("Height build {:.1} ms · blend wait {:.1} ms",s.height_build_ms,s.height_wait_ms));
                     ui.label(format!("Surface blend targets: {:.1} MiB",s.surface_target_bytes as f64/1048576.0));
