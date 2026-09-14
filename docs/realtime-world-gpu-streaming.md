@@ -818,3 +818,47 @@ do not establish continuous contact or resolve the prior collision issue.
 Skirts, spatial detail changes, and collision coverage remain separate work.
 Windows/Vulkan validation is pending, with updated commands in the Windows
 validation handoff.
+
+
+## Height coloring
+
+Height is now the exploration viewer's default color mode, with Neutral, LOD,
+and Normals still available. A fixed six-stop ramp spans minus to plus the
+configured height limit; the sidebar legend shows kilometers above the reference
+radius. This is an altitude display, not water, vegetation, snow, or a sea-level
+model. Terrain lighting remains active. The range does not rescale with the
+visible terrain or camera distance.
+
+The viewer owns one linear-RGB palette used for CPU packing, the legend, and the
+generated WGSL declaration. Local GPU vertices derive radial altitude before
+camera rebasing; height vertices carry the already-computed surface height in
+the unused fourth normal component. Skirts inherit the surface height at their
+top edge, and the overlap depth bias does not alter the color. Both draw paths
+interpolate altitude before applying the ramp. CPU audit meshes use the same
+palette at each vertex, then interpolate vertex colors through Bevy.
+
+There are no extra noise evaluations, compute dispatches, or vertex-buffer
+allocations. The frame uniform grows from 144 to 160 bytes for the reference
+radius and height limit. Switching GPU color modes changes only draw state.
+Saved terrain parameters and collision behavior are unchanged.
+
+Remaining branch slices are collision continuity, visible skirt and spatial
+detail transitions, and frame/height-replacement latency, followed by the
+Windows/Vulkan validation of the combined branch.
+
+Validation covers CPU/GPU palette agreement at 513 heights, including values
+outside the ramp, the production render shader and compositor, and height
+geometry, normals, replay, and skirt inheritance on both saved presets. The new
+altitude check verifies that stored height describes the surface geometry using
+the existing planetary direction precision budget. The focused CPU height test
+also passes. Render shader validation now lives with the compositor test, which
+assembles the same palette and frame declarations as the viewer.
+
+Both 90-second Metal routes completed with exit code 0. Captures and logs are
+adjacent to `/tmp/height-colors-small.csv` and `/tmp/height-colors-large.csv`.
+Orbit and ground captures show the ramp on both surfaces. The small run exposed
+a legend layout error; the corrected label row and visible diagnostics were
+verified in the large run. These were visual checks with compilation and tests
+partly concurrent, so their timings are not performance measurements. Native
+build, formatting, and Clippy with warnings denied pass. Windows/Vulkan validation
+of the ramp remains pending with the other branch follow-ups.

@@ -169,7 +169,7 @@ pub fn run(
         landing: false,
         descent: false,
         speed_factor: 1.0,
-        coloring: Coloring::Neutral,
+        coloring: Coloring::default(),
         collision: None,
         collision_busy: false,
         collision_seconds: 0.0,
@@ -704,6 +704,7 @@ fn position_scene(
                 Coloring::Neutral => 0,
                 Coloring::Lod => 1,
                 Coloring::Normals => 2,
+                Coloring::Height => 3,
             };
         }
         *transform = Transform::from_translation(vector(state.eye.relative_to(anchor)))

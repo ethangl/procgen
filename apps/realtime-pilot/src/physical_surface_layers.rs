@@ -1,14 +1,18 @@
 //! Viewer-owned opaque surface layers and their smooth final composition.
 //! Each surface resolves its own visibility before any coverage is blended.
-pub const TERRAIN_SHADER: &str = concat!(
-    include_str!("physical_frame.wgsl"),
-    include_str!("physical_gpu.wgsl")
-);
+pub static TERRAIN_SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}\n{}\n{}",
+        crate::physical_color::height_color_shader(),
+        include_str!("physical_frame.wgsl"),
+        include_str!("physical_gpu.wgsl")
+    )
+});
 pub const COMPOSITE_SHADER: &str = concat!(
     include_str!("physical_frame.wgsl"),
     include_str!("physical_composite.wgsl")
 );
-pub const FRAME_BYTES: u64 = 144;
+pub const FRAME_BYTES: u64 = 160;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 

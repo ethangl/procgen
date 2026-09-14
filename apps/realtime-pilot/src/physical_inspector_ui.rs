@@ -80,11 +80,16 @@ pub(super) fn panel(
             });
             ui.separator();
             ui.horizontal(|ui| {
+                ui.selectable_value(&mut state.coloring, Coloring::Height, "Height");
                 ui.selectable_value(&mut state.coloring, Coloring::Neutral, "Neutral");
                 ui.selectable_value(&mut state.coloring, Coloring::Lod, "LOD");
                 ui.selectable_value(&mut state.coloring, Coloring::Normals, "Normals");
             });
-            ui.label("LOD 0 (red) = 1 m. Each level doubles spacing.");
+            match state.coloring {
+                Coloring::Height => height_legend(ui, state.field.config().height_limit_m),
+                Coloring::Lod => { ui.label("LOD 0 (red) = 1 m. Each level doubles spacing."); }
+                _ => {}
+            }
             ui.separator();
             if let Some(bridge) = &state.gpu {
                 ui.label("Backend: GPU · height tiles + local voxels");
@@ -152,4 +157,59 @@ pub(super) fn panel(
         }
     }
     Ok(())
+}
+
+fn height_legend(ui: &mut egui::Ui, limit_m: f32) {
+    use crate::physical_color::HEIGHT_COLORS;
+    ui.label("Altitude above reference radius");
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), egui::Sense::hover());
+    let mut mesh = egui::Mesh::default();
+    for stop in HEIGHT_COLORS {
+        let [r, g, b] = stop.rgb;
+        let height = stop.relative_height;
+        let x = egui::lerp(rect.x_range(), (height + 1.0) * 0.5);
+        let color = egui::Rgba::from_rgb(r, g, b).into();
+        mesh.colored_vertex(egui::pos2(x, rect.top()), color);
+        mesh.colored_vertex(egui::pos2(x, rect.bottom()), color);
+    }
+    for i in 0..HEIGHT_COLORS.len() as u32 - 1 {
+        let a = i * 2;
+        mesh.add_triangle(a, a + 1, a + 2);
+        mesh.add_triangle(a + 2, a + 1, a + 3);
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+    let (labels, _) = ui.allocate_exact_size(
+        egui::vec2(
+            ui.available_width(),
+            ui.text_style_height(&egui::TextStyle::Body),
+        ),
+        egui::Sense::hover(),
+    );
+    for (x, align, text) in [
+        (
+            labels.left(),
+            egui::Align2::LEFT_CENTER,
+            format!("−{:.1} km", limit_m / 1000.0),
+        ),
+        (
+            labels.center().x,
+            egui::Align2::CENTER_CENTER,
+            "0 km".into(),
+        ),
+        (
+            labels.right(),
+            egui::Align2::RIGHT_CENTER,
+            format!("+{:.1} km", limit_m / 1000.0),
+        ),
+    ] {
+        ui.painter().text(
+            egui::pos2(x, labels.center().y),
+            align,
+            text,
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().text_color(),
+        );
+    }
+    ui.label("Colors show elevation only.");
 }

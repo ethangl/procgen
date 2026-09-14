@@ -2,15 +2,8 @@ use procgen_cubesphere::{CubeFace, TileAddress};
 use procgen_gpu_tests::{readback, request_device_for_backends, validate_wgsl};
 use procgen_realtime_pilot::*;
 #[test]
-fn height_compute_and_render_shaders_validate() {
+fn height_compute_shader_validates() {
     validate_wgsl("physical height", &height_shader());
-    validate_wgsl(
-        "physical rendering",
-        concat!(
-            include_str!("../../../apps/realtime-pilot/src/physical_frame.wgsl"),
-            include_str!("../../../apps/realtime-pilot/src/physical_gpu.wgsl"),
-        ),
-    );
 }
 #[test]
 fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
@@ -68,7 +61,20 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
                 "tile schedule invariance"
             );
             let cpu = height_tile_vertices(&field, tile, filter);
-            for (a, b) in first[i].iter().zip(cpu) {
+            for (vertex_index, (a, b)) in first[i].iter().zip(cpu).enumerate() {
+                assert!(a.normal[3].is_finite() && a.normal[3].abs() <= config.height_limit_m);
+                if vertex_index < (HEIGHT_SIDE * HEIGHT_SIDE) as usize {
+                    let radius = (0..3)
+                        .map(|axis| (a.anchor[axis] as f64 + a.offset[axis] as f64).powi(2))
+                        .sum::<f64>()
+                        .sqrt();
+                    // The stored color altitude must describe the surface geometry.
+                    // Retain the position check's planetary direction precision budget.
+                    assert!(
+                        (radius - config.radius_m as f64 - a.normal[3] as f64).abs()
+                            <= 0.02 + 4.0 * f32::EPSILON as f64 * config.radius_m as f64
+                    );
+                }
                 let n = procgen_core::Vec3::new(a.normal[0], a.normal[1], a.normal[2]);
                 let reference = procgen_core::Vec3::new(b.normal[0], b.normal[1], b.normal[2]);
                 assert!(n.is_finite() && (n.length() - 1.0).abs() < 0.0001);

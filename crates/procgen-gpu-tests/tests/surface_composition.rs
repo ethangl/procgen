@@ -1,4 +1,6 @@
 //! Render the production compositor into a small target with known opaque layers.
+#[path = "../../../apps/realtime-pilot/src/physical_color.rs"]
+mod physical_color;
 #[path = "../../../apps/realtime-pilot/src/physical_surface_layers.rs"]
 mod surface_layers;
 use procgen_gpu_tests::{readback, request_device_for_backends, validate_wgsl};
@@ -43,7 +45,7 @@ struct Case {
 
 #[test]
 fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
-    validate_wgsl("terrain layer", TERRAIN_SHADER);
+    validate_wgsl("terrain layer", &TERRAIN_SHADER);
     validate_wgsl("surface compositor", COMPOSITE_SHADER);
     let backend = if cfg!(target_os = "macos") {
         wgpu::Backends::METAL
@@ -53,6 +55,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
     let (adapter, device, queue) = request_device_for_backends("surface composition", backend)
         .expect("selected GPU backend required");
     eprintln!("{} {:?}", adapter.name, adapter.backend);
+    check_height_colors(&device, &queue);
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None,
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -325,6 +328,46 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                     );
                 }
             }
+        }
+    }
+}
+
+fn check_height_colors(device: &wgpu::Device, queue: &wgpu::Queue) {
+    use procgen_gpu_tests::{run_compute, storage_output_buffer};
+    use wgpu::util::DeviceExt;
+    // Cover every ramp segment and clamping outside the configured range.
+    let heights: Vec<f32> = (-256..=256).map(|i| i as f32 / 128.0).collect();
+    let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("height color inputs"),
+        contents: bytemuck::cast_slice(&heights),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let output = storage_output_buffer::<[f32; 4]>(device, "height colors", heights.len());
+    let shader = format!(
+        "{}\n{}",
+        physical_color::height_color_shader(),
+        r#"
+        @group(0) @binding(0) var<storage,read> heights: array<f32>;
+        @group(0) @binding(1) var<storage,read_write> colors: array<vec4<f32>>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+            if id.x < arrayLength(&heights) { colors[id.x] = vec4(height_color(heights[id.x]),1.0); }
+        }
+    "#
+    );
+    run_compute(
+        device,
+        queue,
+        "height colors",
+        &shader,
+        &[input.as_entire_binding(), output.as_entire_binding()],
+        heights.len() as u32,
+    );
+    let colors = readback::<[f32; 4]>(device, queue, &output, heights.len());
+    for (height, gpu) in heights.iter().zip(colors) {
+        let cpu = physical_color::height_color(*height);
+        for axis in 0..4 {
+            // Several f32 interpolation operations, well below visible color precision.
+            assert!((cpu[axis] - gpu[axis]).abs() < 0.000001);
         }
     }
 }

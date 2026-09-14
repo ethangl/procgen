@@ -16,7 +16,7 @@ pub struct HeightVertex {
     pub anchor: [i32; 4],
     /// Radial residual and height displacement; w is the sample spacing.
     pub offset: [f32; 4],
-    /// Unit outward normal of the filtered height field; w is unused.
+    /// Unit outward normal; w is the surface altitude in meters, including on skirts.
     pub normal: [f32; 4],
 }
 pub fn height_tile_vertices(
@@ -62,7 +62,7 @@ pub fn height_tile_vertices(
             };
             // Skirts inherit their top vertex's normal, avoiding dark curtains.
             let n = height_normal(field, d, filter, surface_height);
-            result.normal = [n.x, n.y, n.z, 0.0];
+            result.normal = [n.x, n.y, n.z, surface_height];
             for (axis, value) in [d.x, d.y, d.z].into_iter().enumerate() {
                 result.anchor[axis] = (value * radius).floor() as i32;
                 result.offset[axis] =

@@ -95,7 +95,7 @@ fn initialize(
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("voxel direct render"),
-        source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADER.as_str().into()),
     });
     const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0=>Sint32x4,1=>Float32x4,3=>Float32x4];
@@ -278,6 +278,13 @@ impl ViewNode for GpuTerrainNode {
             LOCAL_SURFACE_BIAS_M.to_bits(),
             u32::from(draw.previous_height.is_some()),
             0,
+        ]));
+        let field = &world.resource::<GpuBridge>().field;
+        uniform[144..160].copy_from_slice(bytemuck::cast_slice(&[
+            field.config().radius_m,
+            field.config().height_limit_m,
+            0.0,
+            0.0,
         ]));
         let now = world.resource::<GpuBridge>().start.elapsed().as_secs_f32();
         uniform[96..112].copy_from_slice(bytemuck::cast_slice(&[

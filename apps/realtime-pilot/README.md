@@ -101,8 +101,8 @@ cargo run -p procgen-realtime-pilot -- \
 ```
 
 The viewer loads your saved octave settings and uses GPU exploration by default.
-Edit and save in the `--design` editor, then launch exploration again. Neutral,
-LOD-color, and normal views are available. Density and mesh generation run on
+Edit and save in the `--design` editor, then launch exploration again. Height
+coloring is the default; Neutral, LOD, and Normals remain available. Density and mesh generation run on
 Metal or Vulkan; Bevy draws the resident GPU buffers directly. Selection and
 preparation run on a worker. G5 uses up to 384 GPU height tiles for complete
 planet coverage and 125 one-meter voxel chunks around nearby ground. Height
@@ -110,6 +110,13 @@ filtering is continuous across tiles; skirts and a 16 m overlap cover the
 surface joins. The GPU viewer blends separately depth-tested height and voxel
 layers across the overlap and during height replacement, without pixel discard
 patterns. CPU collision remains independent.
+
+The **Height** view uses a fixed color ramp from minus to plus the configured
+height limit, measured above the reference radius. The legend shows kilometers;
+zero is the reference sphere, not a generated sea level. Colors indicate altitude
+only. Both surfaces use the same palette and range, with terrain lighting. GPU
+view changes require no regeneration. The CPU audit uses the same palette when
+packing its mesh. Skirts inherit their top edge's altitude as well as its normal.
 
 Height tiles carry filtered field normals generated once with each tile. Neutral
 and normal views interpolate them across triangles and use the same normal at

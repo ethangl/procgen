@@ -200,11 +200,11 @@ remain in the ignored local directory `target/windows-gpu-validation/`. No raw
 recordings are added to Git. `analyze.ps1` in that directory reproduces the
 summaries; no branch, commit or push was made for this validation.
 
-## Surface joins and terrain normals: Windows validation pending
+## Surface cleanup: Windows validation pending
 
 The results above predate the smooth surface compositor, height-surface normals,
-and local voxel normals. Run the render and terrain tests, then repeat the two
-routes from the repository root:
+local voxel normals, and height coloring. Run the render and terrain tests, then
+repeat the two routes from the repository root:
 
 ```powershell
 $env:WGPU_BACKEND = "vulkan"
@@ -221,7 +221,10 @@ and both terrain buffer bytes and the new `surface_target_bytes` column. Inspect
 ridge edges, ground views, and return to orbit for stipple, missing coverage, or
 stale surfaces. Check for smooth distant shading and lighting seams across tile
 edges, smooth ground shading, and lighting seams across local chunk boundaries.
-Record results here. Existing position and density tolerances are unchanged.
+The viewer now starts in Height mode. Check that its kilometer legend stays
+fixed during travel and that tile skirts have no artificial color bands. Switch
+to Neutral and back once in an interactive run. Record results here. Existing
+position and density tolerances are unchanged.
 Height normals permit a vector difference of 0.05. Voxel normal components from
 identical density samples permit a difference of 0.00001 times max(abs(CPU), 1).
 Do not retune terrain settings or tolerances during this validation.

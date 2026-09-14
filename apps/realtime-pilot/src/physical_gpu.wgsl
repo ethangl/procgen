@@ -3,6 +3,7 @@ struct Vertex {
     @location(0) position: vec3<f32>,
     @location(1) @interpolate(flat) lod: u32,
     @location(2) normal: vec3<f32>,
+    @location(3) altitude_m: f32,
 }
 fn local_weight(p: vec3<f32>) -> f32 {
     let d = min(p-frame.local_lo.xyz,frame.local_hi.xyz-p);
@@ -15,6 +16,8 @@ fn local_weight(p: vec3<f32>) -> f32 {
     out.clip = frame.clip * vec4<f32>(out.position,1.0);
     out.lod = u32(origin.w);
     out.normal = normal.xyz;
+    let planet_position = vec3<f32>(origin.xyz + anchor.xyz) + offset.xyz;
+    out.altitude_m = length(planet_position) - frame.height_scale.x;
     return out;
 }
 @vertex fn height_vertex(@location(0) anchor: vec4<i32>, @location(1) offset: vec4<f32>, @location(3) normal: vec4<f32>) -> Vertex {
@@ -27,6 +30,8 @@ fn local_weight(p: vec3<f32>) -> f32 {
     out.clip = frame.clip * vec4(out.position,1.0);
     out.lod = u32(max(0.0,ceil(log2(offset.w))));
     out.normal = normal.xyz;
+    // Skirts retain their top altitude, independent of the overlap depth bias.
+    out.altitude_m = normal.w;
     return out;
 }
 fn shade(in: Vertex, normal: vec3<f32>) -> vec4<f32> {
@@ -38,7 +43,9 @@ fn shade(in: Vertex, normal: vec3<f32>) -> vec4<f32> {
     }
     let light = normalize(vec3<f32>(1.0,0.5,0.6));
     let intensity = 0.12 + 0.9*max(dot(normal,light),0.0);
-    return vec4<f32>(vec3<f32>(0.52)*intensity,1.0);
+    var color = vec3<f32>(0.52);
+    if frame.style.x == 3u { color = height_color(in.altitude_m/frame.height_scale.y); }
+    return vec4<f32>(color*intensity,1.0);
 }
 @fragment fn fragment(in: Vertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let weight = local_weight(in.position);

@@ -8,7 +8,9 @@ use bevy::{
         renderer::RenderQueue,
     },
 };
-use procgen_realtime_pilot::{DesignPreview, MeterPosition, VoxelPosition, VoxelSurface};
+use procgen_realtime_pilot::{
+    DesignPreview, MeterPosition, PlanetDesignConfig, VoxelPosition, VoxelSurface,
+};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
@@ -18,8 +20,9 @@ pub const UPLOAD_LIMIT: usize = 512 * 1024;
 const PIECE_TRIANGLES: usize = 3584;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Coloring {
-    #[default]
     Neutral,
+    #[default]
+    Height,
     Lod,
     Normals,
 }
@@ -51,7 +54,7 @@ pub struct PackedSurface {
     pub bytes: usize,
 }
 impl PackedSurface {
-    pub fn voxel(surface: &VoxelSurface, coloring: Coloring) -> Self {
+    pub fn voxel(surface: &VoxelSurface, coloring: Coloring, config: &PlanetDesignConfig) -> Self {
         pack(
             surface.origin_m(),
             surface.positions(),
@@ -61,9 +64,10 @@ impl PackedSurface {
                 .map(|t| (t.vertices, t.chunk.lod()))
                 .collect::<Vec<_>>(),
             coloring,
+            config,
         )
     }
-    pub fn overview(preview: &DesignPreview) -> Self {
+    pub fn overview(preview: &DesignPreview, config: &PlanetDesignConfig) -> Self {
         pack(
             VoxelPosition {
                 x_m: 0,
@@ -89,7 +93,8 @@ impl PackedSurface {
                 .iter()
                 .map(|t| (*t, 19))
                 .collect::<Vec<_>>(),
-            Coloring::Neutral,
+            Coloring::default(),
+            config,
         )
     }
 }
@@ -98,6 +103,7 @@ fn pack(
     positions: &[MeterPosition],
     triangles: &[([u32; 3], u8)],
     coloring: Coloring,
+    config: &PlanetDesignConfig,
 ) -> PackedSurface {
     let mut normals = vec![Vec3::ZERO; positions.len()];
     for &(ids, _) in triangles {
@@ -133,6 +139,10 @@ fn pack(
                         piece.normals.push(n.to_array());
                         piece.colors.push(match coloring {
                             Coloring::Neutral => [0.52, 0.52, 0.52, 1.0],
+                            Coloring::Height => crate::physical_color::height_color(
+                                positions[id as usize].altitude_m(config.radius_m) as f32
+                                    / config.height_limit_m,
+                            ),
                             Coloring::Normals => {
                                 [(n.x + 1.0) * 0.5, (n.y + 1.0) * 0.5, (n.z + 1.0) * 0.5, 1.0]
                             }
