@@ -28,10 +28,16 @@ struct Output {
 @fragment fn fragment(@builtin(position) p: vec4<f32>) -> Output {
     let pixel = vec2<i32>(p.xy);
     let local = read_surface(pixel,2);
-    let current = local_over_height(read_surface(pixel,1),local);
+    var ndc = vec2(0.0);
+    var ray = vec3(0.0);
+    if frame.ocean_sphere.w != 0.0 {
+        ndc = ((p.xy-frame.viewport.xy)/frame.viewport.zw)*vec2(2.0,-2.0)+vec2(-1.0,1.0);
+        ray = normalize(relative_position(ndc,1.0)-frame.eye.xyz);
+    }
+    let current = ocean_surface(local_over_height(read_surface(pixel,1),local),ndc,ray);
     var surface = current;
     if frame.style.z != 0u {
-        let previous = local_over_height(read_surface(pixel,0),local);
+        let previous = ocean_surface(local_over_height(read_surface(pixel,0),local),ndc,ray);
         let blend = clamp((frame.times.x-frame.times.y)/frame.times.w,0.0,1.0);
         surface.color = mix(previous.color,current.color,blend);
         // Reverse-Z: preserve the nearest contributing surface for later passes.

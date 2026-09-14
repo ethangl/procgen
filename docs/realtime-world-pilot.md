@@ -11,7 +11,9 @@ orbit/descent viewer. `cargo run -p procgen-realtime-pilot` loads
 `planet-design-300km.json` and exposes live per-octave controls. The separate
 noise-preview and local-volume editing windows are removed; their generation
 code and headless audits remain. The original radius-4 streaming experiment
-still runs through `--stream`.
+still runs through `--stream`. The GPU viewer also has a first
+[ocean rendering slice](realtime-world-oceans.md), with live sea level and explicit
+saving alongside terrain settings.
 
 ## Purpose
 

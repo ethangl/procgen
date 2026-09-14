@@ -1,6 +1,7 @@
 //! Design file actions and editable controls. No terrain generation runs here.
 use crate::{design_controls, design_edits::DesignEdits, design_file};
 use bevy_egui::egui;
+#[cfg(test)]
 use procgen_realtime_pilot::PlanetDesignConfig;
 use std::path::{Path, PathBuf};
 
@@ -12,15 +13,17 @@ pub enum Tab {
 }
 pub struct DesignPanel {
     pub edits: DesignEdits,
+    pub ocean: crate::ocean::OceanConfig,
     path: PathBuf,
     file_action: Option<FileAction>,
     pub tab: Tab,
     notice: String,
 }
 impl DesignPanel {
-    pub fn new(config: PlanetDesignConfig, path: Option<PathBuf>) -> Self {
+    pub fn new(document: design_file::DesignFile, path: Option<PathBuf>) -> Self {
         Self {
-            edits: DesignEdits::new(config),
+            edits: DesignEdits::new(document.design),
+            ocean: document.ocean,
             path: path.unwrap_or_else(|| PathBuf::from("planet-design.json")),
             file_action: None,
             tab: Tab::Status,
@@ -77,8 +80,8 @@ impl DesignPanel {
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Copy JSON").clicked() {
-                            self.notice = match self.edits.validated() {
-                                Ok(field) => match design_file::encode(field.config()) {
+                            self.notice = match self.document() {
+                                Ok(document) => match design_file::encode(&document) {
                                     Ok(json) => {
                                         ui.ctx().copy_text(json);
                                         "Copied complete design.".into()
@@ -96,21 +99,41 @@ impl DesignPanel {
                             .id(egui::Id::new("planet-design-seed")),
                     );
                     design_controls::planet(ui, &mut self.edits.config);
+                    ui.separator();
+                    ui.checkbox(&mut self.ocean.enabled, "Show ocean");
+                    ui.horizontal(|ui| {
+                        ui.label("Sea level (m)");
+                        ui.add(
+                            egui::DragValue::new(&mut self.ocean.sea_level_m)
+                                .speed(10.0)
+                                .custom_parser(|text| {
+                                    text.parse::<f64>().ok().filter(|value| value.is_finite())
+                                })
+                                .range(crate::ocean::OceanConfig::SEA_LEVEL_RANGE),
+                        );
+                    });
+                    ui.label("Sea level updates immediately. Water has no collision.");
                 }
                 Tab::Status => unreachable!("status panel is rendered by the inspector"),
             });
         self.file_dialog(ui.ctx());
     }
-    fn save_to(&self, path: &Path) -> Result<(), String> {
+    fn document(&self) -> Result<design_file::DesignFile, String> {
         let field = self.edits.validated()?;
-        design_file::save(path, field.config()).map_err(|e| e.to_string())
+        let mut document = design_file::DesignFile::new(field.config().clone());
+        document.ocean = self.ocean;
+        Ok(document)
+    }
+    fn save_to(&self, path: &Path) -> Result<(), String> {
+        design_file::save(path, &self.document()?).map_err(|e| e.to_string())
     }
     fn apply_file_action(&mut self, action: &FileAction) -> Result<(), String> {
         let path = PathBuf::from(action.path());
         match action {
             FileAction::Load(_) => {
                 let config = design_file::load(&path).map_err(|e| e.to_string())?;
-                self.edits.load(config);
+                self.edits.load(config.design);
+                self.ocean = config.ocean;
                 self.notice = format!("Loaded {}", path.display());
             }
             FileAction::SaveAs(_) => {
@@ -215,14 +238,15 @@ mod tests {
         let current = directory.join("planet-design-300km.json");
         let other = directory.join("other.json");
         let config = PlanetDesignConfig::starter(42);
-        design_file::save(&current, &config).unwrap();
-        let mut panel = DesignPanel::new(config, Some(current.clone()));
+        design_file::save(&current, &design_file::DesignFile::new(config.clone())).unwrap();
+        let mut panel =
+            DesignPanel::new(design_file::DesignFile::new(config), Some(current.clone()));
         panel.tab = Tab::Design;
         panel.edits.seed_text = "43".into();
         // A draft destination (including stray movement text) cannot redirect Save.
         panel.file_action = Some(FileAction::SaveAs(format!("{}w", current.display())));
         panel.save_to(&panel.path).unwrap();
-        assert_eq!(design_file::load(&current).unwrap().seed, 43);
+        assert_eq!(design_file::load(&current).unwrap().design.seed, 43);
         assert!(!current.with_extension("jsonw").exists());
         assert!(
             panel
@@ -236,8 +260,8 @@ mod tests {
         assert_eq!(panel.path, other);
         panel.edits.seed_text = "44".into();
         panel.save_to(&panel.path).unwrap();
-        assert_eq!(design_file::load(&other).unwrap().seed, 44);
-        assert_eq!(design_file::load(&current).unwrap().seed, 43);
+        assert_eq!(design_file::load(&other).unwrap().design.seed, 44);
+        assert_eq!(design_file::load(&current).unwrap().design.seed, 43);
         panel.edits.seed_text = "invalid".into();
         assert!(
             panel
@@ -253,9 +277,46 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
+    fn ocean_edits_and_reload_leave_pending_terrain_revision_intact() {
+        let mut panel = DesignPanel::new(
+            design_file::DesignFile::new(PlanetDesignConfig::starter(42)),
+            None,
+        );
+        let now = std::time::Instant::now();
+        panel.edits.config.octaves[0].amplitude_m = 100.0;
+        assert!(panel.edits.observe(now));
+        let (revision, _) = panel
+            .edits
+            .request(now + crate::design_edits::EDIT_DELAY)
+            .unwrap();
+        panel.ocean.sea_level_m = 125.5;
+        panel.ocean.enabled = false;
+        assert!(!panel.edits.observe(now + crate::design_edits::EDIT_DELAY));
+        assert_eq!(panel.edits.revision(), revision);
+        let path =
+            std::env::temp_dir().join(format!("procgen-ocean-save-{}.json", std::process::id()));
+        panel.save_to(&path).unwrap();
+        let document = design_file::load(&path).unwrap();
+        assert_eq!(document.ocean, panel.ocean);
+        panel.ocean.sea_level_m = -20.0;
+        panel
+            .apply_file_action(&FileAction::Load(path.display().to_string()))
+            .unwrap();
+        assert_eq!(panel.ocean, document.ocean);
+        assert!(
+            !panel
+                .edits
+                .observe(now + crate::design_edits::EDIT_DELAY * 2)
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn typing_survives_validation_generation_and_file_notices_without_layout_shift() {
         let ctx = egui::Context::default();
-        let mut panel = DesignPanel::new(PlanetDesignConfig::starter(42), None);
+        let mut panel = DesignPanel::new(
+            design_file::DesignFile::new(PlanetDesignConfig::starter(42)),
+            None,
+        );
         panel.tab = Tab::Design;
         panel.edits.seed_text.clear();
         let rect = frame(&ctx, &mut panel, vec![]);

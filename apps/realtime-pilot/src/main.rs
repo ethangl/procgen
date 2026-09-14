@@ -9,6 +9,7 @@ mod design_file;
 #[cfg(feature = "inspector")]
 mod design_panel;
 mod display;
+mod ocean;
 #[cfg(feature = "inspector")]
 mod physical_capture;
 #[cfg(feature = "inspector")]
@@ -21,6 +22,8 @@ mod physical_gpu_render;
 mod physical_inspector;
 #[cfg(feature = "inspector")]
 mod physical_jobs;
+#[cfg(feature = "inspector")]
+mod physical_ocean;
 #[cfg(feature = "inspector")]
 mod physical_record;
 #[cfg(feature = "inspector")]

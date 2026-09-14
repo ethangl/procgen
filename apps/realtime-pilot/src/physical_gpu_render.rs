@@ -30,6 +30,8 @@ use wgpu::util::DeviceExt;
 pub struct GpuView {
     pub anchor: [i32; 4],
     pub coloring: u32,
+    pub eye: procgen_realtime_pilot::MeterPosition,
+    pub ocean: crate::ocean::OceanConfig,
 }
 pub struct GpuTerrainPlugin(pub GpuBridge);
 impl Plugin for GpuTerrainPlugin {
@@ -283,6 +285,35 @@ impl ViewNode for GpuTerrainNode {
             0.0,
             0.0,
         ]));
+        uniform[160..224].copy_from_slice(bytemuck::cast_slice(&matrix.inverse().to_cols_array()));
+        let viewport = camera.viewport.as_ref().map_or(
+            [
+                0.0,
+                0.0,
+                surfaces.0.size[0] as f32,
+                surfaces.0.size[1] as f32,
+            ],
+            |v| {
+                [
+                    v.physical_position.x as f32,
+                    v.physical_position.y as f32,
+                    v.physical_size.x as f32,
+                    v.physical_size.y as f32,
+                ]
+            },
+        );
+        uniform[224..240].copy_from_slice(bytemuck::cast_slice(&viewport));
+        let eye = view.world_from_view.translation();
+        uniform[240..256].copy_from_slice(bytemuck::cast_slice(&[eye.x, eye.y, eye.z, 0.0]));
+        if settings.ocean.enabled {
+            let ocean = crate::physical_ocean::OceanCamera::new(
+                settings.eye,
+                field.config().radius_m,
+                settings.ocean.sea_level_m,
+            );
+            uniform[256..272].copy_from_slice(bytemuck::cast_slice(&ocean.radial));
+            uniform[272..288].copy_from_slice(bytemuck::cast_slice(&ocean.sphere));
+        }
         let now = world.resource::<GpuBridge>().start.elapsed().as_secs_f32();
         uniform[96..112].copy_from_slice(bytemuck::cast_slice(&[
             now,

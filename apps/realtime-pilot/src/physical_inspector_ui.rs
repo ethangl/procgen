@@ -87,6 +87,10 @@ pub(super) fn panel(
             } else {
                 "Nearby collision: outside ground range"
             });
+            if state.gpu.is_some() && state.editor.ocean.enabled {
+                ui.label(format!("Ocean: sea level {:.1} m · camera {}",state.editor.ocean.sea_level_m,
+                    if altitude < state.editor.ocean.sea_level_m as f64 { "underwater" } else { "above water" }));
+            }
             ui.separator();
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut state.coloring, Coloring::Height, "Height");
@@ -228,5 +232,5 @@ fn height_legend(ui: &mut egui::Ui, limit_m: f32) {
             ui.visuals().text_color(),
         );
     }
-    ui.label("Colors show elevation only.");
+    ui.label("Terrain colors show elevation only.");
 }

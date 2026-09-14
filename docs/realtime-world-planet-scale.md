@@ -47,7 +47,8 @@ The earlier standalone height-preview editor is removed; its CPU preview
 generator and headless audits remain. `--seed U64` explicitly selects the
 unchanged starter: a 2,000 km radius, 18 bands from 1,048.576 km to 8 m,
 4,000 m first amplitude, 0.55 amplitude decay, and a 12,000 m height bound.
-Zero elevation is the reference sphere; there is no water simulation.
+Zero elevation is the reference sphere. The GPU viewer renders a configurable
+[ocean surface](realtime-world-oceans.md); there is no water simulation.
 
 `PlanetDesignConfig` owns meter-based dimensions and ordered octave records.
 It validates to an immutable CPU field. Each record contains enable state,

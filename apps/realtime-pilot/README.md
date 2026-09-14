@@ -16,9 +16,9 @@ saved seed, 300 km radius, and complete octave stack. `--design-file PATH`
 overrides that file. `--seed U64` explicitly selects the unchanged starter
 preset. The old `--design` and `--explore` flags remain optional aliases.
 
-Use **Design** for radius, height bound, seed, and file actions, and **Octaves**
+Use **Design** for radius, height bound, seed, sea level, and file actions, and **Octaves**
 for enable state, wavelength, amplitude, sharpness, warp, and all damping values.
-Valid edits apply 350 ms after the last edit. Rapid edits coalesce. An edit,
+Valid terrain edits apply 350 ms after the last edit. Rapid edits coalesce. An edit,
 including an invalid draft, invalidates older unpublished results. The last
 complete design remains visible while its replacement builds on a worker.
 Height meshes, local voxels, field queries, and collision switch to the accepted
@@ -32,6 +32,13 @@ Controls never save automatically. `--write-design PATH` explicitly
 writes the initial config and sets the viewer's save path. Camera, coloring,
 and control-panel state are not saved as generation data. Text inputs retain
 focus across validation and generation updates.
+
+The GPU viewer renders a spherical ocean with depth-based shorelines, shallow
+water absorption, sky reflection, a sun highlight, and underwater tint.
+**Show ocean** and **Sea level (m)** update immediately without terrain generation.
+Save and Load include ocean settings in a separate top-level `ocean` object;
+older files default to enabled at zero meters. Water has no collision or waves.
+See [ocean rendering](../../docs/realtime-world-oceans.md) for limits and tests.
 
 The separate noise-preview and local-volume editing windows have been removed.
 CPU generation and headless captures remain. `--check` still provides the
@@ -138,7 +145,7 @@ movement at the coverage boundary and resumes it when support arrives.
 
 The **Height** view uses a fixed color ramp from minus to plus the configured
 height limit, measured above the reference radius. The legend shows kilometers;
-zero is the reference sphere, not a generated sea level. Colors indicate altitude
+zero is the reference sphere, not a generated sea level. Terrain colors indicate altitude
 only. Both surfaces use the same palette and range, with terrain lighting. GPU
 view changes require no regeneration. The CPU audit uses the same palette when
 packing its mesh.
@@ -593,7 +600,7 @@ identities are kind, face, x, and y. Independent seed streams jitter candidates
 within the middle half of each cell. Noise selects clustered rock candidates.
 Fine-triangle exterior queries supply position and slope; both kinds reject
 support below the walkable slope threshold. There is no water or material field
-in this pilot, so those eligibility rules are not claimed.
+in this older population experiment, so those eligibility rules are not claimed.
 
 The fixed six-face experiment has at most 408 candidates. Its accepted catalog
 stays on the CPU, while render instances enter and leave a radius of 1.8 around

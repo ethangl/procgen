@@ -18,8 +18,7 @@ use bevy::{
 };
 use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
 use procgen_realtime_pilot::{
-    MeterPosition, PhysicalCollision, PhysicalWalker, PlanetDesignConfig, PlanetDesignField,
-    VoxelPosition,
+    MeterPosition, PhysicalCollision, PhysicalWalker, PlanetDesignField, VoxelPosition,
 };
 use std::{
     path::PathBuf,
@@ -151,19 +150,19 @@ impl Inspector {
 }
 impl Inspector {
     fn new(
-        config: PlanetDesignConfig,
+        document: crate::design_file::DesignFile,
         path: Option<PathBuf>,
         backend: ExplorationBackend,
         record: Option<crate::physical_record::PhysicalRecord>,
     ) -> Self {
-        let field = Arc::new(config.validate().expect("validated design"));
+        let field = Arc::new(document.design.validate().expect("validated design"));
         let radius = field.config().radius_m;
         let mut state = Inspector {
             record,
             gpu: None,
             jobs: Jobs::start(Arc::clone(&field), backend),
             field,
-            editor: crate::design_panel::DesignPanel::new(config, path),
+            editor: crate::design_panel::DesignPanel::new(document, path),
             revision: 0,
             eye: MeterPosition::new(
                 VoxelPosition {
@@ -234,12 +233,12 @@ impl Inspector {
     }
 }
 pub fn run(
-    config: PlanetDesignConfig,
+    document: crate::design_file::DesignFile,
     path: Option<PathBuf>,
     backend: ExplorationBackend,
     record: Option<crate::physical_record::PhysicalRecord>,
 ) {
-    let state = Inspector::new(config, path, backend, record);
+    let state = Inspector::new(document, path, backend, record);
     let gpu = state.gpu.clone();
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -327,6 +326,8 @@ fn setup(
             GpuView {
                 anchor: [0; 4],
                 coloring: 0,
+                eye: state.eye,
+                ocean: state.editor.ocean,
             },
         ));
     }
@@ -606,6 +607,8 @@ fn position_scene(
     }
     for (mut transform, mut projection, gpu) in &mut camera {
         if let Some(mut gpu) = gpu {
+            gpu.eye = state.eye;
+            gpu.ocean = state.editor.ocean;
             gpu.anchor = [anchor.x_m, anchor.y_m, anchor.z_m, 0];
             gpu.coloring = match state.coloring {
                 Coloring::Neutral => 0,
@@ -630,6 +633,7 @@ fn position_scene(
 mod tests {
     use super::*;
     use crate::physical_gpu_bridge::{DesignPublication, DisplayedDesign, GpuOutput};
+    use procgen_realtime_pilot::PlanetDesignConfig;
     use std::sync::{Mutex, atomic::AtomicBool};
 
     #[test]
@@ -637,7 +641,12 @@ mod tests {
         let mut config = PlanetDesignConfig::starter(42);
         config.radius_m = 300_000.0;
         config.octaves.iter_mut().for_each(|o| o.enabled = false);
-        let mut state = Inspector::new(config.clone(), None, ExplorationBackend::Gpu, None);
+        let mut state = Inspector::new(
+            crate::design_file::DesignFile::new(config.clone()),
+            None,
+            ExplorationBackend::Gpu,
+            None,
+        );
         state.near_ground();
         let old_field = Arc::clone(&state.field);
         let eye = state.eye;
