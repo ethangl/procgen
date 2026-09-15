@@ -149,20 +149,38 @@ use crate::{
     VoxelGpuMeshConfig, VoxelGpuWorldConfig, VoxelMeshConfig, VoxelStreamConfig,
     VoxelTransitionConfig,
 };
-/// Local slots have no mixed-LOD transitions; reserve one inert transition triangle.
+/// The near-field band is mixed-LOD, so every slot reserves transition geometry.
+/// One slot costs 2,781,000 bytes: 12,000 48-byte vertices, 24,000 regular
+/// triangles at 12 bytes of indices, 12,288 transition triangles at three
+/// unshared vertices plus three indices each, and 72 bytes of status and draw
+/// records. The 1,536 reserved slots are 3.978 GiB of the budget, leaving
+/// 1.022 GiB for the eight in-flight working sets, each a few megabytes.
+///
+/// The mesh capacities come from replaying the height audit's travel route and
+/// reading back every resident slot: the worst regular mesh held 8,403 vertices
+/// and 16,418 triangles, so these are 1.43 and 1.46 times it. The worst
+/// transition mesh held 16,251 vertices and 5,417 triangles, but that sampling
+/// skipped intermediate coverages and 8,192 overflowed on the real route, so
+/// the transition reservation keeps a wider margin than the others.
+///
+/// The slot count is not the number of chunks alive at once. `set_coverage`
+/// reserves `resident.max(desired) + largest replacement group`, so it is bound
+/// by a coverage change rather than by peak residency: the route peaked at
+/// 1,262 live slots and a 1,142-chunk band, yet refused 1,472 slots and
+/// accepted 1,500. This keeps margin above that for paths the route misses.
 pub const LOCAL_GPU_WORLD_CONFIG: VoxelGpuWorldConfig = VoxelGpuWorldConfig {
     stream: VoxelStreamConfig {
-        max_slots: 300,
+        max_slots: 1_536,
         max_in_flight: 8,
     },
     mesh: VoxelGpuMeshConfig {
         regular: VoxelMeshConfig {
-            vertex_capacity: 20_000,
-            triangle_capacity: 40_000,
+            vertex_capacity: 12_000,
+            triangle_capacity: 24_000,
         },
         transition: VoxelTransitionConfig {
-            triangle_capacity: 1,
+            triangle_capacity: 12_288,
         },
     },
-    memory_budget_bytes: 512 * 1024 * 1024,
+    memory_budget_bytes: 5 * 1024 * 1024 * 1024,
 };

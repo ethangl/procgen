@@ -1,0 +1,5 @@
+# Run macOS binaries from an empty directory. See isolated-run.sh: Metal's
+# device enumeration scans the executable's directory, and target/debug/deps
+# is large enough that the scan dominates every GPU test binary's runtime.
+[target.'cfg(target_os = "macos")']
+runner = ".cargo/isolated-run.sh"

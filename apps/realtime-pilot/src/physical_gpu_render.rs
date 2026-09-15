@@ -275,12 +275,19 @@ impl ViewNode for GpuTerrainNode {
         let draw = world.resource::<GpuDraw>();
         let start = Instant::now();
         let matrix = view.clip_from_view * view.world_from_view.to_matrix().inverse();
+        // local_lo.xyz/local_hi.xyz bound the band relative to the anchor;
+        // local_lo.w is the dissolve width and local_hi.w the coverage weight.
+        // Both distances follow the band's coarsest chunk, floored at the
+        // constants the uniform-one-meter region used.
+        let local = draw.frame.as_ref().filter(|_| settings.show_local);
+        let blend_m = local.map_or(LOCAL_BLEND_M, |f| f.blend_m);
+        let bias_m = local.map_or(LOCAL_SURFACE_BIAS_M, |f| f.bias_m);
         let mut uniform = [0u8; FRAME_BYTES as usize];
         uniform[..64].copy_from_slice(bytemuck::cast_slice(&matrix.to_cols_array()));
         uniform[64..80].copy_from_slice(bytemuck::cast_slice(&settings.anchor));
         uniform[80..96].copy_from_slice(bytemuck::cast_slice(&[
             settings.coloring,
-            LOCAL_SURFACE_BIAS_M.to_bits(),
+            bias_m.to_bits(),
             u32::from(draw.previous_height.is_some()),
             0,
         ]));
@@ -327,9 +334,6 @@ impl ViewNode for GpuTerrainNode {
             draw.frame.as_ref().map_or(0.0, |f| f.born),
             SURFACE_BLEND_SECONDS,
         ]));
-        // local_lo.xyz/local_hi.xyz bound the region relative to the anchor;
-        // local_lo.w is the dissolve width and local_hi.w the coverage weight.
-        let local = draw.frame.as_ref().filter(|_| settings.show_local);
         if let Some(frame) = local {
             for end in 0..2 {
                 let mut bound = [0f32; 4];
@@ -337,7 +341,7 @@ impl ViewNode for GpuTerrainNode {
                     *value = (frame.bounds[end][axis] - settings.anchor[axis]) as f32;
                 }
                 bound[3] = if end == 0 {
-                    LOCAL_BLEND_M
+                    blend_m
                 } else {
                     f32::from(!frame.leases.is_empty())
                 };
@@ -345,7 +349,7 @@ impl ViewNode for GpuTerrainNode {
                     .copy_from_slice(bytemuck::cast_slice(&bound));
             }
         } else {
-            uniform[124..128].copy_from_slice(&LOCAL_BLEND_M.to_le_bytes());
+            uniform[124..128].copy_from_slice(&blend_m.to_le_bytes());
         }
         world
             .resource::<RenderQueue>()

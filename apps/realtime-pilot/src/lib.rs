@@ -43,7 +43,10 @@ pub use design_preview::{
     generate_design_preview,
 };
 pub use field::FieldError;
-pub use height_coverage::{MAX_HEIGHT_TILES, local_voxel_coverage, select_height_coverage};
+pub use height_coverage::{
+    MAX_HEIGHT_TILES, VOXEL_BAND_MAX_SPACING_M, VOXEL_BAND_REQUESTED_LEAVES, cap_voxel_coverage,
+    select_height_coverage, select_voxel_band,
+};
 pub use height_detail::{HEIGHT_DETAIL_RATIO, HEIGHT_FILTER_MIN_M};
 pub use height_distribution::HeightDistribution;
 pub use height_mesh::{HEIGHT_TILE_BYTES, HeightVertex, height_indices, height_tile_vertices};

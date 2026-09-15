@@ -8,9 +8,10 @@ use std::{
     time::Instant,
 };
 pub const SURFACE_BLEND_SECONDS: f32 = 0.25;
-/// Width of the band over which local voxel coverage dissolves into height tiles.
+/// Narrowest band over which local voxel coverage dissolves into height tiles.
+/// A wider band follows the coarsest resident chunk; see `LocalDrawLayout`.
 pub const LOCAL_BLEND_M: f32 = 16.0;
-/// How far the height surface is pushed below the local region it overlaps.
+/// Smallest distance the height surface is pushed below the region it overlaps.
 pub const LOCAL_SURFACE_BIAS_M: f32 = 1.0;
 pub struct ResidentHeightTile {
     pub buffer: wgpu::Buffer,
@@ -43,27 +44,55 @@ pub struct DrawFrame {
     pub bounds: [[i32; 3]; 2],
     pub born: f32,
     pub origins: wgpu::Buffer,
+    /// Dissolve width and height-surface bias for this band's mixed spacings.
+    pub blend_m: f32,
+    pub bias_m: f32,
 }
 /// Instance stride of the origin buffer: three integer meters and the LOD word.
 pub const LOCAL_ORIGIN_BYTES: usize = 16;
-/// The CPU half of a `DrawFrame`: the union of the chunk boxes and the packed
-/// instance records. Buffer creation is the only part that needs a device.
-pub fn local_draw_layout(addresses: &[VoxelChunkAddress]) -> ([[i32; 3]; 2], Vec<u8>) {
+/// The CPU half of a `DrawFrame`: the union of the chunk boxes, the packed
+/// instance records, and the two band-dependent surface-join distances.
+/// Buffer creation is the only part that needs a device.
+pub struct LocalDrawLayout {
+    pub bounds: [[i32; 3]; 2],
+    pub origins: Vec<u8>,
+    pub blend_m: f32,
+    pub bias_m: f32,
+}
+/// The dissolve follows the coarsest chunk in the band, so the edge fades over
+/// a whole coarse chunk rather than a fraction of one, and the height surface
+/// drops by that chunk's cell spacing. Both keep their old fixed values as
+/// floors. The bias rule is provisional: one cell of the coarsest spacing is a
+/// guess at how far a 16 m extraction can stand above the height surface, not a
+/// measured bound, and it will need route evidence or a per-chunk bias instead.
+pub fn local_draw_layout(addresses: &[VoxelChunkAddress]) -> LocalDrawLayout {
     let mut bounds = [[i32::MAX; 3], [i32::MIN; 3]];
     let mut origins = vec![0u8; addresses.len().max(1) * LOCAL_ORIGIN_BYTES];
+    let mut coarsest = None::<VoxelChunkAddress>;
     for (i, address) in addresses.iter().enumerate() {
         let p = address.origin();
         for (axis, value) in [p.x_m, p.y_m, p.z_m].into_iter().enumerate() {
             bounds[0][axis] = bounds[0][axis].min(value);
             bounds[1][axis] = bounds[1][axis].max(value + address.span_m());
         }
-        origins[i * LOCAL_ORIGIN_BYTES..(i + 1) * LOCAL_ORIGIN_BYTES]
-            .copy_from_slice(bytemuck::cast_slice(&[p.x_m, p.y_m, p.z_m, 0]));
+        origins[i * LOCAL_ORIGIN_BYTES..(i + 1) * LOCAL_ORIGIN_BYTES].copy_from_slice(
+            bytemuck::cast_slice(&[p.x_m, p.y_m, p.z_m, i32::from(address.lod())]),
+        );
+        if coarsest.is_none_or(|c| c.lod() < address.lod()) {
+            coarsest = Some(*address);
+        }
     }
     if addresses.is_empty() {
         bounds = [[0; 3]; 2];
     }
-    (bounds, origins)
+    LocalDrawLayout {
+        bounds,
+        origins,
+        blend_m: coarsest.map_or(LOCAL_BLEND_M, |c| (c.span_m() as f32).max(LOCAL_BLEND_M)),
+        bias_m: coarsest.map_or(LOCAL_SURFACE_BIAS_M, |c| {
+            (c.spacing_m() as f32).max(LOCAL_SURFACE_BIAS_M)
+        }),
+    }
 }
 #[derive(Default, Clone)]
 pub struct GpuStats {
@@ -81,7 +110,11 @@ pub struct GpuStats {
     pub selection_ms: f64,
     pub resident: usize,
     pub finest_spacing_m: Option<i32>,
+    pub coarsest_spacing_m: Option<i32>,
     pub drawn: usize,
+    /// Leaves in the coverage the world is currently settling on, and in the
+    /// band selected for the camera. They differ while the band steps.
+    pub current: usize,
     pub target: usize,
     pub in_flight: usize,
     pub retiring: usize,
@@ -201,30 +234,58 @@ mod tests {
         }
     }
     #[test]
-    fn draw_frame_bounds_are_the_union_of_chunk_boxes_with_one_record_per_lease() {
+    fn draw_frame_records_carry_levels_and_derive_the_band_blend_and_bias() {
         use procgen_realtime_pilot::{VOXEL_CHUNK_CELLS, VoxelPosition};
-        let address = |x, y, z| {
+        let address = |x, y, z, lod| {
             procgen_realtime_pilot::VoxelChunkAddress::containing(
                 VoxelPosition {
                     x_m: x,
                     y_m: y,
                     z_m: z,
                 },
-                0,
+                lod,
             )
             .unwrap()
         };
         let span = VOXEL_CHUNK_CELLS;
-        let addresses = [address(0, 0, 0), address(span, -span, 2 * span)];
-        let (bounds, origins) = local_draw_layout(&addresses);
-        assert_eq!(bounds, [[0, -span, 0], [2 * span, span, 3 * span]]);
-        assert_eq!(origins.len(), addresses.len() * LOCAL_ORIGIN_BYTES);
-        let records: &[i32] = bytemuck::cast_slice(&origins);
+        let addresses = [address(0, 0, 0, 0), address(span, -span, 2 * span, 0)];
+        let layout = local_draw_layout(&addresses);
+        assert_eq!(layout.bounds, [[0, -span, 0], [2 * span, span, 3 * span]]);
+        assert_eq!(layout.origins.len(), addresses.len() * LOCAL_ORIGIN_BYTES);
+        let records: &[i32] = bytemuck::cast_slice(&layout.origins);
         assert_eq!(records, [0, 0, 0, 0, span, -span, 2 * span, 0]);
-        // An empty region must still describe a finite box and a bindable buffer.
-        let (bounds, origins) = local_draw_layout(&[]);
-        assert_eq!(bounds, [[0; 3]; 2]);
-        assert_eq!(origins.len(), LOCAL_ORIGIN_BYTES);
+        // One-meter chunks span 32 m, past the 16 m blend floor; their 1 m cells
+        // sit exactly on the bias floor.
+        assert_eq!(
+            (layout.blend_m, layout.bias_m),
+            (32.0, LOCAL_SURFACE_BIAS_M)
+        );
+
+        // A mixed band takes both distances from its coarsest lease: a level
+        // three chunk spans 256 m with 8 m cells, past both floors.
+        let mixed = [
+            address(0, 0, 0, 0),
+            address(8 * span, 0, 0, 2),
+            address(32 * span, 0, 0, 3),
+        ];
+        let layout = local_draw_layout(&mixed);
+        let records: &[i32] = bytemuck::cast_slice(&layout.origins);
+        assert_eq!(
+            records.chunks_exact(4).map(|r| r[3]).collect::<Vec<_>>(),
+            [0, 2, 3],
+            "the fourth word of each record is the chunk level"
+        );
+        assert_eq!((layout.blend_m, layout.bias_m), (256.0, 8.0));
+
+        // An empty region must still describe a finite box, a bindable buffer,
+        // and the two floors.
+        let layout = local_draw_layout(&[]);
+        assert_eq!(layout.bounds, [[0; 3]; 2]);
+        assert_eq!(layout.origins.len(), LOCAL_ORIGIN_BYTES);
+        assert_eq!(
+            (layout.blend_m, layout.bias_m),
+            (LOCAL_BLEND_M, LOCAL_SURFACE_BIAS_M)
+        );
     }
     #[test]
     fn edits_discard_completed_and_in_flight_generations_even_after_reverting() {
