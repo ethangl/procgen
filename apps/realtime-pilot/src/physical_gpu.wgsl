@@ -45,6 +45,14 @@ fn shade(in: Vertex, normal: vec3<f32>) -> vec4<f32> {
     let intensity = 0.12 + 0.9*max(dot(normal,light),0.0);
     var color = vec3<f32>(0.52);
     if frame.style.x == 3u { color = height_color(in.altitude_m/frame.height_scale.y); }
+    if frame.style.x == 4u {
+        // Anchor plus relative position is the planet-space position; at 300 km
+        // it is large, but the direction it gives is well conditioned.
+        let up = normalize(vec3<f32>(frame.anchor.xyz)+in.position);
+        let ocean = frame.ocean_sphere.w != 0.0;
+        let sea_level_m = select(0.0,frame.ocean_sphere.x-frame.height_scale.x,ocean);
+        color = material_color(dot(normal,up),in.altitude_m,frame.height_scale.y,sea_level_m,ocean);
+    }
     return vec4<f32>(color*intensity,1.0);
 }
 @fragment fn fragment(in: Vertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {

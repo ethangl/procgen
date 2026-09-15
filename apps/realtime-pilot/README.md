@@ -5,10 +5,10 @@ It uses `procgen-core`, the CPU gradient-noise primitive from `procgen-noise`, a
 cube-face geometry from `procgen-cubesphere`, and does not touch the existing world
 pipeline or viewer.
 
-The target shape is GPU height tiles as the far field and a GPU voxel world as the
-near field, with CPU code kept as the reference oracle the shaders are tested
-against. The viewer implements both halves: height tiles everywhere and a
-camera-centered band of mixed-LOD voxel chunks over them.
+The target shape is GPU height tiles as the far field and a GPU voxel world as the near
+field, with CPU code kept as the reference oracle the shaders are tested against. The
+viewer implements both halves: height tiles everywhere and a camera-centered band of
+mixed-LOD voxel chunks over them.
 
 ## GPU orbit and descent viewer
 
@@ -23,9 +23,9 @@ The viewer loads the repository's `planet-design-300km.json` with its saved seed
 Use **Design** for radius, height bound, seed, sea level, file actions, and the
 **Volume** 3D detail term, and **Octaves** for enable state, wavelength, amplitude,
 sharpness, warp, and all damping values. Volume has an enabled checkbox, wavelength and
-amplitude in meters, a sharpness slider, and the fade height above the surface;
-`planet-design-300km.json` ships it enabled at 24 m, 6 m, 0.5, and 12 m, which are
-starting values, not a measured preset. Valid terrain edits apply 350 ms after the last
+amplitude in meters, a sharpness slider, and the fade height above the surface, shipped
+enabled at 24 m, 6 m, 0.5, and 12 m as starting values, not a measured preset. Valid
+terrain edits apply 350 ms after the last
 edit, and rapid edits coalesce. An edit, including an invalid draft, invalidates older
 unpublished results. The last complete design stays visible while its replacement builds
 on a worker; height meshes and field queries switch to the accepted design together.
@@ -56,11 +56,11 @@ flight speed. In Orbit, left drag rotates around the current screen axes, includ
 across the poles. Flight speed increases smoothly with terrain clearance above the
 64 m ground band; the panel shows speed in m/s and the scroll multiplier.
 
-**Keep camera 5 m above terrain** is enabled by default. It samples the canonical
-height field at the camera direction and raises a low camera radially. Disable it
-for unrestricted terrain inspection. It checks the endpoint only: fast lateral
-flight can cross a ridge. It provides no walking, swept collision, gravity, or
-water contact. Camera preferences are not saved in design files.
+**Keep camera 5 m above terrain** is enabled by default: it samples the canonical height
+field at the camera direction and raises a low camera radially, and disabling it allows
+inspection below terrain. It checks the endpoint only, so fast lateral flight can cross a
+ridge, and it provides no walking, swept collision, gravity, or water contact. Camera
+preferences are not saved in design files.
 
 The GPU draws up to 384 height tiles with 64 by 64 quads each, with a one-meter
 refinement target, stitched edges, and 250 ms replacement fades. Filtering follows
@@ -81,16 +81,21 @@ Its edge dissolves into the height tiles over the span of its coarsest chunk, at
 16 m, and the height surface underneath drops by that chunk's cell spacing plus the
 volume term's amplitude, at least 1 m; that bias rule is provisional. **Show local
 voxels** turns the layer off; it is on by default. Previous height, current height, and
-local surfaces need three RGBA16F/Depth32F layers: 36 bytes per physical pixel, or 197.8
-MiB at 2880 × 2000.
+local surfaces need three RGBA16F/Depth32F layers: 36 bytes per pixel, 197.8 MiB at
+2880 × 2000.
 
-**Height** colors use a fixed ramp from minus to plus the configured height limit,
-measured above the reference radius. Neutral, LOD, and Normals are also available;
-under **LOD** each band chunk reads its own level, so the spacing rings separate
-from the height tiles underneath. See
-[the flight viewer](../../docs/realtime-world-flight-viewer.md) for architecture and
-limits, and [terrain draw visibility](../../docs/realtime-world-visibility.md) for
-radial tile bounds.
+**Material** is the default coloring, chosen per fragment from slope and altitude: soil
+below 28 degrees blending to rock above 42; snow from 55 percent of the height limit and
+full by 65, held off faces steeper than 35 degrees and gone by 50, so cliffs stay rock
+through the snow line; and sand within 4 m of sea level fading out by 8 m, where the
+ocean is on and the face is gentler than the rock threshold. The colors and angles are
+starting values, not measured ones, and lighting is unchanged. **Height**, **Neutral**,
+**LOD**, and **Normals** remain as inspection modes: Height uses a fixed ramp from minus
+to plus the configured height limit above the reference radius, and under LOD each band
+chunk reads its own level, so the spacing rings separate from the height tiles
+underneath. See [the flight viewer](../../docs/realtime-world-flight-viewer.md) for
+architecture and limits, and
+[terrain draw visibility](../../docs/realtime-world-visibility.md) for radial tile bounds.
 
 ## Headless captures
 
@@ -113,22 +118,15 @@ cargo run -p procgen-realtime-pilot -- \
   --explore-record /tmp/procgen-flight-route.csv
 ```
 
-This writes frame and stage timings plus six adjacent PNG captures, then exits.
-PNG encoding runs off the main thread; clean exit waits for images to save. The CSV
-reports height generation, buffer and target bytes, camera position,
-`terrain_clearance_m`, and `altitude_protection`, then local voxel columns:
-`local_resident`, `local_drawn`, `local_target`, `local_in_flight`,
-`local_retiring`, `finest_spacing_m`, `coarsest_spacing_m`, `gpu_bytes`,
-`local_resident_bytes`, `local_retiring_bytes`, the
-preparation/encoding/completion/submission and publication timings, and GPU density
-and extraction timestamps where the device reports them. The panel shows the same
-band counts, both spacings, the leaves the world is settling on against the target
-band, resident and retiring bytes, and stage timings. `gpu_stats_fresh` is false
-when the last snapshot is reused because its lock is busy; camera clearance stays
-current. `height_generated_tiles` and `height_reused_tiles` count cumulative tile
-work. `height_build_ms` measures preparation, submission waits, and GPU completion;
-`height_wait_ms` measures waiting for the preceding fade. These are elapsed times,
-not GPU timestamps. Live navigation is disabled during recorded runs.
+This writes frame and stage timings plus six adjacent PNG captures, then exits. The route
+uses the default coloring, so the captures are material-colored. PNG encoding runs off
+the main thread; clean exit waits for images to save. The CSV reports height generation,
+buffer and target bytes, camera position, clearance and protection, local voxel counts,
+bytes and spacings, and the stage timings; the
+[flight viewer](../../docs/realtime-world-flight-viewer.md) lists every column in header
+order and defines the ones that need it. The panel shows the same band counts, both
+spacings, the leaves the world is settling on against the target band, resident and
+retiring bytes, and stage timings. Live navigation is disabled during recorded runs.
 
 `--visibility-record FILE.csv` records fixed down and horizon views at 5 m and 500 m
 clearance over 35 seconds, with four screenshots.
@@ -136,12 +134,11 @@ clearance over 35 seconds, with four screenshots.
 ## GPU generation work
 
 The GPU voxel generators and their audits are complete and tested, and the viewer
-draws their output as its near field over the height tiles. See the
-[GPU streaming plan](../../docs/realtime-world-gpu-streaming.md). G1 supplies a WGSL
-density kernel and CPU/GPU agreement checks. G2 adds bounded uniform-chunk meshing,
-deterministic scans, and GPU vertex/index/draw buffers. G3 adds 2:1 transitions and
-bounded incremental residency, which the band now uses. G5 added filtered GPU height
-tiles. These audits run on Metal on macOS and Vulkan on Windows and Linux:
+draws their output as its near field over the height tiles. The
+[GPU streaming plan](../../docs/realtime-world-gpu-streaming.md) records what each
+stage supplies: density, uniform-chunk meshing, 2:1 transitions with bounded
+incremental residency, and filtered height tiles. These audits run on Metal on macOS
+and Vulkan on Windows and Linux:
 
 ```sh
 cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
@@ -151,24 +148,18 @@ cargo test -p procgen-gpu-tests --test height_mesh_agreement -- --nocapture --te
 cargo test -p procgen-gpu-tests --test surface_composition -- --nocapture
 ```
 
-They check real GPU chunk batches, shared halo and parent samples, repeated runs,
-and CPU agreement using the saved preset and radius/control extremes. Timings
-separate pipeline creation, dispatch and completion, CPU sampling, and audit
-readback. A compatible GPU is required; shader validation alone can run without one
-by filtering to `voxel_density_wgsl_validates_without_a_device`. The meshing audit
-checks topology, exact shared boundaries, replay order, capacity failures, and
-saved-terrain agreement with CPU extraction, feeding GPU density directly into
-extraction without an intermediate readback. The voxel mesher is marching tetrahedra;
-`qef.rs` is the seed for a dual-contour mesher and has no caller yet.
-
-The streaming audit checks mixed-LOD seams, local publication, slot reuse,
-cancellation, retirement, overflow, memory limits, and a fixed route through the
-saved terrain. Normal generation reads back eight bytes of overflow flags and, when
-supported, 32 bytes of stage timestamps per job. Visual samples, vertices, indices,
-and draw counts stay on the GPU. The `gpu` feature owns the wgpu implementation, the
-inspector enables it, and the audits use the same encoder as the residency owner.
-Native-device tests also check deferred submission, draw leases through slot
-retirement, and timestamp validity.
+They check real GPU chunk batches, shared halo and parent samples, repeated runs, and CPU
+agreement using the saved preset and radius/control extremes. A compatible GPU is
+required; shader validation alone can run without one by filtering to
+`voxel_density_wgsl_validates_without_a_device`. The meshing audit checks topology, exact
+shared boundaries, replay order, capacity failures, and saved-terrain agreement with CPU
+extraction, feeding GPU density straight into extraction; the mesher is marching
+tetrahedra, and `qef.rs` seeds a dual-contour mesher and has no caller. The streaming
+audit adds mixed-LOD seams, publication, slot reuse, cancellation, retirement, overflow,
+memory limits, deferred submission, draw leases through retirement, and a fixed route
+through the saved terrain. Visual samples, vertices, indices, and draw counts stay on the
+GPU. The `gpu` feature owns the wgpu implementation, the inspector enables it, and the
+audits use the same encoder as the residency owner.
 
 ## Field decisions
 
@@ -201,14 +192,11 @@ follows for this experiment:
   wavelength), sharpness)) * fade(d)`, with `d = height - altitude` and `p` the position
   in world meters. `fade` is one below the surface, smoothsteps to zero over `fade_m`
   above it, and is zero past that, so nothing the term adds floats higher than `fade_m`.
-  `bound` is the design's own `x / sqrt(1 + x*x)`, applied for the same reason it bounds
-  accumulated relief: the shape transform has unit deviation, not a unit bound, so
-  without it `amplitude_m` would be a one-sigma scale and the term would reach several
-  times it, with the long tail landing on the undercut side at a negative sharpness.
-  With it the term stays strictly inside +/- `amplitude_m` by construction, which is
-  what the render bias below relies on. Its key `0x564F_4C55` is separate from the
-  height field's `0x5355_5246`, so the term is not a rescaled octave and enabling it
-  cannot move the height surface.
+  `bound` is the design's own `x / sqrt(1 + x*x)`, so the term stays strictly inside
+  +/- `amplitude_m` whatever the sharpness, which is what the render bias below relies
+  on; [the flight viewer](../../docs/realtime-world-flight-viewer.md) carries the
+  measured argument for bounding it. Its key `0x564F_4C55` is separate from the height
+  field's `0x5355_5246`, so enabling it cannot move the height surface.
 - Apply no spacing filter to that term, unlike the octaves: coincident halo and parent
   samples must stay identical across LODs, which a spacing-dependent term would break,
   seaming chunk levels. Coarse chunks alias it instead; bound its wavelength from below,
@@ -216,10 +204,9 @@ follows for this experiment:
   range that resolves a noise cell to a sixteenth of its width.
 - Push the height surface below the band by the coarsest chunk's cell spacing plus that
   amplitude, because the voxel surface can now sit below the height surface as well as
-  above it and would otherwise show it through every undercut. The soft bound is what
-  makes that a budget rather than a guess at a tail. Height tiles still evaluate height
-  only, and no fragment discard is added, since the band's box can contain surface the
-  band does not cover.
+  above it and would otherwise show through every undercut. The soft bound makes that a
+  budget rather than a guess at a tail. Height tiles still evaluate height only, and no
+  fragment discard is added: the band's box can contain surface the band does not cover.
 
 The [relief calibration report](../../docs/realtime-world-relief.md) describes the
 fixed shape moments; the seed is folded once by the noise crate. See
