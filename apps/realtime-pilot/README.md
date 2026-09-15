@@ -20,12 +20,15 @@ The viewer loads the repository's `planet-design-300km.json` with its saved seed
 300 km radius, and complete octave stack. `--design-file PATH` overrides that file.
 `--seed U64` selects the starter preset instead.
 
-Use **Design** for radius, height bound, seed, sea level, and file actions, and
-**Octaves** for enable state, wavelength, amplitude, sharpness, warp, and all
-damping values. Valid terrain edits apply 350 ms after the last edit, and rapid
-edits coalesce. An edit, including an invalid draft, invalidates older unpublished
-results. The last complete design stays visible while its replacement builds on a
-worker; height meshes and field queries switch to the accepted design together.
+Use **Design** for radius, height bound, seed, sea level, file actions, and the
+**Volume** 3D detail term, and **Octaves** for enable state, wavelength, amplitude,
+sharpness, warp, and all damping values. Volume has an enabled checkbox, wavelength and
+amplitude in meters, a sharpness slider, and the fade height above the surface;
+`planet-design-300km.json` ships it enabled at 24 m, 6 m, 0.5, and 12 m, which are
+starting values, not a measured preset. Valid terrain edits apply 350 ms after the last
+edit, and rapid edits coalesce. An edit, including an invalid draft, invalidates older
+unpublished results. The last complete design stays visible while its replacement builds
+on a worker; height meshes and field queries switch to the accepted design together.
 Edits preserve the camera and its orientation, except that enabled altitude
 protection raises it if the new terrain would cover it.
 
@@ -74,11 +77,12 @@ the cap. There is no altitude gate; the band empties by itself a few kilometers
 above the design's height envelope and fills in again on descent. It advances one
 closed replacement group at a time, refining live rather than waiting for the whole
 target, and reserves 1,536 GPU mesh slots of 2,781,000 bytes inside a 5 GiB budget.
-Its edge dissolves into the height tiles over the span of its coarsest chunk, at
-least 16 m, and the height surface underneath drops by that chunk's cell spacing, at
-least 1 m; that bias rule is provisional. **Show local voxels** turns the layer off;
-it is on by default. Previous height, current height, and local surfaces need three
-RGBA16F/Depth32F layers: 36 bytes per physical pixel, or 197.8 MiB at 2880 × 2000.
+Its edge dissolves into the height tiles over the span of its coarsest chunk, at least
+16 m, and the height surface underneath drops by that chunk's cell spacing plus the
+volume term's amplitude, at least 1 m; that bias rule is provisional. **Show local
+voxels** turns the layer off; it is on by default. Previous height, current height, and
+local surfaces need three RGBA16F/Depth32F layers: 36 bytes per physical pixel, or 197.8
+MiB at 2880 × 2000.
 
 **Height** colors use a fixed ramp from minus to plus the configured height limit,
 measured above the reference radius. Neutral, LOD, and Normals are also available;
@@ -192,6 +196,30 @@ follows for this experiment:
 - Claim analytical derivatives only for the normalized basis and the sharpness
   transform. The composed surface returns a scalar; its feedback vectors are not
   final gradients.
+- Add one bounded 3D term to the voxel density, so the near field can carry cliffs and
+  undercuts a radial height cannot express: `d + amplitude * bound(shape(noise(p /
+  wavelength), sharpness)) * fade(d)`, with `d = height - altitude` and `p` the position
+  in world meters. `fade` is one below the surface, smoothsteps to zero over `fade_m`
+  above it, and is zero past that, so nothing the term adds floats higher than `fade_m`.
+  `bound` is the design's own `x / sqrt(1 + x*x)`, applied for the same reason it bounds
+  accumulated relief: the shape transform has unit deviation, not a unit bound, so
+  without it `amplitude_m` would be a one-sigma scale and the term would reach several
+  times it, with the long tail landing on the undercut side at a negative sharpness.
+  With it the term stays strictly inside +/- `amplitude_m` by construction, which is
+  what the render bias below relies on. Its key `0x564F_4C55` is separate from the
+  height field's `0x5355_5246`, so the term is not a rescaled octave and enabling it
+  cannot move the height surface.
+- Apply no spacing filter to that term, unlike the octaves: coincident halo and parent
+  samples must stay identical across LODs, which a spacing-dependent term would break,
+  seaming chunk levels. Coarse chunks alias it instead; bound its wavelength from below,
+  at 4 m and never finer than `radius / 2^18`, so `p / wavelength` stays inside the f32
+  range that resolves a noise cell to a sixteenth of its width.
+- Push the height surface below the band by the coarsest chunk's cell spacing plus that
+  amplitude, because the voxel surface can now sit below the height surface as well as
+  above it and would otherwise show it through every undercut. The soft bound is what
+  makes that a budget rather than a guess at a tail. Height tiles still evaluate height
+  only, and no fragment discard is added, since the band's box can contain surface the
+  band does not cover.
 
 The [relief calibration report](../../docs/realtime-world-relief.md) describes the
 fixed shape moments; the seed is folded once by the noise crate. See

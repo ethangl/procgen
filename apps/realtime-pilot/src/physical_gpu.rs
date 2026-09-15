@@ -189,7 +189,10 @@ fn generate_revision(
             if dirty {
                 let leases = world.resident_leases();
                 let addresses: Vec<_> = leases.iter().map(|l| l.key.address()).collect();
-                let layout = local_draw_layout(&addresses);
+                let layout = local_draw_layout(
+                    &addresses,
+                    bridge.design.field.config().volume.active_amplitude_m(),
+                );
                 let origins = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("local voxel origins"),
                     contents: &layout.origins,

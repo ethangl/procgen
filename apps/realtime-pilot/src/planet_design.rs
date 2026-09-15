@@ -33,6 +33,56 @@ impl OctaveConfig {
     pub const AMPLITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=20_000.0;
 }
 
+/// One bounded 3D detail term added to the voxel potential, so the near field
+/// can carry cliff faces, undercuts, and pinching a radial height cannot
+/// express. It is faded out with height above the surface, which is what keeps
+/// it from making floating blobs in the air (McKendrick 37:19-38:12). Height
+/// tiles never evaluate it; only the density path does.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VolumeConfig {
+    pub enabled: bool,
+    pub wavelength_m: f32,
+    /// A true bound on the term, not a one-sigma scale: the shaped noise passes
+    /// through the design's `x / sqrt(1 + x*x)` before this scales it, so the
+    /// term stays strictly inside +/- this many meters. The render bias in
+    /// `local_draw_layout` depends on that.
+    pub amplitude_m: f32,
+    pub sharpness: f32,
+    /// Height above the surface over which the term smoothly reaches zero.
+    pub fade_m: f32,
+}
+impl Default for VolumeConfig {
+    /// Disabled, but already carrying values that show something in the band
+    /// the moment the panel checkbox is ticked. These are starting values, not
+    /// a measured preset.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            wavelength_m: 24.0,
+            amplitude_m: 6.0,
+            sharpness: 0.5,
+            fade_m: 12.0,
+        }
+    }
+}
+impl VolumeConfig {
+    pub const WAVELENGTH_RANGE: std::ops::RangeInclusive<f32> = 4.0..=4_096.0;
+    pub const AMPLITUDE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=64.0;
+    pub const FADE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=256.0;
+    /// `p_m / wavelength_m` must stay under this, so the finest noise cell is
+    /// still resolved to at least a sixteenth of its width in f32: consecutive
+    /// f32 values below 2^18 are at most a thirty-secondth apart.
+    pub const COORDINATE_LIMIT: f32 = 262_144.0;
+
+    /// Zero unless enabled, so the one number callers outside the field need -
+    /// how far the voxel surface can sit below the height surface - is read
+    /// from one place.
+    pub fn active_amplitude_m(&self) -> f32 {
+        if self.enabled { self.amplitude_m } else { 0.0 }
+    }
+}
+
 /// Serialized generation contract. The reference sphere is the zero-elevation
 /// datum. Preview/camera preferences are not generation parameters.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +93,10 @@ pub struct PlanetDesignConfig {
     pub height_limit_m: f32,
     /// Strictly descending wavelengths; octave zero is the broadest band.
     pub octaves: Vec<OctaveConfig>,
+    /// Generation data, unlike `ocean`: it is part of the field, and its
+    /// default leaves every design written before it loading unchanged.
+    #[serde(default)]
+    pub volume: VolumeConfig,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +104,7 @@ pub enum DesignError {
     Field(FieldError),
     OctaveCount,
     WavelengthOrder,
+    VolumeWavelength,
     Direction,
     Spacing,
 }
@@ -64,6 +119,11 @@ impl fmt::Display for DesignError {
             Self::Field(e) => e.fmt(f),
             Self::OctaveCount => write!(f, "use 1 to {MAX_DESIGN_OCTAVES} octaves"),
             Self::WavelengthOrder => write!(f, "octave wavelengths must strictly decrease"),
+            Self::VolumeWavelength => write!(
+                f,
+                "volume wavelength (m) must be at least radius / {}",
+                VolumeConfig::COORDINATE_LIMIT
+            ),
             Self::Direction => write!(f, "direction must be finite and nonzero"),
             Self::Spacing => write!(f, "sample spacing must be finite and nonnegative"),
         }
@@ -93,6 +153,7 @@ impl PlanetDesignConfig {
                     ridge_erosion: 0.1,
                 })
                 .collect(),
+            volume: VolumeConfig::default(),
         }
     }
 
@@ -134,9 +195,42 @@ impl PlanetDesignConfig {
         {
             return Err(DesignError::WavelengthOrder);
         }
+        validate_range(
+            "volume wavelength (m)",
+            self.volume.wavelength_m,
+            VolumeConfig::WAVELENGTH_RANGE,
+        )?;
+        validate_range(
+            "volume amplitude (m)",
+            self.volume.amplitude_m,
+            VolumeConfig::AMPLITUDE_RANGE,
+        )?;
+        validate_range(
+            "volume sharpness",
+            self.volume.sharpness,
+            NoiseConfig::SHARPNESS_RANGE,
+        )?;
+        validate_range(
+            "volume fade (m)",
+            self.volume.fade_m,
+            VolumeConfig::FADE_RANGE,
+        )?;
+        // Keep the noise argument inside the f32 range the term is resolved in.
+        // A wavelength finer than radius / 2^18 would push `p_m / wavelength_m`
+        // past 2^18 at the surface, where f32 can no longer place a sample
+        // inside its noise cell to a sixteenth of the cell width. This one rule
+        // is conditional, unlike the ranges above: an inert default wavelength
+        // must not invalidate a large-radius design that never evaluates it.
+        if self.volume.enabled
+            && self.volume.wavelength_m < self.radius_m / VolumeConfig::COORDINATE_LIMIT
+        {
+            return Err(DesignError::VolumeWavelength);
+        }
+        let seed = fold_seed_u64_to_u32(self.seed);
         Ok(PlanetDesignField {
             config: self.clone(),
-            key: hash_u32(fold_seed_u64_to_u32(self.seed), 0x5355_5246, 0, 0),
+            key: hash_u32(seed, 0x5355_5246, 0, 0),
+            volume_key: hash_u32(seed, 0x564F_4C55, 0, 0),
         })
     }
 }
@@ -145,10 +239,16 @@ impl PlanetDesignConfig {
 pub struct PlanetDesignField {
     config: PlanetDesignConfig,
     key: u32,
+    /// Separate from the height key, so the detail term is not a rescaled copy
+    /// of an octave and enabling it cannot move the height surface.
+    volume_key: u32,
 }
 impl PlanetDesignField {
     pub(crate) fn noise_key(&self) -> u32 {
         self.key
+    }
+    pub(crate) fn volume_key(&self) -> u32 {
+        self.volume_key
     }
 
     pub fn config(&self) -> &PlanetDesignConfig {
@@ -328,6 +428,104 @@ mod tests {
             let height = field.elevation_m(p, 0.0).unwrap();
             assert!(height.is_finite() && height.abs() < extreme.height_limit_m);
         }
+    }
+
+    #[test]
+    fn a_design_without_a_volume_block_loads_disabled_and_round_trips_with_one() {
+        let config = PlanetDesignConfig::starter(42);
+        assert_eq!(config.volume, VolumeConfig::default());
+        assert!(!config.volume.enabled);
+        assert_eq!(config.volume.active_amplitude_m(), 0.0);
+        let mut value: serde_json::Value = serde_json::to_value(&config).unwrap();
+        assert!(value.as_object_mut().unwrap().remove("volume").is_some());
+        let restored: PlanetDesignConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(restored, config);
+
+        let mut enabled = config.clone();
+        enabled.volume = VolumeConfig {
+            enabled: true,
+            wavelength_m: 31.5,
+            amplitude_m: 12.0,
+            sharpness: -0.25,
+            fade_m: 40.0,
+        };
+        assert_eq!(enabled.volume.active_amplitude_m(), 12.0);
+        let encoded = serde_json::to_string(&enabled).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PlanetDesignConfig>(&encoded).unwrap(),
+            enabled
+        );
+        // The term is generation data, so it must reach the field's key too.
+        let field = enabled.validate().unwrap();
+        assert_eq!(field.config().volume, enabled.volume);
+        assert_ne!(field.volume_key(), field.noise_key());
+        // An unknown member is still refused on both structs.
+        let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        value["volume"]["octaves"] = 3.into();
+        assert!(serde_json::from_value::<PlanetDesignConfig>(value).is_err());
+    }
+
+    #[test]
+    fn every_volume_range_and_the_radius_wavelength_rule_reject_one_value() {
+        let base = PlanetDesignConfig {
+            volume: VolumeConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..PlanetDesignConfig::starter(42)
+        };
+        base.validate().unwrap();
+        for case in 0..6 {
+            let mut config = base.clone();
+            let v = &mut config.volume;
+            let name = match case {
+                0 => {
+                    v.wavelength_m = *VolumeConfig::WAVELENGTH_RANGE.end() + 1.0;
+                    "volume wavelength (m)"
+                }
+                1 => {
+                    v.wavelength_m = *VolumeConfig::WAVELENGTH_RANGE.start() - 0.5;
+                    "volume wavelength (m)"
+                }
+                2 => {
+                    v.amplitude_m = *VolumeConfig::AMPLITUDE_RANGE.end() + 1.0;
+                    "volume amplitude (m)"
+                }
+                3 => {
+                    v.sharpness = 1.5;
+                    "volume sharpness"
+                }
+                4 => {
+                    v.fade_m = *VolumeConfig::FADE_RANGE.start() - 0.5;
+                    "volume fade (m)"
+                }
+                5 => {
+                    v.fade_m = f32::NAN;
+                    "volume fade (m)"
+                }
+                _ => unreachable!(),
+            };
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains(name), "case {case}: {error}");
+        }
+        // A wavelength inside its own range can still be too fine for the
+        // planet: 100 km / 2^18 is 0.38 m, 8,000 km / 2^18 is 30.5 m.
+        let mut config = base.clone();
+        config.radius_m = 8_000_000.0;
+        assert_eq!(config.volume.wavelength_m, 24.0);
+        // Disabled, the same wavelength is inert and must not invalidate it.
+        config.volume.enabled = false;
+        config.validate().unwrap();
+        config.volume.enabled = true;
+        assert!(matches!(
+            config.validate(),
+            Err(DesignError::VolumeWavelength)
+        ));
+        config.volume.wavelength_m = config.radius_m / VolumeConfig::COORDINATE_LIMIT;
+        config.validate().unwrap();
+        config.radius_m = *PlanetDesignConfig::RADIUS_RANGE.start();
+        config.volume.wavelength_m = *VolumeConfig::WAVELENGTH_RANGE.start();
+        config.validate().unwrap();
     }
 
     #[test]
