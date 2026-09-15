@@ -25,19 +25,30 @@ pub(super) fn panel(
             }
             ui.heading("Physical planet");
             ui.label("Orbit / descent · live terrain controls");
-            if state.gpu.is_some() { state.editor.tabs(ui); }
-            ui.label(format!("Radius: {:.1} km", state.field.config().radius_m / 1000.0));
+            state.editor.tabs(ui);
+            ui.label(format!(
+                "Radius: {:.1} km",
+                state.field.config().radius_m / 1000.0
+            ));
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Orbit").clicked() { state.orbit(); }
+                if ui.button("Orbit").clicked() {
+                    state.orbit();
+                }
                 if ui.button("Fly").clicked() {
                     state.mode = Navigation::Fly;
                     state.descent = false;
                 }
-                if ui.button("Go to ground").clicked() { state.near_ground(); }
+                if ui.button("Go to ground").clicked() {
+                    state.near_ground();
+                }
             });
             ui.horizontal(|ui| {
-                let label = if state.descent { "Stop descent" } else { "Descend continuously" };
+                let label = if state.descent {
+                    "Stop descent"
+                } else {
+                    "Descend continuously"
+                };
                 if ui.button(label).clicked() {
                     state.descent = !state.descent;
                     state.mode = Navigation::Orbit;
@@ -49,12 +60,19 @@ pub(super) fn panel(
                 Navigation::Fly => "Fly: W A S D · E / Q up / down",
             });
             ui.label("Hold right mouse to look · scroll adjusts flight speed");
-            ui.label(format!("Flight speed: {:.1} m/s ({:.2}×)", super::navigation::flight_speed_mps(state.clearance_estimate(), state.speed_factor), state.speed_factor));
-            ui.checkbox(&mut state.keep_above_terrain, format!("Keep camera {CAMERA_CLEARANCE_M:.0} m above terrain"));
+            ui.label(format!(
+                "Flight speed: {:.1} m/s ({:.2}×)",
+                super::navigation::flight_speed_mps(state.clearance_estimate(), state.speed_factor),
+                state.speed_factor
+            ));
+            ui.checkbox(
+                &mut state.keep_above_terrain,
+                format!("Keep camera {CAMERA_CLEARANCE_M:.0} m above terrain"),
+            );
             ui.separator();
-            if state.gpu.is_some() && state.editor.tab != crate::design_panel::Tab::Status {
+            if state.editor.tab != crate::design_panel::Tab::Status {
                 let revision = state.revision;
-                let failure = state.gpu.as_ref().unwrap().designs.lock().unwrap().failure.clone();
+                let failure = state.gpu.designs.lock().unwrap().failure.clone();
                 state.editor.controls(ui, revision, failure.as_deref());
                 return;
             }
@@ -64,10 +82,20 @@ pub(super) fn panel(
             } else {
                 format!("Reference altitude: {:.3} km", altitude / 1000.0)
             });
-            ui.label(format!("Radial terrain clearance: {:.2} m", state.clearance_estimate()));
-            if state.gpu.is_some() && state.editor.ocean.enabled {
-                ui.label(format!("Ocean: sea level {:.1} m · camera {}",state.editor.ocean.sea_level_m,
-                    if altitude < state.editor.ocean.sea_level_m as f64 { "underwater" } else { "above water" }));
+            ui.label(format!(
+                "Radial terrain clearance: {:.2} m",
+                state.clearance_estimate()
+            ));
+            if state.editor.ocean.enabled {
+                ui.label(format!(
+                    "Ocean: sea level {:.1} m · camera {}",
+                    state.editor.ocean.sea_level_m,
+                    if altitude < state.editor.ocean.sea_level_m as f64 {
+                        "underwater"
+                    } else {
+                        "above water"
+                    }
+                ));
             }
             ui.separator();
             ui.horizontal(|ui| {
@@ -78,56 +106,60 @@ pub(super) fn panel(
             });
             match state.coloring {
                 Coloring::Height => height_legend(ui, state.field.config().height_limit_m),
-                Coloring::Lod => { ui.label("Colors show sample spacing: red = 1 m or finer."); }
+                Coloring::Lod => {
+                    ui.label("Colors show sample spacing: red = 1 m or finer.");
+                }
                 _ => {}
             }
             ui.separator();
-            if let Some(bridge) = &state.gpu {
-                ui.label("Backend: GPU · height tiles");
-                let displayed = bridge.display.lock().unwrap().clone();
-                if let Ok(output) = displayed.output.try_lock() {
-                    let s = &output.stats;
-                    ui.label(&s.status);
-                    ui.label(format!("Height tiles: {} · {:.1} MiB · update {:.1} ms",s.height_tiles,s.height_bytes as f64/1048576.0,s.height_update_ms));
-                    ui.label(format!("Drawn tiles: {} / {} across active snapshots", s.height_drawn_tiles, s.height_tested_tiles));
-                    ui.label(format!("Tile work: {} generated · {} reused",s.height_generated_tiles,s.height_reused_tiles));
-                    ui.label(format!("Height build {:.1} ms · blend wait {:.1} ms",s.height_build_ms,s.height_wait_ms));
-                    ui.label(format!("Surface blend targets: {:.1} MiB",s.surface_target_bytes as f64/1048576.0));
-                    ui.label(format!("Height tiles capped at {}",procgen_realtime_pilot::MAX_HEIGHT_TILES));
-                    ui.label(format!("Worker selection: {:.2} ms",s.selection_ms));
-                    ui.label(format!("Render scheduling: {:.3} ms · draw encoding {:.3} ms",s.scheduler_ms,s.draw_ms));
-                }
-                ui.label(format!("Frame: {:.1} ms · peak {:.1} ms",state.frame_ms,state.peak_frame_ms));
-                ui.label(&state.status);
-            } else {
-                ui.label("Backend: CPU audit");
+            let displayed = state.gpu.display.lock().unwrap().clone();
+            if let Ok(output) = displayed.output.try_lock() {
+                let s = &output.stats;
+                ui.label(&s.status);
+                ui.label(format!(
+                    "Height tiles: {} · {:.1} MiB · update {:.1} ms",
+                    s.height_tiles,
+                    s.height_bytes as f64 / 1048576.0,
+                    s.height_update_ms
+                ));
+                ui.label(format!(
+                    "Drawn tiles: {} / {} across active snapshots",
+                    s.height_drawn_tiles, s.height_tested_tiles
+                ));
+                ui.label(format!(
+                    "Tile work: {} generated · {} reused",
+                    s.height_generated_tiles, s.height_reused_tiles
+                ));
+                ui.label(format!(
+                    "Height build {:.1} ms · blend wait {:.1} ms",
+                    s.height_build_ms, s.height_wait_ms
+                ));
+                ui.label(format!(
+                    "Surface blend targets: {:.1} MiB",
+                    s.surface_target_bytes as f64 / 1048576.0
+                ));
+                ui.label(format!(
+                    "Height tiles capped at {}",
+                    procgen_realtime_pilot::MAX_HEIGHT_TILES
+                ));
+                ui.label(format!("Worker selection: {:.2} ms", s.selection_ms));
+                ui.label(format!(
+                    "Render scheduling: {:.3} ms · draw encoding {:.3} ms",
+                    s.scheduler_ms, s.draw_ms
+                ));
+            }
+            ui.label(format!(
+                "Frame: {:.1} ms · peak {:.1} ms",
+                state.frame_ms, state.peak_frame_ms
+            ));
             ui.label(&state.status);
-            ui.label(format!("{} displayed triangles", state.triangles));
-            if let Some(staging) = &state.staging {
-                ui.label(format!("{} upload pieces remaining", staging.result.packed.pieces.len()));
-            }
-            ui.label(format!("Generation: {:.2} s", state.generation_seconds));
-            ui.label(format!("Frame: {:.1} ms · peak {:.1} ms", state.frame_ms, state.peak_frame_ms));
-            ui.label(format!("Upload: {:.0} KiB · CPU {:.2} ms · peak {:.2} ms", state.upload_bytes as f32 / 1024.0, state.upload_ms, state.peak_upload_ms));
-            for (label, bytes) in [
-                ("Build source", state.source_bytes),
-                ("Build mesh", state.mesh_bytes),
-                ("Displayed buffers", state.display_bytes),
-            ] {
-                ui.label(format!("{label}: {:.1} MiB", bytes as f32 / 1048576.0));
-            }
-            ui.label("Payload counters exclude allocator and driver overhead. One replacement at a time; 512 KiB upload per frame.");
-            }
             if ui.button("Reset timing peaks").clicked() {
                 state.peak_frame_ms = 0.0;
-                state.peak_upload_ms = 0.0;
             }
         });
     if state.editor.edits.observe(std::time::Instant::now()) {
         let revision = state.editor.edits.revision();
-        if let Some(bridge) = &state.gpu {
-            bridge.designs.lock().unwrap().invalidate(revision);
-        }
+        state.gpu.designs.lock().unwrap().invalidate(revision);
     }
     let left = (panel.response.rect.width() * ctx.pixels_per_point()).round() as u32;
     let size = UVec2::new(

@@ -1,4 +1,4 @@
-//! Viewer-owned elevation colors, shared by CPU packing, WGSL, and the legend.
+//! Viewer-owned elevation colors, shared by the WGSL shaders and the legend.
 /// Linear RGB and altitude as a fraction of the configured height limit.
 #[derive(Clone, Copy)]
 pub struct HeightColorStop {
@@ -32,19 +32,7 @@ pub const HEIGHT_COLORS: [HeightColorStop; 6] = [
         relative_height: 1.0,
     },
 ];
-pub fn height_color(relative_height: f32) -> [f32; 4] {
-    let mut color = HEIGHT_COLORS[0].rgb;
-    for pair in HEIGHT_COLORS.windows(2) {
-        let [a, b] = [pair[0], pair[1]];
-        let t = ((relative_height - a.relative_height) / (b.relative_height - a.relative_height))
-            .clamp(0.0, 1.0);
-        for (value, target) in color.iter_mut().zip(b.rgb) {
-            *value += (target - *value) * t;
-        }
-    }
-    [color[0], color[1], color[2], 1.0]
-}
-/// Generate the palette declaration from the same records used by CPU and UI.
+/// Generate the palette declaration from the same records the legend draws.
 pub fn height_color_shader() -> String {
     let colors = HEIGHT_COLORS
         .iter()

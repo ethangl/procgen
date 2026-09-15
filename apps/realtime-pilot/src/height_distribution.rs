@@ -1,5 +1,4 @@
 //! Area-sampled broad relief, separate from mesh extrema and cave floors.
-use crate::PlanetField;
 use procgen_core::Vec3;
 use rayon::prelude::*;
 
@@ -12,10 +11,6 @@ pub struct HeightDistribution {
     pub median: f32,
     pub p95: f32,
     pub maximum: f32,
-}
-
-pub(crate) fn sample(field: &PlanetField) -> HeightDistribution {
-    sample_heights(|direction| field.height(direction))
 }
 
 pub(crate) fn sample_heights(height: impl Fn(Vec3) -> f32 + Sync) -> HeightDistribution {
@@ -42,56 +37,37 @@ pub(crate) fn sample_heights(height: impl Fn(Vec3) -> f32 + Sync) -> HeightDistr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::PLANET_PRESETS;
+    use crate::PlanetDesignConfig;
 
+    /// The starter design is the preset every new world begins from, so its
+    /// relief must already be broad rather than a thin skin on the sphere.
     #[test]
-    fn presets_have_broad_relief_without_a_large_radius_offset() {
-        for preset in &PLANET_PRESETS {
-            for seed in [0, 42, 4_294_967_338] {
-                let field = preset.planet.validate(seed).unwrap();
-                let heights = sample(&field);
-                let scale = preset.planet.terrain.height_scale;
-                // The middle 90% must span at least half the configured height
-                // scale. The previous composition reached only 0.11–0.16 times it.
-                assert!(
-                    heights.p95 - heights.p05 > scale * 0.5,
-                    "{} {seed}: {heights:?}",
-                    preset.id
-                );
-                assert!(
-                    heights.median.abs() < scale * 0.25,
-                    "{} {seed}: {heights:?}",
-                    preset.id
-                );
-                assert!(heights.minimum >= -scale && heights.maximum <= scale);
-            }
+    fn the_starter_design_has_broad_relief_centered_near_the_datum() {
+        for seed in [0, 42, 4_294_967_338] {
+            let config = PlanetDesignConfig::starter(seed);
+            let field = config.validate().unwrap();
+            let heights = field.height_distribution();
+            let limit = config.height_limit_m;
+            // The middle 90% must span at least half the configured height limit.
+            assert!(
+                heights.p95 - heights.p05 > limit * 0.5,
+                "{seed}: {heights:?}"
+            );
+            assert!(heights.median.abs() < limit * 0.25, "{seed}: {heights:?}");
+            assert!(heights.minimum >= -limit && heights.maximum <= limit);
         }
     }
 
     #[test]
-    fn distribution_is_schedule_independent_and_zero_scale_is_flat() {
-        let mut config = PLANET_PRESETS[0].planet;
-        let field = config.validate(42).unwrap();
+    fn the_distribution_is_schedule_independent() {
+        let field = PlanetDesignConfig::starter(42).validate().unwrap();
         let run = |threads| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap()
-                .install(|| sample(&field))
+                .install(|| field.height_distribution())
         };
         assert_eq!(run(1), run(4));
-        config.terrain.height_scale = 0.0;
-        let flat = sample(&config.validate(42).unwrap());
-        assert_eq!(
-            flat,
-            HeightDistribution {
-                minimum: 0.0,
-                p05: 0.0,
-                median: 0.0,
-                p95: 0.0,
-                maximum: 0.0
-            }
-        );
     }
 }

@@ -188,12 +188,8 @@ mod tests {
                 let mut config = procgen_realtime_pilot::PlanetDesignConfig::starter(42);
                 config.radius_m = 256_000.;
                 config.octaves.iter_mut().for_each(|o| o.enabled = false);
-                let mut state = Inspector::new(
-                    crate::design_file::DesignFile::new(config),
-                    None,
-                    crate::physical_gpu_bridge::ExplorationBackend::Gpu,
-                    None,
-                );
+                let mut state =
+                    Inspector::new(crate::design_file::DesignFile::new(config), None, None);
                 state.mode = Navigation::Fly;
                 state.speed_factor = 0.9;
                 state.set_radial(altitude);

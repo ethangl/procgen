@@ -384,10 +384,26 @@ fn check_height_colors(device: &wgpu::Device, queue: &wgpu::Queue) {
     );
     let colors = readback::<[f32; 4]>(device, queue, &output, heights.len());
     for (height, gpu) in heights.iter().zip(colors) {
-        let cpu = physical_color::height_color(*height);
+        let cpu = height_color(*height);
         for axis in 0..4 {
             // Several f32 interpolation operations, well below visible color precision.
             assert!((cpu[axis] - gpu[axis]).abs() < 0.000001);
         }
     }
+}
+
+/// Independent interpolation over the same palette records the shader is
+/// generated from. The viewer itself colors terrain in WGSL only.
+fn height_color(relative_height: f32) -> [f32; 4] {
+    use physical_color::HEIGHT_COLORS;
+    let mut color = HEIGHT_COLORS[0].rgb;
+    for pair in HEIGHT_COLORS.windows(2) {
+        let [a, b] = [pair[0], pair[1]];
+        let t = ((relative_height - a.relative_height) / (b.relative_height - a.relative_height))
+            .clamp(0.0, 1.0);
+        for (value, target) in color.iter_mut().zip(b.rgb) {
+            *value += (target - *value) * t;
+        }
+    }
+    [color[0], color[1], color[2], 1.0]
 }

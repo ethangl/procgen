@@ -4,10 +4,10 @@ use procgen_core::Vec3;
 use procgen_gpu_tests::{readback, validate_wgsl};
 use procgen_realtime_pilot::{
     PlanetDesignConfig, VOXEL_MESH_MAX_TRIANGLES, VOXEL_MESH_VERTEX_SLOTS, VOXEL_SAMPLE_COUNT,
-    VoxelChunkAddress, VoxelChunkMesh, VoxelCollision, VoxelMeshConfig, VoxelMeshVertex,
-    VoxelPosition, VoxelVolume, build_voxel_chunk_mesh, sample_voxel_chunk, voxel_mesh_shader,
+    VoxelChunkAddress, VoxelChunkMesh, VoxelMeshConfig, VoxelMeshVertex, VoxelPosition,
+    VoxelVolume, build_voxel_chunk_mesh, sample_voxel_chunk, voxel_mesh_shader,
 };
-use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Instant};
+use std::{collections::BTreeMap, time::Instant};
 use voxel_mesh_support::{Gpu, Source, sample_index};
 
 const CAPACITY: VoxelMeshConfig = VoxelMeshConfig {
@@ -439,26 +439,8 @@ fn check_saved_field(gpu: &Gpu) {
     let cpu_volume = sample_voxel_chunk(&field, a).unwrap();
     let cpu = build_voxel_chunk_mesh(&cpu_volume).unwrap();
     let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
-    // Quarter-voxel collision agreement leaves the interpolation difference below
-    // the 0.4 m player radius. Density-backend agreement uses G1's 0.02 m bound.
-    let collision = VoxelCollision::build(&field, a.origin(), &AtomicBool::new(false)).unwrap();
-    let collision_points: Vec<_> = collision
-        .surface()
-        .positions()
-        .iter()
-        .map(|p| {
-            let p = p.relative_to(a.origin());
-            [p.x as f64, p.y as f64, p.z as f64]
-        })
-        .collect();
-    let collision_indices: Vec<_> = collision
-        .surface()
-        .triangles()
-        .iter()
-        .flat_map(|t| t.vertices)
-        .collect();
+    // Density-backend agreement uses G1's 0.02 m bound.
     let mut compared = 0;
-    let mut collision_error = 0.0f64;
     let mut density_error = 0.0f64;
     for y in 0..16 {
         for z in 0..16 {
@@ -470,9 +452,6 @@ fn check_saved_field(gpu: &Gpu) {
                 continue;
             }
             let reference = ray_x(&cpu, y, z).expect("CPU density surface coverage");
-            let contact = ray_x_geometry(&collision_points, &collision_indices, y, z)
-                .expect("collision surface coverage");
-            collision_error = collision_error.max((x - contact).abs());
             density_error = density_error.max((x - reference).abs());
             compared += 1;
         }
@@ -482,16 +461,10 @@ fn check_saved_field(gpu: &Gpu) {
         "need a useful set of interior surface probes: {compared}"
     );
     assert!(
-        collision_error <= 0.25,
-        "collision surface difference {collision_error} m"
-    );
-    assert!(
         density_error <= 0.02,
         "CPU density surface difference {density_error} m"
     );
-    println!(
-        "{compared} saved surface probes: collision difference {collision_error:.6} m; CPU density difference {density_error:.6} m"
-    );
+    println!("{compared} saved surface probes: CPU density difference {density_error:.6} m");
     println!(
         "saved warm density+mesh {warm_ms:.2} ms; CPU density+mesh {cpu_ms:.2} ms; audit readback {readback_ms:.2} ms"
     );

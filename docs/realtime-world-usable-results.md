@@ -1,5 +1,7 @@
 # Usable terrain: slice 4 results
 
+_Historical record. The code described here was removed after commit c7421fd and remains in history._
+
 Measured on 2026-09-13 with seed 42, `PILOT_PLANET`, and `STREAM_SHELL`.
 Hardware: Apple M1 Max, 64 GiB, macOS 26.6.2, wgpu Metal. Optimized Cargo
 development profile, 1280-by-900 logical window, 2560-by-1800 physical pixels.
