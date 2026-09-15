@@ -101,6 +101,11 @@ fn generate_revision(
     let mut target_band = cap_voxel_coverage(&target, VOXEL_BAND_MAX_SPACING_M)?;
     let mut current = target.clone();
     let mut band = target_band.clone();
+    // A coverage that will not fit its budget is an ordinary outcome of flying
+    // somewhere the band cannot be afforded, not a broken stream. Hold the last
+    // good target and band, say so in the panel, and try again on the next
+    // camera move instead of ending the generation worker.
+    let mut held: Option<String> = None;
     let mut stats = GpuStats::default();
     let mut replacement = Instant::now();
     let mut report = Instant::now();
@@ -123,13 +128,25 @@ fn generate_revision(
         if selected_at.is_none_or(|p| camera.eye.relative_to(p).length() > threshold) {
             let start = Instant::now();
             height_target = select_height_coverage(&bridge.design.field, camera.eye.anchor());
-            target = select_voxel_coverage(
+            match select_voxel_coverage(
                 &bridge.design.field,
                 camera.eye.anchor(),
                 VOXEL_BAND_REQUESTED_LEAVES,
                 MAX_VOXEL_COVERAGE_LEAVES,
-            )?;
-            target_band = cap_voxel_coverage(&target, VOXEL_BAND_MAX_SPACING_M)?;
+            )
+            .and_then(|selected| {
+                let capped = cap_voxel_coverage(&selected, VOXEL_BAND_MAX_SPACING_M)?;
+                Ok((selected, capped))
+            }) {
+                Ok((selected, capped)) => {
+                    target = selected;
+                    target_band = capped;
+                    held = None;
+                }
+                Err(error) => held = Some(error.to_string()),
+            }
+            // Recorded even when the selection was refused, so a camera sitting
+            // still does not re-run it on every pass of this loop.
             selected_at = Some(camera.eye.anchor());
             stats.selection_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
@@ -206,12 +223,30 @@ fn generate_revision(
             // does. Steps that only redivide chunks coarser than the cap leave
             // the band alone and cost the GPU nothing.
             if !replacing && current.leaves() != target.leaves() {
-                current = current.step_toward(&target, camera.eye.anchor())?;
-                let next = cap_voxel_coverage(&current, VOXEL_BAND_MAX_SPACING_M)?;
-                if next.leaves() != band.leaves() {
-                    band = next;
-                    world.set_coverage(&band, camera.eye.anchor())?;
-                    replacement = Instant::now();
+                match current
+                    .step_toward(&target, camera.eye.anchor())
+                    .and_then(|next| {
+                        let capped = cap_voxel_coverage(&next, VOXEL_BAND_MAX_SPACING_M)?;
+                        Ok((next, capped))
+                    }) {
+                    Ok((next, capped)) => {
+                        current = next;
+                        held = None;
+                        if capped.leaves() != band.leaves() {
+                            // A refused replacement leaves `band` behind
+                            // `current`. The walk still advances, so it ends,
+                            // and the world keeps drawing the last coverage it
+                            // actually holds.
+                            match world.set_coverage(&capped, camera.eye.anchor()) {
+                                Ok(()) => {
+                                    band = capped;
+                                    replacement = Instant::now();
+                                }
+                                Err(error) => held = Some(error.to_string()),
+                            }
+                        }
+                    }
+                    Err(error) => held = Some(error.to_string()),
                 }
             }
         }
@@ -235,12 +270,13 @@ fn generate_revision(
             stats.bytes = world.memory_bytes() + stats.height_bytes;
             stats.resident_bytes = world.resident_bytes();
             stats.retiring_bytes = world.retiring_bytes();
-            stats.status = if world.settled() && current.leaves() == target.leaves() {
-                "GPU height terrain and the local voxel band resident"
-            } else {
-                "Refining the local voxel band"
-            }
-            .into();
+            stats.status = match &held {
+                Some(error) => format!("Holding the local voxel band: {error}"),
+                None if world.settled() && current.leaves() == target.leaves() => {
+                    "GPU height terrain and the local voxel band resident".into()
+                }
+                None => "Refining the local voxel band".into(),
+            };
             let mut output = bridge.design.output.lock().unwrap();
             stats.height_tiles = output.height.as_ref().map_or(0, |h| h.tiles.len());
             stats.height_generated_tiles = output.stats.height_generated_tiles;

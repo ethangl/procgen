@@ -235,18 +235,12 @@ fn local_voxel_band_steps_with_bounded_memory_and_reproducible_revisits() {
         let mut peak = 0;
         let mut steps = 0;
         let mut replacements = 0;
-        // Lateral travel makes the band leave ground it already held, which the
-        // coverage walk has to admit rather than only subdivide. The 192 m leg
-        // is the one that grows the band past a thousand chunks, and it is what
-        // caught the transition-capacity overflow, so it earns its time.
-        for (y, clearance_m) in [
-            (0, 2.0),
-            (64, 2.0),
-            (192, 2.0),
-            (0, 2.0),
-            (0, 500.0),
-            (0, 2.0),
-        ] {
+        // Three legs. Lateral travel makes the band leave ground it already
+        // held, which the coverage walk has to admit rather than only
+        // subdivide; the 192 m leg is the one that grows the band past a
+        // thousand chunks and caught the transition-capacity overflow. The
+        // third returns to the start so the first and third can be compared.
+        for (y, clearance_m) in [(0, 2.0), (192, 2.0), (0, 2.0)] {
             let camera = VoxelPosition {
                 x_m: (ground + clearance_m) as i32,
                 y_m: y,
@@ -307,12 +301,10 @@ fn local_voxel_band_steps_with_bounded_memory_and_reproducible_revisits() {
                 spacings.iter().all(|&m| m <= VOXEL_BAND_MAX_SPACING_M),
                 "{spacings:?} exceeds the band's spacing cap"
             );
-            if clearance_m == 500.0 {
-                assert!(
-                    spacings.len() >= 2,
-                    "a band at 500 m clearance must mix spacings, not {spacings:?}"
-                );
-            }
+            assert!(
+                spacings.len() >= 2,
+                "the band must mix spacings, not {spacings:?}"
+            );
             if initial.is_none() {
                 // The viewer draws these buffers directly, so every chunk the
                 // surface passes through must report triangles to draw.

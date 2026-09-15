@@ -194,6 +194,34 @@ mod tests {
             );
         }
     }
+    /// A near-field selection culls empty octants, so a selection for a moved
+    /// camera can hold ground the current coverage never had. Splitting and
+    /// coarsening alone cannot reach it, and the walk stalls without the branch
+    /// that admits it.
+    #[test]
+    fn a_step_admits_target_volume_the_coverage_never_held() {
+        let camera = VoxelPosition {
+            x_m: 3,
+            y_m: 5,
+            z_m: 7,
+        };
+        let children = VoxelChunkAddress::containing(camera, 3)
+            .unwrap()
+            .children()
+            .unwrap();
+        let target = VoxelCoverage::new(children.to_vec()).unwrap();
+        let mut current = VoxelCoverage::new(children[1..].to_vec()).unwrap();
+        for _ in 0..16 {
+            if current.leaves() == target.leaves() {
+                break;
+            }
+            let next = current.step_toward(&target, camera).unwrap();
+            assert_ne!(next.leaves(), current.leaves(), "the walk must advance");
+            next.validate().unwrap();
+            current = next;
+        }
+        assert_eq!(current.leaves(), target.leaves());
+    }
     #[test]
     fn progressive_refinement_and_coarsening_reach_closed_target() {
         let camera = VoxelPosition {

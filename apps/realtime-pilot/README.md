@@ -73,7 +73,7 @@ balanced octree selection for 384 requested leaves, with every chunk coarser tha
 the cap. There is no altitude gate; the band empties by itself a few kilometers
 above the design's height envelope and fills in again on descent. It advances one
 closed replacement group at a time, refining live rather than waiting for the whole
-target, and reserves 1,536 GPU mesh slots of 3,357,000 bytes inside a 6 GiB budget.
+target, and reserves 1,536 GPU mesh slots of 2,781,000 bytes inside a 5 GiB budget.
 Its edge dissolves into the height tiles over the span of its coarsest chunk, at
 least 16 m, and the height surface underneath drops by that chunk's cell spacing, at
 least 1 m; that bias rule is provisional. **Show local voxels** turns the layer off;

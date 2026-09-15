@@ -43,7 +43,8 @@ the band held up to 1,224 chunks. Replaying the height audit's travel route on
 both presets held at most 1,262 slots resident, in flight, or retiring at once,
 with a worst regular mesh of 8,403 vertices and 16,418 triangles and a worst
 transition mesh of 16,251 vertices and 5,417 triangles. The world reserves 1,536
-slots of 3,357,000 bytes, 4.803 GiB, inside a 6 GiB budget.
+slots of 2,781,000 bytes, 3.978 GiB, inside a 5 GiB budget. The slot count is
+bound by the reservation a coverage change makes, not by peak residency.
 
 The worker advances one closed replacement group at a time: when the world is
 settled and the current coverage differs from the target band, it takes a single
