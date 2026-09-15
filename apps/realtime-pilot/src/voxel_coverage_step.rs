@@ -1,4 +1,4 @@
-//! Advance toward a target partition through small, closed replacement groups.
+//! Advance toward a target coverage through small, closed replacement groups.
 use crate::voxel_neighborhood::{bounds, contains};
 use crate::voxel_selection::distance_squared;
 use crate::{VoxelChunkAddress, VoxelCoverage, VoxelCoverageError, VoxelPosition};
@@ -36,14 +36,46 @@ impl VoxelCoverage {
                     .into_iter()
                     .filter(|&child| overlaps_target(child, &targets, &ancestors)),
             );
-            let balanced = Self::balanced(leaves, crate::MAX_VOXEL_COVERAGE_LEAVES)?;
-            return Self::new(
-                balanced
-                    .leaves()
-                    .iter()
-                    .copied()
-                    .filter(|&a| overlaps_target(a, &targets, &ancestors))
-                    .collect(),
+            return Self::retain_target(
+                Self::balanced(leaves, crate::MAX_VOXEL_COVERAGE_LEAVES)?,
+                &targets,
+                &ancestors,
+            );
+        }
+        // A target can also hold volume this coverage never had. Both come from
+        // a shell traversal that culls empty octants, so refining one region
+        // discards octants a selection for a moved camera refines less and
+        // keeps. Splitting and coarsening only redivide the volume already
+        // held, so without this the walk stalls short of the target. Admit the
+        // nearest uncovered target leaf and rebalance around it, as a split
+        // does; its box cannot overlap a leaf that is neither its ancestor nor
+        // its descendant, so the union stays a partition of its own volume.
+        let held: BTreeSet<_> = self.leaves().iter().copied().collect();
+        let covering: BTreeSet<_> = self
+            .leaves()
+            .iter()
+            .flat_map(|a| std::iter::successors(a.parent(), |a| a.parent()))
+            .collect();
+        let admit = target
+            .leaves()
+            .iter()
+            .copied()
+            .filter(|&a| {
+                !covering.contains(&a)
+                    && !std::iter::successors(Some(a), |a| a.parent()).any(|a| held.contains(&a))
+            })
+            .min_by(|a, b| {
+                distance_squared(*a, camera)
+                    .total_cmp(&distance_squared(*b, camera))
+                    .then_with(|| a.cmp(b))
+            });
+        if let Some(a) = admit {
+            let mut leaves = self.leaves().to_vec();
+            leaves.push(a);
+            return Self::retain_target(
+                Self::balanced(leaves, crate::MAX_VOXEL_COVERAGE_LEAVES)?,
+                &targets,
+                &ancestors,
             );
         }
         let mut coarse: Vec<_> = self
@@ -88,6 +120,22 @@ impl VoxelCoverage {
                 .iter()
                 .copied()
                 .filter(|a| target.leaves().contains(a))
+                .collect(),
+        )
+    }
+    /// Balancing around one replacement can reach outside the target's volume.
+    /// Those leaves are dropped rather than meshed on the way past.
+    fn retain_target(
+        balanced: Self,
+        targets: &BTreeSet<VoxelChunkAddress>,
+        ancestors: &BTreeSet<VoxelChunkAddress>,
+    ) -> Result<Self, VoxelCoverageError> {
+        Self::new(
+            balanced
+                .leaves()
+                .iter()
+                .copied()
+                .filter(|&a| overlaps_target(a, targets, ancestors))
                 .collect(),
         )
     }

@@ -7,9 +7,14 @@ implementation sequence and measurements below describe the earlier voxel pilot;
 its reusable generation code and explicit CPU/GPU audits remain.
 
 Status: G1 through G5 are implemented. The earlier G5 viewer used GPU height tiles
-and local voxel geometry; `--backend cpu` selects the CPU visual audit.
+and local voxel geometry.
 The local voxel layer has been restored to the viewer, without collision: height
-tiles remain the far field and GPU voxel chunks the near field.
+tiles remain the far field and GPU voxel chunks the near field. That near field is
+now a camera-centered band of mixed-LOD chunks capped at 16 m cells rather than a
+fixed block of one-meter chunks below 256 m of clearance, so the G3 transition
+meshes and the G4 coverage walk are both back in the viewer's path. See
+[the flight viewer](realtime-world-flight-viewer.md) for the band's cap, leaf
+budget, stepping, and surface-join rules.
 Metal validation and route measurements are recorded below. Windows/Vulkan
 results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 Both hosts have completed the original G5 routes; visual and measurement gaps
@@ -377,7 +382,7 @@ measure on both hosts, not claims about current performance.
 ### G4 implementation
 
 The inspector enables the pilot's `gpu` feature. `--explore` selects GPU
-exploration by default; `--backend cpu` keeps the existing CPU visual audit.
+exploration by default.
 GPU mode starts no CPU visual build or overview upload. Collision keeps its
 separate CPU worker and one-meter canonical field.
 
@@ -385,7 +390,9 @@ The generation worker selects the target partition, advances through closed
 intermediate coverage, prepares transition plans and inputs, and encodes GPU
 commands. It prioritizes nearby splits before distant coarsening. Each step
 preserves 2:1 balance; coarsening checks sibling and neighbor metadata before
-rebuilding an index. A CPU orbit/ground/move/revisit test reaches each requested
+rebuilding an index. A step also admits the nearest target leaf whose volume the
+current coverage does not hold at all, which a moving near-field selection
+produces whenever it culls an octant the next selection keeps. A CPU orbit/ground/move/revisit test reaches each requested
 partition without repeating a partition. The final metadata route takes about
 1.6 seconds in total on the M1 Max; this work is off the render thread.
 
@@ -514,20 +521,23 @@ of Bevy's pipelined render thread, which stalled once during macOS teardown.
 Generation remains on its worker; GPU submission is capped at eight voxel jobs
 plus two height batches per frame.
 
-Within 256 m of the ground, the GPU voxel region contains a five-by-five-by-five
-cube of chunks around the surface below the camera: 160 m across, 125 chunks,
-and one-meter samples throughout. Camera motion reuses unchanged chunk keys.
-The pool allows 300 slots, eight jobs in flight, and a 512 MiB allocation budget.
-Each slot reserves 20,000 regular vertices and 40,000 regular triangles. Uniform
-local resolution needs no transition geometry; one inert transition triangle
-keeps the common buffer contract. The complete local region publishes together,
-so its displayed bounds never promise coverage that is still being generated.
-The generic G3 mixed-LOD extractor remains available and tested.
+The GPU voxel region is a camera-centered band of mixed-LOD chunks rather than a
+fixed cube: the balanced selection for 384 requested leaves with every chunk
+coarser than 16 m cells dropped, so cell spacing grows away from the camera and
+the band empties on its own in orbit. It held up to 1,224 chunks across both
+presets, four directions, and clearances from 5 m to 50 km. Camera motion reuses
+unchanged chunk keys, and the worker advances one closed replacement group per
+settled world, so the band refines live instead of publishing whole. Its
+displayed bounds therefore describe the coverage that is resident, not the
+target. The G3 mixed-LOD extractor is on this path again, so each slot reserves
+transition geometry as well as its regular vertices and triangles.
 
-The local region dissolves into height coverage over its outer 16 m. Reusing
-chunks does not restart the whole region's activation fade. The height
-surface moves up to one meter inward within that overlap so it cannot fight the
-local surface for depth at the tested precision. The displacement follows the
+The band dissolves into height coverage over the span of its coarsest resident
+chunk, at least 16 m. Reusing chunks does not restart the whole region's
+activation fade. The height surface moves inward within that overlap by that
+chunk's cell spacing, at least one meter, so it cannot fight the band's surface
+for depth at the tested precision. That bias rule is provisional: one coarse cell
+is a guess, not a measured bound. The displacement follows the
 same spatial and 250 ms temporal weight as the voxel draw. This is a rendering
 join between two representations, not a watertight hybrid export or a change
 to the canonical field. CPU collision continues to use the unchanged full-band
@@ -1189,7 +1199,7 @@ Controls use stable widget IDs, and validation and file notices use reserved
 layout space. Load applies a validated design. Save controls and Copy JSON use
 the valid draft; file writes happen only on Save controls or `--write-design`.
 `--design-file` overrides the default. `--seed` explicitly selects the unchanged
-starter preset. `--backend cpu` remains a fixed-design visual validation path.
+starter preset.
 The CPU preview generator, headless audits/captures, and other experimental modes
 remain; only the standalone noise-preview and local-volume editing windows were
 removed. The headless `--check` path retains patch and solo diagnostics.

@@ -140,17 +140,19 @@ pub(super) fn panel(
                     s.surface_target_bytes as f64 / 1048576.0
                 ));
                 ui.label(format!(
-                    "Local chunks: {} resident / {} target · {} pending · {} retiring",
-                    s.resident, s.target, s.in_flight, s.retiring
+                    "Band chunks: {} resident · {} of {} target leaves · {} pending · {} retiring",
+                    s.resident, s.current, s.target, s.in_flight, s.retiring
                 ));
+                let spacing =
+                    |m: Option<i32>| m.map_or_else(|| "pending".into(), |m| format!("{m} m"));
                 ui.label(format!(
-                    "{} visible chunks · finest spacing {}",
+                    "{} visible chunks · spacing {} finest / {} coarsest",
                     s.drawn,
-                    s.finest_spacing_m
-                        .map_or_else(|| "pending".into(), |m| format!("{m} m"))
+                    spacing(s.finest_spacing_m),
+                    spacing(s.coarsest_spacing_m)
                 ));
                 ui.label(format!(
-                    "Local resident {:.1} MiB · retiring {:.1} MiB",
+                    "Band resident {:.1} MiB · retiring {:.1} MiB",
                     s.resident_bytes as f64 / 1048576.0,
                     s.retiring_bytes as f64 / 1048576.0
                 ));

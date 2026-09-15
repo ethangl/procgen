@@ -5,8 +5,9 @@ use crate::physical_gpu_bridge::{
 };
 use bevy::prelude::*;
 use procgen_realtime_pilot::{
-    LOCAL_GPU_WORLD_CONFIG, VoxelCoverage, VoxelGpuEvent, VoxelGpuOutcome, VoxelGpuWorld,
-    local_voxel_coverage, select_height_coverage,
+    LOCAL_GPU_WORLD_CONFIG, MAX_VOXEL_COVERAGE_LEAVES, VOXEL_BAND_MAX_SPACING_M,
+    VOXEL_BAND_REQUESTED_LEAVES, VoxelChunkAddress, VoxelCoverage, VoxelGpuEvent, VoxelGpuOutcome,
+    VoxelGpuWorld, cap_voxel_coverage, select_height_coverage, select_voxel_coverage,
 };
 use std::{
     sync::{
@@ -93,8 +94,13 @@ fn generate_revision(
     let mut heights = crate::physical_height::HeightStream::new(device, bridge);
     let mut selected_at = None;
     let mut height_target = Vec::new();
-    let mut target = VoxelCoverage::new(Vec::new())?;
+    // The worker walks whole balanced partitions and hands the world the band
+    // each one draws, because a coverage step only redivides the volume it
+    // already holds. `band` is what the world was last told to hold.
+    let mut target = VoxelCoverage::new(vec![VoxelChunkAddress::root()])?;
+    let mut target_band = cap_voxel_coverage(&target, VOXEL_BAND_MAX_SPACING_M)?;
     let mut current = target.clone();
+    let mut band = target_band.clone();
     let mut stats = GpuStats::default();
     let mut replacement = Instant::now();
     let mut report = Instant::now();
@@ -117,7 +123,13 @@ fn generate_revision(
         if selected_at.is_none_or(|p| camera.eye.relative_to(p).length() > threshold) {
             let start = Instant::now();
             height_target = select_height_coverage(&bridge.design.field, camera.eye.anchor());
-            target = local_voxel_coverage(&bridge.design.field, camera.eye.anchor())?;
+            target = select_voxel_coverage(
+                &bridge.design.field,
+                camera.eye.anchor(),
+                VOXEL_BAND_REQUESTED_LEAVES,
+                MAX_VOXEL_COVERAGE_LEAVES,
+            )?;
+            target_band = cap_voxel_coverage(&target, VOXEL_BAND_MAX_SPACING_M)?;
             selected_at = Some(camera.eye.anchor());
             stats.selection_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
@@ -160,15 +172,17 @@ fn generate_revision(
             if dirty {
                 let leases = world.resident_leases();
                 let addresses: Vec<_> = leases.iter().map(|l| l.key.address()).collect();
-                let (bounds, records) = local_draw_layout(&addresses);
+                let layout = local_draw_layout(&addresses);
                 let origins = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("local voxel origins"),
-                    contents: &records,
+                    contents: &layout.origins,
                     usage: wgpu::BufferUsages::VERTEX,
                 });
                 stats.publication_ms = replacement.elapsed().as_secs_f64() * 1000.0;
                 stats.resident = leases.len();
-                stats.finest_spacing_m = leases.first().map(|l| l.key.address().spacing_m());
+                let spacings = addresses.iter().map(|a| a.spacing_m());
+                stats.finest_spacing_m = spacings.clone().min();
+                stats.coarsest_spacing_m = spacings.max();
                 let mut output = bridge.design.output.lock().unwrap();
                 // Reusing nearby chunks must not restart the whole region's fade.
                 let born = match &output.frame {
@@ -180,18 +194,30 @@ fn generate_revision(
                 output.frame = Some(Arc::new(DrawFrame {
                     leases,
                     origins,
-                    bounds,
+                    bounds: layout.bounds,
+                    blend_m: layout.blend_m,
+                    bias_m: layout.bias_m,
                     born,
                 }));
                 dirty = false;
             }
+            // One coverage step per settled world, and one closed replacement
+            // group per step that changes the band, as the streaming audit
+            // does. Steps that only redivide chunks coarser than the cap leave
+            // the band alone and cost the GPU nothing.
             if !replacing && current.leaves() != target.leaves() {
-                world.set_coverage(&target, camera.eye.anchor())?;
-                current = target.clone();
-                replacement = Instant::now();
+                current = current.step_toward(&target, camera.eye.anchor())?;
+                let next = cap_voxel_coverage(&current, VOXEL_BAND_MAX_SPACING_M)?;
+                if next.leaves() != band.leaves() {
+                    band = next;
+                    world.set_coverage(&band, camera.eye.anchor())?;
+                    replacement = Instant::now();
+                }
             }
         }
-        if !offered && world.settled() && current.leaves() == target.leaves() && heights.ready() {
+        // The band refines live afterwards; waiting for the final target would
+        // hold the first design behind hundreds of coverage steps.
+        if !offered && world.settled() && heights.ready() {
             let publication = DisplayedDesign {
                 revision,
                 field: Arc::clone(&bridge.design.field),
@@ -201,7 +227,8 @@ fn generate_revision(
             offered = true;
         }
         if report.elapsed() >= Duration::from_millis(16) {
-            stats.target = target.leaves().len();
+            stats.current = band.leaves().len();
+            stats.target = target_band.leaves().len();
             stats.in_flight = world.in_flight();
             stats.retiring = world.retiring();
             stats.height_bytes = heights.allocated_bytes(bridge);
@@ -209,9 +236,9 @@ fn generate_revision(
             stats.resident_bytes = world.resident_bytes();
             stats.retiring_bytes = world.retiring_bytes();
             stats.status = if world.settled() && current.leaves() == target.leaves() {
-                "GPU height terrain and local voxels resident"
+                "GPU height terrain and the local voxel band resident"
             } else {
-                "Updating local GPU voxels"
+                "Refining the local voxel band"
             }
             .into();
             let mut output = bridge.design.output.lock().unwrap();

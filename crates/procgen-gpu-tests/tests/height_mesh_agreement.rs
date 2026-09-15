@@ -1,5 +1,5 @@
 use procgen_cubesphere::{CubeFace, FaceEdge, TileAddress};
-use procgen_gpu_tests::{readback, request_device_for_backends, validate_wgsl};
+use procgen_gpu_tests::{readback, readback_many, request_device_for_backends, validate_wgsl};
 use procgen_realtime_pilot::*;
 #[test]
 fn height_compute_shader_validates() {
@@ -194,7 +194,7 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
 }
 
 #[test]
-fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
+fn local_voxel_band_steps_with_bounded_memory_and_reproducible_revisits() {
     use std::{
         sync::Arc,
         time::{Duration, Instant},
@@ -205,7 +205,7 @@ fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
         wgpu::Backends::VULKAN
     };
     let (_, device, queue) = procgen_gpu_tests::request_device_with_limits(
-        "local voxel travel",
+        "local voxel band",
         backend,
         wgpu::Limits {
             max_storage_buffers_per_shader_stage: 8,
@@ -213,30 +213,76 @@ fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
         },
     )
     .expect("selected GPU backend required");
-    for source in [
-        include_str!("../../../planet-design.json"),
-        include_str!("../../../planet-design-300km.json"),
-    ] {
-        let json: serde_json::Value = serde_json::from_str(source).unwrap();
+    // The 300 km preset only: this is the viewer's band, and the viewer loads
+    // this design. The 4,900 km preset costs about as much again to walk and
+    // adds no band behavior of its own; large radii keep their coverage in the
+    // selection unit tests and in the streaming audit, which both use it.
+    {
+        let json: serde_json::Value =
+            serde_json::from_str(include_str!("../../../planet-design-300km.json")).unwrap();
         let config: PlanetDesignConfig = serde_json::from_value(json["design"].clone()).unwrap();
         let field = Arc::new(config.validate().unwrap());
-        let x =
-            (config.radius_m + field.elevation_m(procgen_core::Vec3::X, 0.0).unwrap() + 2.0) as i32;
+        let ground = config.radius_m + field.elevation_m(procgen_core::Vec3::X, 0.0).unwrap();
         let mut world =
             VoxelGpuWorld::new(&device, &queue, Arc::clone(&field), LOCAL_GPU_WORLD_CONFIG)
                 .unwrap();
+        // The coarse start the viewer's worker also uses. It walks whole
+        // balanced partitions and hands the world the band each one draws,
+        // because a coverage step only redivides the volume it already holds.
+        let mut current = VoxelCoverage::new(vec![VoxelChunkAddress::root()]).unwrap();
+        let mut band = cap_voxel_coverage(&current, VOXEL_BAND_MAX_SPACING_M).unwrap();
         let mut initial = None;
         let mut peak = 0;
-        for y in [0, 64, 192, 0, 64, 192, 0] {
+        let mut steps = 0;
+        let mut replacements = 0;
+        // Lateral travel makes the band leave ground it already held, which the
+        // coverage walk has to admit rather than only subdivide. The 192 m leg
+        // is the one that grows the band past a thousand chunks, and it is what
+        // caught the transition-capacity overflow, so it earns its time.
+        for (y, clearance_m) in [
+            (0, 2.0),
+            (64, 2.0),
+            (192, 2.0),
+            (0, 2.0),
+            (0, 500.0),
+            (0, 2.0),
+        ] {
             let camera = VoxelPosition {
-                x_m: x,
+                x_m: (ground + clearance_m) as i32,
                 y_m: y,
                 z_m: 0,
             };
-            let coverage = local_voxel_coverage(&field, camera).unwrap();
-            world.set_coverage(&coverage, camera).unwrap();
+            let target = select_voxel_coverage(
+                &field,
+                camera,
+                VOXEL_BAND_REQUESTED_LEAVES,
+                MAX_VOXEL_COVERAGE_LEAVES,
+            )
+            .unwrap();
+            let target_band = select_voxel_band(
+                &field,
+                camera,
+                VOXEL_BAND_MAX_SPACING_M,
+                VOXEL_BAND_REQUESTED_LEAVES,
+            )
+            .unwrap();
             let start = Instant::now();
+            // One coverage step per settled world, and one closed replacement
+            // group per step that moves the band, as the worker does.
             loop {
+                if world.settled() {
+                    if current.leaves() == target.leaves() {
+                        break;
+                    }
+                    current = current.step_toward(&target, camera).unwrap();
+                    let next = cap_voxel_coverage(&current, VOXEL_BAND_MAX_SPACING_M).unwrap();
+                    if next.leaves() != band.leaves() {
+                        band = next;
+                        world.set_coverage(&band, camera).unwrap();
+                        replacements += 1;
+                    }
+                    steps += 1;
+                }
                 for event in world.update().unwrap() {
                     if let VoxelGpuEvent::Completed { outcome, .. } = event {
                         assert!(matches!(outcome, VoxelGpuOutcome::Ready));
@@ -244,78 +290,121 @@ fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
                 }
                 peak = peak.max(world.memory_bytes());
                 assert!(world.memory_bytes() <= LOCAL_GPU_WORLD_CONFIG.memory_budget_bytes);
-                if world.settled() {
-                    break;
-                }
-                assert!(start.elapsed() < Duration::from_secs(30));
-                std::thread::sleep(Duration::from_millis(1));
+                assert!(start.elapsed() < Duration::from_secs(600));
             }
             let update_ms = start.elapsed().as_secs_f64() * 1000.0;
-            assert_eq!(world.resident_slots().count(), 125);
+            assert_eq!(band.leaves(), target_band.leaves());
+            assert_eq!(world.resident_slots().count(), band.leaves().len());
             let leases = world.resident_leases();
             assert_eq!(
                 leases.len(),
-                coverage.leaves().len(),
+                target_band.leaves().len(),
                 "one draw lease per covered leaf"
             );
+            let spacings: std::collections::BTreeSet<_> =
+                leases.iter().map(|l| l.key.address().spacing_m()).collect();
+            assert!(
+                spacings.iter().all(|&m| m <= VOXEL_BAND_MAX_SPACING_M),
+                "{spacings:?} exceeds the band's spacing cap"
+            );
+            if clearance_m == 500.0 {
+                assert!(
+                    spacings.len() >= 2,
+                    "a band at 500 m clearance must mix spacings, not {spacings:?}"
+                );
+            }
             if initial.is_none() {
                 // The viewer draws these buffers directly, so every chunk the
                 // surface passes through must report triangles to draw.
                 let mut crossing = 0;
-                for lease in &leases {
-                    let draw =
-                        readback::<VoxelMeshDraw>(&device, &queue, &lease.slot.regular.draw, 1)[0];
+                let draws = readback_many::<VoxelMeshDraw>(
+                    &device,
+                    &queue,
+                    &leases
+                        .iter()
+                        .map(|l| (&l.slot.regular.draw, 1))
+                        .collect::<Vec<_>>(),
+                );
+                for (lease, draw) in leases.iter().zip(&draws) {
                     if !chunk_spans_surface(&field, lease.key.address()) {
                         continue;
                     }
                     crossing += 1;
                     assert!(
-                        draw.index_count > 0,
+                        draw[0].index_count > 0,
                         "{:?} spans the surface with no indices",
                         lease.key.address()
                     );
                 }
                 assert!(crossing > 0, "the ground region must cross the surface");
                 println!(
-                    "radius {}: {crossing} of 125 local chunks cross the surface",
-                    config.radius_m
+                    "radius {}: {crossing} of {} band chunks cross the surface",
+                    config.radius_m,
+                    leases.len()
                 );
             }
-            if y == 0 {
-                let mut geometry = Vec::new();
-                for (_, key, slot) in world.resident_slots() {
-                    let draw = readback::<VoxelMeshDraw>(&device, &queue, &slot.regular.draw, 1)[0];
-                    let status =
-                        readback::<VoxelMeshStatus>(&device, &queue, &slot.regular.status, 1)[0];
-                    let vertices = if status.vertex_count == 0 {
-                        Vec::new()
-                    } else {
-                        readback::<VoxelMeshVertex>(
-                            &device,
-                            &queue,
-                            &slot.regular.vertices,
-                            status.vertex_count as usize,
-                        )
-                    };
-                    geometry.push((key.address(), draw.index_count, vertices));
-                }
+            if (y, clearance_m) == (0, 2.0) {
+                // Three batched round trips for the whole band, not three per
+                // chunk: the counts come back first, then the vertices they size.
+                let slots: Vec<_> = world
+                    .resident_slots()
+                    .map(|(_, key, slot)| (key.address(), slot))
+                    .collect();
+                let draws = readback_many::<VoxelMeshDraw>(
+                    &device,
+                    &queue,
+                    &slots
+                        .iter()
+                        .map(|(_, s)| (&s.regular.draw, 1))
+                        .collect::<Vec<_>>(),
+                );
+                let statuses = readback_many::<VoxelMeshStatus>(
+                    &device,
+                    &queue,
+                    &slots
+                        .iter()
+                        .map(|(_, s)| (&s.regular.status, 1))
+                        .collect::<Vec<_>>(),
+                );
+                let vertices = readback_many::<VoxelMeshVertex>(
+                    &device,
+                    &queue,
+                    &slots
+                        .iter()
+                        .zip(&statuses)
+                        .map(|((_, s), status)| {
+                            (&s.regular.vertices, status[0].vertex_count as usize)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                let mut geometry: Vec<_> = slots
+                    .iter()
+                    .zip(&draws)
+                    .zip(vertices)
+                    .map(|(((address, _), draw), vertices)| {
+                        (*address, draw[0].index_count, vertices)
+                    })
+                    .collect();
                 geometry.sort_by_key(|g| g.0);
                 if let Some(reference) = &initial {
                     assert_eq!(
                         &geometry, reference,
-                        "deterministic return to same local chunks"
+                        "deterministic return to the same band"
                     );
                 } else {
                     initial = Some(geometry);
                 }
             }
             println!(
-                "radius {} y {y}: local replacement {:.1} ms",
-                config.radius_m, update_ms
+                "radius {} y {y} clearance {clearance_m} m: {} band leaves of {} selected, spacings {spacings:?}, {:.1} ms",
+                config.radius_m,
+                band.leaves().len(),
+                current.leaves().len(),
+                update_ms
             );
         }
         println!(
-            "radius {}: repeated local travel peak {:.1} MiB",
+            "radius {}: {steps} coverage steps, {replacements} GPU replacements, peak {:.1} MiB",
             config.radius_m,
             peak as f64 / 1048576.0
         );

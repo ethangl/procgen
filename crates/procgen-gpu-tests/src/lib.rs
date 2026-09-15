@@ -133,6 +133,72 @@ pub fn storage_output_buffer<T>(device: &wgpu::Device, label: &str, count: usize
     })
 }
 
+/// One submit and one mapping for many buffers, in the order given.
+///
+/// `readback` costs a full blocking device round trip per call, so sampling
+/// every resident chunk of a coverage with it spends almost all of its wall
+/// time waiting on the queue rather than generating anything. Batching keeps
+/// the same assertions at three round trips per sweep instead of thousands.
+pub fn readback_many<T: Pod>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    sources: &[(&wgpu::Buffer, usize)],
+) -> Vec<Vec<T>> {
+    let stride = size_of::<T>() as u64;
+    let sizes: Vec<u64> = sources
+        .iter()
+        .map(|&(_, count)| count as u64 * stride)
+        .collect();
+    let total: u64 = sizes.iter().sum();
+    if total == 0 {
+        return sources.iter().map(|_| Vec::new()).collect();
+    }
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("agreement test batched readback"),
+        size: total,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("agreement test batched readback encoder"),
+    });
+    let mut offset = 0;
+    for (&(source, _), &size) in sources.iter().zip(&sizes) {
+        if size > 0 {
+            encoder.copy_buffer_to_buffer(source, 0, &staging, offset, size);
+            offset += size;
+        }
+    }
+    queue.submit([encoder.finish()]);
+
+    let slice = staging.slice(..);
+    let (sender, receiver) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        sender.send(result).unwrap();
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("GPU polling failed");
+    receiver
+        .recv()
+        .unwrap()
+        .expect("GPU readback mapping failed");
+    let mapped = slice.get_mapped_range();
+    let mut offset = 0usize;
+    let values = sizes
+        .iter()
+        .map(|&size| {
+            let end = offset + size as usize;
+            let slice = bytemuck::cast_slice(&mapped[offset..end]).to_vec();
+            offset = end;
+            slice
+        })
+        .collect();
+    drop(mapped);
+    staging.unmap();
+    values
+}
+
 pub fn readback<T: Pod>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

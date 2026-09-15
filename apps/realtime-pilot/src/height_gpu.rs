@@ -149,10 +149,23 @@ use crate::{
     VoxelGpuMeshConfig, VoxelGpuWorldConfig, VoxelMeshConfig, VoxelStreamConfig,
     VoxelTransitionConfig,
 };
-/// Local slots have no mixed-LOD transitions; reserve one inert transition triangle.
+/// The near-field band is mixed-LOD, so every slot reserves transition geometry.
+/// One slot costs 3,357,000 bytes: 20,000 48-byte vertices, 40,000 regular
+/// triangles at 12 bytes of indices, 12,288 transition triangles at three
+/// unshared vertices plus three indices each, and 72 bytes of status and draw
+/// records. The 1,536 reserved slots are 4.803 GiB of the budget, leaving
+/// 1.197 GiB for the eight in-flight working sets, each a few megabytes.
+///
+/// The slot count and both capacities come from replaying the height audit's
+/// travel route on both presets, sampling every resident slot: at most 1,262
+/// slots were resident, in flight, or retiring at once, the worst regular mesh
+/// held 8,403 vertices and 16,418 triangles, and the worst transition mesh held
+/// 16,251 vertices and 5,417 triangles. The transition reservation is larger
+/// than that measured worst case because intermediate coverages the sampling
+/// skipped overflowed 8,192.
 pub const LOCAL_GPU_WORLD_CONFIG: VoxelGpuWorldConfig = VoxelGpuWorldConfig {
     stream: VoxelStreamConfig {
-        max_slots: 300,
+        max_slots: 1_536,
         max_in_flight: 8,
     },
     mesh: VoxelGpuMeshConfig {
@@ -161,8 +174,8 @@ pub const LOCAL_GPU_WORLD_CONFIG: VoxelGpuWorldConfig = VoxelGpuWorldConfig {
             triangle_capacity: 40_000,
         },
         transition: VoxelTransitionConfig {
-            triangle_capacity: 1,
+            triangle_capacity: 12_288,
         },
     },
-    memory_budget_bytes: 512 * 1024 * 1024,
+    memory_budget_bytes: 6 * 1024 * 1024 * 1024,
 };

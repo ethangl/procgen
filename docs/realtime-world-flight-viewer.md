@@ -29,26 +29,55 @@ The viewer switches the field and height snapshot together once coverage is
 ready. Navigation continues while generation runs. Text focus and explicit
 file saving retain their existing behavior.
 
-The same worker drives a `VoxelGpuWorld` next to the height stream. Within 256 m
-of the ground it keeps a five-by-five-by-five region of one-meter chunks around
-the point below the camera, meshes them on the GPU, and publishes a draw frame of
-leases whose slots stay pinned until the submitted commands complete. The
-renderer draws each visible lease into its own Local layer and the compositor
-places it over the height surface, dissolving across a 16 m band at the region
-edge; under the overlap the height surface is pushed 1 m radially inward so the
-two triangulations cannot fight. **Show local voxels** disables the pass and
-zeroes that coverage weight. There is no CPU collision worker and no BVH
-construction. Three RGBA16F/Depth32F surfaces cost 36 bytes per physical pixel:
-197.8 MiB at 2880 by 2000, excluding driver padding and other render targets.
+The same worker drives a `VoxelGpuWorld` next to the height stream. It keeps a
+camera-centered band of mixed-LOD chunks: `select_voxel_band` asks the octree
+selection for 384 leaves, balances them 2:1, then drops every leaf whose cell
+spacing exceeds 16 m. A subset of a balanced partition is still balanced, so
+nothing is rebalanced. Chunks at the band edge have no coarser neighbor and mesh
+their outer faces as ordinary cells; that edge dissolves into the height tiles
+rather than stitching to them. There is no altitude gate. The band empties on its
+own once the camera is far enough that nothing within two chunk spans is finer
+than the cap, which happens a few kilometers above the design's height envelope.
+Measured over both presets, four directions, and clearances from 5 m to 50 km,
+the band held up to 1,224 chunks. Replaying the height audit's travel route on
+both presets held at most 1,262 slots resident, in flight, or retiring at once,
+with a worst regular mesh of 8,403 vertices and 16,418 triangles and a worst
+transition mesh of 16,251 vertices and 5,417 triangles. The world reserves 1,536
+slots of 3,357,000 bytes, 4.803 GiB, inside a 6 GiB budget.
 
-At ground level this layer is visually redundant. Height tiles near the camera
-already refine to one meter, and the voxel mesher extracts the same single-valued
-height field, so the composite looks the same with **Show local voxels** on or
-off; LOD coloring cannot separate them either, since both report level 0. A GPU
-test renders the local pipeline into its own layer and checks that it writes
-pixels and that zero coverage removes them, because the panel's chunk counts are
-CPU-side and cannot show this. The near field will only earn its pixels once the
-density field carries volume a radial height cannot express.
+The worker advances one closed replacement group at a time: when the world is
+settled and the current coverage differs from the target band, it takes a single
+`VoxelCoverage::step_toward` and waits for settlement before the next step. An
+empty coverage has nothing to refine, so a band returning from orbit restarts
+from the root chunk. A design is published once the height stream is ready and
+the world is settled on its *current* coverage, not necessarily on the final
+target; the band then refines live while the viewer draws.
+
+The renderer draws each visible lease into its own Local layer and the compositor
+places it over the height surface. Both surface-join distances now follow the
+band's coarsest resident chunk: the dissolve width is that chunk's span, floored
+at the previous fixed 16 m, and the height surface is pushed radially inward by
+that chunk's cell spacing, floored at the previous fixed 1 m. The bias rule is
+provisional. One coarse cell is a guess at how far a 16 m extraction can stand
+above the height surface, not a measured bound; route evidence or a per-chunk
+bias should replace it. **Show local voxels** disables the pass and zeroes that
+coverage weight. There is no CPU collision worker and no BVH construction. Three
+RGBA16F/Depth32F surfaces cost 36 bytes per physical pixel: 197.8 MiB at 2880 by
+2000, excluding driver padding and other render targets.
+
+Each lease's origin record now carries its chunk level in its fourth word, so LOD
+coloring separates the band's spacing rings from the height tiles underneath
+instead of painting the whole near field one color. What the two systems still
+share is the field: the voxel mesher extracts the same single-valued height, so
+where the band is one meter and the tiles have also refined to one meter, the
+silhouette agrees and only the coloring differs. What differs is everything the
+band adds away from that case: distinct 1, 2, 4, 8 and 16 m cell sizes across the
+near field, and a surface that stays voxel-extracted out to the cap instead of
+ending at a 256 m altitude gate. A GPU test renders the local pipeline into its
+own layer and checks that it writes pixels and that zero coverage removes them,
+because the panel's chunk counts are CPU-side and cannot show this. The near
+field will only carry shapes a radial height cannot express once the density
+field carries volume, which is the next step and not part of this one.
 
 Reusable CPU/GPU voxel generation and collision code remain in the library.
 There is no CPU visual backend and no `--backend` flag.
@@ -101,7 +130,8 @@ meters above terrain at 30 seconds and flies forward, rises at 75 seconds,
 returns to orbit at 85 seconds, then exits. Six screenshots accompany the CSV.
 The CSV carries `terrain_clearance_m` and `altitude_protection` in place of the
 old collision columns, and local voxel counts, bytes, and stage timings after
-them; height timings and buffer/target bytes remain. Existing scripts for the
+them, including `finest_spacing_m` and `coarsest_spacing_m` for the band; height
+timings and buffer/target bytes remain. Existing scripts for the
 old collision-route schema must be updated.
 
 ### Metal smoke result, 2026-09-14

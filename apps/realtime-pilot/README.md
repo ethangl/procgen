@@ -7,8 +7,8 @@ pipeline or viewer.
 
 The target shape is GPU height tiles as the far field and a GPU voxel world as the
 near field, with CPU code kept as the reference oracle the shaders are tested
-against. The viewer implements both halves: height tiles everywhere and uniform
-one-meter voxel chunks around the camera near the ground.
+against. The viewer implements both halves: height tiles everywhere and a
+camera-centered band of mixed-LOD voxel chunks over them.
 
 ## GPU orbit and descent viewer
 
@@ -67,21 +67,26 @@ identities. See [height tile reuse](../../docs/realtime-world-height-reuse.md) f
 the filtering rule, shared normals, and validation. Height generation keeps at most
 two batches of 32 tiles in flight.
 
-Below 256 m of terrain clearance the viewer also draws a local voxel region: 125
-one-meter chunks meshed on the GPU around the ground point below the camera, drawn
-over the height tiles and dissolved into them across a 16 m band at the region
-edge. **Show local voxels** turns that layer off for direct comparison; it is on by
-default. Previous height, current height, and local surfaces need three
-RGBA16F/Depth32F layers, or 36 bytes per physical pixel: 197.8 MiB at 2880 × 2000,
-excluding driver padding and other render targets.
+The viewer also draws a camera-centered voxel band over the height tiles: the
+balanced octree selection for 384 requested leaves, with every chunk coarser than
+16 m cells dropped, so cell spacing grows with distance from the camera and stops at
+the cap. There is no altitude gate; the band empties by itself a few kilometers
+above the design's height envelope and fills in again on descent. It advances one
+closed replacement group at a time, refining live rather than waiting for the whole
+target, and reserves 1,536 GPU mesh slots of 3,357,000 bytes inside a 6 GiB budget.
+Its edge dissolves into the height tiles over the span of its coarsest chunk, at
+least 16 m, and the height surface underneath drops by that chunk's cell spacing, at
+least 1 m; that bias rule is provisional. **Show local voxels** turns the layer off;
+it is on by default. Previous height, current height, and local surfaces need three
+RGBA16F/Depth32F layers: 36 bytes per physical pixel, or 197.8 MiB at 2880 × 2000.
 
 **Height** colors use a fixed ramp from minus to plus the configured height limit,
 measured above the reference radius. Neutral, LOD, and Normals are also available;
-under **LOD** the one-meter local chunks read red over the coarser height tiles.
-See [the flight viewer](../../docs/realtime-world-flight-viewer.md) for
-architecture, validation, and limits, and
-[terrain draw visibility](../../docs/realtime-world-visibility.md) for radial tile
-bounds and near-first drawing.
+under **LOD** each band chunk reads its own level, so the spacing rings separate
+from the height tiles underneath. See
+[the flight viewer](../../docs/realtime-world-flight-viewer.md) for architecture and
+limits, and [terrain draw visibility](../../docs/realtime-world-visibility.md) for
+radial tile bounds.
 
 ## Headless captures
 
@@ -95,7 +100,7 @@ cargo run -p procgen-realtime-pilot --no-default-features -- --check
 spacing, resolved octave weights, and a full-resolution height distribution as JSON.
 `--patch-span METERS` audits a ground patch instead of the whole planet, `--solo
 INDEX` audits one octave band, and `--preview-quads 16|32|64|128|256` sets the
-resolution. These select a headless audit, not a visual preview.
+resolution. These select headless audits, not visual previews.
 
 Record the fixed 90-second orbit/descent/flight route:
 
@@ -107,18 +112,19 @@ cargo run -p procgen-realtime-pilot -- \
 This writes frame and stage timings plus six adjacent PNG captures, then exits.
 PNG encoding runs off the main thread; clean exit waits for images to save. The CSV
 reports height generation, buffer and target bytes, camera position,
-`terrain_clearance_m`, and `altitude_protection`, followed by local voxel columns:
+`terrain_clearance_m`, and `altitude_protection`, then local voxel columns:
 `local_resident`, `local_drawn`, `local_target`, `local_in_flight`,
-`local_retiring`, `finest_spacing_m`, `gpu_bytes`, `local_resident_bytes`,
-`local_retiring_bytes`, the preparation/encoding/completion/submission and
-publication timings, and GPU density and extraction timestamps where the device
-reports them. The panel shows the same local chunk counts, resident and retiring
-bytes, and stage timings. `gpu_stats_fresh` is false when the last GPU-statistics
-snapshot is reused because its lock is busy; camera clearance stays current. `height_generated_tiles` and `height_reused_tiles` count
-cumulative tile work for the current design. `height_build_ms` measures
-preparation, submission waits, and GPU completion; `height_wait_ms` measures
-waiting for the preceding fade. These are elapsed times, not GPU timestamps. Live
-navigation is disabled during recorded runs.
+`local_retiring`, `finest_spacing_m`, `coarsest_spacing_m`, `gpu_bytes`,
+`local_resident_bytes`, `local_retiring_bytes`, the
+preparation/encoding/completion/submission and publication timings, and GPU density
+and extraction timestamps where the device reports them. The panel shows the same
+band counts, both spacings, the leaves the world is settling on against the target
+band, resident and retiring bytes, and stage timings. `gpu_stats_fresh` is false
+when the last snapshot is reused because its lock is busy; camera clearance stays
+current. `height_generated_tiles` and `height_reused_tiles` count cumulative tile
+work. `height_build_ms` measures preparation, submission waits, and GPU completion;
+`height_wait_ms` measures waiting for the preceding fade. These are elapsed times,
+not GPU timestamps. Live navigation is disabled during recorded runs.
 
 `--visibility-record FILE.csv` records fixed down and horizon views at 5 m and 500 m
 clearance over 35 seconds, with four screenshots.
@@ -130,8 +136,8 @@ draws their output as its near field over the height tiles. See the
 [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md). G1 supplies a WGSL
 density kernel and CPU/GPU agreement checks. G2 adds bounded uniform-chunk meshing,
 deterministic scans, and GPU vertex/index/draw buffers. G3 adds 2:1 transitions and
-bounded incremental GPU residency. G5 added filtered GPU height tiles. These audits
-run on Metal on macOS and Vulkan on Windows and Linux:
+bounded incremental residency, which the band now uses. G5 added filtered GPU height
+tiles. These audits run on Metal on macOS and Vulkan on Windows and Linux:
 
 ```sh
 cargo test -p procgen-gpu-tests --test voxel_density_agreement -- --nocapture
@@ -148,9 +154,8 @@ readback. A compatible GPU is required; shader validation alone can run without 
 by filtering to `voxel_density_wgsl_validates_without_a_device`. The meshing audit
 checks topology, exact shared boundaries, replay order, capacity failures, and
 saved-terrain agreement with CPU extraction, feeding GPU density directly into
-extraction without an intermediate readback. The voxel mesher is marching
-tetrahedra; `qef.rs` is retained as the seed for a dual-contour mesher and has no
-caller yet.
+extraction without an intermediate readback. The voxel mesher is marching tetrahedra;
+`qef.rs` is the seed for a dual-contour mesher and has no caller yet.
 
 The streaming audit checks mixed-LOD seams, local publication, slot reuse,
 cancellation, retirement, overflow, memory limits, and a fixed route through the
@@ -209,6 +214,6 @@ audit, `gpu` adds the wgpu generators, and `inspector` adds the windowed viewer.
 Tests cover shuffled queries, independent thread schedules, direct and batched
 agreement, field envelopes, finite values at control extremes, analytical gradient
 checks, invalid inputs, shared cube-face addresses, height-tile stitching, voxel
-addressing and selection, transition meshes, and quantized initial fingerprints.
-Exact float bits are not pinned. Precision across large distances is open. No
-planet-scale performance claim follows from these bounded experiments.
+addressing, band selection and its spacing cap, transition meshes, and quantized
+initial fingerprints. Exact float bits are not pinned. Precision across large
+distances is open. No planet-scale performance claim follows from these experiments.

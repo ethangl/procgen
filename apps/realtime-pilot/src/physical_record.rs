@@ -102,7 +102,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,coarsest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -167,7 +167,7 @@ impl PhysicalRecord {
             .unwrap_or_default();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -194,6 +194,10 @@ impl PhysicalRecord {
             stats.retiring,
             stats
                 .finest_spacing_m
+                .map(|m| m.to_string())
+                .unwrap_or_default(),
+            stats
+                .coarsest_spacing_m
                 .map(|m| m.to_string())
                 .unwrap_or_default(),
             stats.bytes,
@@ -276,6 +280,7 @@ mod tests {
             height_tiles: 384,
             resident: 125,
             finest_spacing_m: Some(1),
+            coarsest_spacing_m: Some(16),
             ..Default::default()
         };
         let eye = MeterPosition::new(
@@ -306,6 +311,7 @@ mod tests {
             "retain the last GPU snapshot explicitly"
         );
         assert_eq!(value(2, "finest_spacing_m"), "1");
+        assert_eq!(value(2, "coarsest_spacing_m"), "16");
         assert_eq!(value(2, "terrain_clearance_m"), "-10.000");
         assert_eq!(value(2, "altitude_protection"), "false");
     }
