@@ -3,9 +3,9 @@ use crate::voxel_gpu_buffers::OVERFLOW_FLAGS_BYTES;
 use crate::voxel_gpu_timing::{GpuTiming, TIMING_BYTES};
 use crate::{
     PlanetDesignField, VoxelCoverage, VoxelGpuInput, VoxelGpuMeshConfig, VoxelGpuMesher,
-    VoxelGpuOutcome, VoxelGpuResidency, VoxelGpuSlot, VoxelGpuTicket, VoxelGpuWork, VoxelMeshError,
-    VoxelMeshKey, VoxelPosition, VoxelPublication, VoxelStreamConfig, VoxelStreamError,
-    VoxelTransitionPlan,
+    VoxelGpuOutcome, VoxelGpuRequest, VoxelGpuResidency, VoxelGpuSlot, VoxelGpuTicket,
+    VoxelGpuWork, VoxelMeshError, VoxelMeshKey, VoxelPosition, VoxelPublication, VoxelStreamConfig,
+    VoxelStreamError, VoxelTransitionPlan,
 };
 use std::{
     error::Error,
@@ -139,6 +139,9 @@ pub struct VoxelGpuWorld {
     last_submission: u64,
     completed_submission: u64,
     stopped: bool,
+    /// Events gathered by an update that then failed. A caller that observes the
+    /// error still observes every publication and completion that preceded it.
+    deferred: Vec<VoxelGpuEvent>,
 }
 impl VoxelGpuWorld {
     pub fn new(
@@ -185,6 +188,7 @@ impl VoxelGpuWorld {
             last_submission: 0,
             completed_submission: 0,
             stopped: false,
+            deferred: Vec::new(),
         })
     }
     pub fn set_coverage(
@@ -268,10 +272,25 @@ impl VoxelGpuWorld {
         self.update_with_submit(|submission| submission.submit(&queue))
     }
     /// Preparation and encoding run here; the caller owns command submission.
+    /// Events survive a failed update: they are returned by the next one.
     pub fn update_with_submit(
         &mut self,
-        mut submit: impl FnMut(VoxelGpuSubmission),
+        submit: impl FnMut(VoxelGpuSubmission),
     ) -> Result<Vec<VoxelGpuEvent>, VoxelGpuError> {
+        let mut events = std::mem::take(&mut self.deferred);
+        match self.step(&mut events, submit) {
+            Ok(()) => Ok(events),
+            Err(error) => {
+                self.deferred = events;
+                Err(error)
+            }
+        }
+    }
+    fn step<F: FnMut(VoxelGpuSubmission)>(
+        &mut self,
+        events: &mut Vec<VoxelGpuEvent>,
+        mut submit: F,
+    ) -> Result<(), VoxelGpuError> {
         if self.stopped {
             return Err(VoxelGpuError::Stopped);
         }
@@ -279,7 +298,6 @@ impl VoxelGpuWorld {
             self.stopped = true;
             return Err(VoxelGpuError::Poll(error));
         }
-        let mut events = Vec::new();
         while let Ok(completion) = self.receiver.try_recv() {
             match completion {
                 Completion::Fence(fence) => {
@@ -339,82 +357,96 @@ impl VoxelGpuWorld {
                     .is_none_or(|slot| Arc::strong_count(slot) == 1)
             });
         while let Some(request) = self.residency.admit() {
-            let start = Instant::now();
-            let plan = VoxelTransitionPlan::new(request.key);
-            let allocation = if self.slots[request.ticket.slot()].is_some() {
-                0
-            } else {
-                self.config.mesh.slot_bytes()
-            };
-            if self.memory_bytes() + allocation + VoxelGpuMesher::work_bytes(&plan)
-                > self.config.memory_budget_bytes
-            {
-                self.residency
-                    .complete(request.ticket, VoxelGpuOutcome::Failed);
-                return Err(VoxelGpuError::MemoryBudget);
-            }
-            if self.slots[request.ticket.slot()].is_none() {
-                self.slots[request.ticket.slot()] =
-                    Some(Arc::new(VoxelGpuSlot::new(&self.device, self.config.mesh)?));
-            }
-            let slot = self.slots[request.ticket.slot()].as_ref().unwrap();
-            let work = self.mesher.prepare(
-                &plan,
-                VoxelGpuInput::Field(&self.field),
-                slot,
-                self.config.mesh,
-            )?;
-            let flags = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("voxel overflow completion"),
-                size: OVERFLOW_FLAGS_BYTES + work.timing.as_ref().map_or(0, |_| TIMING_BYTES),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            let preparation_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let encoding = Instant::now();
-            let mut encoder = self.device.create_command_encoder(&Default::default());
-            self.mesher.encode(&mut encoder, &work, slot);
-            let flag_offset = std::mem::offset_of!(crate::VoxelMeshStatus, overflow) as u64;
-            let flag_bytes = size_of::<u32>() as u64;
-            encoder.copy_buffer_to_buffer(&slot.regular.status, flag_offset, &flags, 0, flag_bytes);
-            encoder.copy_buffer_to_buffer(
-                &slot.transition.status,
-                flag_offset,
-                &flags,
-                flag_bytes,
-                flag_bytes,
-            );
-            if let Some(timing) = &work.timing {
-                encoder.copy_buffer_to_buffer(
-                    &timing.resolved,
-                    0,
-                    &flags,
-                    OVERFLOW_FLAGS_BYTES,
-                    TIMING_BYTES,
-                );
-            }
-            self.last_submission += 1;
             let ticket = request.ticket;
-            submit(VoxelGpuSubmission {
-                commands: encoder.finish(),
-                flags: flags.clone(),
-                ticket,
-                sender: self.sender.clone(),
-            });
-            events.push(VoxelGpuEvent::Submitted {
-                ticket,
-                preparation_ms,
-                encoding_ms: encoding.elapsed().as_secs_f64() * 1000.0,
-            });
-            self.jobs.push(Pending {
-                ticket,
-                work,
-                flags,
-                submission: self.last_submission,
-                start,
-            });
+            // An admitted slot is Working until it is completed. Completing every
+            // failure here keeps a new `?` in `encode_request` from leaking the slot.
+            if let Err(error) = self.encode_request(request, events, &mut submit) {
+                self.residency.complete(ticket, VoxelGpuOutcome::Failed);
+                return Err(error);
+            }
             debug_assert!(self.memory_bytes() <= self.config.memory_budget_bytes);
         }
-        Ok(events)
+        Ok(())
+    }
+    /// The caller completes `request.ticket` as failed on every error path.
+    fn encode_request<F: FnMut(VoxelGpuSubmission)>(
+        &mut self,
+        request: VoxelGpuRequest,
+        events: &mut Vec<VoxelGpuEvent>,
+        submit: &mut F,
+    ) -> Result<(), VoxelGpuError> {
+        let start = Instant::now();
+        let plan = VoxelTransitionPlan::new(request.key);
+        let allocation = if self.slots[request.ticket.slot()].is_some() {
+            0
+        } else {
+            self.config.mesh.slot_bytes()
+        };
+        if self.memory_bytes() + allocation + VoxelGpuMesher::work_bytes(&plan)
+            > self.config.memory_budget_bytes
+        {
+            return Err(VoxelGpuError::MemoryBudget);
+        }
+        if self.slots[request.ticket.slot()].is_none() {
+            self.slots[request.ticket.slot()] =
+                Some(Arc::new(VoxelGpuSlot::new(&self.device, self.config.mesh)?));
+        }
+        let slot = self.slots[request.ticket.slot()].as_ref().unwrap();
+        let work = self.mesher.prepare(
+            &plan,
+            VoxelGpuInput::Field(&self.field),
+            slot,
+            self.config.mesh,
+        )?;
+        let flags = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voxel overflow completion"),
+            size: OVERFLOW_FLAGS_BYTES + work.timing.as_ref().map_or(0, |_| TIMING_BYTES),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let preparation_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let encoding = Instant::now();
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.mesher.encode(&mut encoder, &work, slot);
+        let flag_offset = std::mem::offset_of!(crate::VoxelMeshStatus, overflow) as u64;
+        let flag_bytes = size_of::<u32>() as u64;
+        encoder.copy_buffer_to_buffer(&slot.regular.status, flag_offset, &flags, 0, flag_bytes);
+        encoder.copy_buffer_to_buffer(
+            &slot.transition.status,
+            flag_offset,
+            &flags,
+            flag_bytes,
+            flag_bytes,
+        );
+        if let Some(timing) = &work.timing {
+            encoder.copy_buffer_to_buffer(
+                &timing.resolved,
+                0,
+                &flags,
+                OVERFLOW_FLAGS_BYTES,
+                TIMING_BYTES,
+            );
+        }
+        self.last_submission += 1;
+        let ticket = request.ticket;
+        submit(VoxelGpuSubmission {
+            commands: encoder.finish(),
+            flags: flags.clone(),
+            ticket,
+            sender: self.sender.clone(),
+        });
+        events.push(VoxelGpuEvent::Submitted {
+            ticket,
+            preparation_ms,
+            encoding_ms: encoding.elapsed().as_secs_f64() * 1000.0,
+        });
+        self.jobs.push(Pending {
+            ticket,
+            work,
+            flags,
+            submission: self.last_submission,
+            start,
+        });
+        Ok(())
     }
 }

@@ -303,7 +303,16 @@ impl VoxelResidency {
                     i += 1;
                     continue;
                 }
-                Err(TryRecvError::Disconnected) => return Err(VoxelResidencyError::WorkerStopped),
+                Err(TryRecvError::Disconnected) => {
+                    // Release the reservation before reporting: a worker that
+                    // ends without a result must not hold its slot and its
+                    // address forever. The join surfaces a worker panic here
+                    // rather than leaving the thread unobserved, and update()
+                    // requests the address again on its next pass.
+                    let job = self.jobs.remove(i);
+                    let _ = job.worker.join();
+                    return Err(VoxelResidencyError::WorkerStopped);
+                }
             };
             let job = self.jobs.remove(i);
             job.worker
@@ -470,6 +479,48 @@ mod tests {
         settle(&mut parallel, camera);
         compare(&serial, &parallel);
         assert!(parallel.stats().installations > before);
+    }
+
+    #[test]
+    fn a_worker_that_stops_without_a_result_reports_once_and_its_address_is_requested_again() {
+        let field = field();
+        let camera = ground(&field);
+        let config = VoxelResidencyConfig {
+            max_leaves: 160,
+            max_jobs: 1,
+            density_reach_m: 32.0,
+        };
+        let mut world = VoxelResidency::new(Arc::clone(&field), config).unwrap();
+        world.reselect(camera);
+        let address = *world.requests.keys().next().unwrap();
+        let (sender, receiver) =
+            mpsc::sync_channel::<Result<Option<VoxelVolume>, VoxelVolumeError>>(1);
+        // A worker that exits without sending; its receiver reports Disconnected.
+        drop(sender);
+        world.jobs.push(Job {
+            request: Request {
+                address,
+                serial: world.requests[&address],
+            },
+            cancel: Arc::new(AtomicBool::new(false)),
+            receiver,
+            worker: std::thread::spawn(|| {}),
+        });
+        assert!(matches!(
+            world.update(camera),
+            Err(VoxelResidencyError::WorkerStopped)
+        ));
+        assert!(world.jobs.is_empty(), "the dead reservation is released");
+        world
+            .update(camera)
+            .expect("a dead worker cannot wedge polling");
+        assert!(
+            world.requests.contains_key(&address),
+            "the request outlives its worker"
+        );
+        assert!(!world.jobs.is_empty(), "the next update starts fresh work");
+        settle(&mut world, camera);
+        assert!(world.residents.contains_key(&address));
     }
 
     #[test]
