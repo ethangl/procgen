@@ -1,5 +1,7 @@
 # Streaming pilot: slice 3 route results
 
+_Historical record. The code described here was removed after commit c7421fd and remains in history._
+
 Measured on 2026-09-13 with seed 42, `PILOT_PLANET`, and `STREAM_SHELL`.
 The source and run commands are in the [pilot README](../apps/realtime-pilot/README.md#streaming-and-detail-slice-3).
 

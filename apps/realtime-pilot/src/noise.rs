@@ -1,12 +1,6 @@
 use procgen_core::{ScalarFieldSample3, Vec3};
 use procgen_noise::{GRADIENT_NOISE_VALUE_BOUND, gradient_noise_3d};
 
-use crate::field::{FieldError, validate_range};
-
-/// Fixed work per broad-surface query.
-pub const OCTAVES: usize = 6;
-const LACUNARITY: f32 = 2.0;
-
 // Fixed moments of the normalized basis, measured over a spatial reference
 // distribution (see the relief report). Never fit these to a generated world.
 pub(crate) const BASIS_STD_DEV: f32 = 0.135;
@@ -34,59 +28,6 @@ impl NoiseConfig {
     pub const SHARPNESS_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
     pub const GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.9;
     pub const SHAPING_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
-    pub(crate) fn validate(self) -> Result<(), FieldError> {
-        validate_range("wavelength", self.wavelength, Self::WAVELENGTH_RANGE)?;
-        validate_range("sharpness", self.sharpness, Self::SHARPNESS_RANGE)?;
-        validate_range("gain", self.gain, Self::GAIN_RANGE)?;
-        for (name, value) in [
-            ("perturbation", self.perturbation),
-            ("slope erosion", self.slope_erosion),
-            ("altitude erosion", self.altitude_erosion),
-            ("ridge erosion", self.ridge_erosion),
-        ] {
-            validate_range(name, value, Self::SHAPING_RANGE)?;
-        }
-        Ok(())
-    }
-}
-
-/// Pilot completion of the slide fragments, not a reconstruction of NMS code.
-/// The derivative accumulators are shaping signals, not a final gradient.
-pub(crate) fn uber_noise(key: u32, p: Vec3, config: NoiseConfig) -> f32 {
-    let mut frequency = config.wavelength.recip();
-    let mut amplitude = 1.0;
-    let mut damped_amplitude = 1.0;
-    let mut envelope_amplitude = 1.0;
-    let mut envelope = 0.0;
-    let mut sum = 0.0;
-    let mut slope_sum = Vec3::ZERO;
-    let mut ridge_sum = Vec3::ZERO;
-    let mut perturb_sum = Vec3::ZERO;
-
-    for _ in 0..OCTAVES {
-        let sample = normalized_noise(key, p * frequency + perturb_sum);
-        // Deliberately the unshaped basis derivative in octave coordinates.
-        let d = sample.derivative;
-        let feature = shape(sample, config.sharpness).value;
-        slope_sum = slope_sum + d * config.slope_erosion;
-        ridge_sum = ridge_sum + d * config.ridge_erosion;
-        sum += damped_amplitude * feature / (1.0 + slope_sum.length_squared());
-        let altitude = sum.clamp(0.0, 1.0);
-        let smooth = altitude * altitude * (3.0 - 2.0 * altitude);
-        amplitude *= config.gain * (1.0 + (smooth - 1.0) * config.altitude_erosion);
-        damped_amplitude =
-            amplitude * (1.0 - config.ridge_erosion / (1.0 + ridge_sum.length_squared()));
-        perturb_sum = perturb_sum + d * config.perturbation;
-        frequency *= LACUNARITY;
-        // A position-independent bound preserves damping instead of undoing it.
-        envelope += envelope_amplitude;
-        envelope_amplitude *= config.gain;
-    }
-    // Standardized features have comparable contrast, not a [-1, 1] bound.
-    // A smooth transfer bounds elevation without clipping peaks or canceling
-    // the position-dependent erosion weights with a local normalization.
-    let relief = sum / envelope;
-    relief / (1.0 + relief * relief).sqrt()
 }
 
 pub(crate) fn normalized_noise(key: u32, p: Vec3) -> ScalarFieldSample3 {
@@ -117,10 +58,7 @@ pub(crate) fn shape(sample: ScalarFieldSample3, sharpness: f32) -> ScalarFieldSa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        PRESETS,
-        test_support::{positions, reference_noise_positions},
-    };
+    use crate::test_support::{positions, reference_noise_positions};
     use procgen_noise::fold_seed_u64_to_u32;
 
     #[test]
@@ -172,68 +110,6 @@ mod tests {
                     assert!((analytic - (hi - lo) / (2.0 * step)).abs() < tolerance);
                 }
             }
-        }
-    }
-
-    #[test]
-    fn extreme_controls_remain_finite_and_bounded() {
-        for sharpness in [-1.0, 0.0, 1.0] {
-            for strength in [0.0, 1.0] {
-                let config = NoiseConfig {
-                    sharpness,
-                    perturbation: strength,
-                    slope_erosion: strength,
-                    altitude_erosion: strength,
-                    ridge_erosion: strength,
-                    gain: 0.9,
-                    wavelength: 0.125,
-                };
-                for p in positions() {
-                    let value = uber_noise(19, p, config);
-                    assert!(value.is_finite() && (-1.0..=1.0).contains(&value));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn each_control_changes_the_sampled_field() {
-        let base = PRESETS[0].config.noise;
-        let variants = [
-            NoiseConfig {
-                sharpness: -1.0,
-                ..base
-            },
-            NoiseConfig {
-                perturbation: 0.9,
-                ..base
-            },
-            NoiseConfig {
-                slope_erosion: 0.9,
-                ..base
-            },
-            NoiseConfig {
-                altitude_erosion: 0.9,
-                ..base
-            },
-            NoiseConfig {
-                ridge_erosion: 0.9,
-                ..base
-            },
-            NoiseConfig { gain: 0.85, ..base },
-            NoiseConfig {
-                wavelength: 0.3,
-                ..base
-            },
-        ];
-        for config in variants {
-            let difference: f32 = positions()
-                .map(|p| (uber_noise(7, p, base) - uber_noise(7, p, config)).abs())
-                .sum();
-            assert!(
-                difference > 0.01,
-                "control had no useful effect: {config:?}"
-            );
         }
     }
 }

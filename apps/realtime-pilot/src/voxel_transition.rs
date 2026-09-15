@@ -1,10 +1,7 @@
 //! Canonical transition interpolation and extraction from a bounded topology plan.
 use crate::voxel_chunk_mesh::{build_regular_mesh, edge_vertex};
 use crate::voxel_mesh_topology::{NONE, SIMPLEX_RINGS};
-use crate::{
-    PlanetDesignField, VoxelChunkMesh, VoxelMeshError, VoxelMeshVertex, VoxelTransitionPlan,
-    VoxelVolume,
-};
+use crate::{VoxelChunkMesh, VoxelMeshError, VoxelMeshVertex, VoxelTransitionPlan, VoxelVolume};
 use rayon::prelude::*;
 
 pub struct VoxelTransitionSamples {
@@ -27,18 +24,6 @@ impl VoxelTransitionSamples {
     pub fn values(&self) -> &[f32] {
         &self.values
     }
-}
-pub fn sample_voxel_transition(
-    field: &PlanetDesignField,
-    plan: &VoxelTransitionPlan,
-) -> Result<VoxelTransitionSamples, VoxelMeshError> {
-    VoxelTransitionSamples::new(
-        plan.sample_points()
-            .par_iter()
-            .map(|&p| crate::voxel_density::potential_at(field, p))
-            .collect(),
-        plan,
-    )
 }
 pub fn build_voxel_regular_mesh(
     volume: &VoxelVolume,
@@ -125,7 +110,7 @@ pub fn build_voxel_transition_mesh(
 mod tests {
     use super::*;
     use crate::{VoxelChunkAddress, VoxelCoverage, VoxelPosition};
-    use std::{collections::BTreeMap, sync::atomic::AtomicBool};
+    use std::collections::BTreeMap;
 
     #[derive(Clone, Copy, PartialEq, Debug)]
     struct Point([f64; 3]);
@@ -296,22 +281,6 @@ mod tests {
             )
             .length()
         };
-        let volumes: Vec<_> = coverage
-            .leaves()
-            .iter()
-            .map(|&a| VoxelVolume::fixture(a, f))
-            .collect();
-        let baseline = crate::build_voxel_surface(
-            &volumes.iter().collect::<Vec<_>>(),
-            VoxelPosition {
-                x_m: 0,
-                y_m: 0,
-                z_m: 0,
-            },
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-        assert_eq!(baseline.topology().boundary_edges, 0);
         let center = VoxelPosition {
             x_m: 64,
             y_m: 64,
@@ -337,20 +306,10 @@ mod tests {
                 }
             }
         }
-        let baseline_error = baseline
-            .positions()
-            .iter()
-            .map(|p| (p.relative_to(center).length() - 50.0).abs())
-            .fold(0.0f32, f32::max);
         // One sixteenth of a coarse (2 m) voxel bounds curvature interpolation in this fixture.
-        assert!(transition_error <= 0.125 && baseline_error <= 0.125);
-        println!(
-            "sphere radial error: bounded {transition_error:.6} m, adaptive baseline {baseline_error:.6} m"
-        );
+        assert!(transition_error <= 0.125);
+        println!("sphere radial error: bounded {transition_error:.6} m");
         let (triangles, _) = check(f, &coverage, true);
-        println!(
-            "15-chunk sphere: bounded transitions {triangles} triangles, adaptive baseline {}",
-            baseline.triangles().len()
-        );
+        println!("15-chunk sphere: bounded transitions {triangles} triangles");
     }
 }

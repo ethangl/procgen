@@ -12,7 +12,6 @@ use std::{
 
 /// Positive solid, negative air. This is a clamped density, not a signed distance.
 pub const VOXEL_DENSITY_LIMIT_M: f32 = 4.0;
-pub const VOXEL_DENSITY_BYTES: usize = VOXEL_SAMPLE_COUNT * std::mem::size_of::<f32>();
 pub(crate) const SQRT_SEED: u32 = 0x5f375a86;
 pub(crate) const SQRT_ITERATIONS: u32 = 5;
 
@@ -349,7 +348,10 @@ mod tests {
         };
         let mut a = run(1);
         assert_eq!(a.potentials, run(4).potentials);
-        assert_eq!(a.allocated_bytes(), VOXEL_DENSITY_BYTES);
+        assert_eq!(
+            a.allocated_bytes(),
+            VOXEL_SAMPLE_COUNT * std::mem::size_of::<f32>()
+        );
         a.potentials[5] = f32::NAN;
         assert!(a.validate().is_err());
         a.potentials.clear();

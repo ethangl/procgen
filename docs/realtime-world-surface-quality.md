@@ -1,5 +1,7 @@
 # Surface quality
 
+_Historical record. The code described here was removed after commit c7421fd and remains in history._
+
 This follows the five-slice real-time world proof of concept. The visual target
 is neutral terrain with better geometry and surface quality. This work does not
 use the older world-heightmap pipeline.

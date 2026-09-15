@@ -193,7 +193,8 @@ mod tests {
             let mut config = PlanetDesignConfig::starter(42);
             config.radius_m = radius;
             let field = config.validate().unwrap();
-            let limit = crate::VoxelResidencyConfig::default().max_leaves;
+            // The leaf budget a resident near-field selection is expected to fit in.
+            const LEAF_LIMIT: usize = 512;
             for axis in 0..3 {
                 for sign in [-1.0, 1.0] {
                     let coordinates = |normal: f32, u: i32, v: i32| {
@@ -210,8 +211,8 @@ mod tests {
                     let direction = coordinates(sign * radius, 0, 0).as_vec3().normalized();
                     let height = field.elevation_m(direction, 0.0).unwrap();
                     let camera = coordinates(sign * (radius + height + 2.0), 0, 0);
-                    let leaves = select_leaves(&field, camera, limit);
-                    assert!(leaves.len() <= limit);
+                    let leaves = select_leaves(&field, camera, LEAF_LIMIT);
+                    assert!(leaves.len() <= LEAF_LIMIT);
                     for u in [-16, -4, 0, 4, 16] {
                         for v in [-16, -4, 0, 4, 16] {
                             let direction = coordinates(sign * radius, u, v).as_vec3().normalized();

@@ -5,8 +5,8 @@ use procgen_core::Vec3;
 use rayon::prelude::*;
 
 use crate::{
-    DesignError, FieldError, HeightDistribution, PlanetDesignConfig, field::validate_range,
-    planet_design::octave_weight, shell::face_grid,
+    DesignError, FieldError, HeightDistribution, PlanetDesignConfig, cube_grid::face_grid,
+    field::validate_range, planet_design::octave_weight,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -142,7 +142,7 @@ pub fn generate_design_preview(
                 .collect();
             let triangles = quads
                 .into_iter()
-                .flat_map(|q| [[0, 1, 3], [0, 3, 2]].map(|t| t.map(|i| q.columns[i] as u32)))
+                .flat_map(|q| [[0, 1, 3], [0, 3, 2]].map(|t| t.map(|i| q[i] as u32)))
                 .collect();
             (vertices, triangles, spacing, radius + config.height_limit_m)
         }

@@ -480,6 +480,7 @@ provides a CPU surface function, bounded density queries, three presets, and a
 64³ volume inspector with movable cross-sections. The app also has a headless
 capture command. Its generation library uses the existing hash and gradient
 noise primitives; it has no dependency on the other world-generation stages.
+The code for this slice was removed after commit c7421fd and remains in history.
 
 The [implementation notes](../apps/realtime-pilot/README.md#field-decisions)
 record the pilot's choices for the missing octave-loop details. The inspection
@@ -498,22 +499,22 @@ parameters, location, camera route, backend, generator version, timing, and
 screenshots. Add useful discoveries to the fixed set.
 
 Slice 2 adds a six-face spherical shell, validated elevation band, CPU dual
-contouring, and a whole-planet overview in the same application. See the
-[implementation decisions and run commands](../apps/realtime-pilot/README.md#spherical-regions-slice-2).
+contouring, and a whole-planet overview in the same application.
+The code for this slice was removed after commit c7421fd and remains in history.
 Shared samples and polygon ownership cover same-resolution joins and cube
 corners. The original one-vertex-per-cell extractor had unresolved nonmanifold
 edges. Surface-quality slice 2 separates contour cycles, resolves shared face
 arcs, and checks manifold edges and vertex neighborhoods in fine and mixed LOD
-meshes; see [the repair record](realtime-world-surface-quality.md#slice-2-extraction-repair). The inspector can compare overview, region ownership,
-and shifted render origins. Its static inspector remains available alongside the slice-3 streaming inspector.
+meshes; see [the repair record](realtime-world-surface-quality.md#slice-2-extraction-repair). The inspector could compare overview, region ownership,
+and shifted render origins.
 
 Slice 3 adds bounded render-mesh streaming over the resident slice-2 CPU
 contour source. Six face regions use three mesh detail levels with a shared
 fine collar, bounded jobs and uploads, cancellation tickets, and GPU-readiness
 checks followed by dithered replacement. Initial coarse coverage replaces the
 overview only as a complete set. See the
-[streaming scope and budgets](../apps/realtime-pilot/README.md#streaming-and-detail-slice-3)
-and the [recorded route results](realtime-world-streaming-results.md).
+[recorded route results](realtime-world-streaming-results.md).
+The code for this slice was removed after commit c7421fd and remains in history.
 Density paging and arbitrary planet scale remain outside this bounded version.
 The resident source and fixed fine borders are explicit costs of the selected
 mixed-resolution boundary construction, not claims about the source games.
@@ -524,9 +525,9 @@ nearest-landmark queries. The triangle-query approach does not require a closed
 volume. The later extraction repair does not change this into a solid physics
 body or add inside/outside classification. Render replacement never swaps collision support. The
 accepted population catalog stays resident while instances are evicted.
-See [usable terrain](../apps/realtime-pilot/README.md#usable-terrain-slice-4)
-for movement, memory, and topology limits and the
-[runtime report](realtime-world-usable-results.md) for measured evidence.
+See the [runtime report](realtime-world-usable-results.md) for measured evidence
+of movement, memory, and topology limits.
+The code for this slice was removed after commit c7421fd and remains in history.
 The two-platform exit criterion is still pending Windows/Vulkan measurements.
 
 Slice 5 adds three spherical presets, resolved parameter inspection, versioned
@@ -534,8 +535,8 @@ case files, recorded camera replays, and sequential CPU seed sweeps. Fixed seeds
 and recorded fresh samples share the same geometry/contact checks; each result
 retains full inputs, build identity, costs, and any failure stage/location.
 Camera playback and fixed-step collision evaluation are separate contracts.
-See [variety and seed checks](../apps/realtime-pilot/README.md#variety-captures-and-seed-checks-slice-5)
-and the [evaluation report](realtime-world-variety-results.md).
+See the [evaluation report](realtime-world-variety-results.md).
+The code for this slice was removed after commit c7421fd and remains in history.
 These tools expose failures and cost outliers; they do not close the outstanding
 manifold, scale, performance, or two-platform validation requirements.
 

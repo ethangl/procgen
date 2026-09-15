@@ -28,11 +28,6 @@ impl HeightSubmission {
         });
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ExplorationBackend {
-    Gpu,
-    Cpu,
-}
 #[derive(Clone, Copy)]
 pub struct GpuCamera {
     pub eye: MeterPosition,

@@ -1,5 +1,7 @@
 # Variety and reproduction: slice 5 results
 
+_Historical record. The code described here was removed after commit c7421fd and remains in history._
+
 Measured on 2026-09-13 on Apple M1 Max, 64 GiB, macOS 26.6.2.
 Rust: `rustc 1.92.0 (ded5c06cf 2025-12-08)`, optimized Cargo development
 profile. Geometry and seed checks use the canonical CPU implementation; native
