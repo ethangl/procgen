@@ -119,6 +119,10 @@ fn generate_revision(
             return Ok(Some(request));
         }
         let camera = *bridge.shared.camera.lock().unwrap();
+        // Band selection stays on `elevation_m`. This clearance only sets how
+        // far the camera may drift before coverage is reselected; a few meters
+        // of volume displacement cannot change which chunks are wanted, and the
+        // voxel selection below is measured against the height surface too.
         let clearance = camera.eye.altitude_m(bridge.design.field.config().radius_m) as f32
             - bridge
                 .design

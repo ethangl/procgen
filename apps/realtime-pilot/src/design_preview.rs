@@ -125,6 +125,9 @@ pub fn generate_design_preview(
         return Err(PreviewError::Resolution);
     }
     let radius = config.radius_m;
+    // Height, not `surface_height`: `--check` audits the octave stack itself,
+    // and its reported distribution and band weights are about that stack. The
+    // projected volume term belongs to what the viewer draws, not to this audit.
     let (vertices, triangles, spacing_m, extent_m) = match preview.area {
         PreviewArea::Planet => {
             let (directions, quads) = face_grid(n);

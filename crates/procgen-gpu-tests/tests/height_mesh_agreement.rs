@@ -14,12 +14,31 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
     };
     let (_, device, queue) =
         request_device_for_backends("height mesh", backend).expect("selected GPU backend required");
-    for source in [
-        include_str!("../../../planet-design.json"),
-        include_str!("../../../planet-design-300km.json"),
+    // Each preset runs twice, with the volume term off and on. The tiles now
+    // draw the projected surface, so the CPU and the shader have to agree on
+    // the projection as well as on the height stack, at the same tolerances and
+    // including the shared-edge exactness checks. Both presets carry the starter
+    // block's values; only `enabled` moves here.
+    for (source, volume) in [
+        (include_str!("../../../planet-design.json"), false),
+        (include_str!("../../../planet-design.json"), true),
+        (include_str!("../../../planet-design-300km.json"), false),
+        (include_str!("../../../planet-design-300km.json"), true),
     ] {
         let json: serde_json::Value = serde_json::from_str(source).unwrap();
-        let config: PlanetDesignConfig = serde_json::from_value(json["design"].clone()).unwrap();
+        let mut config: PlanetDesignConfig =
+            serde_json::from_value(json["design"].clone()).unwrap();
+        assert_eq!(
+            (
+                config.volume.wavelength_m,
+                config.volume.amplitude_m,
+                config.volume.sharpness,
+                config.volume.fade_m,
+            ),
+            (24.0, 6.0, 0.5, 12.0),
+            "both presets carry the starter volume values"
+        );
+        config.volume.enabled = volume;
         let field = config.validate().unwrap();
         let mesher = HeightGpuMesher::new(&device, &field);
         let tiles = [
@@ -74,7 +93,13 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
             );
             let cpu = height_tile_vertices(&field, tile);
             for (a, b) in first[i].iter().zip(cpu) {
-                assert!(a.normal[3].is_finite() && a.normal[3].abs() <= config.height_limit_m);
+                // The stored altitude is the projected surface, which can stand
+                // off the bounded height by up to the term's amplitude.
+                assert!(
+                    a.normal[3].is_finite()
+                        && a.normal[3].abs()
+                            <= config.height_limit_m + config.volume.active_amplitude_m()
+                );
                 let radius = (0..3)
                     .map(|axis| (a.anchor[axis] as f64 + a.offset[axis] as f64).powi(2))
                     .sum::<f64>()
@@ -187,7 +212,7 @@ fn filtered_tiles_match_cpu_and_replay_after_reordered_submissions() {
             }
         }
         println!(
-            "radius {}: max height vertex error {max_error:.6} m, normal error {max_normal_error:.6}",
+            "radius {}, volume {volume}: max height vertex error {max_error:.6} m, normal error {max_normal_error:.6}",
             config.radius_m
         );
     }

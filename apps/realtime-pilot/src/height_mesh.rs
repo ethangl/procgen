@@ -33,7 +33,9 @@ pub fn height_tile_vertices(field: &PlanetDesignField, tile: HeightTile) -> Vec<
                 .unwrap()
                 .direction();
             let footprint = tile.footprint_m([x, y], radius);
-            let surface_height = field.height(d, footprint);
+            // The projected surface, not the bare height: the far field has to
+            // draw the same surface the near-field band extracts.
+            let surface_height = field.surface_height(d, footprint);
             let mut result = HeightVertex {
                 anchor: [0, 0, 0, address.level() as i32],
                 offset: [0.0, 0.0, 0.0, spacing],
@@ -62,7 +64,7 @@ fn height_normal(
     let step = footprint.max(HEIGHT_NORMAL_MIN_STEP_M);
     let sample = |d: Vec3| {
         let d = d.normalized();
-        field.height(d, footprint)
+        field.surface_height(d, footprint)
     };
     let derivative = |axis| {
         let delta = axis * (step / radius);
@@ -120,12 +122,24 @@ mod tests {
             Vec3::new(1.0, 1.0, 1.0).normalized(),
             Vec3::new(-1.0, 1.0, 0.3).normalized(),
         ];
-        for amplitude in [0.0, 4_000.0] {
+        // The third case turns the volume term on, because the tiles now draw
+        // the projected surface and their normals have to light that surface.
+        // Its secant matches the differencing step, and its tolerance is wider:
+        // an 8 m secant across a 24 m wavelength is not the same quantity as a
+        // 1 m central difference, and at 24 m the projected surface is genuinely
+        // rough at the metre scale. Measured 0.019, about 1.1 degrees, against
+        // 0.0036 for the smooth height-only cases.
+        for (amplitude, volume, secant_m, tolerance) in [
+            (0.0, false, 8.0, 0.01),
+            (4_000.0, false, 8.0, 0.01),
+            (4_000.0, true, 1.0, 0.03),
+        ] {
             config.octaves[0].amplitude_m = amplitude;
+            config.volume.enabled = volume;
             let field = config.validate().unwrap();
             for d in directions {
                 let footprint = 0.25;
-                let n = height_normal(&field, d, footprint, field.height(d, footprint));
+                let n = height_normal(&field, d, footprint, field.surface_height(d, footprint));
                 assert!(n.is_finite() && (n.length() - 1.0).abs() < 0.00001);
                 assert!(n.dot(d) > 0.0, "outward on every cube face");
                 if amplitude == 0.0 {
@@ -137,8 +151,9 @@ mod tests {
                     let u = axis.cross(d).normalized();
                     let v = d.cross(u);
                     let surface = |t: Vec3| {
-                        let q = (d + t * (8.0 / config.radius_m)).normalized();
-                        let r = f64::from(config.radius_m) + f64::from(field.height(q, footprint));
+                        let q = (d + t * (secant_m / config.radius_m)).normalized();
+                        let r = f64::from(config.radius_m)
+                            + f64::from(field.surface_height(q, footprint));
                         [f64::from(q.x) * r, f64::from(q.y) * r, f64::from(q.z) * r]
                     };
                     for tangent in [u, v] {
@@ -150,8 +165,10 @@ mod tests {
                             + f64::from(n.y) * edge[1]
                             + f64::from(n.z) * edge[2];
                         assert!(
-                            dot.abs() / length < 0.01,
-                            "normal must be perpendicular to the smooth displaced surface"
+                            dot.abs() / length < tolerance,
+                            "normal must be perpendicular to the displaced surface: {} at \
+                             amplitude {amplitude}, volume {volume}",
+                            dot.abs() / length
                         );
                     }
                 }
