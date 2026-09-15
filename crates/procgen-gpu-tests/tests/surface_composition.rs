@@ -23,6 +23,15 @@ const BLUE: Sample = Sample {
     color: wgpu::Color::BLUE,
     depth: 0.75,
 };
+const LOCAL: Sample = Sample {
+    color: wgpu::Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 0.5,
+    },
+    depth: 0.625,
+};
 enum ExpectedColor {
     Rgb([f32; 3]),
     Water,
@@ -32,6 +41,7 @@ struct Case {
     name: &'static str,
     previous: Sample,
     current: Sample,
+    local: Sample,
     blend: f32,
     replacing: bool,
     expected_color: ExpectedColor,
@@ -85,6 +95,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             name: "first snapshot is immediately opaque",
             previous: EMPTY,
             current: RED,
+            local: EMPTY,
             blend: 0.0,
             replacing: false,
             expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
@@ -95,6 +106,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             name: "height crossfade works when new surface is behind old",
             previous: BLUE,
             current: RED,
+            local: EMPTY,
             blend: 0.5,
             replacing: true,
             expected_color: ExpectedColor::Rgb([0.5, 0.0, 0.5]),
@@ -102,9 +114,68 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
         },
         Case {
             ocean: false,
+            name: "local overlap is smooth",
+            previous: EMPTY,
+            current: RED,
+            local: LOCAL,
+            blend: 1.0,
+            replacing: false,
+            expected_color: ExpectedColor::Rgb([0.5, 0.5, 0.0]),
+            expected_depth: 0.625,
+        },
+        Case {
+            ocean: false,
+            name: "height occludes hidden local surface",
+            previous: EMPTY,
+            current: BLUE,
+            local: LOCAL,
+            blend: 1.0,
+            replacing: false,
+            expected_color: ExpectedColor::Rgb([0.0, 0.0, 1.0]),
+            expected_depth: 0.75,
+        },
+        Case {
+            ocean: false,
+            name: "coverage rounded to zero cannot write invisible depth",
+            previous: EMPTY,
+            current: RED,
+            local: Sample {
+                color: wgpu::Color::TRANSPARENT,
+                depth: 0.75,
+            },
+            blend: 1.0,
+            replacing: false,
+            expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
+            expected_depth: 0.5,
+        },
+        Case {
+            ocean: false,
+            name: "local visibility blends separately through height replacement",
+            previous: BLUE,
+            current: RED,
+            local: LOCAL,
+            blend: 0.5,
+            replacing: true,
+            expected_color: ExpectedColor::Rgb([0.25, 0.25, 0.5]),
+            expected_depth: 0.75,
+        },
+        Case {
+            ocean: false,
+            name: "missing height does not multiply local coverage",
+            previous: EMPTY,
+            current: EMPTY,
+            local: LOCAL,
+            blend: 0.5,
+            replacing: true,
+            expected_color: ExpectedColor::Rgb([0.5, 1.0, 0.5]),
+            expected_depth: 0.625,
+        },
+        Case {
+            ocean: false,
             name: "retired height cannot retain invisible depth",
             previous: BLUE,
             current: RED,
+            local: EMPTY,
             blend: 1.0,
             replacing: true,
             expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
@@ -115,6 +186,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             name: "unborn height cannot write depth",
             previous: RED,
             current: BLUE,
+            local: EMPTY,
             blend: 0.0,
             replacing: true,
             expected_color: ExpectedColor::Rgb([1.0, 0.0, 0.0]),
@@ -125,6 +197,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             name: "silhouette fades over background",
             previous: BLUE,
             current: EMPTY,
+            local: EMPTY,
             blend: 0.5,
             replacing: true,
             expected_color: ExpectedColor::Rgb([0.5, 0.5, 1.0]),
@@ -135,6 +208,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             name: "empty layers preserve scene",
             previous: EMPTY,
             current: EMPTY,
+            local: EMPTY,
             blend: 0.5,
             replacing: false,
             expected_color: ExpectedColor::Rgb([1.0, 1.0, 1.0]),
@@ -148,6 +222,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                 color: wgpu::Color::RED,
                 depth: 0.001,
             },
+            local: EMPTY,
             blend: 1.0,
             replacing: false,
             expected_color: ExpectedColor::Water,
@@ -158,6 +233,18 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             name: "dry height terrain occludes ocean",
             previous: EMPTY,
             current: BLUE,
+            local: EMPTY,
+            blend: 1.0,
+            replacing: false,
+            expected_color: ExpectedColor::Rgb([0.0, 0.0, 1.0]),
+            expected_depth: 0.75,
+        },
+        Case {
+            ocean: true,
+            name: "dry local terrain occludes ocean",
+            previous: EMPTY,
+            current: EMPTY,
+            local: BLUE,
             blend: 1.0,
             replacing: false,
             expected_color: ExpectedColor::Rgb([0.0, 0.0, 1.0]),
@@ -171,6 +258,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                 color: wgpu::Color::RED,
                 depth: 0.001,
             },
+            local: EMPTY,
             blend: 0.5,
             replacing: true,
             expected_color: ExpectedColor::Water,
@@ -184,6 +272,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                 color: wgpu::Color::RED,
                 depth: 0.001,
             },
+            local: EMPTY,
             blend: 1.0,
             replacing: true,
             expected_color: ExpectedColor::Water,
@@ -228,15 +317,15 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                     1f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0., 0., -1., 0.,
                 ];
                 frame[..64].copy_from_slice(bytemuck::cast_slice(&clip));
-                frame[128..192].copy_from_slice(bytemuck::cast_slice(&inverse));
-                frame[192..208].copy_from_slice(bytemuck::cast_slice(&[
+                frame[160..224].copy_from_slice(bytemuck::cast_slice(&inverse));
+                frame[224..240].copy_from_slice(bytemuck::cast_slice(&[
                     0f32,
                     0.,
                     size[0] as f32,
                     size[1] as f32,
                 ]));
-                frame[224..240].copy_from_slice(bytemuck::cast_slice(&[0f32, 0., 1., 300_002.]));
-                frame[240..256]
+                frame[256..272].copy_from_slice(bytemuck::cast_slice(&[0f32, 0., 1., 300_002.]));
+                frame[272..288]
                     .copy_from_slice(bytemuck::cast_slice(&[300_000f32, 2., 1_200_004., 1.]));
             }
             queue.write_buffer(&uniform, 0, &frame);
@@ -244,6 +333,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
             for (layer, sample) in [
                 (SurfaceLayer::PreviousHeight, case.previous),
                 (SurfaceLayer::CurrentHeight, case.current),
+                (SurfaceLayer::Local, case.local),
             ] {
                 let mut color = layers.color_attachment(layer);
                 color.ops.load = wgpu::LoadOp::Clear(sample.color);

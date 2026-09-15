@@ -233,9 +233,8 @@ fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
                 y_m: y,
                 z_m: 0,
             };
-            world
-                .set_coverage(&local_voxel_coverage(&field, camera).unwrap(), camera)
-                .unwrap();
+            let coverage = local_voxel_coverage(&field, camera).unwrap();
+            world.set_coverage(&coverage, camera).unwrap();
             let start = Instant::now();
             loop {
                 for event in world.update().unwrap() {
@@ -253,6 +252,35 @@ fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
             }
             let update_ms = start.elapsed().as_secs_f64() * 1000.0;
             assert_eq!(world.resident_slots().count(), 125);
+            let leases = world.resident_leases();
+            assert_eq!(
+                leases.len(),
+                coverage.leaves().len(),
+                "one draw lease per covered leaf"
+            );
+            if initial.is_none() {
+                // The viewer draws these buffers directly, so every chunk the
+                // surface passes through must report triangles to draw.
+                let mut crossing = 0;
+                for lease in &leases {
+                    let draw =
+                        readback::<VoxelMeshDraw>(&device, &queue, &lease.slot.regular.draw, 1)[0];
+                    if !chunk_spans_surface(&field, lease.key.address()) {
+                        continue;
+                    }
+                    crossing += 1;
+                    assert!(
+                        draw.index_count > 0,
+                        "{:?} spans the surface with no indices",
+                        lease.key.address()
+                    );
+                }
+                assert!(crossing > 0, "the ground region must cross the surface");
+                println!(
+                    "radius {}: {crossing} of 125 local chunks cross the surface",
+                    config.radius_m
+                );
+            }
             if y == 0 {
                 let mut geometry = Vec::new();
                 for (_, key, slot) in world.resident_slots() {
@@ -292,4 +320,35 @@ fn local_voxel_travel_has_bounded_memory_and_reproducible_revisits() {
             peak as f64 / 1048576.0
         );
     }
+}
+
+/// True when the density sign changes across a chunk's corners, so marching
+/// tetrahedra must emit triangles inside it. One meter of slack absorbs the
+/// difference between this direct height query and the shader's mirrored
+/// arithmetic, which `voxel_density_agreement` pins far more tightly.
+fn chunk_spans_surface(field: &PlanetDesignField, address: VoxelChunkAddress) -> bool {
+    let origin = address.origin();
+    let span = address.span_m();
+    let mut low = f32::MAX;
+    let mut high = f32::MIN;
+    for corner in 0..8 {
+        let p = [
+            origin.x_m + (corner & 1) * span,
+            origin.y_m + ((corner >> 1) & 1) * span,
+            origin.z_m + ((corner >> 2) & 1) * span,
+        ];
+        let direction = procgen_core::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
+        // The radial residual is taken in f64: an f32 planet radius cannot
+        // resolve meters. Positive is solid, as the density kernel defines it.
+        let distance = p
+            .iter()
+            .map(|&v| f64::from(v) * f64::from(v))
+            .sum::<f64>()
+            .sqrt();
+        let altitude = (distance - f64::from(field.config().radius_m)) as f32;
+        let potential = field.elevation_m(direction, 0.0).unwrap() - altitude;
+        low = low.min(potential);
+        high = high.max(potential);
+    }
+    low < -1.0 && high > 1.0
 }

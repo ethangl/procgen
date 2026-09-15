@@ -2,12 +2,14 @@
 
 Current viewer: [GPU height terrain, oceans, and flight](realtime-world-flight-viewer.md).
 [Height tile reuse](realtime-world-height-reuse.md) removes camera-dependent
-mesh invalidation. Runtime local voxels, walking, and collision have been removed. The implementation
-sequence and measurements below describe the earlier voxel pilot; its reusable
-generation code and explicit CPU/GPU audits remain.
+mesh invalidation. Runtime walking and collision remain removed. The
+implementation sequence and measurements below describe the earlier voxel pilot;
+its reusable generation code and explicit CPU/GPU audits remain.
 
 Status: G1 through G5 are implemented. The earlier G5 viewer used GPU height tiles
 and local voxel geometry; `--backend cpu` selects the CPU visual audit.
+The local voxel layer has been restored to the viewer, without collision: height
+tiles remain the far field and GPU voxel chunks the near field.
 Metal validation and route measurements are recorded below. Windows/Vulkan
 results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 Both hosts have completed the original G5 routes; visual and measurement gaps

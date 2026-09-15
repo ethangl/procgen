@@ -2,6 +2,7 @@
 pub const HEIGHT_BATCHES_IN_FLIGHT: usize = 2;
 use crate::physical_gpu_bridge::{
     GpuGeneration, HeightFrame, HeightSubmission, ResidentHeightTile, SURFACE_BLEND_SECONDS,
+    TerrainSubmission,
 };
 use procgen_realtime_pilot::HeightTile;
 use procgen_realtime_pilot::{HEIGHT_GPU_BATCH_TILES, HEIGHT_TILE_BYTES, HeightGpuMesher};
@@ -133,10 +134,10 @@ impl HeightStream {
             bridge
                 .shared
                 .submit
-                .send(HeightSubmission {
+                .send(TerrainSubmission::Height(HeightSubmission {
                     commands: encoder.finish(),
                     completed,
-                })
+                }))
                 .expect("render queue owner");
             pending.receipts.push(receipt);
         }

@@ -7,8 +7,8 @@ pipeline or viewer.
 
 The target shape is GPU height tiles as the far field and a GPU voxel world as the
 near field, with CPU code kept as the reference oracle the shaders are tested
-against. The viewer implements the height-tile half; the GPU voxel pipeline and its
-audits are built but not yet wired into it.
+against. The viewer implements both halves: height tiles everywhere and uniform
+one-meter voxel chunks around the camera near the ground.
 
 ## GPU orbit and descent viewer
 
@@ -65,12 +65,19 @@ the selected tile layout and retains fine distant bands. Unchanged tiles reuse
 their GPU buffers during movement; changed neighbors rebuild only affected
 identities. See [height tile reuse](../../docs/realtime-world-height-reuse.md) for
 the filtering rule, shared normals, and validation. Height generation keeps at most
-two batches of 32 tiles in flight. Previous and current height surfaces need two
-RGBA16F/Depth32F layers, or 24 bytes per physical pixel: 131.8 MiB at 2880 × 2000,
+two batches of 32 tiles in flight.
+
+Below 256 m of terrain clearance the viewer also draws a local voxel region: 125
+one-meter chunks meshed on the GPU around the ground point below the camera, drawn
+over the height tiles and dissolved into them across a 16 m band at the region
+edge. **Show local voxels** turns that layer off for direct comparison; it is on by
+default. Previous height, current height, and local surfaces need three
+RGBA16F/Depth32F layers, or 36 bytes per physical pixel: 197.8 MiB at 2880 × 2000,
 excluding driver padding and other render targets.
 
 **Height** colors use a fixed ramp from minus to plus the configured height limit,
-measured above the reference radius. Neutral, LOD, and Normals are also available.
+measured above the reference radius. Neutral, LOD, and Normals are also available;
+under **LOD** the one-meter local chunks read red over the coarser height tiles.
 See [the flight viewer](../../docs/realtime-world-flight-viewer.md) for
 architecture, validation, and limits, and
 [terrain draw visibility](../../docs/realtime-world-visibility.md) for radial tile
@@ -100,9 +107,14 @@ cargo run -p procgen-realtime-pilot -- \
 This writes frame and stage timings plus six adjacent PNG captures, then exits.
 PNG encoding runs off the main thread; clean exit waits for images to save. The CSV
 reports height generation, buffer and target bytes, camera position,
-`terrain_clearance_m`, and `altitude_protection`. `gpu_stats_fresh` is false when
-the last GPU-statistics snapshot is reused because its lock is busy; camera
-clearance stays current. `height_generated_tiles` and `height_reused_tiles` count
+`terrain_clearance_m`, and `altitude_protection`, followed by local voxel columns:
+`local_resident`, `local_drawn`, `local_target`, `local_in_flight`,
+`local_retiring`, `finest_spacing_m`, `gpu_bytes`, `local_resident_bytes`,
+`local_retiring_bytes`, the preparation/encoding/completion/submission and
+publication timings, and GPU density and extraction timestamps where the device
+reports them. The panel shows the same local chunk counts, resident and retiring
+bytes, and stage timings. `gpu_stats_fresh` is false when the last GPU-statistics
+snapshot is reused because its lock is busy; camera clearance stays current. `height_generated_tiles` and `height_reused_tiles` count
 cumulative tile work for the current design. `height_build_ms` measures
 preparation, submission waits, and GPU completion; `height_wait_ms` measures
 waiting for the preceding fade. These are elapsed times, not GPU timestamps. Live
@@ -113,8 +125,8 @@ clearance over 35 seconds, with four screenshots.
 
 ## GPU generation work
 
-The GPU voxel generators and their audits are complete and tested; the viewer draws
-only height tiles. See the
+The GPU voxel generators and their audits are complete and tested, and the viewer
+draws their output as its near field over the height tiles. See the
 [GPU streaming plan](../../docs/realtime-world-gpu-streaming.md). G1 supplies a WGSL
 density kernel and CPU/GPU agreement checks. G2 adds bounded uniform-chunk meshing,
 deterministic scans, and GPU vertex/index/draw buffers. G3 adds 2:1 transitions and

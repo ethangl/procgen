@@ -111,6 +111,7 @@ pub(super) fn panel(
                 }
                 _ => {}
             }
+            ui.checkbox(&mut state.show_local_voxels, "Show local voxels");
             ui.separator();
             let displayed = state.gpu.display.lock().unwrap().clone();
             if let Ok(output) = displayed.output.try_lock() {
@@ -139,14 +140,54 @@ pub(super) fn panel(
                     s.surface_target_bytes as f64 / 1048576.0
                 ));
                 ui.label(format!(
-                    "Height tiles capped at {}",
+                    "Local chunks: {} resident / {} target · {} pending · {} retiring",
+                    s.resident, s.target, s.in_flight, s.retiring
+                ));
+                ui.label(format!(
+                    "{} visible chunks · finest spacing {}",
+                    s.drawn,
+                    s.finest_spacing_m
+                        .map_or_else(|| "pending".into(), |m| format!("{m} m"))
+                ));
+                ui.label(format!(
+                    "Local resident {:.1} MiB · retiring {:.1} MiB",
+                    s.resident_bytes as f64 / 1048576.0,
+                    s.retiring_bytes as f64 / 1048576.0
+                ));
+                ui.label(format!(
+                    "Terrain buffers: {:.1} MiB",
+                    s.bytes as f64 / 1048576.0
+                ));
+                ui.label(format!(
+                    "Voxel budget: {:.0} MiB · height tiles capped at {}",
+                    procgen_realtime_pilot::LOCAL_GPU_WORLD_CONFIG.memory_budget_bytes as f64
+                        / 1048576.0,
                     procgen_realtime_pilot::MAX_HEIGHT_TILES
                 ));
                 ui.label(format!("Worker selection: {:.2} ms", s.selection_ms));
                 ui.label(format!(
+                    "Last local job: {:.2} ms preparation · {:.2} ms encoding",
+                    s.preparation_ms, s.encoding_ms
+                ));
+                ui.label(format!(
+                    "Submission to receipt: {:.2} ms",
+                    s.submission_latency_ms
+                ));
+                ui.label(format!(
+                    "Job completion: {:.2} ms · local publication {:.2} ms",
+                    s.completion_ms, s.publication_ms
+                ));
+                ui.label(format!(
                     "Render scheduling: {:.3} ms · draw encoding {:.3} ms",
                     s.scheduler_ms, s.draw_ms
                 ));
+                match s.gpu_times {
+                    Some(times) => ui.label(format!(
+                        "GPU: {:.3} ms density · {:.3} ms extraction",
+                        times.density_ms, times.extraction_ms
+                    )),
+                    None => ui.label("GPU execution timestamps: unavailable on this device"),
+                };
             }
             ui.label(format!(
                 "Frame: {:.1} ms · peak {:.1} ms",
