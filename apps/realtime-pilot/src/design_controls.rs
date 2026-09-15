@@ -1,5 +1,7 @@
 use bevy_egui::egui;
-use procgen_realtime_pilot::{MAX_DESIGN_OCTAVES, NoiseConfig, OctaveConfig, PlanetDesignConfig};
+use procgen_realtime_pilot::{
+    MAX_DESIGN_OCTAVES, NoiseConfig, OctaveConfig, PlanetDesignConfig, VolumeConfig,
+};
 
 pub fn distance(meters: f32) -> String {
     if meters.abs() >= 1000.0 {
@@ -41,6 +43,50 @@ fn planet_controls(ui: &mut egui::Ui, config: &mut PlanetDesignConfig) {
         .text("Height bound (m)"),
     );
     ui.label("Elevation zero is the reference sphere.");
+}
+
+/// The one 3D term in the density field. Edits reach the terrain through the
+/// same debounce and validation as the octaves, because they live on the same
+/// config struct.
+pub fn volume(ui: &mut egui::Ui, config: &mut PlanetDesignConfig) {
+    ui.scope_builder(
+        egui::UiBuilder::new().id("planet-design-volume-controls"),
+        |ui| {
+            volume_controls(ui, config);
+        },
+    );
+}
+
+fn volume_controls(ui: &mut egui::Ui, config: &mut PlanetDesignConfig) {
+    let v = &mut config.volume;
+    ui.heading("Volume · 3D surface detail");
+    ui.checkbox(&mut v.enabled, "Add 3D detail to the voxel band");
+    ui.horizontal(|ui| {
+        ui.label("Wavelength (m)");
+        ui.add(
+            egui::DragValue::new(&mut v.wavelength_m)
+                .speed(0.5)
+                .range(VolumeConfig::WAVELENGTH_RANGE),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("Amplitude (m)");
+        ui.add(
+            egui::DragValue::new(&mut v.amplitude_m)
+                .speed(0.1)
+                .range(VolumeConfig::AMPLITUDE_RANGE),
+        );
+    });
+    ui.add(egui::Slider::new(&mut v.sharpness, NoiseConfig::SHARPNESS_RANGE).text("Sharpness"));
+    ui.horizontal(|ui| {
+        ui.label("Fade above surface (m)");
+        ui.add(
+            egui::DragValue::new(&mut v.fade_m)
+                .speed(0.5)
+                .range(VolumeConfig::FADE_RANGE),
+        );
+    });
+    ui.label("Only the voxel band carries this. Height tiles stay a height field.");
 }
 
 pub fn octaves(ui: &mut egui::Ui, config: &mut PlanetDesignConfig) {

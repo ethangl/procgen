@@ -21,6 +21,20 @@ struct GpuOctave {
     enabled: u32,
 }
 
+/// Eight words, the same 32 bytes as one octave, so the octave array keeps its
+/// uniform alignment; the two pads are always zero.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuVolume {
+    wavelength_m: f32,
+    amplitude_m: f32,
+    sharpness: f32,
+    fade_m: f32,
+    enabled: u32,
+    key: u32,
+    pad: [u32; 2],
+}
+
 /// Uniform layout for an already validated field. Seeds are narrowed only by
 /// the canonical field constructor; this upload reuses that resolved key.
 #[repr(C)]
@@ -31,6 +45,7 @@ pub struct VoxelGpuParameters {
     key: u32,
     octave_count: u32,
     arithmetic: [f32; 4],
+    volume: GpuVolume,
     octaves: [GpuOctave; MAX_DESIGN_OCTAVES],
 }
 impl VoxelGpuParameters {
@@ -42,6 +57,15 @@ impl VoxelGpuParameters {
             key: field.noise_key(),
             octave_count: config.octaves.len() as u32,
             arithmetic: [1.0, 0.0, 0.0, 0.0],
+            volume: GpuVolume {
+                wavelength_m: config.volume.wavelength_m,
+                amplitude_m: config.volume.amplitude_m,
+                sharpness: config.volume.sharpness,
+                fade_m: config.volume.fade_m,
+                enabled: u32::from(config.volume.enabled),
+                key: field.volume_key(),
+                pad: [0; 2],
+            },
             octaves: [GpuOctave::zeroed(); MAX_DESIGN_OCTAVES],
         };
         for (target, source) in result.octaves.iter_mut().zip(&config.octaves) {

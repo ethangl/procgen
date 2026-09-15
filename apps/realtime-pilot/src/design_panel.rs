@@ -113,6 +113,8 @@ impl DesignPanel {
                         );
                     });
                     ui.label("Sea level updates immediately. Water has no collision.");
+                    ui.separator();
+                    design_controls::volume(ui, &mut self.edits.config);
                 }
                 Tab::Status => unreachable!("status panel is rendered by the inspector"),
             });

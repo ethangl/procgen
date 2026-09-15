@@ -58,10 +58,26 @@ The renderer draws each visible lease into its own Local layer and the composito
 places it over the height surface. Both surface-join distances now follow the
 band's coarsest resident chunk: the dissolve width is that chunk's span, floored
 at the previous fixed 16 m, and the height surface is pushed radially inward by
-that chunk's cell spacing, floored at the previous fixed 1 m. The bias rule is
-provisional. One coarse cell is a guess at how far a 16 m extraction can stand
-above the height surface, not a measured bound; route evidence or a per-chunk
-bias should replace it. **Show local voxels** disables the pass and zeroes that
+that chunk's cell spacing **plus the volume term's amplitude** (zero when the
+term is disabled, which restores the old rule exactly), floored at the previous
+fixed 1 m. The second part is there because the volume term can move the voxel
+surface *below* the height surface as well as above it, and without it the
+height surface shows through every undercut. That part is a true bound, not an
+estimate: the term's shaped noise passes through the design's
+`x / sqrt(1 + x*x)` before the amplitude scales it, so the term stays strictly
+inside plus or minus `amplitude_m` whatever the sharpness. Bounding it that way
+was necessary, not decorative. The shape transform has unit deviation rather
+than a unit bound, so an unbounded term made the amplitude a one-sigma scale: a
+6 m amplitude at sharpness 0.5 measured -3.3 m to +26.0 m over the 300 km
+design's surface samples, and a negative sharpness puts that long tail on the
+undercut side, where the bias rule cannot survive it. Bounded, the same shipped
+term measures -2.9 m to +5.7 m inside its 6 m, and a unit test walks both signs
+of sharpness at a 64 m amplitude to confirm the bound holds and is approached.
+The first part of the rule remains provisional: one coarse cell is a guess at
+how far a 16 m extraction can stand above the height surface, not a measured
+bound, and route evidence or a per-chunk bias should replace it. No fragment
+discard was added: the band's bounding box can contain surface the band does not
+cover, so a discard there would open holes. **Show local voxels** disables the pass and zeroes that
 coverage weight. There is no CPU collision worker and no BVH construction. Three
 RGBA16F/Depth32F surfaces cost 36 bytes per physical pixel: 197.8 MiB at 2880 by
 2000, excluding driver padding and other render targets.
@@ -77,8 +93,10 @@ near field, and a surface that stays voxel-extracted out to the cap instead of
 ending at a 256 m altitude gate. A GPU test renders the local pipeline into its
 own layer and checks that it writes pixels and that zero coverage removes them,
 because the panel's chunk counts are CPU-side and cannot show this. The near
-field will only carry shapes a radial height cannot express once the density
-field carries volume, which is the next step and not part of this one.
+field now carries shapes a radial height cannot express, because the density
+field carries one bounded 3D detail term faded out with height above the
+surface. Projecting that term into the far field is a separate step; height
+tiles still evaluate height only.
 
 Reusable CPU/GPU voxel generation and collision code remain in the library.
 There is no CPU visual backend and no `--backend` flag.
@@ -107,7 +125,10 @@ height without resetting its orientation.
 Fast lateral movement can cross a ridge between endpoints. Filtered or still
 retiring visual meshes can differ from canonical height, so the check does not
 guarantee clearance from every displayed triangle. Oceans remain traversable.
-Caves and overhangs are outside this height-field renderer's scope.
+Protection still samples the height field only, so it does not see the volume
+term at all: the camera can pass through volumetric solid that stands above the
+height surface, and it can hang in air the term has carved out below it. Caves
+and overhangs are outside this height-field renderer's scope.
 
 ## Validation
 

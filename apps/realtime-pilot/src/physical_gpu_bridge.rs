@@ -60,12 +60,19 @@ pub struct LocalDrawLayout {
     pub bias_m: f32,
 }
 /// The dissolve follows the coarsest chunk in the band, so the edge fades over
-/// a whole coarse chunk rather than a fraction of one, and the height surface
-/// drops by that chunk's cell spacing. Both keep their old fixed values as
-/// floors. The bias rule is provisional: one cell of the coarsest spacing is a
-/// guess at how far a 16 m extraction can stand above the height surface, not a
-/// measured bound, and it will need route evidence or a per-chunk bias instead.
-pub fn local_draw_layout(addresses: &[VoxelChunkAddress]) -> LocalDrawLayout {
+/// a whole coarse chunk rather than a fraction of one. The height surface drops
+/// by that chunk's cell spacing plus the volume term's amplitude, because the
+/// voxel surface can now sit that far *below* the height surface as well as
+/// above it, and without the second part the height surface would show through
+/// every undercut. Both keep their old fixed values as floors. The bias rule is
+/// still provisional: one coarse cell is a guess at how far a 16 m extraction
+/// can stand above the height surface, not a measured bound, and it will need
+/// route evidence or a per-chunk bias instead. `volume_amplitude_m` is zero
+/// when the term is disabled, which restores the old rule exactly.
+pub fn local_draw_layout(
+    addresses: &[VoxelChunkAddress],
+    volume_amplitude_m: f32,
+) -> LocalDrawLayout {
     let mut bounds = [[i32::MAX; 3], [i32::MIN; 3]];
     let mut origins = vec![0u8; addresses.len().max(1) * LOCAL_ORIGIN_BYTES];
     let mut coarsest = None::<VoxelChunkAddress>;
@@ -90,7 +97,7 @@ pub fn local_draw_layout(addresses: &[VoxelChunkAddress]) -> LocalDrawLayout {
         origins,
         blend_m: coarsest.map_or(LOCAL_BLEND_M, |c| (c.span_m() as f32).max(LOCAL_BLEND_M)),
         bias_m: coarsest.map_or(LOCAL_SURFACE_BIAS_M, |c| {
-            (c.spacing_m() as f32).max(LOCAL_SURFACE_BIAS_M)
+            (c.spacing_m() as f32 + volume_amplitude_m).max(LOCAL_SURFACE_BIAS_M)
         }),
     }
 }
@@ -249,7 +256,7 @@ mod tests {
         };
         let span = VOXEL_CHUNK_CELLS;
         let addresses = [address(0, 0, 0, 0), address(span, -span, 2 * span, 0)];
-        let layout = local_draw_layout(&addresses);
+        let layout = local_draw_layout(&addresses, 0.0);
         assert_eq!(layout.bounds, [[0, -span, 0], [2 * span, span, 3 * span]]);
         assert_eq!(layout.origins.len(), addresses.len() * LOCAL_ORIGIN_BYTES);
         let records: &[i32] = bytemuck::cast_slice(&layout.origins);
@@ -268,7 +275,7 @@ mod tests {
             address(8 * span, 0, 0, 2),
             address(32 * span, 0, 0, 3),
         ];
-        let layout = local_draw_layout(&mixed);
+        let layout = local_draw_layout(&mixed, 0.0);
         let records: &[i32] = bytemuck::cast_slice(&layout.origins);
         assert_eq!(
             records.chunks_exact(4).map(|r| r[3]).collect::<Vec<_>>(),
@@ -277,9 +284,17 @@ mod tests {
         );
         assert_eq!((layout.blend_m, layout.bias_m), (256.0, 8.0));
 
+        // The volume term's amplitude adds to the bias, because the voxel
+        // surface can sit that far below the height surface; the dissolve
+        // width does not change.
+        let layout = local_draw_layout(&mixed, 6.0);
+        assert_eq!((layout.blend_m, layout.bias_m), (256.0, 14.0));
+        let layout = local_draw_layout(&addresses, 6.0);
+        assert_eq!((layout.blend_m, layout.bias_m), (32.0, 7.0));
+
         // An empty region must still describe a finite box, a bindable buffer,
         // and the two floors.
-        let layout = local_draw_layout(&[]);
+        let layout = local_draw_layout(&[], 6.0);
         assert_eq!(layout.bounds, [[0; 3]; 2]);
         assert_eq!(layout.origins.len(), LOCAL_ORIGIN_BYTES);
         assert_eq!(

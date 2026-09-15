@@ -6,8 +6,8 @@ use procgen_gpu_tests::{
 };
 use procgen_realtime_pilot::{
     MAX_DESIGN_OCTAVES, OctaveConfig, PlanetDesignConfig, PlanetDesignField, VOXEL_HALO,
-    VOXEL_SAMPLE_COUNT, VOXEL_SAMPLE_SIDE, VoxelChunkAddress, VoxelGpuChunk, VoxelGpuParameters,
-    VoxelPosition, VoxelSampleIndex, sample_voxel_chunk, voxel_density_shader,
+    VOXEL_SAMPLE_COUNT, VOXEL_SAMPLE_SIDE, VolumeConfig, VoxelChunkAddress, VoxelGpuChunk,
+    VoxelGpuParameters, VoxelPosition, VoxelSampleIndex, sample_voxel_chunk, voxel_density_shader,
 };
 use wgpu::util::DeviceExt;
 
@@ -75,6 +75,28 @@ fn gpu_density_matches_full_band_cpu_chunks_and_replays_exactly() {
         first.dispatch_wait_ms,
         repeat.dispatch_wait_ms,
         repeat.readback_ms,
+    );
+
+    // The same comparison with the volumetric detail term enabled at its
+    // starter values. Same tolerances, and the shared halo/parent samples must
+    // still agree exactly: the term has no spacing filter for that reason.
+    let mut with_volume = saved.clone();
+    with_volume.volume = VolumeConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let volume_field = with_volume.validate().unwrap();
+    let volume_result = gpu.dispatch(&volume_field, &addresses);
+    compare_cpu(
+        "saved preset, volume enabled",
+        &volume_field,
+        &addresses,
+        &volume_result.values,
+    );
+    check_shared_samples(&addresses, &volume_result.values);
+    assert_ne!(
+        volume_result.values, first.values,
+        "the enabled term must change the sampled potentials"
     );
 
     for (radius, seed) in [

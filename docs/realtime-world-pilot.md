@@ -304,6 +304,14 @@ Attenuate additive detail with altitude so the upper band becomes empty.
 This controls the envelope; it does not prove that every solid component is
 attached to the ground. Floating fragments are an explicit visual test.
 
+The additive term is implemented as a surface-relative 3D detail added to the
+voxel density and faded out over a configured height above the surface, with
+`audit_detached_solids` as the explicit attachment test. Subtractive caves and
+placed features were set aside by decision, not deferred by difficulty: the
+target viewing distance for this pilot is tens to thousands of meters of
+altitude, where a cave mouth is smaller than a pixel and an entrance rule buys
+nothing that the surface silhouette does not already show.
+
 For the first cave experiment, use deterministic feature candidates that
 contain both an underground shape and an entrance shape tied to the same
 surface query. This is a proposed bounded solution to the entrance problem

@@ -407,27 +407,27 @@ fn local_voxel_band_steps_with_bounded_memory_and_reproducible_revisits() {
 /// tetrahedra must emit triangles inside it. One meter of slack absorbs the
 /// difference between this direct height query and the shader's mirrored
 /// arithmetic, which `voxel_density_agreement` pins far more tightly.
+/// Whether the extracted surface has to pass through this chunk, judged at the
+/// eight box corners. The canonical CPU potential is the definition of that
+/// surface, so it is the right oracle here: a height-only estimate stopped
+/// predicting the mesh once the density field gained its volumetric term, which
+/// can move the crossing by several meters either way. CPU/GPU agreement on the
+/// potential itself is established independently in voxel_density_agreement.
 fn chunk_spans_surface(field: &PlanetDesignField, address: VoxelChunkAddress) -> bool {
     let origin = address.origin();
     let span = address.span_m();
     let mut low = f32::MAX;
     let mut high = f32::MIN;
     for corner in 0..8 {
-        let p = [
-            origin.x_m + (corner & 1) * span,
-            origin.y_m + ((corner >> 1) & 1) * span,
-            origin.z_m + ((corner >> 2) & 1) * span,
-        ];
-        let direction = procgen_core::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
-        // The radial residual is taken in f64: an f32 planet radius cannot
-        // resolve meters. Positive is solid, as the density kernel defines it.
-        let distance = p
-            .iter()
-            .map(|&v| f64::from(v) * f64::from(v))
-            .sum::<f64>()
-            .sqrt();
-        let altitude = (distance - f64::from(field.config().radius_m)) as f32;
-        let potential = field.elevation_m(direction, 0.0).unwrap() - altitude;
+        // Positive is solid, as the density kernel defines it.
+        let potential = sample_voxel_potential(
+            field,
+            VoxelPosition {
+                x_m: origin.x_m + (corner & 1) * span,
+                y_m: origin.y_m + ((corner >> 1) & 1) * span,
+                z_m: origin.z_m + ((corner >> 2) & 1) * span,
+            },
+        );
         low = low.min(potential);
         high = high.max(potential);
     }

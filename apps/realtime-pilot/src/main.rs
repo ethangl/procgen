@@ -167,6 +167,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "vertices": result.positions_m().len(), "triangles": result.triangles().len(),
                 "preview_spacing_m": result.spacing_m, "octave_weights": result.octave_weights,
                 "full_resolution_selected_band_heights_m": result.distribution,
+                // The preview is a height surface and never evaluates this
+                // term; it is reported so the audit records the whole design.
+                "volume": config.volume,
             }))?
         );
         return Ok(());

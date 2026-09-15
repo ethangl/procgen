@@ -10,12 +10,23 @@ struct PilotOctave {
     ridge_erosion: f32,
     enabled: u32,
 }
+struct PilotVolume {
+    wavelength_m: f32,
+    amplitude_m: f32,
+    sharpness: f32,
+    fade_m: f32,
+    enabled: u32,
+    key: u32,
+    pad_0: u32,
+    pad_1: u32,
+}
 struct PilotParameters {
     radius_m: f32,
     height_limit_m: f32,
     key: u32,
     octave_count: u32,
     arithmetic: vec4<f32>,
+    volume: PilotVolume,
     octaves: array<PilotOctave, PILOT_MAX_OCTAVES>,
 }
 struct PilotChunk {
@@ -120,6 +131,32 @@ fn pilot_square(value: f32) -> PilotCompensated {
     return PilotCompensated(product, pilot_sum(error, pilot_product(low, low)));
 }
 
+// Mirror of volume_at in voxel_density.rs. No spacing filter, by design: the
+// density path evaluates the full stack so coincident halo and parent samples
+// stay identical across LODs. The fade uses d, positive below the surface, so
+// the term reaches zero fade_m above it and cannot float free above that. The
+// shaped noise passes through the same x / sqrt(1 + x*x) soft bound the height
+// stack uses, so amplitude_m is a true bound on the term and the render bias
+// can rely on it.
+fn pilot_volume(p: vec3<f32>, d: f32) -> f32 {
+    if pilot.volume.enabled == 0u || pilot.volume.amplitude_m == 0.0 { return 0.0; }
+    var fade = 1.0;
+    if d < 0.0 {
+        if d <= -pilot.volume.fade_m { return 0.0; }
+        let t = clamp(pilot_divide(pilot_sum(d, pilot.volume.fade_m), pilot.volume.fade_m), 0.0, 1.0);
+        fade = pilot_product(pilot_product(t, t), pilot_sum(3.0, -pilot_product(2.0, t)));
+    }
+    let q = vec3(
+        pilot_divide(p.x, pilot.volume.wavelength_m),
+        pilot_divide(p.y, pilot.volume.wavelength_m),
+        pilot_divide(p.z, pilot.volume.wavelength_m),
+    );
+    let sample = scale_sample(gradient_noise_3d_with_arithmetic(pilot.volume.key, q, F32Arithmetic(pilot.arithmetic.x, pilot.arithmetic.y)), PILOT_NOISE_SCALE);
+    let shaped = pilot_shape(sample.value, pilot.volume.sharpness);
+    let bounded = shaped / pilot_sqrt(pilot_sum(1.0, pilot_product(shaped, shaped)));
+    return pilot_product(pilot_product(pilot.volume.amplitude_m, bounded), fade);
+}
+
 fn pilot_potential(position: vec3<i32>) -> f32 {
     let p = vec3<f32>(position);
     let radius_squared = pilot_square(pilot.radius_m);
@@ -133,7 +170,8 @@ fn pilot_potential(position: vec3<i32>) -> f32 {
     if any(position != vec3(0)) {
         height = pilot_height(pilot_scale_add(p, pilot_divide(1.0, distance), vec3(0.0)));
     }
-    return height - altitude;
+    let d = height - altitude;
+    return d + pilot_volume(p, d);
 }
 
 @compute @workgroup_size(64)

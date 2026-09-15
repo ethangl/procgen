@@ -19,6 +19,7 @@ mod planet_design;
 #[allow(dead_code)]
 mod qef;
 mod voxel_address;
+mod voxel_attachment;
 mod voxel_chunk_mesh;
 mod voxel_coverage_step;
 mod voxel_density;
@@ -55,16 +56,21 @@ pub use meter_position::MeterPosition;
 pub use noise::NoiseConfig;
 pub use planet_design::{
     DesignError, MAX_DESIGN_OCTAVES, OctaveConfig, PlanetDesignConfig, PlanetDesignField,
+    VolumeConfig,
 };
 
 pub use voxel_address::{
     ChunkIndex, VOXEL_CHUNK_CELLS, VOXEL_HALO, VOXEL_ROOT_LOD, VOXEL_SAMPLE_COUNT,
     VOXEL_SAMPLE_SIDE, VoxelChunkAddress, VoxelPosition, VoxelSampleIndex,
 };
+pub use voxel_attachment::{ATTACHMENT_BLOCK_CHUNKS, DetachedReport, audit_detached_solids};
 pub use voxel_chunk_mesh::{
     VoxelChunkMesh, VoxelMeshError, VoxelMeshVertex, build_voxel_chunk_mesh,
 };
-pub use voxel_density::{VOXEL_DENSITY_LIMIT_M, VoxelVolume, VoxelVolumeError, sample_voxel_chunk};
+pub use voxel_density::{
+    VOXEL_DENSITY_LIMIT_M, VoxelVolume, VoxelVolumeError, sample_voxel_chunk,
+    sample_voxel_potential,
+};
 pub use voxel_gpu::{VoxelGpuChunk, VoxelGpuParameters, voxel_density_shader};
 pub use voxel_gpu_residency::{
     VoxelGpuOutcome, VoxelGpuRequest, VoxelGpuResidency, VoxelGpuTicket, VoxelPublication,
