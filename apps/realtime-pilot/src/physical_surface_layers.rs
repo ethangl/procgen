@@ -13,7 +13,7 @@ pub const COMPOSITE_SHADER: &str = concat!(
     include_str!("physical_composite.wgsl"),
     include_str!("physical_ocean.wgsl")
 );
-pub const FRAME_BYTES: u64 = 256;
+pub const FRAME_BYTES: u64 = 288;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -21,11 +21,12 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub enum SurfaceLayer {
     PreviousHeight = 0,
     CurrentHeight = 1,
+    Local = 2,
 }
 pub struct SurfaceLayers {
     pub size: [u32; 2],
-    colors: [wgpu::TextureView; 2],
-    depths: [wgpu::TextureView; 2],
+    colors: [wgpu::TextureView; 3],
+    depths: [wgpu::TextureView; 3],
     group: wgpu::BindGroup,
 }
 impl SurfaceLayers {
@@ -136,7 +137,7 @@ impl SurfaceCompositor {
                 size: wgpu::Extent3d {
                     width: size[0],
                     height: size[1],
-                    depth_or_array_layers: 2,
+                    depth_or_array_layers: 3,
                 },
                 mip_level_count: 1,
                 sample_count: 1,

@@ -32,6 +32,7 @@ struct Inspector {
     gpu: GpuBridge,
     field: Arc<PlanetDesignField>,
     keep_above_terrain: bool,
+    show_local_voxels: bool,
     editor: crate::design_panel::DesignPanel,
     revision: u64,
     eye: MeterPosition,
@@ -124,6 +125,7 @@ impl Inspector {
             record,
             gpu: GpuBridge::new(Arc::clone(&field), GpuCamera { eye }),
             keep_above_terrain: true,
+            show_local_voxels: true,
             field,
             editor: crate::design_panel::DesignPanel::new(document, path),
             revision: 0,
@@ -135,7 +137,7 @@ impl Inspector {
             coloring: Coloring::default(),
             frame_ms: 0.0,
             peak_frame_ms: 0.0,
-            status: "GPU height terrain · orbit and flight".into(),
+            status: "GPU height terrain and local voxels · orbit and flight".into(),
         };
         state.face_ground();
         state
@@ -224,6 +226,7 @@ fn setup(
         GpuView {
             anchor: [0; 4],
             coloring: 0,
+            show_local: state.show_local_voxels,
             eye: state.eye,
             ocean: state.editor.ocean,
         },
@@ -343,6 +346,7 @@ fn position_scene(
     for (mut transform, mut projection, mut gpu) in &mut camera {
         gpu.eye = state.eye;
         gpu.ocean = state.editor.ocean;
+        gpu.show_local = state.show_local_voxels;
         gpu.anchor = [anchor.x_m, anchor.y_m, anchor.z_m, 0];
         gpu.coloring = match state.coloring {
             Coloring::Neutral => 0,

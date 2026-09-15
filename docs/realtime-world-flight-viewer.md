@@ -1,16 +1,16 @@
 # Real-time pilot flight viewer
 
-The default viewer uses GPU height tiles, spherical oceans, and orbit/flight
-navigation. Run `cargo run -p procgen-realtime-pilot`. It loads the unchanged
+The default viewer uses GPU height tiles as the far field, a GPU voxel world as
+the near field, spherical oceans, and orbit/flight navigation. Run
+`cargo run -p procgen-realtime-pilot`. It loads the unchanged
 `planet-design-300km.json`; `--design-file`, `--seed`, and `--write-design`
-retain their existing meanings. This replaces runtime local voxel rendering,
-CPU collision generation, and walking in the physical-scale viewer only.
+retain their existing meanings. CPU collision generation and walking remain
+removed from the physical-scale viewer.
 
-The intended use is planet inspection, not ground gameplay. The current design
-field has one radial height per direction, so a second voxel surface and a
-triangle collision index are unnecessary. Full-screen terrain raymarching is
-not introduced: the existing height renderer already supplies bounded GPU
-terrain generation, distant detail, and continuous orbit-to-surface coverage.
+The intended use is planet inspection, not ground gameplay. A triangle collision
+index is not maintained. Full-screen terrain raymarching is not introduced: the
+existing height renderer already supplies bounded GPU terrain generation,
+distant detail, and continuous orbit-to-surface coverage.
 
 ## Generation and publication
 
@@ -29,16 +29,29 @@ The viewer switches the field and height snapshot together once coverage is
 ready. Navigation continues while generation runs. Text focus and explicit
 file saving retain their existing behavior.
 
-There is no GPU voxel world, CPU collision worker, density extraction, BVH
-construction, or local voxel render pass in the default viewer. The renderer
-composites only previous/current height snapshots and their oceans. Two
-RGBA16F/Depth32F surfaces cost 24 bytes per physical pixel, down from 36:
-131.8 MiB at 2880 by 2000, excluding driver padding and other render targets.
+The same worker drives a `VoxelGpuWorld` next to the height stream. Within 256 m
+of the ground it keeps a five-by-five-by-five region of one-meter chunks around
+the point below the camera, meshes them on the GPU, and publishes a draw frame of
+leases whose slots stay pinned until the submitted commands complete. The
+renderer draws each visible lease into its own Local layer and the compositor
+places it over the height surface, dissolving across a 16 m band at the region
+edge; under the overlap the height surface is pushed 1 m radially inward so the
+two triangulations cannot fight. **Show local voxels** disables the pass and
+zeroes that coverage weight. There is no CPU collision worker and no BVH
+construction. Three RGBA16F/Depth32F surfaces cost 36 bytes per physical pixel:
+197.8 MiB at 2880 by 2000, excluding driver padding and other render targets.
 
-Reusable CPU/GPU voxel generation and collision code remain in the library,
-as do `--check-chunks`, `--check-residency`, `--check-surfaces`, and
-`--check-explore`. `--backend cpu` is still an explicit voxel visual audit.
-The `--planet`, `--stream`, capture, sweep, and replay experiments are unchanged.
+At ground level this layer is visually redundant. Height tiles near the camera
+already refine to one meter, and the voxel mesher extracts the same single-valued
+height field, so the composite looks the same with **Show local voxels** on or
+off; LOD coloring cannot separate them either, since both report level 0. A GPU
+test renders the local pipeline into its own layer and checks that it writes
+pixels and that zero coverage removes them, because the panel's chunk counts are
+CPU-side and cannot show this. The near field will only earn its pixels once the
+density field carries volume a radial height cannot express.
+
+Reusable CPU/GPU voxel generation and collision code remain in the library.
+There is no CPU visual backend and no `--backend` flag.
 
 ## Camera behavior
 
@@ -71,8 +84,9 @@ Caves and overhangs are outside this height-field renderer's scope.
 Focused tests cover altitude protection and terrain edits, unchanged safe
 camera positions, disabling/re-enabling protection, stale publication, typing
 focus, explicit save/reload, and orbit axes. GPU tests exercise the actual
-height and ocean shaders and the two-layer compositor. Canonical CPU voxel
-and collision audits remain separate from flight-viewer checks.
+height and ocean shaders, the three-layer compositor, and the resident local
+leases and their draw records. Canonical CPU voxel and collision audits remain
+separate from flight-viewer checks.
 
 ```sh
 cargo test -p procgen-realtime-pilot --bin procgen-realtime-pilot
@@ -85,9 +99,10 @@ cargo run -p procgen-realtime-pilot -- --explore-record /tmp/procgen-flight-rout
 The 90-second recording starts in orbit, descends at 5 seconds, moves to five
 meters above terrain at 30 seconds and flies forward, rises at 75 seconds,
 returns to orbit at 85 seconds, then exits. Six screenshots accompany the CSV.
-The CSV replaces voxel/collision columns with `terrain_clearance_m` and
-`altitude_protection`; height timings and buffer/target bytes remain. Existing
-scripts for the old collision-route schema must be updated.
+The CSV carries `terrain_clearance_m` and `altitude_protection` in place of the
+old collision columns, and local voxel counts, bytes, and stage timings after
+them; height timings and buffer/target bytes remain. Existing scripts for the
+old collision-route schema must be updated.
 
 ### Metal smoke result, 2026-09-14
 

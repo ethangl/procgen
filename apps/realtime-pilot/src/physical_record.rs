@@ -102,7 +102,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -161,9 +161,13 @@ impl PhysicalRecord {
         }
         let stats = &self.last_stats;
         let p = eye.anchor();
+        let (density, extraction) = stats
+            .gpu_times
+            .map(|t| (t.density_ms.to_string(), t.extraction_ms.to_string()))
+            .unwrap_or_default();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -182,7 +186,24 @@ impl PhysicalRecord {
             stats.height_generated_tiles,
             stats.height_reused_tiles,
             stats.height_drawn_tiles,
-            stats.height_tested_tiles
+            stats.height_tested_tiles,
+            stats.resident,
+            stats.drawn,
+            stats.target,
+            stats.in_flight,
+            stats.retiring,
+            stats
+                .finest_spacing_m
+                .map(|m| m.to_string())
+                .unwrap_or_default(),
+            stats.bytes,
+            stats.resident_bytes,
+            stats.retiring_bytes,
+            stats.preparation_ms,
+            stats.encoding_ms,
+            stats.completion_ms,
+            stats.submission_latency_ms,
+            stats.publication_ms
         )
     }
     pub fn finish(&mut self) -> io::Result<()> {
@@ -253,6 +274,8 @@ mod tests {
         let mut record = PhysicalRecord::new(path.clone()).unwrap();
         let stats = GpuStats {
             height_tiles: 384,
+            resident: 125,
+            finest_spacing_m: Some(1),
             ..Default::default()
         };
         let eye = MeterPosition::new(
@@ -277,6 +300,12 @@ mod tests {
         let value = |row: usize, name| rows[row][rows[0].iter().position(|&h| h == name).unwrap()];
         assert_eq!(value(2, "height_tiles"), "384");
         assert_eq!(value(2, "gpu_stats_fresh"), "false");
+        assert_eq!(
+            value(2, "local_resident"),
+            "125",
+            "retain the last GPU snapshot explicitly"
+        );
+        assert_eq!(value(2, "finest_spacing_m"), "1");
         assert_eq!(value(2, "terrain_clearance_m"), "-10.000");
         assert_eq!(value(2, "altitude_protection"), "false");
     }

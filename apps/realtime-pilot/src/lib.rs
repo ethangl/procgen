@@ -108,4 +108,7 @@ pub use voxel_gpu_compute::{VoxelGpuInput, VoxelGpuMesher, VoxelGpuWork};
 #[cfg(feature = "gpu")]
 pub use voxel_gpu_timing::VoxelGpuTimes;
 #[cfg(feature = "gpu")]
-pub use voxel_gpu_world::{VoxelGpuError, VoxelGpuEvent, VoxelGpuWorld, VoxelGpuWorldConfig};
+pub use voxel_gpu_world::{
+    VoxelGpuError, VoxelGpuEvent, VoxelGpuLease, VoxelGpuSubmission, VoxelGpuWorld,
+    VoxelGpuWorldConfig,
+};
