@@ -2,8 +2,9 @@
 //! Each surface resolves its own visibility before any coverage is blended.
 pub static TERRAIN_SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         crate::physical_color::height_color_shader(),
+        crate::physical_color::material_color_shader(),
         include_str!("physical_frame.wgsl"),
         include_str!("physical_gpu.wgsl")
     )

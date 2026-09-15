@@ -4,7 +4,9 @@ use bevy::prelude::*;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Coloring {
     Neutral,
+    /// Slope and altitude choose soil, rock, snow, or shore sand.
     #[default]
+    Material,
     Height,
     Lod,
     Normals,
