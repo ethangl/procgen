@@ -657,6 +657,108 @@ fn gpu_failures_keep_previous_coverage_and_memory_reservations() {
     assert!(limited.memory_bytes() <= budget);
 }
 
+/// A rejected admission must strand neither its slot nor the events its update
+/// had already gathered: the publication that happens in the same call as the
+/// rejection is delivered by the next call.
+#[test]
+fn a_rejected_admission_frees_its_slot_and_defers_rather_than_drops_its_events() {
+    let (device, queue) = device();
+    let json: serde_json::Value =
+        serde_json::from_str(include_str!("../../../planet-design.json")).unwrap();
+    let design: PlanetDesignConfig = serde_json::from_value(json["design"].clone()).unwrap();
+    let field = Arc::new(design.validate().unwrap());
+    let camera = position(4_903_255, 16, 16);
+    // Three isolated leaves. Each is its own replacement group, so the second
+    // can publish in the very update that rejects the third.
+    let near = parent(camera);
+    let mid = parent(position(4_903_255, 100_000, 16));
+    let far = parent(position(4_903_255, 200_000, 16));
+    let one = VoxelCoverage::new(vec![near]).unwrap();
+    let all = VoxelCoverage::new(vec![near, mid, far]).unwrap();
+    let work = |a| VoxelGpuMesher::work_bytes(&VoxelTransitionPlan::new(all.key(a).unwrap()));
+    assert_eq!(one.key(near).unwrap(), all.key(near).unwrap());
+    assert!(
+        work(near) == work(mid) && work(mid) == work(far),
+        "leaves without finer neighbors share one working-set size"
+    );
+    // Two slots plus one working set. The third chunk needs a third slot.
+    let budget = 2 * CONFIG.slot_bytes() + work(near);
+    let mut world = VoxelGpuWorld::new(
+        &device,
+        &queue,
+        field,
+        VoxelGpuWorldConfig {
+            stream: VoxelStreamConfig {
+                max_slots: 8,
+                max_in_flight: 1,
+            },
+            mesh: CONFIG,
+            memory_budget_bytes: budget,
+        },
+    )
+    .unwrap();
+    world.set_coverage(&one, camera).unwrap();
+    settle(&mut world);
+    world.set_coverage(&all, camera).unwrap();
+    let start = Instant::now();
+    let mut published = 0;
+    let error = loop {
+        match world.update() {
+            Ok(events) => {
+                published += events
+                    .iter()
+                    .filter(|e| matches!(e, VoxelGpuEvent::Published(_)))
+                    .count();
+                assert!(
+                    start.elapsed() < Duration::from_secs(30),
+                    "GPU residency stalled"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => break error,
+        }
+    };
+    assert!(matches!(error, VoxelGpuError::MemoryBudget));
+    assert_eq!(
+        published, 0,
+        "the second chunk publishes in the rejected call"
+    );
+    assert_eq!(world.in_flight(), 0, "the rejected slot is completed");
+    assert_eq!(world.resident_slots().count(), 2);
+    assert!(world.memory_bytes() <= budget);
+    let events = world.update().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, VoxelGpuEvent::Published(p) if !p.installed.is_empty()))
+            .count(),
+        1,
+        "the rejected call's publication reaches the consumer"
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        VoxelGpuEvent::Completed {
+            outcome: VoxelGpuOutcome::Ready,
+            ..
+        }
+    )));
+    assert!(
+        world.update().unwrap().is_empty(),
+        "deferred events are delivered once"
+    );
+    // Dropping the rejected chunk clears its failure and frees a slot; the same
+    // request is then admitted, so the rejection cost no admission capacity.
+    world.set_coverage(&one, camera).unwrap();
+    settle(&mut world);
+    assert_eq!(world.resident_slots().count(), 1);
+    world
+        .set_coverage(&VoxelCoverage::new(vec![near, far]).unwrap(), camera)
+        .unwrap();
+    settle(&mut world);
+    assert_eq!(world.resident_slots().count(), 2);
+    assert!(world.failed().next().is_none());
+}
+
 #[test]
 fn native_device_orbit_meshes_stay_inside_their_chunks() {
     use procgen_gpu_tests::block_on;
