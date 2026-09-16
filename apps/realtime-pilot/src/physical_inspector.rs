@@ -356,6 +356,7 @@ fn position_scene(
             Coloring::Lod => 1,
             Coloring::Normals => 2,
             Coloring::Height => 3,
+            Coloring::Material => 4,
         };
         *transform = Transform::from_translation(vector(state.eye.relative_to(anchor)))
             .with_rotation(state.rotation);

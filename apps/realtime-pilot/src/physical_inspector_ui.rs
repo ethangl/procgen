@@ -99,12 +99,14 @@ pub(super) fn panel(
             }
             ui.separator();
             ui.horizontal(|ui| {
+                ui.selectable_value(&mut state.coloring, Coloring::Material, "Material");
                 ui.selectable_value(&mut state.coloring, Coloring::Height, "Height");
                 ui.selectable_value(&mut state.coloring, Coloring::Neutral, "Neutral");
                 ui.selectable_value(&mut state.coloring, Coloring::Lod, "LOD");
                 ui.selectable_value(&mut state.coloring, Coloring::Normals, "Normals");
             });
             match state.coloring {
+                Coloring::Material => material_legend(ui, state.field.config().height_limit_m),
                 Coloring::Height => height_legend(ui, state.field.config().height_limit_m),
                 Coloring::Lod => {
                     ui.label("Colors show sample spacing: red = 1 m or finer.");
@@ -222,6 +224,40 @@ pub(super) fn panel(
     Ok(())
 }
 
+/// Swatches from the same CPU rule the shader is generated from, at one
+/// representative input each. Sea level is zero for the shore swatch, so the
+/// swatch shows the rule rather than the current ocean setting.
+fn material_legend(ui: &mut egui::Ui, limit_m: f32) {
+    use crate::physical_color::material_color;
+    ui.label("Material from slope and altitude");
+    for (label, rgb) in [
+        (
+            "Soil · gentle low ground",
+            material_color(1.0, 0.0, limit_m, None),
+        ),
+        (
+            "Rock · 60° face",
+            material_color(60f32.to_radians().cos(), 0.0, limit_m, None),
+        ),
+        (
+            "Snow · flat at 70% of the limit",
+            material_color(1.0, 0.7 * limit_m, limit_m, None),
+        ),
+        (
+            "Sand · flat 2 m above sea level",
+            material_color(1.0, 2.0, limit_m, Some(0.0)),
+        ),
+    ] {
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 12.0), egui::Sense::hover());
+            let [r, g, b] = rgb;
+            ui.painter()
+                .rect_filled(rect, 2.0, egui::Rgba::from_rgb(r, g, b));
+            ui.label(label);
+        });
+    }
+    ui.label("Starting colors; lighting is unchanged.");
+}
 fn height_legend(ui: &mut egui::Ui, limit_m: f32) {
     use crate::physical_color::HEIGHT_COLORS;
     ui.label("Altitude above reference radius");

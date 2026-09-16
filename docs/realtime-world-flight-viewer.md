@@ -121,6 +121,32 @@ floor of the measurement and reads 0.044 m on the disabled run.
 Reusable CPU/GPU voxel generation and collision code remain in the library.
 There is no CPU visual backend and no `--backend` flag.
 
+## Coloring
+
+**Material** is the default coloring and the first mode in the panel. It is a fragment
+rule over the existing shading, not a generation change: nothing about height tiles,
+the voxel band, or the field moves. Each fragment takes `slope = dot(normal, up)` with
+`up` the normalized planet-space position, and its altitude above the reference radius,
+and blends four materials with smoothsteps so nothing bands. Soil holds below 28
+degrees and becomes rock above 42. Snow comes in from 55 percent of the configured
+height limit and is full by 65, multiplied by a slope factor that is one below 35
+degrees and zero above 50, so cliffs stay rock through the snow line. Shore sand is
+full within 4 m above sea level and gone by 8 m, only when the ocean is enabled and
+only where the face is gentler than the rock threshold; it has no lower bound, so
+ground just under the waterline reads as sand too. The directional light and ambient
+term are applied afterwards exactly as Height mode applies them.
+
+The four colors and the four angles are starting values, not measured ones. They live
+once in `physical_color.rs` as `MaterialRule` and feed two consumers: the CPU
+`material_color`, which draws the panel legend's four swatches, and the generated WGSL
+`material_color` the terrain shader calls. A GPU test dispatches the generated shader
+over a grid of slope cosines and altitudes with the ocean on and off and compares it to
+the CPU function within 1e-6 per component, the same way the height palette is checked.
+
+**Height**, **Neutral**, **LOD**, and **Normals** remain as inspection modes and are
+unchanged. Height maps altitude through the six-stop ramp; LOD reads each lease's chunk
+level, so the band's spacing rings separate from the height tiles underneath.
+
 ## Camera behavior
 
 Orbit dragging uses the current screen axes. Right drag looks around. In flight,
@@ -176,35 +202,41 @@ cargo run -p procgen-realtime-pilot -- --explore-record /tmp/procgen-flight-rout
 
 The 90-second recording starts in orbit, descends at 5 seconds, moves to five
 meters above terrain at 30 seconds and flies forward, rises at 75 seconds,
-returns to orbit at 85 seconds, then exits. Six screenshots accompany the CSV.
+returns to orbit at 85 seconds, then exits. Six screenshots accompany the CSV. The
+route uses the default coloring, so the captures are material-colored. Existing
+scripts for the old collision-route schema must be updated: `terrain_clearance_m`
+and `altitude_protection` replace the collision columns, and the local voxel counts,
+bytes, and stage timings follow them.
 
-The CSV has 40 columns, in this order. `terrain_clearance_m` and
-`altitude_protection` replaced the old collision columns, and the local voxel
-counts, bytes, and stage timings follow them; scripts written for the old
-collision-route schema must be updated.
+The header `PhysicalRecord::new` writes carries 40 columns in this order:
 
-- Frame and phase: `seconds`, `phase`, `frame_ms`.
-- Height stream: `height_tiles`, `height_bytes`, `height_update_ms`,
-  `selection_ms`, `scheduler_ms`, `draw_ms`.
-- Camera and targets: `x_m`, `y_m`, `z_m`, `surface_target_bytes`, `status`,
-  `gpu_stats_fresh`.
-- Height timings and camera clearance: `height_build_ms` (preparation,
-  submission waits, and GPU completion), `height_wait_ms` (waiting for the
-  preceding fade), `terrain_clearance_m`, `altitude_protection`.
-- Height tile counts: `height_generated_tiles` and `height_reused_tiles`, both
-  cumulative, `height_drawn_tiles`, `height_tested_tiles`.
-- Local voxel band: `local_resident`, `local_drawn`, `local_target`,
-  `local_in_flight`, `local_retiring`, `finest_spacing_m`, `coarsest_spacing_m`,
-  `gpu_bytes`, `local_resident_bytes`, `local_retiring_bytes`.
-- Band stage timings: `preparation_ms`, `encoding_ms`, `completion_ms`,
-  `submission_latency_ms`, `publication_ms`, and `gpu_density_ms` and
-  `gpu_extraction_ms` where the device reports timestamps.
-
-`gpu_stats_fresh` is false when the last snapshot is reused because its lock is
-busy; camera clearance stays current either way. Every `_ms` column except the
-two `gpu_` ones is elapsed time, not a GPU timestamp. The panel shows the same
-band counts, both spacings, the leaves the world is settling on against the
-target band, resident and retiring bytes, and stage timings.
+1. `seconds`, `phase` — elapsed time and the route stage index.
+2. `frame_ms` — viewer frame time.
+3. `height_tiles`, `height_bytes`, `height_update_ms` — resident height tiles, their
+   GPU buffer bytes, and the time to apply the last snapshot.
+4. `selection_ms`, `scheduler_ms`, `draw_ms` — coverage selection, residency
+   scheduling, and draw encoding.
+5. `x_m`, `y_m`, `z_m` — camera position in meters.
+6. `surface_target_bytes` — the three-layer surface target payload.
+7. `status` — the panel's status line.
+8. `gpu_stats_fresh` — false when the last snapshot is reused because its lock is
+   busy; camera clearance stays current either way.
+9. `height_build_ms`, `height_wait_ms` — preparation, submission waits and GPU
+   completion, and waiting for the preceding fade. Both are elapsed times, not GPU
+   timestamps.
+10. `terrain_clearance_m`, `altitude_protection` — radial clearance and whether the
+    camera protection is enabled.
+11. `height_generated_tiles`, `height_reused_tiles` — cumulative tile work.
+12. `height_drawn_tiles`, `height_tested_tiles` — per-frame visibility results.
+13. `local_resident`, `local_drawn`, `local_target`, `local_in_flight`,
+    `local_retiring` — voxel band slot counts.
+14. `finest_spacing_m`, `coarsest_spacing_m` — the band's cell spacing range.
+15. `gpu_bytes`, `local_resident_bytes`, `local_retiring_bytes` — voxel GPU bytes,
+    total and by residency state.
+16. `preparation_ms`, `encoding_ms`, `completion_ms`, `submission_latency_ms`,
+    `publication_ms` — voxel generation stage timings.
+17. `gpu_density_ms`, `gpu_extraction_ms` — GPU timestamps where the device reports
+    them.
 
 ### Metal smoke result, 2026-09-14
 

@@ -61,6 +61,7 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
         .expect("selected GPU backend required");
     eprintln!("{} {:?}", adapter.name, adapter.backend);
     check_height_colors(&device, &queue);
+    check_material_colors(&device, &queue);
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None,
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -438,6 +439,73 @@ fn opaque_layers_blend_without_stipple_or_hidden_surface_leaks() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Height limit and sea level the material grid is evaluated against.
+const MATERIAL_LIMIT_M: f32 = 3000.0;
+const MATERIAL_SEA_LEVEL_M: f32 = 0.0;
+
+fn check_material_colors(device: &wgpu::Device, queue: &wgpu::Queue) {
+    use procgen_gpu_tests::{run_compute, storage_output_buffer};
+    use wgpu::util::DeviceExt;
+    // Slope from vertical to flat, altitude across the whole envelope, plus
+    // meters either side of the waterline the relative grid steps over.
+    let mut samples: Vec<[f32; 4]> = Vec::new();
+    let mut altitudes: Vec<f32> = (-16..=16)
+        .map(|i| i as f32 / 16.0 * MATERIAL_LIMIT_M)
+        .collect();
+    altitudes.extend([-4.0, 0.0, 2.0, 4.0, 6.0, 8.0, 12.0]);
+    for slope in 0..=32 {
+        let slope_cos = slope as f32 / 32.0;
+        for altitude_m in &altitudes {
+            // The fourth component carries the ocean flag, so one dispatch
+            // covers the shore rule enabled and disabled.
+            samples.push([slope_cos, *altitude_m, MATERIAL_SEA_LEVEL_M, 0.0]);
+            samples.push([slope_cos, *altitude_m, MATERIAL_SEA_LEVEL_M, 1.0]);
+        }
+    }
+    let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("material color inputs"),
+        contents: bytemuck::cast_slice(&samples),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let output = storage_output_buffer::<[f32; 4]>(device, "material colors", samples.len());
+    let shader = format!(
+        "{}\n{}",
+        physical_color::material_color_shader(),
+        format_args!(
+            r#"
+        @group(0) @binding(0) var<storage,read> samples: array<vec4<f32>>;
+        @group(0) @binding(1) var<storage,read_write> colors: array<vec4<f32>>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+            if id.x >= arrayLength(&samples) {{ return; }}
+            let s = samples[id.x];
+            colors[id.x] = vec4(material_color(s.x,s.y,{MATERIAL_LIMIT_M:?},s.z,s.w != 0.0),1.0);
+        }}
+    "#
+        )
+    );
+    run_compute(
+        device,
+        queue,
+        "material colors",
+        &shader,
+        &[input.as_entire_binding(), output.as_entire_binding()],
+        samples.len() as u32,
+    );
+    let colors = readback::<[f32; 4]>(device, queue, &output, samples.len());
+    for (sample, gpu) in samples.iter().zip(colors) {
+        let sea_level_m = (sample[3] != 0.0).then_some(sample[2]);
+        let cpu =
+            physical_color::material_color(sample[0], sample[1], MATERIAL_LIMIT_M, sea_level_m);
+        for axis in 0..3 {
+            // Smoothstep and two mixes in f32, well below visible color precision.
+            assert!(
+                (cpu[axis] - gpu[axis]).abs() < 0.000001,
+                "{sample:?} axis {axis}: {cpu:?} vs {gpu:?}"
+            );
         }
     }
 }
