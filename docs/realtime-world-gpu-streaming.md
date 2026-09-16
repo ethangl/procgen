@@ -1188,8 +1188,11 @@ The camera's physical point and rotation are retained. Collision requests carry
 an immutable field identity; results from earlier designs cannot install.
 
 The last complete design remains visible while the replacement builds. The
-recorded flight route measures that build at 6.83 s from a scripted octave edit
-to the new revision on screen, on Apple M1 Max; see
+replacement now appears as soon as its height tiles are ready, without waiting
+for its voxel band: the recorded flight route measures 2.13 s from a scripted
+octave edit to the new revision on screen, on Apple M1 Max, down from 6.83 s when
+publication waited for the band, and the band fills in behind it over the next
+ten seconds; see
 [the flight viewer's edit-latency result](realtime-world-flight-viewer.md#metal-edit-latency-result-2026-09-15).
 GPU leases and queue completion retain retired buffers until draws finish. There is
 one generation worker, one queued latest request, and at most one pending design

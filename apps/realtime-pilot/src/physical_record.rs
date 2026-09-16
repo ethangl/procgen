@@ -110,7 +110,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,coarsest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms,design_revision,edit_pending"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,coarsest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms,design_revision,edit_pending,band_resident_fraction"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -189,9 +189,16 @@ impl PhysicalRecord {
             .gpu_times
             .map(|t| (t.density_ms.to_string(), t.extraction_ms.to_string()))
             .unwrap_or_default();
+        // How much of the selected band is drawable, which is the curve the
+        // band traces as it fills in behind a newly published design. An empty
+        // band has no fraction to report rather than a nominal one.
+        let band_resident_fraction = match stats.target {
+            0 => String::new(),
+            target => format!("{:.4}", stats.resident as f64 / target as f64),
+        };
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{design_revision},{edit_pending}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{design_revision},{edit_pending},{band_resident_fraction}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -303,6 +310,7 @@ mod tests {
         let stats = GpuStats {
             height_tiles: 384,
             resident: 125,
+            target: 250,
             finest_spacing_m: Some(1),
             coarsest_spacing_m: Some(16),
             ..Default::default()
@@ -340,6 +348,16 @@ mod tests {
         assert_eq!(value(2, "altitude_protection"), "false");
         assert_eq!(value(2, "design_revision"), "0");
         assert_eq!(value(2, "edit_pending"), "false");
+        assert_eq!(
+            value(1, "band_resident_fraction"),
+            "0.5000",
+            "125 of a 250-chunk band is drawable"
+        );
+        assert_eq!(
+            value(2, "band_resident_fraction"),
+            "0.5000",
+            "the retained snapshot keeps its fraction"
+        );
     }
     #[test]
     fn the_scripted_edit_fires_once_in_flight_and_stays_pending_until_the_revision_changes() {
@@ -375,6 +393,11 @@ mod tests {
         assert_eq!(
             (value(1, "design_revision"), value(1, "edit_pending")),
             ("0", "true")
+        );
+        assert_eq!(
+            value(1, "band_resident_fraction"),
+            "",
+            "an empty band reports no fraction"
         );
         assert_eq!(
             (value(2, "design_revision"), value(2, "edit_pending")),

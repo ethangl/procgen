@@ -93,14 +93,18 @@ struct Pipelines {
     voxel: Arc<VoxelGpuMesher>,
     height: Arc<HeightGpuPipeline>,
 }
-/// The design publication decision for one worker iteration. `settled_at_top`
-/// is the world state after this iteration's events were drained and before any
-/// coverage step it goes on to take, because a step makes the world unsettled
-/// again: reading `settled()` after the step held every design behind the
-/// band's whole walk to its target instead of publishing it as soon as the
-/// height shell was ready.
-fn should_publish(offered: bool, settled_at_top: bool, heights_ready: bool) -> bool {
-    !offered && settled_at_top && heights_ready
+/// The design publication decision for one worker iteration. A design is ready
+/// as soon as its height shell is. The voxel world's settlement is deliberately
+/// not part of this: re-meshing a whole band after an edit takes seconds, and
+/// the tiles that approximate it do not.
+///
+/// The tiles are the same octave height the band's density starts from, so they
+/// differ from the band's surface only by the volume term, which the tiles do
+/// not evaluate and which is strictly inside plus or minus its `amplitude_m`
+/// (6 m in the shipped 300 km design), and by the tiles' own spacing filter.
+/// That is the same disagreement the band dissolves across at its edge today.
+fn should_publish(offered: bool, heights_ready: bool) -> bool {
+    !offered && heights_ready
 }
 /// Start the new world on the coverage the previous revision reached, handed
 /// over in one `set_coverage` of its capped band, so the band arrives as one
@@ -318,9 +322,12 @@ fn generate_revision(
                 }
             }
         }
-        // The band refines live afterwards; waiting for the final target would
-        // hold the first design behind hundreds of coverage steps.
-        if should_publish(offered, settled, heights.ready()) {
+        // Tiles first, band behind: this is the intended order, not a
+        // shortcut. The new revision's `GpuOutput.frame` stays `None` until its
+        // first publication event, so the renderer draws height tiles alone
+        // until the band's first group arrives and then dissolves into them at
+        // the band edge, exactly as it does at startup.
+        if should_publish(offered, heights.ready()) {
             let publication = DisplayedDesign {
                 revision,
                 field: Arc::clone(&bridge.design.field),
@@ -370,14 +377,11 @@ fn generate_revision(
 mod tests {
     use super::should_publish;
     #[test]
-    fn a_design_publishes_on_the_first_settled_iteration_with_heights_ready() {
-        // The iteration that publishes is usually also the one that takes the
-        // next coverage step, which leaves the world unsettled. Reading the
-        // world after the step held the design back until the band had walked
-        // all the way to its target.
-        assert!(should_publish(false, true, true));
-        assert!(!should_publish(false, false, true), "world still settling");
-        assert!(!should_publish(false, true, false), "no height shell yet");
-        assert!(!should_publish(true, true, true), "already offered");
+    fn a_design_publishes_as_soon_as_its_height_tiles_are_ready() {
+        // The voxel band is not a precondition. It re-meshes behind the tiles,
+        // which is seconds of work the viewer no longer waits through.
+        assert!(should_publish(false, true));
+        assert!(!should_publish(false, false), "no height shell yet");
+        assert!(!should_publish(true, true), "already offered");
     }
 }

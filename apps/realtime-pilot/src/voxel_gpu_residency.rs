@@ -9,6 +9,12 @@ pub struct VoxelStreamConfig {
     pub max_slots: usize,
     pub max_in_flight: usize,
 }
+/// Most jobs one stream encodes before reading a completion back. Each holds a
+/// working set of a few megabytes outside the slot reservation, and the owner
+/// of the render queue drains that many submissions per frame, so this ceiling
+/// bounds both. It was eight while a band only grew a group at a time; a design
+/// edit re-meshes the whole band, which is the case that wants the width.
+const MAX_JOBS_IN_FLIGHT: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoxelStreamError {
     SlotLimit,
@@ -36,7 +42,7 @@ impl VoxelStreamConfig {
         if !(1..=crate::MAX_VOXEL_COVERAGE_LEAVES).contains(&self.max_slots) {
             return Err(VoxelStreamError::SlotLimit);
         }
-        let max = 8.min(self.max_slots);
+        let max = MAX_JOBS_IN_FLIGHT.min(self.max_slots);
         if !(1..=max).contains(&self.max_in_flight) {
             return Err(VoxelStreamError::JobLimit { max });
         }

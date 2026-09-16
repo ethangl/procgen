@@ -60,25 +60,43 @@ settled and the current coverage differs from the target band, it takes a single
 empty coverage has nothing to refine, so a band returning from orbit restarts
 from the root chunk.
 
-A design is published on the first iteration whose world was settled at the top
-and whose height stream is ready, whether or not that same iteration goes on to
-take a coverage step. The worker reads `settled()` once, after it drains the
-world's events and before it steps, because a step makes the world unsettled
-again: reading it after the step held every edit behind the band's whole walk to
-its target, about 450 steps and 160 frame-coupled GPU replacements. The band then
-refines live while the viewer draws.
+**A design is published as soon as its height tiles are ready. The voxel band is
+not a precondition; it fills in behind them.** Tiles first, band behind, is the
+intended order. A new revision's `GpuOutput.frame` stays `None` until its own
+first publication event, so the renderer draws that revision's tiles alone until
+the band's first closed group arrives, and the band then dissolves into the tiles
+at its edge exactly as it does at startup. The tiles are the same octave height
+the band's density starts from; they differ from the band's surface only by the
+volume term, which the tiles do not evaluate and which stays strictly inside plus
+or minus its `amplitude_m` (6 m in the shipped 300 km design), and by the tiles'
+own spacing filter. The height surface is already pushed below the band by that
+same amplitude, which is what the bias rule below is for.
 
-A new revision does not restart that walk. `generate_revision` hands its
-successor the coverage its band had reached, and the new world receives that
-coverage's capped band in one `set_coverage`. Band selection follows the camera
-and the height shell, which a design edit does not move, so the seed is usually
-already the new revision's target and arrives as one replacement group per closed
-region. A seed the new world refuses falls back to the root chunk and is reported
-in the panel's held-band status. Only the first generation starts from the root.
+Waiting for the world to settle instead cost 4.85 s of a 6.83 s edit, because a
+design edit changes the field and every chunk of the band re-meshes. The worker
+still reads `settled()` once per iteration, after it drains the world's events
+and before it steps, for the draw-frame hand-off and the status line; a step
+makes the world unsettled again, so reading it after the step would misdescribe
+the iteration.
 
-The flight route measures the result: it scripts one octave edit at 40 seconds
-through the panel's own draft, and the `design_revision` and `edit_pending`
-columns bound the edit-to-display window. See "Metal edit-latency result" below.
+A new revision does not restart the band's walk from the root. `generate_revision`
+hands its successor the coverage its band had reached, and the new world receives
+that coverage's capped band in one `set_coverage`. Band selection follows the
+camera and the height shell, which a design edit does not move, so the seed is
+usually already the new revision's target and arrives as one replacement group per
+closed region. A seed the new world refuses falls back to the root chunk and is
+reported in the panel's held-band status. Only the first generation starts from
+the root.
+
+That one seeded group is also why the band's in-flight width was raised from
+eight jobs to thirty-two: growing a band a group at a time never needed the
+width, but re-meshing a whole band does. See `LOCAL_GPU_WORLD_CONFIG` for the
+memory arithmetic and "Metal edit-latency result" below for what it bought.
+
+The flight route measures both halves: it scripts one octave edit at 40 seconds
+through the panel's own draft, the `design_revision` and `edit_pending` columns
+bound the edit-to-display window, and `band_resident_fraction` traces the band
+filling in behind it.
 
 The renderer draws each visible lease into its own Local layer and the compositor
 places it over the height surface. Both surface-join distances now follow the
@@ -209,7 +227,7 @@ scripts for the old collision-route schema must be updated: `terrain_clearance_m
 and `altitude_protection` replace the collision columns, and the local voxel counts,
 bytes, and stage timings follow them.
 
-The header `PhysicalRecord::new` writes carries 42 columns in this order:
+The header `PhysicalRecord::new` writes carries 43 columns in this order:
 
 1. `seconds`, `phase` — elapsed time and the route stage index.
 2. `frame_ms` — viewer frame time.
@@ -242,28 +260,44 @@ The header `PhysicalRecord::new` writes carries 42 columns in this order:
     and whether the route's scripted 40-second octave edit is still waiting for its
     publication. Edit-to-display latency is the number of rows with
     `edit_pending` true times the mean `frame_ms` over them.
+19. `band_resident_fraction` — `local_resident / local_target`, the share of the
+    selected band that is drawable. After an edit it traces the band filling in
+    behind the published tiles. Empty when the band is empty, which is any
+    altitude where nothing within two chunk spans is finer than the 16 m cap.
 
 ### Metal edit-latency result, 2026-09-15
 
-`cargo run -p procgen-realtime-pilot -- --explore-record /tmp/edit-latency-route.csv`
-on Apple M1 Max, 10,480 rows, exit code 0. The scripted edit fired at 40.004 s and
-the new revision appeared at 46.838 s: **814 rows with `edit_pending` true, mean
-frame time 8.394 ms in that window, so 6.83 s edit to display**. The route's
-maximum frame time after the first second was 87.4 ms, at the 85 s return to
-orbit; the maximum inside the edit window was 17.8 ms. Peak `gpu_bytes` was
-4,250,888,400 (4,054 MiB), inside the 5 GiB budget. No row held the band.
+`cargo run -p procgen-realtime-pilot -- --explore-record ...` on Apple M1 Max, exit
+code 0. The route was recorded twice, differing only in the band's in-flight
+width, so the concurrency change has a before and after.
 
-Where that 6.83 s goes: the worker took the request about 0.5 s after the edit,
-which is the panel's 350 ms debounce plus one replacement group, and the height
-shell rebuilt in 55 ms. The rest is the new world settling on the seeded band,
-which the revision's own `publication_ms` reports as 4,847 ms for about 634
-chunks at eight submissions in flight. Publication still waits for
-`world.settled()`, and a design edit changes the field, so every chunk of the
-seeded band is re-meshed before the first settle. Seeding replaced 160 small
-replacement groups with one large one and removed the walk from the root, but it
-cannot remove that work. Publishing before the band is resident would change what
-is drawn at the moment of publication, so it is a separate decision, not a tuning
-step.
+| | in flight 8 | in flight 32 |
+| --- | --- | --- |
+| edit to display | **2.13 s** (255 rows, mean 8.366 ms) | **2.37 s** (278 rows, mean 8.518 ms) |
+| band reaches `band_resident_fraction` 1.0 | 10.77 s after the edit | **9.77 s** after the edit |
+| max frame time after the first second | 105.4 ms | 87.0 ms |
+| frame time p50 / p90 / p99 | 8.34 / 8.66 / 16.11 ms | 8.40 / **16.34** / 17.58 ms |
+| frames over 16.7 ms | 0.6 % | **6.2 %** |
+| peak `gpu_bytes` | 4,231,421,400 (4,035 MiB) | 4,404,083,792 (4,200 MiB) |
+
+Publishing on the tiles is what moved the latency: 6.83 s before, 2.13 s after,
+with the voxel band no longer on the path. What remains is the panel's 350 ms
+debounce, the request pick-up, and the height shell rebuilding.
+
+The in-flight width is the weaker of the two changes and it is not free. It is
+used — the route observes 19 to 32 jobs in flight during the fill — and it takes
+about a second off the band's fill-in, but it does not touch edit-to-display
+latency at all, and it moves p90 frame time from 8.66 ms to 16.34 ms, because the
+owner of the render queue drains up to `max_in_flight + 2` submissions in one
+frame. The peak frame time and the worst frame inside the fill window both
+improved (105.4 to 87.0 ms, and 72.5 to 53.8 ms), so the cost is a wider spread
+rather than a taller spike, but 0.6 % to 6.2 % of frames over 16.7 ms is a real
+change in how the viewer feels. The extra memory, 165 MiB measured, matches the
+170 MiB the arithmetic on `LOCAL_GPU_WORLD_CONFIG` predicts for twenty-four more
+worst-case working sets.
+
+The band's fill-in is still about ten seconds, and the run-to-run difference
+between the two columns above is within the noise of a single recording each.
 
 ### Metal smoke result, 2026-09-14
 
