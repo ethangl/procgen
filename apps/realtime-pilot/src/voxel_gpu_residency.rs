@@ -9,11 +9,11 @@ pub struct VoxelStreamConfig {
     pub max_slots: usize,
     pub max_in_flight: usize,
 }
-/// Most jobs one stream encodes before reading a completion back. Each holds a
-/// working set of a few megabytes outside the slot reservation, and the owner
-/// of the render queue drains that many submissions per frame, so this ceiling
-/// bounds both. It was eight while a band only grew a group at a time; a design
-/// edit re-meshes the whole band, which is the case that wants the width.
+/// Ceiling on the jobs one stream encodes before reading a completion back. Each
+/// holds a working set of a few megabytes outside the slot reservation, and the
+/// owner of the render queue drains that many submissions per frame, so this
+/// bounds both. The viewer runs at eight; the ceiling leaves room for a wider
+/// setting without changing validation, which used to hard-code the old value.
 const MAX_JOBS_IN_FLIGHT: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoxelStreamError {

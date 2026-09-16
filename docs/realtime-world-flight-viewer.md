@@ -65,12 +65,12 @@ not a precondition; it fills in behind them.** Tiles first, band behind, is the
 intended order. A new revision's `GpuOutput.frame` stays `None` until its own
 first publication event, so the renderer draws that revision's tiles alone until
 the band's first closed group arrives, and the band then dissolves into the tiles
-at its edge exactly as it does at startup. The tiles are the same octave height
-the band's density starts from; they differ from the band's surface only by the
-volume term, which the tiles do not evaluate and which stays strictly inside plus
-or minus its `amplitude_m` (6 m in the shipped 300 km design), and by the tiles'
-own spacing filter. The height surface is already pushed below the band by that
-same amplitude, which is what the bias rule below is for.
+at its edge exactly as it does at startup. The tiles draw the projected surface,
+so they differ from the band's surface only by the projection's first-order
+error, measured below at 0.554 m over eight directions and 2.375 m over 104 for
+the shipped 6 m term, and by the tiles' own spacing filter. The height surface is
+pushed below the band by the bias rule below, which still budgets the whole
+amplitude and so covers that error with room to spare.
 
 Waiting for the world to settle instead cost 4.85 s of a 6.83 s edit, because a
 design edit changes the field and every chunk of the band re-meshes. The worker
@@ -88,10 +88,10 @@ closed region. A seed the new world refuses falls back to the root chunk and is
 reported in the panel's held-band status. Only the first generation starts from
 the root.
 
-That one seeded group is also why the band's in-flight width was raised from
-eight jobs to thirty-two: growing a band a group at a time never needed the
-width, but re-meshing a whole band does. See `LOCAL_GPU_WORLD_CONFIG` for the
-memory arithmetic and "Metal edit-latency result" below for what it bought.
+That one seeded group re-meshes the whole band at once, so the route was also
+recorded with the band's in-flight width raised from eight jobs to thirty-two.
+The width stays at eight; "Metal edit-latency result" below records what the
+wider setting bought and what it cost.
 
 The flight route measures both halves: it scripts one octave edit at 40 seconds
 through the panel's own draft, the `design_revision` and `edit_pending` columns
@@ -311,17 +311,18 @@ Publishing on the tiles is what moved the latency: 6.83 s before, 2.13 s after,
 with the voxel band no longer on the path. What remains is the panel's 350 ms
 debounce, the request pick-up, and the height shell rebuilding.
 
-The in-flight width is the weaker of the two changes and it is not free. It is
-used — the route observes 19 to 32 jobs in flight during the fill — and it takes
-about a second off the band's fill-in, but it does not touch edit-to-display
-latency at all, and it moves p90 frame time from 8.66 ms to 16.34 ms, because the
-owner of the render queue drains up to `max_in_flight + 2` submissions in one
-frame. The peak frame time and the worst frame inside the fill window both
-improved (105.4 to 87.0 ms, and 72.5 to 53.8 ms), so the cost is a wider spread
-rather than a taller spike, but 0.6 % to 6.2 % of frames over 16.7 ms is a real
-change in how the viewer feels. The extra memory, 165 MiB measured, matches the
-170 MiB the arithmetic on `LOCAL_GPU_WORLD_CONFIG` predicts for twenty-four more
-worst-case working sets.
+The in-flight width was not kept. It is used — the route observes 19 to 32 jobs
+in flight during the fill — and it takes about a second off the band's fill-in,
+but it does not touch edit-to-display latency at all, and it moves p90 frame time
+from 8.66 ms to 16.34 ms, because the owner of the render queue drains up to
+`max_in_flight + 2` submissions in one frame. The peak frame time and the worst
+frame inside the fill window both improved (105.4 to 87.0 ms, and 72.5 to
+53.8 ms), so the cost is a wider spread rather than a taller spike, but 0.6 % to
+6.2 % of frames over 16.7 ms is a real change in how the viewer feels, and a
+second of fill-in does not pay for it. `LOCAL_GPU_WORLD_CONFIG` stays at eight;
+the residency ceiling that used to hard-code eight is now a named constant of
+thirty-two, so the setting can be widened again without a validation change. The
+extra memory at thirty-two, 165 MiB measured, matched the arithmetic's prediction.
 
 The band's fill-in is still about ten seconds, and the run-to-run difference
 between the two columns above is within the noise of a single recording each.

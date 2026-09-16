@@ -98,11 +98,11 @@ struct Pipelines {
 /// not part of this: re-meshing a whole band after an edit takes seconds, and
 /// the tiles that approximate it do not.
 ///
-/// The tiles are the same octave height the band's density starts from, so they
-/// differ from the band's surface only by the volume term, which the tiles do
-/// not evaluate and which is strictly inside plus or minus its `amplitude_m`
-/// (6 m in the shipped 300 km design), and by the tiles' own spacing filter.
-/// That is the same disagreement the band dissolves across at its edge today.
+/// The tiles draw the projected surface (`PlanetDesignField::surface_height`),
+/// so they differ from the band's surface only by the projection's first-order
+/// error, measured at 0.554 m over eight directions and 2.375 m over 104 for the
+/// shipped 6 m term, plus the tiles' own spacing filter. That is the same
+/// disagreement the band dissolves across at its edge today.
 fn should_publish(offered: bool, heights_ready: bool) -> bool {
     !offered && heights_ready
 }

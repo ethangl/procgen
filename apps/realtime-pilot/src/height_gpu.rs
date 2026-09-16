@@ -175,12 +175,14 @@ use crate::{
 /// triangles at 12 bytes of indices, 12,288 transition triangles at three
 /// unshared vertices plus three indices each, and 72 bytes of status and draw
 /// records. The 1,536 reserved slots are 3.978 GiB of the budget, leaving
-/// 1.022 GiB for the in-flight working sets. Thirty-two of them fit with room
-/// to spare: over fifteen camera positions and 6,823 band leaves, the largest
-/// working set `VoxelGpuMesher::work_bytes` reserves is 5.32 MiB and the mean
-/// is 2.62 MiB, so thirty-two worst cases at once are 170 MiB of that 1.022 GiB.
-/// The concurrency is thirty-two rather than eight because a design edit
-/// re-meshes the whole band, and that cost is what the viewer waits through.
+/// 1.022 GiB for the in-flight working sets: over fifteen camera positions and
+/// 6,823 band leaves, the largest working set `VoxelGpuMesher::work_bytes`
+/// reserves is 5.32 MiB and the mean 2.62 MiB, so eight worst cases at once are
+/// 43 MiB of that 1.022 GiB. The width stays at eight. The recorded route showed
+/// that thirty-two buys about a second of band fill-in after an edit, leaves
+/// edit-to-display latency unchanged, and raises frames over 16.7 ms from 0.6 to
+/// 6.2 percent, because the render queue owner drains that many submissions in
+/// one frame.
 ///
 /// The mesh capacities come from replaying the height audit's travel route and
 /// reading back every resident slot: the worst regular mesh held 8,403 vertices
@@ -197,7 +199,7 @@ use crate::{
 pub const LOCAL_GPU_WORLD_CONFIG: VoxelGpuWorldConfig = VoxelGpuWorldConfig {
     stream: VoxelStreamConfig {
         max_slots: 1_536,
-        max_in_flight: 32,
+        max_in_flight: 8,
     },
     mesh: VoxelGpuMeshConfig {
         regular: VoxelMeshConfig {

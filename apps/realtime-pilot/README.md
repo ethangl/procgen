@@ -20,17 +20,19 @@ The viewer loads the repository's `planet-design-300km.json` with its saved seed
 300 km radius, and complete octave stack. `--design-file PATH` overrides that file.
 `--seed U64` selects the starter preset instead.
 
-Use **Design** for radius, height bound, seed, sea level, file actions, and the
-**Volume** 3D detail term, and **Octaves** for enable state, wavelength, amplitude,
-sharpness, warp, and all damping values. Volume has an enabled checkbox, wavelength and
-amplitude in meters, a sharpness slider, and the fade height above the surface, shipped
-enabled at 24 m, 6 m, 0.5, and 12 m as starting values, not a measured preset. Valid
-terrain edits apply 350 ms after the last
-edit, and rapid edits coalesce. An edit, including an invalid draft, invalidates older
-unpublished results. The last complete design stays visible while its replacement builds
-on a worker; height meshes and field queries switch to the accepted design together.
-Edits preserve the camera and its orientation, except that enabled altitude
-protection raises it if the new terrain would cover it.
+Use **Design** for radius, height bound, seed, sea level, file actions, and the **Volume**
+3D detail term, and **Octaves** for enable state, wavelength, amplitude, sharpness, warp,
+and all damping values. Volume has an enabled checkbox, wavelength and amplitude in
+meters, a sharpness slider, and the fade height above the surface, shipped enabled at 24
+m, 6 m, 0.5, and 12 m as starting values, not a measured preset. Valid terrain edits apply
+350 ms after the last edit, and rapid edits coalesce. An edit, including an invalid draft,
+invalidates older unpublished results. The last complete design stays visible while its
+replacement builds on a worker; height meshes and field queries switch to the accepted
+design together. A scripted octave edit on the recorded route reaches the screen in 2.13
+s, most of it the 350 ms debounce and the height tiles rebuilding; the voxel band
+re-meshes behind the tiles over the following ten seconds. Edits preserve the camera and
+its orientation, except that enabled altitude protection raises it if the new terrain
+would cover it.
 
 **Load…** opens a path dialog, validates the file, and makes it the current design.
 **Save controls** overwrites that current file; its path is read-only in the panel,
