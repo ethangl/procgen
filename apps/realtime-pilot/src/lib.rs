@@ -108,7 +108,8 @@ mod voxel_gpu_world;
 
 #[cfg(feature = "gpu")]
 pub use height_gpu::{
-    HEIGHT_GPU_BATCH_TILES, HeightGpuMesher, LOCAL_GPU_WORLD_CONFIG, height_shader,
+    HEIGHT_GPU_BATCH_TILES, HeightGpuMesher, HeightGpuPipeline, LOCAL_GPU_WORLD_CONFIG,
+    height_shader,
 };
 #[cfg(feature = "gpu")]
 pub use voxel_gpu_buffers::{VoxelGpuMeshBuffers, VoxelGpuMeshConfig, VoxelGpuSlot};

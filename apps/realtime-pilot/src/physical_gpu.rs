@@ -1,13 +1,14 @@
 //! Terrain generation worker; rendering consumes immutable GPU snapshots.
 use crate::physical_gpu_bridge::{
-    DesignRequest, DisplayedDesign, DrawFrame, GpuBridge, GpuGeneration, GpuOutput, GpuStats,
+    DesignHandoff, DisplayedDesign, DrawFrame, GpuBridge, GpuGeneration, GpuOutput, GpuStats,
     TerrainSubmission, local_draw_layout,
 };
 use bevy::prelude::*;
 use procgen_realtime_pilot::{
-    LOCAL_GPU_WORLD_CONFIG, MAX_VOXEL_COVERAGE_LEAVES, VOXEL_BAND_MAX_SPACING_M,
-    VOXEL_BAND_REQUESTED_LEAVES, VoxelChunkAddress, VoxelCoverage, VoxelGpuEvent, VoxelGpuOutcome,
-    VoxelGpuWorld, cap_voxel_coverage, select_height_coverage, select_voxel_coverage,
+    HeightGpuPipeline, LOCAL_GPU_WORLD_CONFIG, MAX_VOXEL_COVERAGE_LEAVES, VOXEL_BAND_MAX_SPACING_M,
+    VOXEL_BAND_REQUESTED_LEAVES, VoxelChunkAddress, VoxelCoverage, VoxelGpuEvent, VoxelGpuMesher,
+    VoxelGpuOutcome, VoxelGpuWorld, VoxelPosition, cap_voxel_coverage, select_height_coverage,
+    select_voxel_coverage,
 };
 use std::{
     sync::{
@@ -68,55 +69,116 @@ fn generate(
         shared: bridge.clone(),
         design: bridge.display.lock().unwrap().clone(),
     };
-    while let Some(request) = generate_revision(device, queue, &generation, stop)? {
+    // Both kernels are composed and compiled once for the whole worker. Only a
+    // design's parameters change between revisions, so a revision costs the
+    // meshes it generates rather than a second shader compilation.
+    let pipelines = Pipelines {
+        voxel: Arc::new(VoxelGpuMesher::new(device, queue)),
+        height: Arc::new(HeightGpuPipeline::new(device)),
+    };
+    let mut seed = VoxelCoverage::new(vec![VoxelChunkAddress::root()])?;
+    while let Some(handoff) = generate_revision(device, queue, &generation, &pipelines, seed, stop)?
+    {
         generation.design = DisplayedDesign {
-            revision: request.revision,
-            field: request.field,
+            revision: handoff.request.revision,
+            field: handoff.request.field,
             output: Arc::new(Mutex::new(GpuOutput::default())),
         };
+        seed = handoff.coverage;
     }
     Ok(())
+}
+/// Compiled kernels shared by every revision this worker generates.
+struct Pipelines {
+    voxel: Arc<VoxelGpuMesher>,
+    height: Arc<HeightGpuPipeline>,
+}
+/// The design publication decision for one worker iteration. `settled_at_top`
+/// is the world state after this iteration's events were drained and before any
+/// coverage step it goes on to take, because a step makes the world unsettled
+/// again: reading `settled()` after the step held every design behind the
+/// band's whole walk to its target instead of publishing it as soon as the
+/// height shell was ready.
+fn should_publish(offered: bool, settled_at_top: bool, heights_ready: bool) -> bool {
+    !offered && settled_at_top && heights_ready
+}
+/// Start the new world on the coverage the previous revision reached, handed
+/// over in one `set_coverage` of its capped band, so the band arrives as one
+/// replacement group per closed region rather than one step per chunk.
+/// An empty band is the whole coverage above the spacing cap, which the world
+/// already holds; a new world has nothing resident.
+fn seed_band(
+    world: &mut VoxelGpuWorld,
+    seed: VoxelCoverage,
+    camera: VoxelPosition,
+) -> Result<(VoxelCoverage, VoxelCoverage), String> {
+    let band = cap_voxel_coverage(&seed, VOXEL_BAND_MAX_SPACING_M).map_err(|e| e.to_string())?;
+    if !band.leaves().is_empty() {
+        world
+            .set_coverage(&band, camera)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok((seed, band))
 }
 fn generate_revision(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     bridge: &GpuGeneration,
+    pipelines: &Pipelines,
+    seed: VoxelCoverage,
     stop: &AtomicBool,
-) -> Result<Option<DesignRequest>, Box<dyn std::error::Error>> {
+) -> Result<Option<DesignHandoff>, Box<dyn std::error::Error>> {
     let revision = bridge.design.revision;
     let mut offered = revision == 0;
-    let mut world = VoxelGpuWorld::new(
+    let mut world = VoxelGpuWorld::with_mesher(
         device,
         queue,
+        Arc::clone(&pipelines.voxel),
         Arc::clone(&bridge.design.field),
         LOCAL_GPU_WORLD_CONFIG,
     )?;
-    let mut heights = crate::physical_height::HeightStream::new(device, bridge);
+    let mut heights =
+        crate::physical_height::HeightStream::new(device, Arc::clone(&pipelines.height), bridge);
     let mut selected_at = None;
     let mut height_target = Vec::new();
-    // The worker walks whole balanced partitions and hands the world the band
-    // each one draws, because a coverage step only redivides the volume it
-    // already holds. `band` is what the world was last told to hold.
-    let mut target = VoxelCoverage::new(vec![VoxelChunkAddress::root()])?;
-    let mut target_band = cap_voxel_coverage(&target, VOXEL_BAND_MAX_SPACING_M)?;
-    let mut current = target.clone();
-    let mut band = target_band.clone();
     // A coverage that will not fit its budget is an ordinary outcome of flying
     // somewhere the band cannot be afforded, not a broken stream. Hold the last
     // good target and band, say so in the panel, and try again on the next
     // camera move instead of ending the generation worker.
     let mut held: Option<String> = None;
+    // The worker walks whole balanced partitions and hands the world the band
+    // each one draws, because a coverage step only redivides the volume it
+    // already holds. `band` is what the world was last told to hold.
+    let (mut current, mut band) = match seed_band(
+        &mut world,
+        seed,
+        bridge.shared.camera.lock().unwrap().eye.anchor(),
+    ) {
+        Ok(seeded) => seeded,
+        Err(error) => {
+            held = Some(error);
+            let root = VoxelCoverage::new(vec![VoxelChunkAddress::root()])?;
+            let band = cap_voxel_coverage(&root, VOXEL_BAND_MAX_SPACING_M)?;
+            (root, band)
+        }
+    };
+    // Nothing is stepped until the first selection runs, which happens on the
+    // first pass of the loop below.
+    let mut target = current.clone();
+    let mut target_band = band.clone();
     let mut stats = GpuStats::default();
     let mut replacement = Instant::now();
     let mut report = Instant::now();
     let mut dirty = false;
     while !stop.load(Ordering::Relaxed) {
-        // Drain the bounded GPU work before replacing its owner. No UI thread joins.
-        if world.settled()
+        // A pending request stops new steps below, so the voxel work in flight
+        // is at most one replacement group. Waiting for the world to settle
+        // instead would hold the edit behind the rest of the band's walk.
+        if world.in_flight() == 0
             && heights.idle()
-            && let Some(request) = bridge.shared.designs.lock().unwrap().request.take()
+            && let Some(handoff) = bridge.shared.designs.lock().unwrap().take_request(&current)
         {
-            return Ok(Some(request));
+            return Ok(Some(handoff));
         }
         let camera = *bridge.shared.camera.lock().unwrap();
         let clearance = camera.eye.altitude_m(bridge.design.field.config().radius_m) as f32
@@ -185,7 +247,10 @@ fn generate_revision(
                 VoxelGpuEvent::Published(_) => dirty = true,
             }
         }
-        if world.settled() {
+        // Captured once, because the step below makes the world unsettled again
+        // and the publication decision must describe the top of this iteration.
+        let settled = world.settled();
+        if settled {
             if dirty {
                 let leases = world.resident_leases();
                 let addresses: Vec<_> = leases.iter().map(|l| l.key.address()).collect();
@@ -255,7 +320,7 @@ fn generate_revision(
         }
         // The band refines live afterwards; waiting for the final target would
         // hold the first design behind hundreds of coverage steps.
-        if !offered && world.settled() && heights.ready() {
+        if should_publish(offered, settled, heights.ready()) {
             let publication = DisplayedDesign {
                 revision,
                 field: Arc::clone(&bridge.design.field),
@@ -275,7 +340,7 @@ fn generate_revision(
             stats.retiring_bytes = world.retiring_bytes();
             stats.status = match &held {
                 Some(error) => format!("Holding the local voxel band: {error}"),
-                None if world.settled() && current.leaves() == target.leaves() => {
+                None if settled && current.leaves() == target.leaves() => {
                     "GPU height terrain and the local voxel band resident".into()
                 }
                 None => "Refining the local voxel band".into(),
@@ -299,4 +364,20 @@ fn generate_revision(
         std::thread::sleep(Duration::from_millis(1));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_publish;
+    #[test]
+    fn a_design_publishes_on_the_first_settled_iteration_with_heights_ready() {
+        // The iteration that publishes is usually also the one that takes the
+        // next coverage step, which leaves the world unsettled. Reading the
+        // world after the step held the design back until the band had walked
+        // all the way to its target.
+        assert!(should_publish(false, true, true));
+        assert!(!should_publish(false, false, true), "world still settling");
+        assert!(!should_publish(false, true, false), "no height shell yet");
+        assert!(!should_publish(true, true, true), "already offered");
+    }
 }

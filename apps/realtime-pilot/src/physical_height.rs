@@ -5,7 +5,9 @@ use crate::physical_gpu_bridge::{
     TerrainSubmission,
 };
 use procgen_realtime_pilot::HeightTile;
-use procgen_realtime_pilot::{HEIGHT_GPU_BATCH_TILES, HEIGHT_TILE_BYTES, HeightGpuMesher};
+use procgen_realtime_pilot::{
+    HEIGHT_GPU_BATCH_TILES, HEIGHT_TILE_BYTES, HeightGpuMesher, HeightGpuPipeline,
+};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, mpsc},
@@ -44,9 +46,15 @@ pub struct HeightStream {
     pending: Option<Pending>,
 }
 impl HeightStream {
-    pub fn new(device: &wgpu::Device, bridge: &GpuGeneration) -> Self {
+    /// The kernel is compiled by the caller and outlives every revision; only
+    /// this design's parameter buffer is built here.
+    pub fn new(
+        device: &wgpu::Device,
+        pipeline: Arc<HeightGpuPipeline>,
+        bridge: &GpuGeneration,
+    ) -> Self {
         Self {
-            mesher: HeightGpuMesher::new(device, &bridge.design.field),
+            mesher: HeightGpuMesher::with_pipeline(device, pipeline, &bridge.design.field),
             current: None,
             pending: None,
         }

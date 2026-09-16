@@ -312,6 +312,13 @@ fn record_route(
             }
             None => {}
         }
+        // The scripted edit goes through the panel's own draft, so it takes the
+        // same debounce, revision, and request path a person's edit takes.
+        if record.design_edit(state.revision) {
+            let octaves = &mut state.editor.edits.config.octaves;
+            let finest = octaves.len() - 1;
+            octaves[finest].enabled = !octaves[finest].enabled;
+        }
         if let Some(path) = record.screenshot() {
             captures.request(&mut commands, path);
         }
@@ -329,6 +336,7 @@ fn record_frame(mut state: NonSendMut<Inspector>, time: Res<Time<Real>>) {
                 state.eye,
                 state.clearance_estimate(),
                 state.keep_above_terrain,
+                state.revision,
             )
             .expect("write route CSV");
         drop(output);

@@ -1,7 +1,9 @@
 //! Renderer-owned messages, immutable snapshots, and visual transition settings.
 use bevy::prelude::Resource;
 use procgen_realtime_pilot::HeightTile;
-use procgen_realtime_pilot::{MeterPosition, PlanetDesignField, VoxelChunkAddress, VoxelGpuLease};
+use procgen_realtime_pilot::{
+    MeterPosition, PlanetDesignField, VoxelChunkAddress, VoxelCoverage, VoxelGpuLease,
+};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, mpsc},
@@ -195,6 +197,15 @@ pub struct DesignRequest {
     pub revision: u64,
     pub field: Arc<PlanetDesignField>,
 }
+/// What a finishing revision hands its successor: the request that replaces it
+/// and the voxel coverage its band had reached. The next world starts its band
+/// from that coverage rather than from the root chunk, because the band's
+/// selection follows the camera and the height shell, which a design edit does
+/// not move.
+pub struct DesignHandoff {
+    pub request: DesignRequest,
+    pub coverage: VoxelCoverage,
+}
 #[derive(Default)]
 pub struct DesignExchange {
     pub failure: Option<String>,
@@ -217,6 +228,16 @@ impl DesignExchange {
     }
     pub fn take_ready(&mut self) -> Option<DisplayedDesign> {
         self.ready.take()
+    }
+    /// Take the queued request, if any, together with the coverage the
+    /// finishing revision reached. The coverage is cloned only when a request
+    /// is actually taken; the worker polls this every millisecond.
+    pub fn take_request(&mut self, coverage: &VoxelCoverage) -> Option<DesignHandoff> {
+        let request = self.request.take()?;
+        Some(DesignHandoff {
+            request,
+            coverage: coverage.clone(),
+        })
     }
 }
 
@@ -315,5 +336,42 @@ mod tests {
         assert!(exchange.publish(publication(3)));
         assert_eq!(exchange.take_ready().unwrap().field.config().seed, 3);
         assert!(exchange.take_ready().is_none());
+    }
+    #[test]
+    fn a_taken_request_carries_the_finishing_revisions_coverage_forward() {
+        use procgen_realtime_pilot::{VoxelChunkAddress, VoxelPosition};
+        let reached = VoxelCoverage::new(
+            VoxelChunkAddress::containing(
+                VoxelPosition {
+                    x_m: 4_903_255,
+                    y_m: 16,
+                    z_m: 16,
+                },
+                3,
+            )
+            .unwrap()
+            .children()
+            .unwrap()
+            .to_vec(),
+        )
+        .unwrap();
+        let mut exchange = DesignExchange::default();
+        assert!(
+            exchange.take_request(&reached).is_none(),
+            "no request, no hand-off"
+        );
+        exchange.invalidate(1);
+        exchange.request = Some(DesignRequest {
+            revision: 1,
+            field: publication(1).field,
+        });
+        let handoff = exchange.take_request(&reached).unwrap();
+        assert_eq!(handoff.request.revision, 1);
+        assert_eq!(
+            handoff.coverage.leaves(),
+            reached.leaves(),
+            "the next world starts its band where this one left it"
+        );
+        assert!(exchange.take_request(&reached).is_none());
     }
 }

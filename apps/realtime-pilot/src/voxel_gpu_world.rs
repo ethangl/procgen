@@ -128,7 +128,7 @@ pub struct VoxelGpuLease {
 pub struct VoxelGpuWorld {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    mesher: VoxelGpuMesher,
+    mesher: Arc<VoxelGpuMesher>,
     field: Arc<PlanetDesignField>,
     config: VoxelGpuWorldConfig,
     residency: VoxelGpuResidency,
@@ -144,12 +144,9 @@ pub struct VoxelGpuWorld {
     deferred: Vec<VoxelGpuEvent>,
 }
 impl VoxelGpuWorld {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        field: Arc<PlanetDesignField>,
-        config: VoxelGpuWorldConfig,
-    ) -> Result<Self, VoxelGpuError> {
+    /// Config and device preconditions, checked before either constructor
+    /// compiles or accepts a mesher.
+    fn admissible(device: &wgpu::Device, config: VoxelGpuWorldConfig) -> Result<(), VoxelGpuError> {
         config.stream.validate()?;
         config.mesh.validate()?;
         let largest = (config.mesh.regular.vertex_capacity as u64
@@ -173,11 +170,39 @@ impl VoxelGpuWorld {
         if config.memory_budget_bytes < config.mesh.slot_bytes() {
             return Err(VoxelGpuError::MemoryBudget);
         }
+        Ok(())
+    }
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        field: Arc<PlanetDesignField>,
+        config: VoxelGpuWorldConfig,
+    ) -> Result<Self, VoxelGpuError> {
+        Self::admissible(device, config)?;
+        Self::with_mesher(
+            device,
+            queue,
+            Arc::new(VoxelGpuMesher::new(device, queue)),
+            field,
+            config,
+        )
+    }
+    /// Share one mesher's compiled shader modules and pipelines across worlds.
+    /// A design edit builds a new world for the new field; compiling the same
+    /// kernels again costs more than the first meshes the world then generates.
+    pub fn with_mesher(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesher: Arc<VoxelGpuMesher>,
+        field: Arc<PlanetDesignField>,
+        config: VoxelGpuWorldConfig,
+    ) -> Result<Self, VoxelGpuError> {
+        Self::admissible(device, config)?;
         let (sender, receiver) = mpsc::channel();
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
-            mesher: VoxelGpuMesher::new(device, queue),
+            mesher,
             field,
             config,
             residency: VoxelGpuResidency::new(config.stream)?,

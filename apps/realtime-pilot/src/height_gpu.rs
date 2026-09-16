@@ -1,5 +1,6 @@
 //! GPU height tiles and canonical CPU audit vertices. No device discovery.
 use crate::{HeightTile, PlanetDesignField, VoxelGpuParameters, voxel_density_shader};
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::{HEIGHT_TILE_BYTES, HEIGHT_VERTEX_COUNT};
@@ -38,24 +39,44 @@ pub fn height_shader() -> String {
         include_str!("height_gpu.wgsl")
     )
 }
-pub struct HeightGpuMesher {
-    pipeline: wgpu::ComputePipeline,
-    field: wgpu::BindGroup,
-}
-impl HeightGpuMesher {
-    pub fn new(device: &wgpu::Device, field: &PlanetDesignField) -> Self {
+/// The compiled height kernel, which holds nothing from any one design.
+/// Composing and compiling the shader is the expensive half of a mesher, and a
+/// design edit changes only the field parameters, so this half is built once
+/// and shared across revisions.
+pub struct HeightGpuPipeline(wgpu::ComputePipeline);
+impl HeightGpuPipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("physical height mesh"),
             source: wgpu::ShaderSource::Wgsl(height_shader().into()),
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("physical height mesh"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("height_mesh"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        Self(
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("physical height mesh"),
+                layout: None,
+                module: &shader,
+                entry_point: Some("height_mesh"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+        )
+    }
+}
+pub struct HeightGpuMesher {
+    pipeline: Arc<HeightGpuPipeline>,
+    field: wgpu::BindGroup,
+}
+impl HeightGpuMesher {
+    pub fn new(device: &wgpu::Device, field: &PlanetDesignField) -> Self {
+        Self::with_pipeline(device, Arc::new(HeightGpuPipeline::new(device)), field)
+    }
+    /// Bind a design to an already compiled kernel. Only the parameter buffer
+    /// and its bind group depend on the field.
+    pub fn with_pipeline(
+        device: &wgpu::Device,
+        pipeline: Arc<HeightGpuPipeline>,
+        field: &PlanetDesignField,
+    ) -> Self {
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("physical height parameters"),
             contents: bytemuck::bytes_of(&VoxelGpuParameters::new(field)),
@@ -63,7 +84,7 @@ impl HeightGpuMesher {
         });
         let field = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("physical height field"),
-            layout: &pipeline.get_bind_group_layout(0),
+            layout: &pipeline.0.get_bind_group_layout(0),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: params.as_entire_binding(),
@@ -97,7 +118,7 @@ impl HeightGpuMesher {
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("physical height tile"),
-            layout: &self.pipeline.get_bind_group_layout(1),
+            layout: &self.pipeline.0.get_bind_group_layout(1),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -113,7 +134,7 @@ impl HeightGpuMesher {
             label: Some("physical height tile"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.pipeline.0);
         pass.set_bind_group(0, &self.field, &[]);
         pass.set_bind_group(1, &group, &[]);
         pass.dispatch_workgroups(

@@ -23,11 +23,19 @@ the tile budget; this is not a promise of uniform one-meter coverage.
 
 Each worker generation owns immutable height snapshots. At most two batches of
 32 tiles are in flight. An edit invalidates unpublished results immediately;
-valid drafts coalesce for 350 ms. The worker drains outstanding submissions
-before taking the latest request, and revision checks reject stale publication.
-The viewer switches the field and height snapshot together once coverage is
-ready. Navigation continues while generation runs. Text focus and explicit
-file saving retain their existing behavior.
+valid drafts coalesce for 350 ms. A pending request stops the worker issuing new
+coverage steps, so it takes the request as soon as the height stream is idle and
+no voxel work is in flight, which is within one replacement group rather than
+after the rest of the band's walk. Revision checks reject stale publication. The
+viewer switches the field and height snapshot together once coverage is ready.
+Navigation continues while generation runs. Text focus and explicit file saving
+retain their existing behavior.
+
+Both kernels are composed and compiled once for the whole worker, not once per
+revision. `VoxelGpuWorld::with_mesher` takes an existing `VoxelGpuMesher`, and
+`HeightGpuPipeline` holds the compiled height kernel while `HeightGpuMesher`
+holds only the design's parameter buffer and bind group. The shaders and their
+bind group layouts are unchanged.
 
 The same worker drives a `VoxelGpuWorld` next to the height stream. It keeps a
 camera-centered band of mixed-LOD chunks: `select_voxel_band` asks the octree
@@ -50,9 +58,27 @@ The worker advances one closed replacement group at a time: when the world is
 settled and the current coverage differs from the target band, it takes a single
 `VoxelCoverage::step_toward` and waits for settlement before the next step. An
 empty coverage has nothing to refine, so a band returning from orbit restarts
-from the root chunk. A design is published once the height stream is ready and
-the world is settled on its *current* coverage, not necessarily on the final
-target; the band then refines live while the viewer draws.
+from the root chunk.
+
+A design is published on the first iteration whose world was settled at the top
+and whose height stream is ready, whether or not that same iteration goes on to
+take a coverage step. The worker reads `settled()` once, after it drains the
+world's events and before it steps, because a step makes the world unsettled
+again: reading it after the step held every edit behind the band's whole walk to
+its target, about 450 steps and 160 frame-coupled GPU replacements. The band then
+refines live while the viewer draws.
+
+A new revision does not restart that walk. `generate_revision` hands its
+successor the coverage its band had reached, and the new world receives that
+coverage's capped band in one `set_coverage`. Band selection follows the camera
+and the height shell, which a design edit does not move, so the seed is usually
+already the new revision's target and arrives as one replacement group per closed
+region. A seed the new world refuses falls back to the root chunk and is reported
+in the panel's held-band status. Only the first generation starts from the root.
+
+The flight route measures the result: it scripts one octave edit at 40 seconds
+through the panel's own draft, and the `design_revision` and `edit_pending`
+columns bound the edit-to-display window. See "Metal edit-latency result" below.
 
 The renderer draws each visible lease into its own Local layer and the compositor
 places it over the height surface. Both surface-join distances now follow the
@@ -174,14 +200,16 @@ cargo run -p procgen-realtime-pilot -- --explore-record /tmp/procgen-flight-rout
 ```
 
 The 90-second recording starts in orbit, descends at 5 seconds, moves to five
-meters above terrain at 30 seconds and flies forward, rises at 75 seconds,
-returns to orbit at 85 seconds, then exits. Six screenshots accompany the CSV. The
+meters above terrain at 30 seconds and flies forward, disables the finest octave
+at 40 seconds while still flying low, rises at 75 seconds, returns to orbit at 85
+seconds, then exits. The edit is not a route stage: the flight continues through
+it and the `phase` column keeps its meaning. Six screenshots accompany the CSV. The
 route uses the default coloring, so the captures are material-colored. Existing
 scripts for the old collision-route schema must be updated: `terrain_clearance_m`
 and `altitude_protection` replace the collision columns, and the local voxel counts,
 bytes, and stage timings follow them.
 
-The header `PhysicalRecord::new` writes carries 40 columns in this order:
+The header `PhysicalRecord::new` writes carries 42 columns in this order:
 
 1. `seconds`, `phase` — elapsed time and the route stage index.
 2. `frame_ms` — viewer frame time.
@@ -210,6 +238,32 @@ The header `PhysicalRecord::new` writes carries 40 columns in this order:
     `publication_ms` — voxel generation stage timings.
 17. `gpu_density_ms`, `gpu_extraction_ms` — GPU timestamps where the device reports
     them.
+18. `design_revision`, `edit_pending` — the design revision the viewer is drawing,
+    and whether the route's scripted 40-second octave edit is still waiting for its
+    publication. Edit-to-display latency is the number of rows with
+    `edit_pending` true times the mean `frame_ms` over them.
+
+### Metal edit-latency result, 2026-09-15
+
+`cargo run -p procgen-realtime-pilot -- --explore-record /tmp/edit-latency-route.csv`
+on Apple M1 Max, 10,480 rows, exit code 0. The scripted edit fired at 40.004 s and
+the new revision appeared at 46.838 s: **814 rows with `edit_pending` true, mean
+frame time 8.394 ms in that window, so 6.83 s edit to display**. The route's
+maximum frame time after the first second was 87.4 ms, at the 85 s return to
+orbit; the maximum inside the edit window was 17.8 ms. Peak `gpu_bytes` was
+4,250,888,400 (4,054 MiB), inside the 5 GiB budget. No row held the band.
+
+Where that 6.83 s goes: the worker took the request about 0.5 s after the edit,
+which is the panel's 350 ms debounce plus one replacement group, and the height
+shell rebuilt in 55 ms. The rest is the new world settling on the seeded band,
+which the revision's own `publication_ms` reports as 4,847 ms for about 634
+chunks at eight submissions in flight. Publication still waits for
+`world.settled()`, and a design edit changes the field, so every chunk of the
+seeded band is re-meshed before the first settle. Seeding replaced 160 small
+replacement groups with one large one and removed the walk from the root, but it
+cannot remove that work. Publishing before the band is resident would change what
+is drawn at the moment of publication, so it is a separate decision, not a tuning
+step.
 
 ### Metal smoke result, 2026-09-14
 

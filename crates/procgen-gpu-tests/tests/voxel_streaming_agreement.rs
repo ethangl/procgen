@@ -857,3 +857,67 @@ fn native_device_orbit_meshes_stay_inside_their_chunks() {
     }
     println!("orbit vertices within radial bounds");
 }
+
+/// A design edit builds a new world for the new field. Sharing one mesher
+/// across those worlds skips a second shader compilation; it must not change
+/// what either world generates, and the two worlds must stay independent.
+#[test]
+fn worlds_sharing_one_mesher_generate_and_retire_independently() {
+    let (device, queue) = device();
+    let json: serde_json::Value =
+        serde_json::from_str(include_str!("../../../planet-design.json")).unwrap();
+    let design: PlanetDesignConfig = serde_json::from_value(json["design"].clone()).unwrap();
+    let field = Arc::new(design.validate().unwrap());
+    let config = VoxelGpuWorldConfig {
+        stream: VoxelStreamConfig {
+            max_slots: 128,
+            max_in_flight: 2,
+        },
+        mesh: CONFIG,
+        memory_budget_bytes: 512 * 1024 * 1024,
+    };
+    let compiled = Instant::now();
+    let mesher = Arc::new(VoxelGpuMesher::new(&device, &queue));
+    let compile_ms = compiled.elapsed().as_secs_f64() * 1000.0;
+    let mut worlds: Vec<_> = (0..2)
+        .map(|_| {
+            VoxelGpuWorld::with_mesher(
+                &device,
+                &queue,
+                Arc::clone(&mesher),
+                Arc::clone(&field),
+                config,
+            )
+            .unwrap()
+        })
+        .collect();
+    let root = VoxelChunkAddress::containing(position(4_903_255, 16, 16), 3).unwrap();
+    let coverage = partition(root, 0);
+    let camera = position(4_903_255, 16, 16);
+    let mut snapshots = Vec::new();
+    for world in &mut worlds {
+        world.set_coverage(&coverage, camera).unwrap();
+        let run = settle(world);
+        assert_eq!(run.submitted, coverage.leaves().len());
+        snapshots.push(snapshot(&device, &queue, world, root));
+    }
+    assert_eq!(
+        snapshots[0].keys().collect::<Vec<_>>(),
+        snapshots[1].keys().collect::<Vec<_>>()
+    );
+    for (key, first) in &snapshots[0] {
+        let second = &snapshots[1][key];
+        assert_eq!(first.regular_vertices, second.regular_vertices);
+        assert_eq!(first.regular_indices, second.regular_indices);
+        assert_eq!(first.transition_vertices, second.transition_vertices);
+        assert_eq!(first.transition_indices, second.transition_indices);
+    }
+    // Retiring one world's coverage must leave the other's residency alone.
+    let resident = worlds[1].resident_slots().count();
+    worlds[0]
+        .set_coverage(&VoxelCoverage::new(vec![root]).unwrap(), camera)
+        .unwrap();
+    settle(&mut worlds[0]);
+    assert_eq!(worlds[1].resident_slots().count(), resident);
+    println!("shared voxel mesher: compiled once in {compile_ms:.2} ms for two worlds");
+}

@@ -16,6 +16,9 @@ pub struct PhysicalRecord {
     capture: usize,
     last_stats: GpuStats,
     route: RecordRoute,
+    /// The displayed revision the scripted edit must replace, once it has been
+    /// applied. `edit_pending` is true for every row until that revision changes.
+    edited: Option<u64>,
 }
 #[derive(Clone, Copy)]
 enum RecordRoute {
@@ -37,6 +40,11 @@ pub enum RouteAction {
     Finish,
     View { clearance_m: f32, view: RecordView },
 }
+/// One scripted design edit during the low flight phase, so the route measures
+/// edit-to-display latency instead of an impression of it. It is not a stage:
+/// the flight continues through it, and the phase column keeps its meaning.
+const FLIGHT_EDIT_SECONDS: f64 = 40.;
+
 const STAGES: [(f64, RouteAction); 6] = [
     (5., RouteAction::Descend),
     (30., RouteAction::Ground),
@@ -102,7 +110,7 @@ impl PhysicalRecord {
         let mut output = BufWriter::new(File::create(&path)?);
         writeln!(
             output,
-            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,coarsest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms"
+            "seconds,phase,frame_ms,height_tiles,height_bytes,height_update_ms,selection_ms,scheduler_ms,draw_ms,x_m,y_m,z_m,surface_target_bytes,status,gpu_stats_fresh,height_build_ms,height_wait_ms,terrain_clearance_m,altitude_protection,height_generated_tiles,height_reused_tiles,height_drawn_tiles,height_tested_tiles,local_resident,local_drawn,local_target,local_in_flight,local_retiring,finest_spacing_m,coarsest_spacing_m,gpu_bytes,local_resident_bytes,local_retiring_bytes,preparation_ms,encoding_ms,completion_ms,submission_latency_ms,publication_ms,gpu_density_ms,gpu_extraction_ms,design_revision,edit_pending"
         )?;
         Ok(Self {
             start: Instant::now(),
@@ -112,6 +120,7 @@ impl PhysicalRecord {
             capture: 0,
             last_stats: GpuStats::default(),
             route,
+            edited: None,
         })
     }
     pub fn action(&mut self) -> Option<RouteAction> {
@@ -136,6 +145,19 @@ impl PhysicalRecord {
     fn current_action(&self) -> Option<RouteAction> {
         self.phase.checked_sub(1).map(|i| self.route.stages()[i].1)
     }
+    /// True once, on the flight route, when the caller must apply the scripted
+    /// design edit. `displayed` is the revision it has to replace, which pins
+    /// the `edit_pending` window down to that revision's publication.
+    pub fn design_edit(&mut self, displayed: u64) -> bool {
+        if self.edited.is_some()
+            || !matches!(self.route, RecordRoute::Flight)
+            || self.start.elapsed().as_secs_f64() < FLIGHT_EDIT_SECONDS
+        {
+            return false;
+        }
+        self.edited = Some(displayed);
+        true
+    }
     pub fn screenshot(&mut self) -> Option<PathBuf> {
         let times = self.route.captures();
         if let Some(&at) = times.get(self.capture)
@@ -154,7 +176,9 @@ impl PhysicalRecord {
         eye: MeterPosition,
         clearance_m: f32,
         protected: bool,
+        design_revision: u64,
     ) -> io::Result<()> {
+        let edit_pending = self.edited == Some(design_revision);
         let gpu_stats_fresh = stats.is_some();
         if let Some(stats) = stats {
             self.last_stats.clone_from(stats);
@@ -167,7 +191,7 @@ impl PhysicalRecord {
             .unwrap_or_default();
         writeln!(
             self.output,
-            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction}",
+            "{:.3},{},{frame_ms:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{:?},{gpu_stats_fresh},{:.3},{:.3},{clearance_m:.3},{protected},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{density},{extraction},{design_revision},{edit_pending}",
             self.start.elapsed().as_secs_f64(),
             self.phase,
             stats.height_tiles,
@@ -291,8 +315,8 @@ mod tests {
             },
             procgen_core::Vec3::ZERO,
         );
-        record.write(8.0, Some(&stats), eye, 5.0, true).unwrap();
-        record.write(8.0, None, eye, -10.0, false).unwrap();
+        record.write(8.0, Some(&stats), eye, 5.0, true, 0).unwrap();
+        record.write(8.0, None, eye, -10.0, false, 0).unwrap();
         record.finish().unwrap();
         drop(record);
         let csv = std::fs::read_to_string(&path).unwrap();
@@ -314,5 +338,59 @@ mod tests {
         assert_eq!(value(2, "coarsest_spacing_m"), "16");
         assert_eq!(value(2, "terrain_clearance_m"), "-10.000");
         assert_eq!(value(2, "altitude_protection"), "false");
+        assert_eq!(value(2, "design_revision"), "0");
+        assert_eq!(value(2, "edit_pending"), "false");
+    }
+    #[test]
+    fn the_scripted_edit_fires_once_in_flight_and_stays_pending_until_the_revision_changes() {
+        let path =
+            std::env::temp_dir().join(format!("procgen-flight-edit-{}.csv", std::process::id()));
+        let mut record = PhysicalRecord::new(path.clone()).unwrap();
+        let eye = MeterPosition::new(
+            VoxelPosition {
+                x_m: 300000,
+                y_m: 0,
+                z_m: 0,
+            },
+            procgen_core::Vec3::ZERO,
+        );
+        assert!(
+            !record.design_edit(0),
+            "no edit before the low flight phase"
+        );
+        record.start = Instant::now() - std::time::Duration::from_secs(40);
+        assert!(record.design_edit(0));
+        assert!(!record.design_edit(0), "the route scripts one edit");
+        record.write(8.0, None, eye, 5.0, true, 0).unwrap();
+        record.write(8.0, None, eye, 5.0, true, 1).unwrap();
+        record.finish().unwrap();
+        drop(record);
+        let csv = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let rows: Vec<_> = csv
+            .lines()
+            .map(|line| line.split(',').collect::<Vec<_>>())
+            .collect();
+        let value = |row: usize, name| rows[row][rows[0].iter().position(|&h| h == name).unwrap()];
+        assert_eq!(
+            (value(1, "design_revision"), value(1, "edit_pending")),
+            ("0", "true")
+        );
+        assert_eq!(
+            (value(2, "design_revision"), value(2, "edit_pending")),
+            ("1", "false")
+        );
+    }
+    #[test]
+    fn the_visibility_route_scripts_no_design_edit() {
+        let path = std::env::temp_dir().join(format!(
+            "procgen-visibility-edit-{}.csv",
+            std::process::id()
+        ));
+        let mut record = PhysicalRecord::visibility(path.clone()).unwrap();
+        record.start = Instant::now() - std::time::Duration::from_secs(40);
+        assert!(!record.design_edit(0));
+        drop(record);
+        std::fs::remove_file(path).unwrap();
     }
 }
