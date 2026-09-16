@@ -37,7 +37,9 @@ impl OctaveConfig {
 /// can carry cliff faces, undercuts, and pinching a radial height cannot
 /// express. It is faded out with height above the surface, which is what keeps
 /// it from making floating blobs in the air (McKendrick 37:19-38:12). Height
-/// tiles never evaluate it; only the density path does.
+/// tiles carry a first-order projection of it through `surface_height`, so the
+/// far field draws the surface the band extracts; the fade itself belongs to
+/// the density path, which is the only one that has a `d` to fade over.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VolumeConfig {
@@ -258,20 +260,46 @@ impl PlanetDesignField {
     /// Zero spacing evaluates every enabled octave. Nonzero spacing smoothly
     /// removes wavelengths from four down to two samples per wavelength.
     pub fn elevation_m(&self, direction: Vec3, spacing_m: f32) -> Result<f32, DesignError> {
-        if !direction.is_finite()
-            || !direction.length_squared().is_finite()
-            || direction.length_squared() == 0.0
-        {
-            return Err(DesignError::Direction);
-        }
-        if !spacing_m.is_finite() || spacing_m < 0.0 {
-            return Err(DesignError::Spacing);
-        }
-        Ok(self.height(direction.normalized(), spacing_m))
+        Ok(self.height(checked_direction(direction, spacing_m)?, spacing_m))
+    }
+
+    /// The surface the near-field band actually extracts, projected back into a
+    /// single radial height so the far field can draw it.
+    ///
+    /// On the band's own surface `d` is zero, so the volume term's fade is one
+    /// and the displaced height is `h + w * volume_shape(dir * (radius + h))`.
+    /// `w` is the same footprint smoothstep the height octaves use, so a tile
+    /// that cannot resolve the term's wavelength does not carry it and coarse
+    /// tiles stitch through their shared footprints unchanged. Filtering is
+    /// correct here and forbidden in the density path, where coincident samples
+    /// at different levels must stay bit-identical.
+    ///
+    /// This is first order only. The true zero crossing along the radial ray
+    /// solves `h - a + volume(P(a), h - a) = 0`; evaluating at `a = h` ignores
+    /// the term's own variation over that displacement. The residual is
+    /// measured, not argued: see `the_projected_far_field_surface_tracks_the_band_crossing`
+    /// in voxel_density.rs.
+    pub fn surface_m(&self, direction: Vec3, spacing_m: f32) -> Result<f32, DesignError> {
+        let direction = checked_direction(direction, spacing_m)?;
+        Ok(self.surface_height(direction, spacing_m))
     }
 
     pub fn height_distribution(&self) -> HeightDistribution {
         sample_heights(|direction| self.height(direction, 0.0))
+    }
+
+    /// See `surface_m` for the projection and its first-order caveat.
+    pub(crate) fn surface_height(&self, direction: Vec3, footprint_m: f32) -> f32 {
+        let height = self.height(direction, footprint_m);
+        let volume = &self.config.volume;
+        let weight = octave_weight(volume.wavelength_m, footprint_m);
+        // Both early outs return `height` itself rather than adding a zero, so
+        // a disabled or unresolvable term leaves the far field bit-identical.
+        if volume.active_amplitude_m() == 0.0 || weight == 0.0 {
+            return height;
+        }
+        let p = direction * (self.config.radius_m + height);
+        height + weight * crate::voxel_density::volume_shape_at(self, p)
     }
 
     pub(crate) fn height(&self, direction: Vec3, spacing_m: f32) -> f32 {
@@ -305,6 +333,19 @@ impl PlanetDesignField {
         let relative = sum / self.config.height_limit_m;
         sum / (1.0 + relative * relative).sqrt()
     }
+}
+
+fn checked_direction(direction: Vec3, spacing_m: f32) -> Result<Vec3, DesignError> {
+    if !direction.is_finite()
+        || !direction.length_squared().is_finite()
+        || direction.length_squared() == 0.0
+    {
+        return Err(DesignError::Direction);
+    }
+    if !spacing_m.is_finite() || spacing_m < 0.0 {
+        return Err(DesignError::Spacing);
+    }
+    Ok(direction.normalized())
 }
 
 pub(crate) fn octave_weight(wavelength_m: f32, spacing_m: f32) -> f32 {
@@ -529,6 +570,55 @@ mod tests {
     }
 
     #[test]
+    fn the_far_field_projection_adds_only_what_a_tile_can_resolve() {
+        let disabled = PlanetDesignConfig::starter(42);
+        let mut config = disabled.clone();
+        config.volume.enabled = true;
+        let volume = config.volume.clone();
+        let with = config.validate().unwrap();
+        let without = disabled.validate().unwrap();
+        // Two samples per wavelength is where octave_weight reaches zero, so a
+        // tile this coarse must carry exactly the bare height.
+        let coarse = volume.wavelength_m / 2.0;
+        let mut sampled = 0;
+        let mut moved = 0;
+        for p in positions() {
+            sampled += 1;
+            let p = p.normalized();
+            assert_eq!(
+                without.surface_height(p, 0.0),
+                without.height(p, 0.0),
+                "a disabled term must leave the far field untouched"
+            );
+            assert_eq!(without.surface_height(p, 0.25), without.height(p, 0.25));
+            assert_eq!(
+                with.surface_height(p, coarse),
+                with.height(p, coarse),
+                "a tile that cannot resolve the wavelength must not carry it"
+            );
+            let offset = with.surface_height(p, 0.0) - with.height(p, 0.0);
+            assert!(
+                offset.abs() <= volume.amplitude_m,
+                "{offset} m exceeds the term's own bound"
+            );
+            moved += usize::from(offset != 0.0);
+        }
+        assert_eq!(
+            moved, sampled,
+            "the enabled term must move every unfiltered tile"
+        );
+        // The checked query agrees with the internal one and rejects the same
+        // arguments elevation_m does.
+        let p = Vec3::new(0.3, -1.0, 0.45);
+        assert_eq!(
+            with.surface_m(p, 0.0).unwrap(),
+            with.surface_height(p.normalized(), 0.0)
+        );
+        assert!(with.surface_m(Vec3::ZERO, 0.0).is_err());
+        assert!(with.surface_m(Vec3::X, -1.0).is_err());
+    }
+
+    #[test]
     fn bounded_seeded_and_schedule_independent() {
         let config = PlanetDesignConfig::starter(42);
         let a = config.validate().unwrap();
@@ -551,6 +641,28 @@ mod tests {
                 .build()
                 .unwrap()
                 .install(|| a.height_distribution())
+        };
+        assert_eq!(run(1), run(4));
+        // The far-field projection has to be schedule-independent too.
+        let projected = PlanetDesignConfig {
+            volume: VolumeConfig {
+                enabled: true,
+                ..VolumeConfig::default()
+            },
+            ..config
+        }
+        .validate()
+        .unwrap();
+        let run = |n| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .unwrap()
+                .install(|| {
+                    positions()
+                        .map(|p| projected.surface_height(p.normalized(), 0.0).to_bits())
+                        .collect::<Vec<_>>()
+                })
         };
         assert_eq!(run(1), run(4));
     }

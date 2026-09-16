@@ -54,9 +54,12 @@ impl Inspector {
     fn up(&self) -> Vec3 {
         vector(self.eye.direction())
     }
+    /// The drawn surface under the camera, the same query
+    /// `keep_camera_above_terrain` protects against, so the reported clearance
+    /// and the protection cannot disagree about where the ground is.
     fn height(&self) -> f32 {
         self.field
-            .elevation_m(self.eye.direction(), 0.0)
+            .surface_m(self.eye.direction(), 0.0)
             .expect("camera direction")
     }
     fn clearance_estimate(&self) -> f32 {
