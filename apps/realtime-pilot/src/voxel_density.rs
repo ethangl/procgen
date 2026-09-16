@@ -146,7 +146,14 @@ pub(crate) fn sample_voxel_chunk_cancellable(
 
 pub(crate) fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -> f32 {
     // All root and halo coordinates fit exactly in f32 at their LOD spacing.
-    let p = position.as_vec3();
+    potential_at_point(field, position.as_vec3())
+}
+
+/// The same potential at an arbitrary point. The kernel only ever evaluates it
+/// at integer meter positions, so `potential_at` is the definition callers use;
+/// this form exists so the far-field projection test can walk a radial ray
+/// between them without quantizing to whole meters.
+fn potential_at_point(field: &PlanetDesignField, p: Vec3) -> f32 {
     let radius = field.config().radius_m;
     let distance = voxel_sqrt(p.length_squared());
     let altitude = radial_altitude(p, radius, distance);
@@ -161,9 +168,11 @@ pub(crate) fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -
     d + volume_at(field, p, d)
 }
 
-/// The surface-relative 3D detail term. `d` is positive below the surface, so
-/// the fade is one inside the solid and reaches zero `fade_m` above it: nothing
-/// this term adds can float free in the air more than that far up.
+/// The unfaded shape of the detail term at `p`: bounded shaped noise times the
+/// amplitude, and zero when the term is off. This is the part that does not
+/// depend on where the surface is, so both callers can share it - the density
+/// path multiplies it by the fade below, and `PlanetDesignField::surface_height`
+/// evaluates it on the band's own surface, where `d` is zero and the fade is one.
 ///
 /// The shaped noise is bounded by the design's own `x / sqrt(1 + x*x)` before
 /// the amplitude scales it, the same soft bound the height stack applies to its
@@ -174,12 +183,33 @@ pub(crate) fn potential_at(field: &PlanetDesignField, position: VoxelPosition) -
 /// render bias in `local_draw_layout` assumes the voxel surface sits at most
 /// `amplitude_m` below the height surface, so that has to be a true bound and
 /// not a statistical one, or the height surface shows through undercuts.
+pub(crate) fn volume_shape_at(field: &PlanetDesignField, p: Vec3) -> f32 {
+    let volume = &field.config().volume;
+    if volume.active_amplitude_m() == 0.0 {
+        return 0.0;
+    }
+    let q = Vec3::new(
+        p.x / volume.wavelength_m,
+        p.y / volume.wavelength_m,
+        p.z / volume.wavelength_m,
+    );
+    let shaped = shape(normalized_noise(field.volume_key(), q), volume.sharpness).value;
+    volume.amplitude_m * (shaped / (1.0 + shaped * shaped).sqrt())
+}
+
+/// The surface-relative 3D detail term. `d` is positive below the surface, so
+/// the fade is one inside the solid and reaches zero `fade_m` above it: nothing
+/// this term adds can float free in the air more than that far up.
 ///
 /// There is deliberately no spacing filter here, unlike the height octaves. The
 /// density path always evaluates the full stack, and coincident halo and parent
 /// samples must stay bit-identical across LODs, which a spacing-dependent term
 /// would break and open seams between chunk levels. Coarse chunks alias this
-/// wavelength instead; the wavelength is bounded from below by validation.
+/// wavelength instead; the wavelength is bounded from below by validation. The
+/// far-field projection in `surface_height` does filter by footprint, which is
+/// correct there for the opposite reason: tiles already filter and stitch
+/// through shared footprints, and nothing in the tile mesh has to agree bit for
+/// bit with a sample taken at another level.
 fn volume_at(field: &PlanetDesignField, p: Vec3, d: f32) -> f32 {
     let volume = &field.config().volume;
     if !volume.enabled || volume.amplitude_m == 0.0 {
@@ -193,13 +223,7 @@ fn volume_at(field: &PlanetDesignField, p: Vec3, d: f32) -> f32 {
         let t = ((d + volume.fade_m) / volume.fade_m).clamp(0.0, 1.0);
         fade = t * t * (3.0 - 2.0 * t);
     }
-    let q = Vec3::new(
-        p.x / volume.wavelength_m,
-        p.y / volume.wavelength_m,
-        p.z / volume.wavelength_m,
-    );
-    let shaped = shape(normalized_noise(field.volume_key(), q), volume.sharpness).value;
-    volume.amplitude_m * (shaped / (1.0 + shaped * shaped).sqrt()) * fade
+    volume_shape_at(field, p) * fade
 }
 
 /// Avoid subtracting two rounded planet radii. Compensated squared products
@@ -566,6 +590,116 @@ mod tests {
             }
         }
         assert_eq!(compared, 17_usize.pow(3));
+    }
+
+    /// The whole point of the far-field projection: the surface the height
+    /// tiles draw has to be the surface the band extracts.
+    ///
+    /// The band's surface is found by bisecting the canonical potential along
+    /// the radial ray; the far field's is `radius_m + surface_height`. The
+    /// bisection narrows the ray parameter to a millimeter, but the position it
+    /// evaluates is an f32 vector at 300 km, whose components step by 2^-5 m, so
+    /// about three centimeters is the floor of any measurement here. The
+    /// disabled run measures that floor directly: with no term to project, the
+    /// only difference left is the altitude arithmetic and that quantization.
+    ///
+    /// Eight directions are reported on their own because eight is what the
+    /// eye checks, and a wider sweep because eight understates the worst case
+    /// by a factor of four. The wider number is the one the bias rule should
+    /// read.
+    #[test]
+    fn the_projected_far_field_surface_tracks_the_band_crossing() {
+        let mut config = enabled_volume_config(42);
+        config.radius_m = 300_000.0;
+        let enabled = config.validate().unwrap();
+        let flat = PlanetDesignConfig {
+            volume: crate::VolumeConfig {
+                enabled: false,
+                ..config.volume.clone()
+            },
+            ..config.clone()
+        }
+        .validate()
+        .unwrap();
+        let radius = f64::from(config.radius_m);
+
+        let crossing = |field: &PlanetDesignField, direction: Vec3, height: f32| {
+            // The term is bounded by its amplitude and dead more than fade_m
+            // above the surface, so this bracket always contains the crossing.
+            let reach = f64::from(config.volume.amplitude_m + config.volume.fade_m) + 8.0;
+            let potential = |offset: f64| {
+                let r = radius + f64::from(height) + offset;
+                let p = Vec3::new(
+                    (f64::from(direction.x) * r) as f32,
+                    (f64::from(direction.y) * r) as f32,
+                    (f64::from(direction.z) * r) as f32,
+                );
+                potential_at_point(field, p)
+            };
+            let (mut low, mut high) = (-reach, reach);
+            assert!(potential(low) > 0.0 && potential(high) < 0.0, "bracket");
+            while high - low > 0.001 {
+                let middle = 0.5 * (low + high);
+                if potential(middle) > 0.0 {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            radius + f64::from(height) + 0.5 * (low + high)
+        };
+        let error = |direction: Vec3| {
+            // The far field must be bit-identical to bare height with the term
+            // off, so the projection can never disturb a design that has none.
+            assert_eq!(
+                flat.surface_m(direction, 0.0).unwrap(),
+                flat.elevation_m(direction, 0.0).unwrap()
+            );
+            let flat_height = flat.height(direction, 0.0);
+            let floor =
+                (crossing(&flat, direction, flat_height) - radius - f64::from(flat_height)).abs();
+            let height = enabled.height(direction, 0.0);
+            let projected = radius + f64::from(enabled.surface_height(direction, 0.0));
+            (
+                (crossing(&enabled, direction, height) - projected).abs(),
+                floor,
+            )
+        };
+        let worst = |directions: &[Vec3]| {
+            directions
+                .iter()
+                .map(|&d| error(d))
+                .fold((0.0_f64, 0.0_f64), |a, b| (a.0.max(b.0), a.1.max(b.1)))
+        };
+
+        // Eight directions spread over the sphere, none of them axis-aligned.
+        let eight = [
+            Vec3::new(1.0, 0.3, -0.2),
+            Vec3::new(-0.7, 1.0, 0.4),
+            Vec3::new(0.25, -1.0, 0.8),
+            Vec3::new(-0.9, -0.35, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-1.0, 0.6, -0.55),
+            Vec3::new(0.15, 0.85, -1.0),
+            Vec3::new(-0.45, -1.0, -0.3),
+        ]
+        .map(Vec3::normalized);
+        let sweep: Vec<_> = crate::test_support::positions()
+            .map(Vec3::normalized)
+            .chain(eight)
+            .collect();
+        let (near, floor) = worst(&eight);
+        let (far, sweep_floor) = worst(&sweep);
+        println!(
+            "300 km design, volume enabled: far field versus band crossing at most {near:.3} m over \
+             eight directions and {far:.3} m over {}; disabled, the same measurement reads \
+             {floor:.3} m and {sweep_floor:.3} m, which is the f32 position floor",
+            sweep.len()
+        );
+        // Measured 0.554 m and 2.375 m. The margin is modest and the measured
+        // number, not the bound, is what a later bias tune should read.
+        assert!(near < 0.8 && far < 3.2, "{near} m, {far} m");
+        assert!(sweep_floor < 0.1, "measurement floor {sweep_floor} m");
     }
 
     #[test]

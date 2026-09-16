@@ -63,14 +63,20 @@ pub struct LocalDrawLayout {
 }
 /// The dissolve follows the coarsest chunk in the band, so the edge fades over
 /// a whole coarse chunk rather than a fraction of one. The height surface drops
-/// by that chunk's cell spacing plus the volume term's amplitude, because the
-/// voxel surface can now sit that far *below* the height surface as well as
-/// above it, and without the second part the height surface would show through
-/// every undercut. Both keep their old fixed values as floors. The bias rule is
-/// still provisional: one coarse cell is a guess at how far a 16 m extraction
-/// can stand above the height surface, not a measured bound, and it will need
-/// route evidence or a per-chunk bias instead. `volume_amplitude_m` is zero
-/// when the term is disabled, which restores the old rule exactly.
+/// by that chunk's cell spacing plus the volume term's amplitude. Both keep
+/// their old fixed values as floors, and `volume_amplitude_m` is zero when the
+/// term is disabled, which restores the old rule exactly.
+///
+/// The amplitude part is now larger than it needs to be, and is kept unchanged
+/// on purpose. Height tiles evaluate the projected surface, so the two surfaces
+/// no longer differ by the whole amplitude: they differ by the projection's
+/// first-order error, measured at 2.375 m worst case for the 300 km design's
+/// 6 m term (`the_projected_far_field_surface_tracks_the_band_crossing` in
+/// voxel_density.rs). That measured number, not the amplitude, is the value a
+/// later tune should use. The spacing part remains provisional for its own
+/// reason: one coarse cell is a guess at how far a 16 m extraction can stand
+/// above the height surface, not a measured bound, and it will need route
+/// evidence or a per-chunk bias instead.
 pub fn local_draw_layout(
     addresses: &[VoxelChunkAddress],
     volume_amplitude_m: f32,

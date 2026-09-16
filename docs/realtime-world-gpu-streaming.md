@@ -15,6 +15,10 @@ fixed block of one-meter chunks below 256 m of clearance, so the G3 transition
 meshes and the G4 coverage walk are both back in the viewer's path. See
 [the flight viewer](realtime-world-flight-viewer.md) for the band's cap, leaf
 budget, stepping, and surface-join rules.
+The height tiles now draw a first-order projection of the density field's volume
+term, so the far field and the band describe one surface: measured against a
+bisected band crossing on the 300 km preset, they differ by at most 2.375 m for
+that design's 6 m term, and not at all when the term is disabled.
 Metal validation and route measurements are recorded below. Windows/Vulkan
 results are in [Windows GPU validation](windows-gpu-validation.md#windowsvulkan-validation-2026-09-14).
 Both hosts have completed the original G5 routes; visual and measurement gaps

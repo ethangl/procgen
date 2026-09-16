@@ -131,21 +131,12 @@ fn pilot_square(value: f32) -> PilotCompensated {
     return PilotCompensated(product, pilot_sum(error, pilot_product(low, low)));
 }
 
-// Mirror of volume_at in voxel_density.rs. No spacing filter, by design: the
-// density path evaluates the full stack so coincident halo and parent samples
-// stay identical across LODs. The fade uses d, positive below the surface, so
-// the term reaches zero fade_m above it and cannot float free above that. The
-// shaped noise passes through the same x / sqrt(1 + x*x) soft bound the height
-// stack uses, so amplitude_m is a true bound on the term and the render bias
-// can rely on it.
-fn pilot_volume(p: vec3<f32>, d: f32) -> f32 {
+// Mirror of volume_shape_at in voxel_density.rs: the unfaded term, shared by
+// the density path and the far-field projection. The shaped noise passes
+// through the same x / sqrt(1 + x*x) soft bound the height stack uses, so
+// amplitude_m is a true bound on the term and the render bias can rely on it.
+fn pilot_volume_shape(p: vec3<f32>) -> f32 {
     if pilot.volume.enabled == 0u || pilot.volume.amplitude_m == 0.0 { return 0.0; }
-    var fade = 1.0;
-    if d < 0.0 {
-        if d <= -pilot.volume.fade_m { return 0.0; }
-        let t = clamp(pilot_divide(pilot_sum(d, pilot.volume.fade_m), pilot.volume.fade_m), 0.0, 1.0);
-        fade = pilot_product(pilot_product(t, t), pilot_sum(3.0, -pilot_product(2.0, t)));
-    }
     let q = vec3(
         pilot_divide(p.x, pilot.volume.wavelength_m),
         pilot_divide(p.y, pilot.volume.wavelength_m),
@@ -154,7 +145,40 @@ fn pilot_volume(p: vec3<f32>, d: f32) -> f32 {
     let sample = scale_sample(gradient_noise_3d_with_arithmetic(pilot.volume.key, q, F32Arithmetic(pilot.arithmetic.x, pilot.arithmetic.y)), PILOT_NOISE_SCALE);
     let shaped = pilot_shape(sample.value, pilot.volume.sharpness);
     let bounded = shaped / pilot_sqrt(pilot_sum(1.0, pilot_product(shaped, shaped)));
-    return pilot_product(pilot_product(pilot.volume.amplitude_m, bounded), fade);
+    return pilot_product(pilot.volume.amplitude_m, bounded);
+}
+
+// Mirror of volume_at in voxel_density.rs. No spacing filter, by design: the
+// density path evaluates the full stack so coincident halo and parent samples
+// stay identical across LODs. The fade uses d, positive below the surface, so
+// the term reaches zero fade_m above it and cannot float free above that.
+fn pilot_volume(p: vec3<f32>, d: f32) -> f32 {
+    if pilot.volume.enabled == 0u || pilot.volume.amplitude_m == 0.0 { return 0.0; }
+    var fade = 1.0;
+    if d < 0.0 {
+        if d <= -pilot.volume.fade_m { return 0.0; }
+        let t = clamp(pilot_divide(pilot_sum(d, pilot.volume.fade_m), pilot.volume.fade_m), 0.0, 1.0);
+        fade = pilot_product(pilot_product(t, t), pilot_sum(3.0, -pilot_product(2.0, t)));
+    }
+    return pilot_product(pilot_volume_shape(p), fade);
+}
+
+// Mirror of PlanetDesignField::surface_height: the band's surface projected
+// back onto the radial ray, for the far field to draw. On that surface d is
+// zero and the fade is one, so only the shape remains, filtered by the tile's
+// footprint with the same smoothstep pilot_filtered_height applies to octaves.
+// P is built the way the host builds it, so the two sides round alike.
+fn pilot_surface_height(direction: vec3<f32>, footprint_m: f32) -> f32 {
+    let height = pilot_filtered_height(direction, footprint_m);
+    if pilot.volume.enabled == 0u || pilot.volume.amplitude_m == 0.0 { return height; }
+    var weight = 1.0;
+    if footprint_m > 0.0 {
+        let t = clamp((pilot.volume.wavelength_m / footprint_m - 2.0) * 0.5, 0.0, 1.0);
+        weight = t * t * (3.0 - 2.0 * t);
+    }
+    if weight == 0.0 { return height; }
+    let p = pilot_scale_add(direction, pilot_sum(pilot.radius_m, height), vec3(0.0));
+    return pilot_sum(height, pilot_product(weight, pilot_volume_shape(p)));
 }
 
 fn pilot_potential(position: vec3<i32>) -> f32 {

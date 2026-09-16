@@ -10,8 +10,10 @@ fn height_footprint(local: vec2<u32>, spans: vec4<u32>) -> f32 {
         * f32(CUBESPHERE_TILE_QUADS / HEIGHT_QUADS) / HEIGHT_DETAIL_RATIO;
     return max(f32(numerator)*unit/f32(q*q), HEIGHT_FILTER_MIN_M);
 }
+// The projected surface the band extracts, not the bare height: the far field
+// draws the same surface as the near field.
 fn height_normal_sample(direction: vec3<f32>, footprint: f32) -> f32 {
-    return pilot_filtered_height(normalize(direction),footprint);
+    return pilot_surface_height(normalize(direction),footprint);
 }
 fn height_normal(direction: vec3<f32>, height: f32, footprint: f32) -> vec3<f32> {
     let step = max(footprint,HEIGHT_NORMAL_MIN_STEP_M);
@@ -46,12 +48,11 @@ fn height_mesh(@builtin(global_invocation_id) id: vec3<u32>) {
     let direction = cubesphere_tile_direction(tile, local * (CUBESPHERE_TILE_QUADS / HEIGHT_QUADS));
     let spacing = cubesphere_vertex_spacing(tile.y) * pilot.radius_m * f32(CUBESPHERE_TILE_QUADS / HEIGHT_QUADS);
     let footprint = height_footprint(local,height_tiles[tile_index].corner_spans);
-    let height = pilot_filtered_height(direction, footprint);
-    let surface_height = height;
-    let normal = height_normal(direction,height,footprint);
+    let surface_height = pilot_surface_height(direction, footprint);
+    let normal = height_normal(direction,surface_height,footprint);
     // Split the base radius before adding height, preserving local relief even
     // on the large comparison planet. fma retains the radial product residual.
     let anchor = vec3<i32>(floor(direction * pilot.radius_m));
     let residual = fma(direction, vec3(pilot.radius_m), -vec3<f32>(anchor));
-    height_vertices[id.x] = HeightVertex(vec4(anchor, i32(tile.y)), vec4(residual + direction * height, spacing), vec4(normal,surface_height));
+    height_vertices[id.x] = HeightVertex(vec4(anchor, i32(tile.y)), vec4(residual + direction * surface_height, spacing), vec4(normal,surface_height));
 }

@@ -117,12 +117,17 @@ design's surface samples, and a negative sharpness puts that long tail on the
 undercut side, where the bias rule cannot survive it. Bounded, the same shipped
 term measures -2.9 m to +5.7 m inside its 6 m, and a unit test walks both signs
 of sharpness at a 64 m amplitude to confirm the bound holds and is approached.
-The first part of the rule remains provisional: one coarse cell is a guess at
-how far a 16 m extraction can stand above the height surface, not a measured
-bound, and route evidence or a per-chunk bias should replace it. No fragment
-discard was added: the band's bounding box can contain surface the band does not
-cover, so a discard there would open holes. **Show local voxels** disables the pass and zeroes that
-coverage weight. There is no CPU collision worker and no BVH construction. Three
+The amplitude part is now larger than it needs to be and is kept unchanged on
+purpose: the far field carries a projection of the term, so the two surfaces
+differ by the projection's measured first-order error, 2.375 m for that 6 m
+term, rather than by the whole amplitude. That measured number is what a later
+tune should read. The first part of the rule remains provisional for its own
+reason: one coarse cell is a guess at how far a 16 m extraction can stand above
+the height surface, not a measured bound, and route evidence or a per-chunk bias
+should replace it. No fragment discard was added: the band's bounding box can
+contain surface the band does not cover, so a discard there would open holes.
+**Show local voxels** disables the pass and zeroes that coverage weight. There is
+no CPU collision worker and no BVH construction. Three
 RGBA16F/Depth32F surfaces cost 36 bytes per physical pixel: 197.8 MiB at 2880 by
 2000, excluding driver padding and other render targets.
 
@@ -137,10 +142,25 @@ near field, and a surface that stays voxel-extracted out to the cap instead of
 ending at a 256 m altitude gate. A GPU test renders the local pipeline into its
 own layer and checks that it writes pixels and that zero coverage removes them,
 because the panel's chunk counts are CPU-side and cannot show this. The near
-field now carries shapes a radial height cannot express, because the density
-field carries one bounded 3D detail term faded out with height above the
-surface. Projecting that term into the far field is a separate step; height
-tiles still evaluate height only.
+field carries shapes a radial height cannot express, because the density field
+carries one bounded 3D detail term faded out with height above the surface.
+
+The far field now carries that term too. `PlanetDesignField::surface_height`
+evaluates the term's unfaded shape on the band's own surface, where the fade is
+one, and adds it to the filtered height: `h + w * shape(dir * (radius + h))`,
+with `w` the same footprint smoothstep the octaves use, so a tile too coarse to
+resolve the 24 m wavelength carries exactly the bare height and coarse tiles
+stitch through their shared footprints unchanged. Filtering is correct here and
+forbidden in the density path, where coincident samples at different levels must
+stay bit-identical. The projection is first order. The true zero crossing along
+the radial ray solves `h - a + volume(P(a), h - a) = 0`, and evaluating at
+`a = h` ignores the term's own variation over that displacement. Bisecting the
+canonical potential along the ray on the 300 km design with the shipped 6 m term
+measures the residual at 0.554 m over eight surface directions and 2.375 m over
+104; with the term disabled the projected surface is bit-identical to the height
+surface. The bisection resolves the ray parameter to a millimeter, but the f32
+position it evaluates steps by about three centimeters at 300 km, which is the
+floor of the measurement and reads 0.044 m on the disabled run.
 
 Reusable CPU/GPU voxel generation and collision code remain in the library.
 There is no CPU visual backend and no `--backend` flag.
@@ -185,8 +205,10 @@ plus 100 m could slow high-altitude flight by more than 100 times during descent
 Movement-system tests exercise all six keys on both sides of that old boundary.
 
 **Keep camera 5 m above terrain** is enabled by default and is a viewer-only
-preference. The library samples the canonical full-detail height at the camera
-direction and raises a low camera radially. Each frame checks the endpoint;
+preference. The library samples the projected surface at the camera direction,
+the same surface the tiles draw, and raises a low camera radially. The inspector's
+clearance readout uses that query too, so the number and the protection cannot
+disagree about where the ground is. Each frame checks the endpoint;
 there is no swept collision, gravity, walking support, or ocean contact.
 Disabling protection allows inspection below terrain. Re-enabling it, or
 publishing terrain that covers the camera, raises the camera to the clearance
@@ -195,19 +217,24 @@ height without resetting its orientation.
 Fast lateral movement can cross a ridge between endpoints. Filtered or still
 retiring visual meshes can differ from canonical height, so the check does not
 guarantee clearance from every displayed triangle. Oceans remain traversable.
-Protection still samples the height field only, so it does not see the volume
-term at all: the camera can pass through volumetric solid that stands above the
-height surface, and it can hang in air the term has carved out below it. Caves
-and overhangs are outside this height-field renderer's scope.
+Protection now sees the volume term through the projection, so the gap it keeps
+is bounded by that projection's measured error, 2.375 m for the shipped 6 m
+term, rather than by the term's whole amplitude. It is still a single radial
+query against a single-valued surface: it cannot see an overhang the band
+extracts above that surface, and it can hang in air the term has carved out
+below it. Caves and overhangs are outside this height-field renderer's scope.
 
 ## Validation
 
 Focused tests cover altitude protection and terrain edits, unchanged safe
 camera positions, disabling/re-enabling protection, stale publication, typing
-focus, explicit save/reload, and orbit axes. GPU tests exercise the actual
-height and ocean shaders, the three-layer compositor, and the resident local
-leases and their draw records. Canonical CPU voxel and collision audits remain
-separate from flight-viewer checks.
+focus, explicit save/reload, and orbit axes. The far-field projection is checked
+against a bisected band crossing, against exact equality with bare height when
+the term is disabled or filtered out, and for schedule independence. GPU tests
+exercise the actual height and ocean shaders on both presets with the term off
+and on, the three-layer compositor, and the resident local leases and their draw
+records. Canonical CPU voxel and collision audits remain separate from
+flight-viewer checks.
 
 ```sh
 cargo test -p procgen-realtime-pilot --bin procgen-realtime-pilot

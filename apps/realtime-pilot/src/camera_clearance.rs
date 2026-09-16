@@ -5,9 +5,14 @@ pub const CAMERA_CLEARANCE_M: f32 = 5.0;
 
 /// Raise an underground/near-surface camera along its radial direction. Fast
 /// lateral movement can cross ridges; this only constrains the endpoint.
+///
+/// Sampled from `surface_m`, not `elevation_m`, so the 5 m gap tracks the
+/// surface the viewer actually draws: with the volume term enabled the drawn
+/// surface stands off the height surface by up to its amplitude, and protecting
+/// against the height surface alone let the eye clip into displaced terrain.
 pub fn keep_camera_above_terrain(field: &PlanetDesignField, eye: MeterPosition) -> MeterPosition {
     let direction = eye.direction();
-    let height = field.elevation_m(direction, 0.0).expect("camera direction");
+    let height = field.surface_m(direction, 0.0).expect("camera direction");
     let clearance = eye.altitude_m(field.config().radius_m) - height as f64;
     if clearance < CAMERA_CLEARANCE_M as f64 {
         eye.translated(direction * (CAMERA_CLEARANCE_M as f64 - clearance) as f32)
@@ -38,7 +43,7 @@ mod tests {
         );
         let safe = keep_camera_above_terrain(&field, eye);
         let clearance = safe.altitude_m(config.radius_m)
-            - field.elevation_m(safe.direction(), 0.0).unwrap() as f64;
+            - field.surface_m(safe.direction(), 0.0).unwrap() as f64;
         assert!(clearance >= CAMERA_CLEARANCE_M as f64 - 0.001);
         let high = safe.translated(Vec3::X * 100.0);
         assert_eq!(keep_camera_above_terrain(&field, high), high);
